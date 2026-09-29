@@ -11,6 +11,8 @@ Screen *projects_screen_new(void);
 Screen *connection_screen_new(void);
 Screen *sessions_screen_new(const Project *project);
 Screen *placeholder_screen_new(void);
+/// After a conversation was deleted: drops it from the saved list and from the sidebar, which then asks the server again.
+void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
