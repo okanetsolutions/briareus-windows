@@ -29,7 +29,8 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Hides write controls on a Read-only token. A capability catalog read from the server keeps operations it does not offer unavailable, so the app adapts to older and newer servers.
 - Saves projects, conversations, transcripts and pull requests on the computer. A screen opens on what it last showed and then asks the server only for what changed; a saved transcript resumes from its last event, and F5 reads it again in full.
 - Pauses polling while the window is minimized or in the background, with exponential backoff and `Retry-After` after failures.
-- Follows the system light or dark theme, including the title bar, and scales with the monitor's DPI.
+- Opens filling the screen, follows the system light or dark theme, including the title bar, and scales with the monitor's DPI. Reads in the dashboard's type: Segoe UI at its sizes, Cascadia Code for code.
+- A conversation's actions (its pull request and changes, review loop, rename, stop, close, reopen, delete) sit in its header. A wide window lays a pull request out in two columns.
 
 ## Build
 

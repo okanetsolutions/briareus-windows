@@ -16,7 +16,7 @@ struct Pane {
     bool stick_bottom, show_bottom_button;
     int header_h, footer_h;
     HeaderInfo header;
-    RECT button_rects[4]; RECT back_rect; RECT bottom_button_rect;
+    RECT button_rects[HEADER_BUTTONS]; RECT back_rect; RECT bottom_button_rect;
     int hover_button;       // -1 none, -2 back, -3 bottom button, 0...3 header buttons
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
@@ -206,6 +206,10 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     if (s && s->vt->scrolled) s->vt->scrolled(s, pane_at_bottom(p));
 }
 
+static int header_button_width(HDC hdc, const HeaderButton *b, bool labels) {
+    if (!b->label[0] || !labels) return px(32);
+    return px(10) + px(13) + px(5) + text_width(hdc, b->label, FONT_CAPTION_SEMIBOLD) + px(10);
+}
 static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
     if (!p->header_h) return;
     RECT hr = { rc->left, rc->top, rc->right, rc->top + p->header_h };
@@ -223,13 +227,30 @@ static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
         x += size + px(6);
     } else x = px(16);
     int right = hr.right - px(8);
+    // Labelled buttons draw as pills; when together they would leave the title no room, all fall back to glyphs.
+    int labelled_w = 0;
+    for (int i = 0; i < p->header.button_count; i++) labelled_w += header_button_width(hdc, &p->header.buttons[i], true) + px(4);
+    bool labels = labelled_w <= right - x - px(160);
     for (int i = p->header.button_count - 1; i >= 0; i--) {
-        RECT br = { right - size, cy - size / 2, right, cy + size / 2 };
-        p->button_rects[i] = br;
         HeaderButton *b = &p->header.buttons[i];
-        if (p->hover_button == i && b->enabled) fill_round_rect(hdc, &br, size / 2, blend(theme.text, theme.background, 0.06), blend(theme.text, theme.background, 0.06));
-        draw_glyph(hdc, b->glyph, &br, FONT_ICON, b->enabled ? theme.accent : blend(theme.accent, theme.background, 0.4));
-        right -= size + px(4);
+        bool pill = b->label[0] && labels;
+        int bw = header_button_width(hdc, b, labels), bh = pill ? px(28) : size;
+        RECT br = { right - bw, cy - bh / 2, right, cy + bh / 2 };
+        p->button_rects[i] = br;
+        bool hovered = p->hover_button == i && b->enabled;
+        COLORREF c = b->destructive ? theme.danger : theme.accent;
+        if (!b->enabled) c = blend(c, theme.background, 0.4);
+        if (pill) {
+            fill_round_rect(hdc, &br, px(6), hovered ? blend(theme.text, theme.surface, 0.05) : theme.surface, theme.border);
+            RECT g = { br.left + px(10), br.top, br.left + px(10) + px(13), br.bottom };
+            draw_glyph(hdc, b->glyph, &g, FONT_ICON_SMALL, c);
+            RECT t = { g.right + px(5), br.top, br.right - px(10), br.bottom };
+            draw_text(hdc, b->label, &t, FONT_CAPTION_SEMIBOLD, b->enabled ? theme.text : blend(theme.text, theme.background, 0.4), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            if (hovered) fill_round_rect(hdc, &br, size / 2, blend(theme.text, theme.background, 0.06), blend(theme.text, theme.background, 0.06));
+            draw_glyph(hdc, b->glyph, &br, FONT_ICON, c);
+        }
+        right -= bw + px(4);
     }
     RECT tr = { x, hr.top, right - px(6), hr.bottom - 1 };
     if (p->header.large) {

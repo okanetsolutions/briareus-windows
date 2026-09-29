@@ -9,8 +9,9 @@
 #include <string.h>
 
 enum {
-    ACT_MENU = 1000, ACT_ANSWER, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
+    ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
     ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_MESSAGE_TEXT, ACT_FINDING_LINK,
+    ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
 enum { ID_COMPOSER = 301 };
@@ -584,6 +585,12 @@ static void conversation_layout(Screen *base, Doc *doc) {
 
 // MARK: - Header and menu
 
+static void header_button(HeaderInfo *info, wchar_t glyph, const char *label, int action, bool enabled, bool destructive) {
+    if (info->button_count >= HEADER_BUTTONS) return;
+    HeaderButton *b = &info->buttons[info->button_count++];
+    b->glyph = glyph; b->action = action; b->enabled = enabled; b->destructive = destructive;
+    snprintf(b->label, sizeof b->label, "%s", label);
+}
 static void conversation_header(Screen *base, HeaderInfo *info) {
     ConversationScreen *s = (ConversationScreen *)base;
     const Session *ss = session(s);
@@ -595,34 +602,31 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     snprintf(info->status, sizeof info->status, "%s", session_status(ss));
     str_free(&sub); free(status);
-    info->buttons[0].glyph = 0xE712; info->buttons[0].action = ACT_MENU; info->buttons[0].enabled = !s->busy && !s->uncertain; info->buttons[0].tip = "Conversation actions";
-    info->button_count = 1;
-}
-
-static void show_menu(ConversationScreen *s, POINT pt) {
-    const Session *ss = session(s);
-    HMENU menu = CreatePopupMenu();
+    // Every action the conversation takes, in the header as the dashboard has them.
+    bool can = !s->busy && !s->uncertain;
+    bool closed = str_eq(session_status(ss), "closed");
     int number = session_pull_number(ss);
     const char *repo = session_repo(ss);
     if (number && repo) {
-        if (store_supports("pull_files")) AppendMenuW(menu, MF_STRING, MENU_CHANGES, L"View changes");
-        if (store_supports("pull")) { wchar_t label[64]; swprintf(label, 64, L"Pull request #%d", number); AppendMenuW(menu, MF_STRING, MENU_PULL, label); }
-        if (GetMenuItemCount(menu)) AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        if (store_supports("pull_files")) header_button(info, 0xE8A5, "View changes", ACT_MENU_ITEM + MENU_CHANGES, true, false);
+        if (store_supports("pull")) { char l[40]; snprintf(l, sizeof l, "Pull request #%d", number); header_button(info, 0xE8AB, l, ACT_MENU_ITEM + MENU_PULL, true, false); }
     }
     if (store_supports("review_loop") && session_can_review_loop(ss)) {
-        if (session_review_loop_on(ss)) AppendMenuW(menu, MF_STRING, MENU_LOOP_OFF, L"Turn off review loop");
-        else AppendMenuW(menu, MF_STRING, MENU_LOOP_ON, L"Turn on review loop");
+        bool on = session_review_loop_on(ss);
+        header_button(info, 0xE895, on ? "Turn off review loop" : "Turn on review loop", ACT_MENU_ITEM + (on ? MENU_LOOP_OFF : MENU_LOOP_ON), can, false);
     }
-    if (store_supports("rename")) AppendMenuW(menu, MF_STRING, MENU_RENAME, L"Rename\x2026");
-    if (store_supports("cancel") && session_is_active(ss)) AppendMenuW(menu, MF_STRING, MENU_STOP, L"Stop agent");
-    if (store_supports("close") && !str_eq(session_status(ss), "closed")) AppendMenuW(menu, MF_STRING, MENU_CLOSE, L"Close conversation");
-    if (store_supports("reopen") && str_eq(session_status(ss), "closed")) AppendMenuW(menu, MF_STRING, MENU_REOPEN, L"Reopen");
-    if (store_supports("delete")) { AppendMenuW(menu, MF_SEPARATOR, 0, NULL); AppendMenuW(menu, MF_STRING, MENU_DELETE, L"Delete conversation"); }
-    if (!GetMenuItemCount(menu)) { DestroyMenu(menu); return; }
-    s->dialog_open = true;
-    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
-    s->dialog_open = false;
-    DestroyMenu(menu);
+    if (store_supports("rename")) header_button(info, 0xE70F, "Rename", ACT_MENU_ITEM + MENU_RENAME, can, false);
+    if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "Stop agent", ACT_MENU_ITEM + MENU_STOP, can, false);
+    if (store_supports("close") && !closed) header_button(info, 0xE8BB, "Close conversation", ACT_MENU_ITEM + MENU_CLOSE, can, false);
+    if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "Reopen", ACT_MENU_ITEM + MENU_REOPEN, can, false);
+    if (store_supports("delete")) header_button(info, 0xE74D, "Delete conversation", ACT_MENU_ITEM + MENU_DELETE, can, true);
+}
+
+static void menu_choice(ConversationScreen *s, int chosen) {
+    const Session *ss = session(s);
+    int number = session_pull_number(ss);
+    const char *repo = session_repo(ss);
+    if ((chosen == MENU_CHANGES || chosen == MENU_PULL) && !(number && repo)) return;
     switch (chosen) {
     case MENU_CHANGES: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_files_screen_new(&p, number)); project_free(&p); break; }
     case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
@@ -644,8 +648,8 @@ static void show_menu(ConversationScreen *s, POINT pt) {
 
 static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
+    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_COPY) { menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
-    case ACT_MENU: show_menu(s, pt); break;
     case ACT_ANSWER: {
         int seq = (int)(arg >> 8), index = (int)(arg & 0xFF);
         for (size_t i = 0; i < s->transcript.count; i++) {

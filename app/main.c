@@ -238,7 +238,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         if (g_sidebar) pane_relayout(g_sidebar);
         if (g_detail) pane_relayout(g_detail);
     }
-    ShowWindow(hwnd, show == SW_SHOWMINIMIZED ? SW_SHOWNORMAL : show);
+    // The app always opens filling the screen, whatever the shortcut asks.
+    (void)show;
+    ShowWindow(hwnd, SW_SHOWMAXIMIZED);
     UpdateWindow(hwnd);
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {

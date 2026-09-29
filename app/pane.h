@@ -8,10 +8,12 @@
 typedef struct Pane Pane;
 typedef struct Screen Screen;
 
-typedef struct { wchar_t glyph; int action; bool enabled; const char *tip; } HeaderButton;
+/// A header button: a glyph alone, or a labelled pill when `label` is set and the header has room for the labels.
+typedef struct { wchar_t glyph; int action; bool enabled; const char *tip; char label[40]; bool destructive; } HeaderButton;
+enum { HEADER_BUTTONS = 8 };
 typedef struct {
     char title[512]; char subtitle[512]; char status[48];   // status draws a dot before the subtitle
-    HeaderButton buttons[4]; int button_count;
+    HeaderButton buttons[HEADER_BUTTONS]; int button_count;
     bool large;   // the sidebar's root shows a large title
 } HeaderInfo;
 
