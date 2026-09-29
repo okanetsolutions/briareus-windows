@@ -6,10 +6,46 @@
 #include <stdlib.h>
 #include <string.h>
 
+// MARK: - Errands, shared by the board and one pull request
+
+static wchar_t action_glyph(const char *id) {
+    static const struct { const char *id; wchar_t glyph; } icons[] = {
+        { "run", 0xE768 }, { "review", 0xE721 }, { "solve-conflicts", 0xE8AB }, { "fix-checks", 0xE90F }, { "implement-feedback", 0xE90F },
+        { "custom-feedback", 0xE70F }, { "test-sheet", 0xE9D5 }, { "qa", 0xE714 }, { "test-run", 0xE768 }, { "pr-body-summary", 0xE8A5 }, { "delete-self-comments", 0xE74D },
+    };
+    for (size_t k = 0; k < sizeof icons / sizeof *icons; k++) if (str_eq(icons[k].id, id)) return icons[k].glyph;
+    return 0xE945;
+}
+/// Asks before an errand starts: for its input when it takes one, for a confirmation otherwise. True to go ahead.
+static bool action_prompt(const BoardAction *a, int number, char **input) {
+    *input = NULL;
+    if (a->has_input) return dialog_action_input(app_window(), a, number, input);
+    char *title = xstrfmt("Start a paid %s session on #%d?", a->label, number);
+    char *message = str_empty(a->hint) ? NULL : xstrfmt("%s.", a->hint);
+    bool ok = app_confirm(title, message, "Start session", str_eq(a->id, "delete-self-comments"));
+    free(title); free(message);
+    return ok;
+}
+/// The errands this app can start on a row: what the server offers for it, less what the token or server lacks.
+static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count) {
+    *count = 0;
+    if (!store_can_manage()) return NULL;
+    size_t n; BoardAction *offered = board_actions_offered(catalog, pull, failed_checks, &n);
+    BoardAction *out = xcalloc(n ? n : 1, sizeof *out);
+    for (size_t i = 0; i < n; i++) {
+        char *op = board_action_operation(&offered[i]);
+        if (store_supports(op)) board_action_copy(&out[(*count)++], &offered[i]);
+        free(op);
+    }
+    board_actions_free(offered, n);
+    return out;
+}
+
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_VIEW_PULL, ACT_PULL_ACTION };
 enum { TIMER_POLL = 1 };
+enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
 typedef struct {
     Screen base;
@@ -25,6 +61,11 @@ typedef struct {
     Request *req;
     Poller poller;
     bool fresh_pending;
+    Json *catalog;      // the server's `actions`, for the buttons under each pull request
+    Request *req_actions, *req_start;
+    bool busy, uncertain, dialog_open;
+    int starting_number; char *starting_id;
+    char *write_error;
 } PullsScreen;
 
 static BoardFilter *current_filter(PullsScreen *s) { return s->tab == 0 ? &s->pull_filter : &s->issue_filter; }
@@ -73,25 +114,57 @@ static void pulls_done(void *owner, Request *req) {
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
+static void board_actions_done(void *owner, Request *req) {
+    PullsScreen *s = owner;
+    if (!req->ok) return;
+    json_free(s->catalog); s->catalog = json_clone(json_get(req->result, "actions"));
+    cache_store(g_store.cache, req->result, "actions");
+    pane_relayout(s->base.pane);
+}
 static void pulls_load(PullsScreen *s, bool fresh) {
     if (!s->loaded) {
         char *key = xstrfmt("pulls:%s", s->project.repo);
         Json *saved = cache_value(g_store.cache, key);
         if (saved) { pulls_show(s, saved, true); json_free(saved); pane_relayout(s->base.pane); }
         free(key);
+        if (!json_count(s->catalog)) { Json *acts = cache_value(g_store.cache, "actions"); if (acts) { json_free(s->catalog); s->catalog = json_clone(json_get(acts, "actions")); json_free(acts); } }
     }
     if (s->req) request_cancel(&s->req);
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
     if (fresh) json_set_str(args, "fresh", "1");
     store_call("pulls", args, 0, s, pulls_done, 0, &s->req);
+    if (store_can_manage() && store_supports("actions") && !s->req_actions) store_call("actions", json_object(), 0, s, board_actions_done, 0, &s->req_actions);
+}
+static void board_start_done(void *owner, Request *req) {
+    PullsScreen *s = owner;
+    s->busy = false;
+    if (req->ok) {
+        Session started;
+        set_string(&s->write_error, NULL);
+        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+    } else {
+        char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
+        // A refusal is definite; anything else may have started the session.
+        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
+    }
+    pane_relayout(s->base.pane);
+}
+static void board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input) {
+    if (s->busy || s->uncertain || str_empty(branch)) return;
+    s->busy = true; s->starting_number = number; set_string(&s->starting_id, action->id);
+    char *op = board_action_operation(action);
+    Json *args = board_action_arguments(action, s->project.repo, number, branch, input);
+    store_call(op, args, board_action_timeout_ms(action), s, board_start_done, 0, &s->req_start);
+    free(op);
+    pane_relayout(s->base.pane);
 }
 
 static void pulls_destroy(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
-    request_cancel(&s->req); poller_stop(&s->poller);
-    json_free(s->board); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
+    request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); poller_stop(&s->poller);
+    json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
-    project_free(&s->project); free(s->error);
+    project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
 }
 
@@ -100,6 +173,11 @@ static void pulls_layout(Screen *base, Doc *doc) {
     int w = doc->width;
     doc_space(doc, px(10));
     if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(10)); }
+    if (s->write_error) {
+        doc_notice(doc, px(4), w - px(8), s->write_error);
+        if (s->uncertain) { doc_space(doc, px(4)); doc_text(doc, px(4), w - px(8), "The request may have completed. Refresh (F5) and look for its conversation in the project before starting another agent.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
+        doc_space(doc, px(10));
+    }
     if (s->loaded && (s->issue_count || json_is_set(json_get(s->board, "issuesError")))) {
         char *pt = xstrfmt("Pull requests (%zu)", s->pull_count), *it = xstrfmt("Issues (%zu)", s->issue_count);
         const char *titles[2] = { pt, it };
@@ -126,8 +204,21 @@ static void pulls_layout(Screen *base, Doc *doc) {
     if (s->tab == 0) {
         for (size_t i = 0; i < s->pull_count; i++) {
             if (!board_filter_passes(filter, &rows[i], -1)) continue;
-            StackPosition stack; bool has_stack = stack_position_parse(json_get(s->pulls[i].raw, "stack"), json_get(s->board, "stacks"), &stack);
-            doc_pull_row(doc, 0, w, &s->pulls[i], has_stack ? &stack : NULL, s->project.repo, ACT_OPEN_PULL, (intptr_t)i);
+            const PullSummary *pull = &s->pulls[i];
+            StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
+            // The dashboard's buttons: the pull request on GitHub, then the errands its state offers, the suggested one filled.
+            size_t an = 0; BoardAction *actions = str_empty(pull->branch) ? NULL : row_actions(s->catalog, pull, 0, &an);
+            ButtonSpec *buttons = xcalloc(an + 1, sizeof *buttons); size_t bn = 0;
+            if (!str_empty(pull->url)) { ButtonSpec b = { 0xE8A7, "View PR", BUTTON_BORDERED, ACT_VIEW_PULL, (intptr_t)i, true }; buttons[bn++] = b; }
+            for (size_t k = 0; k < an && k < ACTION_STRIDE; k++) {
+                bool starting = s->busy && s->starting_number == pull->number && str_eq(s->starting_id, actions[k].id);
+                bool suggested = str_eq(pull->recommended, actions[k].id);
+                ButtonSpec b = { action_glyph(actions[k].id), starting ? "Starting\xE2\x80\xA6" : actions[k].label, suggested ? BUTTON_PROMINENT : BUTTON_BORDERED,
+                                 ACT_PULL_ACTION, (intptr_t)(i * ACTION_STRIDE + k), !s->busy && !s->uncertain };
+                buttons[bn++] = b;
+            }
+            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, ACT_OPEN_PULL, (intptr_t)i, buttons, bn);
+            free(buttons); board_actions_free(actions, an);
             if (has_stack) stack_position_free(&stack);
             doc_space(doc, px(6));
         }
@@ -228,14 +319,40 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_detail(issue_detail_screen_new(&s->project, &s->issues[arg])); break;
+    case ACT_VIEW_PULL: if ((size_t)arg < s->pull_count) open_web_url(s->pulls[arg].url); break;
+    case ACT_PULL_ACTION: {
+        size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;
+        if (index >= s->pull_count || s->busy || s->uncertain) break;
+        // The rows may be replaced while the prompt is up, so what the start needs is copied first.
+        int number = s->pulls[index].number; char *branch = xstrdup(s->pulls[index].branch ? s->pulls[index].branch : "");
+        size_t an; BoardAction *actions = row_actions(s->catalog, &s->pulls[index], 0, &an);
+        if (k < an) {
+            char *input = NULL;
+            s->dialog_open = true;
+            bool ok = action_prompt(&actions[k], number, &input);
+            s->dialog_open = false;
+            if (ok) board_start(s, number, branch, &actions[k], input);
+            free(input);
+        }
+        board_actions_free(actions, an); free(branch);
+        break;
+    }
     }
 }
-static void pulls_timer(Screen *base, UINT id) { PullsScreen *s = (PullsScreen *)base; if (poller_fired(&s->poller, id)) pulls_load(s, false); }
+static void pulls_timer(Screen *base, UINT id) {
+    PullsScreen *s = (PullsScreen *)base;
+    if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
+}
 static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
-    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000); else { poller_stop(&s->poller); request_cancel(&s->req); }
+    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000); else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); }
 }
-static void pulls_refresh(Screen *base) { pulls_load((PullsScreen *)base, true); }
+static void pulls_refresh(Screen *base) {
+    PullsScreen *s = (PullsScreen *)base;
+    // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
+    s->uncertain = false; set_string(&s->write_error, NULL);
+    pulls_load(s, true);
+}
 static void pulls_activated(Screen *base, bool active) { if (active) pulls_visible(base, true); }
 static const ScreenVTable pulls_vt = {
     .destroy = pulls_destroy, .layout = pulls_layout, .header = pulls_header, .action = pulls_action, .timer = pulls_timer,
@@ -245,7 +362,7 @@ Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &pulls_vt; s->base.id = xstrfmt("pulls:%s", project->repo);
     project_copy(&s->project, project);
-    s->board = json_null();
+    s->board = json_null(); s->catalog = json_array();
     board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening); s->has_opening = true;
     return &s->base;
 }
@@ -296,15 +413,8 @@ static void save_pull(PullScreen *s) {
 }
 static void rebuild_actions(PullScreen *s) {
     board_actions_free(s->actions, s->action_count); s->actions = NULL; s->action_count = 0;
-    if (!store_can_manage() || !is_open(s) || !json_str(json_get(s->pr, "headRef"))) return;
-    size_t n; BoardAction *offered = board_actions_offered(s->catalog, board_row(s), json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), &n);
-    s->actions = xcalloc(n ? n : 1, sizeof *s->actions);
-    for (size_t i = 0; i < n; i++) {
-        char *op = board_action_operation(&offered[i]);
-        if (store_supports(op)) board_action_copy(&s->actions[s->action_count++], &offered[i]);
-        free(op);
-    }
-    board_actions_free(offered, n);
+    if (!is_open(s) || !json_str(json_get(s->pr, "headRef"))) return;
+    s->actions = row_actions(s->catalog, board_row(s), json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), &s->action_count);
 }
 static void pull_finish_poll(PullScreen *s) {
     if (s->req_pull || s->req_findings) return;
@@ -722,12 +832,7 @@ static void pull_layout(Screen *base, Doc *doc) {
             const BoardAction *a = &s->actions[i];
             if (i) row_gap(doc, w);
             bool suggested = row && str_eq(row->recommended, a->id);
-            static const struct { const char *id; wchar_t glyph; } icons[] = {
-                { "run", 0xE768 }, { "review", 0xE721 }, { "solve-conflicts", 0xE8AB }, { "fix-checks", 0xE90F }, { "implement-feedback", 0xE90F },
-                { "custom-feedback", 0xE70F }, { "test-sheet", 0xE9D5 }, { "qa", 0xE714 }, { "test-run", 0xE768 }, { "pr-body-summary", 0xE8A5 }, { "delete-self-comments", 0xE74D },
-            };
-            wchar_t glyph = 0xE945;
-            for (size_t k = 0; k < sizeof icons / sizeof *icons; k++) if (str_eq(icons[k].id, a->id)) glyph = icons[k].glyph;
+            wchar_t glyph = action_glyph(a->id);
             int y = doc->y;
             int bw = suggested ? draw_badge(NULL, 0, 0, 0xE945, "Suggested", theme.accent, theme.elevated, NULL) : 0;
             bool enabled = !s->busy && !s->uncertain;
@@ -901,21 +1006,14 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_MERGE: prepare_merge(s); break;
     case ACT_START_ACTION: {
         if ((size_t)arg >= s->action_count) break;
-        const BoardAction *a = &s->actions[arg];
+        // The list may be rebuilt while the prompt is up, so the errand is copied first.
+        BoardAction a; board_action_copy(&a, &s->actions[arg]);
+        char *input = NULL;
         s->dialog_open = true;
-        if (a->has_input) {
-            char *input = NULL;
-            bool ok = dialog_action_input(app_window(), a, s->number, &input);
-            s->dialog_open = false;
-            if (ok) { start_action(s, a, input); free(input); }
-        } else {
-            char *title = xstrfmt("Start a paid %s session on #%d?", a->label, s->number);
-            char *message = str_empty(a->hint) ? NULL : xstrfmt("%s.", a->hint);
-            bool ok = app_confirm(title, message, "Start session", str_eq(a->id, "delete-self-comments"));
-            s->dialog_open = false;
-            free(title); free(message);
-            if (ok) start_action(s, a, NULL);
-        }
+        bool ok = action_prompt(&a, s->number, &input);
+        s->dialog_open = false;
+        if (ok) start_action(s, &a, input);
+        free(input); board_action_free(&a);
         break;
     }
     case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;

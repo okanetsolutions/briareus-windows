@@ -74,6 +74,10 @@ int doc_notice_box(Doc *doc, int x, int w, const char *message);
 typedef enum { BUTTON_PROMINENT, BUTTON_BORDERED, BUTTON_PLAIN, BUTTON_DESTRUCTIVE } ButtonStyle;
 /// A button sized to its text at (x, cursor); `w` 0 fits the text, -1 stretches to the doc width from x. Advances.
 int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int action, intptr_t arg, bool enabled);
+/// A small button with a glyph before its text, as the board's errand buttons; each is its own clickable item.
+typedef struct { wchar_t glyph; const char *text; ButtonStyle style; int action; intptr_t arg; bool enabled; } ButtonSpec;
+/// A line of small buttons laid out left to right, wrapping within `w`; advances. Returns the first item or -1.
+int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t count);
 /// A row of small toggle buttons (a segmented picker); `selected` is the chosen index or -1. Advances.
 int doc_segments(Doc *doc, int x, int w, const char *const *titles, size_t count, int selected, int action, intptr_t arg_base, bool enabled);
 /// A centred progress note ("Loading…"); advances.

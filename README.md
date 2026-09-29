@@ -20,7 +20,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Shows open pull requests as the dashboard does: labels, whether they conflict with their base, the state of their checks, author, assignees, reviewers, linked issues and stack position, narrowed by author, reviewer or label.
 - Opens a pull request on its description, file changes with diffs (wrapped or scrolled), checks, reviews, commits, the issues it closes, findings and the conversations already run on it.
 - Records fix, optional or dismiss decisions on findings, and merges when the server offers it, saying first what stands in the way.
-- Starts the board's errands on a pull request: run, code review, solve conflicts, fix failing checks, implement feedback, feedback in your own words, test sheet, QA, PR body and delete my comments. The one the pull request's state asks for is marked as suggested.
+- Starts the board's errands from the buttons under each pull request, as the dashboard has them, or from the pull request itself: view on GitHub, run, code review, solve conflicts, fix failing checks, implement feedback, feedback in your own words, test sheet, QA, PR body and delete my comments. The one the pull request's state asks for is highlighted.
 - Lists the repository's open issues, sub-issues nested under their epic, with the pull requests answering each, and starts a session on an issue.
 
 **Connection**

@@ -305,7 +305,7 @@ int doc_notice_box(Doc *doc, int x, int w, const char *message) {
 
 // MARK: - Buttons
 
-typedef struct { ButtonStyle style; bool enabled; } ButtonData;
+typedef struct { ButtonStyle style; bool enabled, small; wchar_t glyph; } ButtonData;
 static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     ButtonData *d = it->data;
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it && d->enabled;
@@ -326,8 +326,22 @@ static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     if (pressed) fill = blend(theme.text, fill, 0.12);
     if (!d->enabled) text = blend(text, fill, 0.5);
     int h = rc->bottom - rc->top;
-    fill_round_rect(hdc, rc, h / 2, fill, border);
+    fill_round_rect(hdc, rc, d->small ? px(6) : h / 2, fill, border);
     RECT t = *rc;
+    if (d->small) {
+        // Glyph, then the text, both centred as one.
+        int gw = d->glyph ? px(13) + px(5) : 0;
+        int tw = text_width(hdc, it->text, FONT_CAPTION_SEMIBOLD);
+        int cx = rc->left + ((rc->right - rc->left) - gw - tw) / 2;
+        if (cx < rc->left + px(6)) cx = rc->left + px(6);
+        if (d->glyph) {
+            RECT g = { cx, rc->top, cx + px(13), rc->bottom };
+            draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, text);
+        }
+        t.left = cx + gw; t.right = rc->right - px(4);
+        draw_text(hdc, it->text, &t, FONT_CAPTION_SEMIBOLD, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        return;
+    }
     draw_text(hdc, it->text, &t, FONT_SUBHEADLINE_SEMIBOLD, text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int action, intptr_t arg, bool enabled) {
@@ -342,6 +356,27 @@ int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int 
     if (enabled) { it->action = action; it->arg = arg; it->hand = true; }
     doc->y += h;
     return i;
+}
+
+int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t count) {
+    int h = font_height(doc->hdc, FONT_CAPTION_SEMIBOLD) + px(11);
+    int gap = px(6), cx = 0, cy = 0, first = -1;
+    for (size_t k = 0; k < count; k++) {
+        const ButtonSpec *b = &buttons[k];
+        int bw = px(11) * 2 + (b->glyph ? px(13) + px(5) : 0) + text_width(doc->hdc, b->text, FONT_CAPTION_SEMIBOLD);
+        if (bw > w) bw = w;
+        if (cx > 0 && cx + bw > w) { cx = 0; cy += h + gap; }
+        RECT rc = { x + cx, doc->y + cy, x + cx + bw, doc->y + cy + h };
+        int i = doc_add(doc, &rc, paint_button);
+        Item *it = &doc->items[i];
+        ButtonData *d = xcalloc(1, sizeof *d); d->style = b->style; d->enabled = b->enabled; d->small = true; d->glyph = b->glyph;
+        it->data = d; it->free_data = free; it->text = xstrdup(b->text);
+        if (b->enabled) { it->action = b->action; it->arg = b->arg; it->hand = true; }
+        if (first < 0) first = i;
+        cx += bw + gap;
+    }
+    if (count) doc->y += cy + h;
+    return first;
 }
 
 typedef struct { char **titles; size_t count; int selected; bool enabled; int action; intptr_t arg_base; } SegmentData;

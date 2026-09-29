@@ -190,7 +190,7 @@ static void updated_text(Doc *doc, int right, int y, bool has, time_t when) {
     free(rel);
 }
 
-void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg) {
+void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count) {
     int box = doc_box_begin(doc, x, w, px(10), theme.elevated, theme.border, px(10));
     int left = x + px(12), inner = w - px(24);
     COLORREF tint = pull_conflicting(pull) ? theme.danger : pull->draft ? theme.secondary : theme.success;
@@ -233,6 +233,7 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
         str_free(&who);
     }
     for (size_t i = 0; i < pull->issue_count; i++) doc_linked_row(doc, tx, tw, &pull->issues[i], repo, 0, 0);
+    if (button_count) { doc_space(doc, px(8)); doc_button_row(doc, tx, tw, buttons, button_count); }
     doc_box_end(doc, box, px(10));
     doc_box_action(doc, box, action, arg);
 }
