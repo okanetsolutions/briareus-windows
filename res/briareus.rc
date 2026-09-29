@@ -14,52 +14,53 @@ BEGIN
     IDS_APP_TITLE "Briareus"
 END
 
-IDD_NEW_CONVERSATION DIALOGEX 0, 0, 340, 262
+IDD_NEW_CONVERSATION DIALOGEX 0, 0, 372, 296
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "New conversation"
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "", IDC_PROJECT_NAME, 12, 10, 316, 10
-    EDITTEXT        IDC_PROMPT, 12, 24, 316, 96, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL
-    LTEXT           "", IDC_RECORDING, 12, 125, 200, 10
-    PUSHBUTTON      "Record a voice note", IDC_MIC, 228, 123, 100, 14
-    LTEXT           "Branch", IDC_BRANCH_LABEL, 12, 146, 60, 10
-    COMBOBOX        IDC_BRANCH, 76, 144, 252, 120, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Model", IDC_MODEL_LABEL, 12, 166, 60, 10
-    COMBOBOX        IDC_MODEL, 76, 164, 252, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Effort", IDC_EFFORT_LABEL, 12, 186, 60, 10
-    COMBOBOX        IDC_EFFORT, 76, 184, 252, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Starting a conversation runs a paid agent using this project's configured provider and model.", IDC_NOTE, 12, 204, 316, 18
-    LTEXT           "", IDC_ERROR, 12, 222, 316, 18
-    LTEXT           "The request may have completed. Close this window and refresh the conversations before starting again.", IDC_UNCERTAIN, 12, 222, 200, 18, NOT WS_VISIBLE
-    PUSHBUTTON      "Return to conversations", IDC_RETURN, 220, 224, 108, 14, NOT WS_VISIBLE
-    DEFPUSHBUTTON   "Start", IDC_START, 226, 242, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 280, 242, 48, 14
+    LTEXT           "", IDC_PROJECT_NAME, 14, 12, 344, 10
+    LTEXT           "What should the agent do?", IDC_PROMPT_LABEL, 14, 28, 344, 10
+    EDITTEXT        IDC_PROMPT, 16, 42, 340, 94, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | NOT WS_BORDER, 0
+    LTEXT           "", IDC_RECORDING, 14, 148, 220, 10
+    PUSHBUTTON      "Record a voice note", IDC_MIC, 248, 144, 110, 18, BS_OWNERDRAW
+    LTEXT           "Branch", IDC_BRANCH_LABEL, 14, 174, 60, 10
+    COMBOBOX        IDC_BRANCH, 78, 171, 280, 120, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Model", IDC_MODEL_LABEL, 14, 196, 60, 10
+    COMBOBOX        IDC_MODEL, 78, 193, 280, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Effort", IDC_EFFORT_LABEL, 14, 218, 60, 10
+    COMBOBOX        IDC_EFFORT, 78, 215, 280, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Starting a conversation runs a paid agent using this project's configured provider and model.", IDC_NOTE, 14, 238, 344, 18
+    LTEXT           "", IDC_ERROR, 14, 238, 344, 18, NOT WS_VISIBLE
+    LTEXT           "The request may have completed. Close this window and refresh the conversations before starting again.", IDC_UNCERTAIN, 14, 254, 220, 20, NOT WS_VISIBLE
+    PUSHBUTTON      "Return to conversations", IDC_RETURN, 236, 252, 122, 18, BS_OWNERDRAW | NOT WS_VISIBLE
+    PUSHBUTTON      "Start", IDC_START, 240, 272, 56, 18, BS_OWNERDRAW
+    PUSHBUTTON      "Cancel", IDCANCEL, 302, 272, 56, 18, BS_OWNERDRAW
 END
 
-IDD_RENAME DIALOGEX 0, 0, 260, 66
+IDD_RENAME DIALOGEX 0, 0, 280, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Rename conversation"
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Title", -1, 12, 12, 40, 10
-    EDITTEXT        IDC_TITLE, 12, 24, 236, 14, ES_AUTOHSCROLL
-    DEFPUSHBUTTON   "Save", IDOK, 146, 46, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 200, 46, 48, 14
+    LTEXT           "Title", -1, 14, 12, 60, 10
+    EDITTEXT        IDC_TITLE, 16, 26, 248, 16, ES_AUTOHSCROLL | NOT WS_BORDER, 0
+    PUSHBUTTON      "Save", IDOK, 148, 54, 56, 18, BS_OWNERDRAW
+    PUSHBUTTON      "Cancel", IDCANCEL, 210, 54, 56, 18, BS_OWNERDRAW
 END
 
-IDD_ACTION_INPUT DIALOGEX 0, 0, 340, 200
+IDD_ACTION_INPUT DIALOGEX 0, 0, 372, 222
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Give feedback"
-FONT 9, "Segoe UI", 400, 0, 0x1
+FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "", IDC_HINT, 12, 10, 316, 10
-    EDITTEXT        IDC_INPUT, 12, 24, 316, 110, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL
-    LTEXT           "", IDC_RECORDING, 12, 139, 200, 10
-    PUSHBUTTON      "Record a voice note", IDC_MIC, 228, 137, 100, 14
-    LTEXT           "", IDC_NOTE, 12, 156, 316, 22
-    DEFPUSHBUTTON   "Start", IDC_START, 226, 180, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 280, 180, 48, 14
+    LTEXT           "", IDC_HINT, 14, 12, 344, 10
+    EDITTEXT        IDC_INPUT, 16, 26, 340, 110, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | NOT WS_BORDER, 0
+    LTEXT           "", IDC_RECORDING, 14, 148, 220, 10
+    PUSHBUTTON      "Record a voice note", IDC_MIC, 248, 144, 110, 18, BS_OWNERDRAW
+    LTEXT           "", IDC_NOTE, 14, 170, 344, 22
+    PUSHBUTTON      "Start", IDC_START, 240, 198, 56, 18, BS_OWNERDRAW
+    PUSHBUTTON      "Cancel", IDCANCEL, 302, 198, 56, 18, BS_OWNERDRAW
 END
 
 1 VERSIONINFO

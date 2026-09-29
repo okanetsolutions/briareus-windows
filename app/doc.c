@@ -305,7 +305,7 @@ int doc_notice_box(Doc *doc, int x, int w, const char *message) {
 
 // MARK: - Buttons
 
-typedef struct { ButtonStyle style; bool enabled, small; wchar_t glyph; } ButtonData;
+typedef struct { ButtonStyle style; bool enabled, compact; wchar_t glyph; } ButtonData;
 static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     ButtonData *d = it->data;
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it && d->enabled;
@@ -326,9 +326,9 @@ static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     if (pressed) fill = blend(theme.text, fill, 0.12);
     if (!d->enabled) text = blend(text, fill, 0.5);
     int h = rc->bottom - rc->top;
-    fill_round_rect(hdc, rc, d->small ? px(6) : h / 2, fill, border);
+    fill_round_rect(hdc, rc, d->compact ? px(6) : h / 2, fill, border);
     RECT t = *rc;
-    if (d->small) {
+    if (d->compact) {
         // Glyph, then the text, both centred as one.
         int gw = d->glyph ? px(13) + px(5) : 0;
         int tw = text_width(hdc, it->text, FONT_CAPTION_SEMIBOLD);
@@ -369,7 +369,7 @@ int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t cou
         RECT rc = { x + cx, doc->y + cy, x + cx + bw, doc->y + cy + h };
         int i = doc_add(doc, &rc, paint_button);
         Item *it = &doc->items[i];
-        ButtonData *d = xcalloc(1, sizeof *d); d->style = b->style; d->enabled = b->enabled; d->small = true; d->glyph = b->glyph;
+        ButtonData *d = xcalloc(1, sizeof *d); d->style = b->style; d->enabled = b->enabled; d->compact = true; d->glyph = b->glyph;
         it->data = d; it->free_data = free; it->text = xstrdup(b->text);
         if (b->enabled) { it->action = b->action; it->arg = b->arg; it->hand = true; }
         if (first < 0) first = i;

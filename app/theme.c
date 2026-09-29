@@ -67,36 +67,37 @@ void theme_set_dpi(int dpi) {
     current_dpi = dpi > 0 ? dpi : 96;
     for (int i = 0; i < FONT_COUNT; i++) if (fonts[i]) { DeleteObject(fonts[i]); fonts[i] = NULL; }
     // The dashboard's type: its `--font-sans` resolves to Segoe UI on Windows and `--font-mono` to Cascadia Code,
-    // and its scale reads at a desk: 15px body, 13px for the smallest chrome, 17px headings. Points here are px * 0.75.
+    // and its scale reads at a desk: 15px body, 13px for the smallest chrome, 17px headings. GDI draws a touch smaller
+    // than a browser, so every step here is one pixel above the dashboard's. Points are px * 0.75.
     const wchar_t *ui = L"Segoe UI";
     const wchar_t *mono = font_exists(L"Cascadia Code") ? L"Cascadia Code" : font_exists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
     const wchar_t *icons = font_exists(L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
-    fonts[FONT_BODY] = make_font(ui, 11.25, FW_NORMAL, false);              // 15px
-    fonts[FONT_BODY_MEDIUM] = make_font(ui, 11.25, FW_MEDIUM, false);
-    fonts[FONT_BODY_SEMIBOLD] = make_font(ui, 11.25, FW_SEMIBOLD, false);
-    fonts[FONT_HEADLINE] = make_font(ui, 12.75, FW_SEMIBOLD, false);        // 17px
-    fonts[FONT_SUBHEADLINE] = make_font(ui, 10.5, FW_NORMAL, false);        // 14px
-    fonts[FONT_SUBHEADLINE_SEMIBOLD] = make_font(ui, 10.5, FW_SEMIBOLD, false);
-    fonts[FONT_TITLE3] = make_font(ui, 15, FW_SEMIBOLD, false);             // 20px
-    fonts[FONT_LARGE_TITLE] = make_font(ui, 18, FW_SEMIBOLD, false);        // 24px
-    fonts[FONT_CALLOUT] = make_font(ui, 10.5, FW_NORMAL, false);            // 14px
-    fonts[FONT_FOOTNOTE] = make_font(ui, 9.75, FW_NORMAL, false);           // 13px
-    fonts[FONT_CAPTION] = make_font(ui, 9.75, FW_NORMAL, false);            // 13px
-    fonts[FONT_CAPTION_MEDIUM] = make_font(ui, 9.75, FW_MEDIUM, false);
-    fonts[FONT_CAPTION_SEMIBOLD] = make_font(ui, 9.75, FW_SEMIBOLD, false);
-    fonts[FONT_CAPTION2] = make_font(ui, 9, FW_NORMAL, false);              // 12px
-    fonts[FONT_BODY_ITALIC] = make_font(ui, 11.25, FW_NORMAL, true);
-    fonts[FONT_CALLOUT_ITALIC] = make_font(ui, 10.5, FW_NORMAL, true);
-    fonts[FONT_FOOTNOTE_SEMIBOLD] = make_font(ui, 9.75, FW_SEMIBOLD, false);
-    fonts[FONT_SUBHEADLINE_ITALIC] = make_font(ui, 10.5, FW_NORMAL, true);
-    fonts[FONT_MONO] = make_font(mono, 9.75, FW_NORMAL, false);             // 13px
-    fonts[FONT_MONO_SMALL] = make_font(mono, 9, FW_NORMAL, false);          // 12px
-    fonts[FONT_MONO_CAPTION2] = make_font(mono, 8.25, FW_NORMAL, false);    // 11px
+    fonts[FONT_BODY] = make_font(ui, 12, FW_NORMAL, false);              // 16px
+    fonts[FONT_BODY_MEDIUM] = make_font(ui, 12, FW_MEDIUM, false);
+    fonts[FONT_BODY_SEMIBOLD] = make_font(ui, 12, FW_SEMIBOLD, false);
+    fonts[FONT_HEADLINE] = make_font(ui, 13.5, FW_SEMIBOLD, false);        // 18px
+    fonts[FONT_SUBHEADLINE] = make_font(ui, 11.25, FW_NORMAL, false);        // 15px
+    fonts[FONT_SUBHEADLINE_SEMIBOLD] = make_font(ui, 11.25, FW_SEMIBOLD, false);
+    fonts[FONT_TITLE3] = make_font(ui, 15.75, FW_SEMIBOLD, false);             // 21px
+    fonts[FONT_LARGE_TITLE] = make_font(ui, 18.75, FW_SEMIBOLD, false);        // 25px
+    fonts[FONT_CALLOUT] = make_font(ui, 11.25, FW_NORMAL, false);            // 15px
+    fonts[FONT_FOOTNOTE] = make_font(ui, 10.5, FW_NORMAL, false);           // 14px
+    fonts[FONT_CAPTION] = make_font(ui, 10.5, FW_NORMAL, false);            // 14px
+    fonts[FONT_CAPTION_MEDIUM] = make_font(ui, 10.5, FW_MEDIUM, false);
+    fonts[FONT_CAPTION_SEMIBOLD] = make_font(ui, 10.5, FW_SEMIBOLD, false);
+    fonts[FONT_CAPTION2] = make_font(ui, 9.75, FW_NORMAL, false);              // 13px
+    fonts[FONT_BODY_ITALIC] = make_font(ui, 12, FW_NORMAL, true);
+    fonts[FONT_CALLOUT_ITALIC] = make_font(ui, 11.25, FW_NORMAL, true);
+    fonts[FONT_FOOTNOTE_SEMIBOLD] = make_font(ui, 10.5, FW_SEMIBOLD, false);
+    fonts[FONT_SUBHEADLINE_ITALIC] = make_font(ui, 11.25, FW_NORMAL, true);
+    fonts[FONT_MONO] = make_font(mono, 10.5, FW_NORMAL, false);             // 14px
+    fonts[FONT_MONO_SMALL] = make_font(mono, 9.75, FW_NORMAL, false);          // 13px
+    fonts[FONT_MONO_CAPTION2] = make_font(mono, 9, FW_NORMAL, false);    // 12px
     fonts[FONT_ICON] = make_font(icons, 11, FW_NORMAL, false);
     fonts[FONT_ICON_SMALL] = make_font(icons, 9, FW_NORMAL, false);
     fonts[FONT_ICON_LARGE] = make_font(icons, 15, FW_NORMAL, false);
     fonts[FONT_ICON_HUGE] = make_font(icons, 26, FW_NORMAL, false);
-    fonts[FONT_SERIF_MONOGRAM] = make_font(ui, 12, FW_SEMIBOLD, false);
+    fonts[FONT_SERIF_MONOGRAM] = make_font(ui, 12.75, FW_SEMIBOLD, false);
 }
 
 void theme_init(void) { theme_refresh(); theme_set_dpi(96); }
