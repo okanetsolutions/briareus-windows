@@ -21,6 +21,7 @@
 #define IDC_UNCERTAIN           213
 #define IDC_RETURN              214
 #define IDC_RECORDING           215
+#define IDC_PROMPT_LABEL        216
 
 #define IDD_RENAME              300
 #define IDC_TITLE               301

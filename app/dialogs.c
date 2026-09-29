@@ -70,6 +70,72 @@ LRESULT dialog_ctl_color(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
 }
 
+// MARK: - Drawing the dialogs' own controls
+
+/// Edits lose their system border and get a rounded frame painted by the dialog, focused in the accent colour.
+static void dialog_prepare_edit(HWND dialog, int id) {
+    HWND e = GetDlgItem(dialog, id);
+    RECT r; GetClientRect(e, &r);
+    SetWindowRgn(e, CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1, px(8), px(8)), TRUE);
+    SendMessageW(e, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(px(8), px(8)));
+    if (GetWindowLongW(e, GWL_STYLE) & ES_MULTILINE) {
+        RECT f; SendMessageW(e, EM_GETRECT, 0, (LPARAM)&f);
+        f.top += px(6); f.bottom -= px(6);
+        SendMessageW(e, EM_SETRECT, 0, (LPARAM)&f);
+    }
+    (void)dialog;
+}
+static RECT edit_frame_rect(HWND dialog, HWND e) {
+    RECT r; GetWindowRect(e, &r);
+    MapWindowPoints(NULL, dialog, (POINT *)&r, 2);
+    InflateRect(&r, px(2), px(2));
+    return r;
+}
+static void dialog_paint_frames(HWND dialog, const int *ids, size_t count) {
+    PAINTSTRUCT ps; HDC hdc = BeginPaint(dialog, &ps);
+    for (size_t i = 0; i < count; i++) {
+        HWND e = GetDlgItem(dialog, ids[i]);
+        if (!e || !IsWindowVisible(e)) continue;
+        RECT r = edit_frame_rect(dialog, e);
+        fill_round_rect(hdc, &r, px(9), theme.elevated, GetFocus() == e ? theme.accent : theme.border);
+    }
+    EndPaint(dialog, &ps);
+}
+static void dialog_invalidate_frame(HWND dialog, int id) {
+    HWND e = GetDlgItem(dialog, id);
+    if (!e) return;
+    RECT r = edit_frame_rect(dialog, e);
+    InvalidateRect(dialog, &r, TRUE);
+}
+/// Buttons are owner-drawn as the app's: the one that goes ahead filled in the accent colour, the rest bordered.
+typedef enum { DIALOG_BUTTON_PROMINENT, DIALOG_BUTTON_BORDERED } DialogButtonStyle;
+static void dialog_draw_button(const DRAWITEMSTRUCT *di, DialogButtonStyle style) {
+    HDC hdc = di->hDC; RECT rc = di->rcItem;
+    bool disabled = (di->itemState & ODS_DISABLED) != 0, pressed = (di->itemState & ODS_SELECTED) != 0, focused = (di->itemState & ODS_FOCUS) != 0;
+    COLORREF fill, border, text;
+    if (style == DIALOG_BUTTON_PROMINENT) { fill = disabled ? blend(theme.secondary, theme.background, 0.35) : theme.accent; border = fill; text = theme.white; }
+    else { fill = theme.surface; border = focused ? theme.accent : theme.border; text = theme.text; }
+    if (pressed) fill = blend(theme.text, fill, 0.12);
+    if (disabled) text = blend(text, fill, 0.5);
+    fill_rect(hdc, &rc, theme.background);
+    fill_round_rect(hdc, &rc, px(6), fill, border);
+    wchar_t label[64]; GetWindowTextW(di->hwndItem, label, 64);
+    draw_textw(hdc, label, &rc, FONT_SUBHEADLINE_SEMIBOLD, text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+static bool dialog_draw_item(WPARAM wp, LPARAM lp, int prominent_id) {
+    (void)wp;
+    const DRAWITEMSTRUCT *di = (const DRAWITEMSTRUCT *)lp;
+    if (di->CtlType != ODT_BUTTON) return false;
+    dialog_draw_button(di, (int)di->CtlID == prominent_id ? DIALOG_BUTTON_PROMINENT : DIALOG_BUTTON_BORDERED);
+    return true;
+}
+/// Static text in the secondary colour (labels, notes) or the danger colour (errors), on the dialog's background.
+static LRESULT dialog_static_color(HWND dialog, WPARAM wp, LPARAM lp, COLORREF color) {
+    LRESULT brush = dialog_ctl_color(dialog, WM_CTLCOLORSTATIC, wp, lp);
+    SetTextColor((HDC)wp, color);
+    return brush;
+}
+
 // MARK: - Voice in dialogs
 
 typedef struct { HWND dialog; VoiceNote *note; int text_id; } DialogVoice;
@@ -296,7 +362,9 @@ static INT_PTR CALLBACK new_conversation_proc(HWND dialog, UINT msg, WPARAM wp, 
         d = (NewConversation *)lp; d->dialog = dialog;
         SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
         dialog_theme(dialog);
-        set_control_text(dialog, IDC_PROJECT_NAME, project_title(d->project));
+        dialog_prepare_edit(dialog, IDC_PROMPT);
+        SendMessageW(dialog, DM_SETDEFID, IDC_START, 0);
+        { const char *t = project_title(d->project); char *line = str_eq(t, d->project->repo) ? xstrdup(t) : xstrfmt("%s \xC2\xB7 %s", t, d->project->repo); set_control_text(dialog, IDC_PROJECT_NAME, line); free(line); }
         ShowWindow(GetDlgItem(dialog, IDC_MODEL), SW_HIDE); ShowWindow(GetDlgItem(dialog, IDC_MODEL_LABEL), SW_HIDE);
         ShowWindow(GetDlgItem(dialog, IDC_EFFORT), SW_HIDE); ShowWindow(GetDlgItem(dialog, IDC_EFFORT_LABEL), SW_HIDE);
         combo_add(GetDlgItem(dialog, IDC_BRANCH), "Default branch");
@@ -324,12 +392,23 @@ static INT_PTR CALLBACK new_conversation_proc(HWND dialog, UINT msg, WPARAM wp, 
         SetFocus(GetDlgItem(dialog, IDC_PROMPT));
         return FALSE;
     }
-    case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_CTLCOLORSTATIC: {
+        int id = GetDlgCtrlID((HWND)lp);
+        if (id == IDC_ERROR) return dialog_static_color(dialog, wp, lp, theme.danger);
+        if (id == IDC_PROJECT_NAME || id == IDC_BRANCH_LABEL || id == IDC_MODEL_LABEL || id == IDC_EFFORT_LABEL || id == IDC_NOTE || id == IDC_UNCERTAIN || id == IDC_RECORDING) return dialog_static_color(dialog, wp, lp, theme.secondary);
+        return dialog_ctl_color(dialog, msg, wp, lp);
+    }
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_PROMPT }; dialog_paint_frames(dialog, ids, 1); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDC_START) ? TRUE : FALSE;
     case WM_TIMER: if (wp == 7 && d) dialog_voice_tick(&d->voice); return TRUE;
     case WM_COMMAND:
         if (!d) return FALSE;
         switch (LOWORD(wp)) {
-        case IDC_PROMPT: if (HIWORD(wp) == EN_CHANGE) update_start(d); return TRUE;
+        case IDC_PROMPT:
+            if (HIWORD(wp) == EN_CHANGE) update_start(d);
+            else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, IDC_PROMPT);
+            return TRUE;
         case IDC_MODEL: if (HIWORD(wp) == CBN_SELCHANGE) model_changed(d); return TRUE;
         case IDC_EFFORT: if (HIWORD(wp) == CBN_SELCHANGE) effort_changed(d); return TRUE;
         case IDC_MIC: dialog_voice_toggle(&d->voice); return TRUE;
@@ -365,12 +444,18 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
     case WM_INITDIALOG:
         r = (RenameState *)lp; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
         dialog_theme(dialog);
+        dialog_prepare_edit(dialog, IDC_TITLE);
+        SendMessageW(dialog, DM_SETDEFID, IDOK, 0);
         set_control_text(dialog, IDC_TITLE, r->current);
         SendMessageW(GetDlgItem(dialog, IDC_TITLE), EM_SETSEL, 0, -1);
         SetFocus(GetDlgItem(dialog, IDC_TITLE));
         return FALSE;
-    case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_CTLCOLORSTATIC: return dialog_static_color(dialog, wp, lp, theme.secondary);
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_TITLE }; dialog_paint_frames(dialog, ids, 1); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDOK) ? TRUE : FALSE;
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_TITLE && (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS)) { dialog_invalidate_frame(dialog, IDC_TITLE); return TRUE; }
         if (LOWORD(wp) == IDOK) { r->result = control_text(dialog, IDC_TITLE); EndDialog(dialog, IDOK); return TRUE; }
         if (LOWORD(wp) == IDCANCEL) { EndDialog(dialog, IDCANCEL); return TRUE; }
         return FALSE;
@@ -398,6 +483,8 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
     case WM_INITDIALOG: {
         s = (InputState *)lp; s->dialog = dialog; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
         dialog_theme(dialog);
+        dialog_prepare_edit(dialog, IDC_INPUT);
+        SendMessageW(dialog, DM_SETDEFID, IDC_START, 0);
         wchar_t *title = utf8_to_wide(s->action->label); SetWindowTextW(dialog, title); free(title);
         const char *hint = !str_empty(s->action->input.placeholder) ? s->action->input.placeholder : s->action->input.label;
         set_control_text(dialog, IDC_HINT, hint ? hint : "");
@@ -409,12 +496,18 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
         SetFocus(GetDlgItem(dialog, IDC_INPUT));
         return FALSE;
     }
-    case WM_CTLCOLORDLG: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_CTLCOLORSTATIC: return dialog_static_color(dialog, wp, lp, GetDlgCtrlID((HWND)lp) == IDC_HINT ? theme.text : theme.secondary);
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_INPUT }; dialog_paint_frames(dialog, ids, 1); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDC_START) ? TRUE : FALSE;
     case WM_TIMER: if (wp == 7 && s) dialog_voice_tick(&s->voice); return TRUE;
     case WM_COMMAND:
         if (!s) return FALSE;
         switch (LOWORD(wp)) {
-        case IDC_INPUT: if (HIWORD(wp) == EN_CHANGE) input_update(s); return TRUE;
+        case IDC_INPUT:
+            if (HIWORD(wp) == EN_CHANGE) input_update(s);
+            else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, IDC_INPUT);
+            return TRUE;
         case IDC_MIC: dialog_voice_toggle(&s->voice); return TRUE;
         case IDC_START: { char *text = control_text(dialog, IDC_INPUT); s->input = str_trim(text); free(text); EndDialog(dialog, IDOK); return TRUE; }
         case IDCANCEL: EndDialog(dialog, IDCANCEL); return TRUE;
