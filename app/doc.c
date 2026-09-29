@@ -2,14 +2,18 @@
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
+#include <wctype.h>
+
+static void rich_free(void *data);
 
 // MARK: - Items
 
-void doc_init(Doc *doc) { memset(doc, 0, sizeof *doc); doc->hover = -1; doc->pressed = -1; }
+void doc_init(Doc *doc) { memset(doc, 0, sizeof *doc); doc->hover = -1; doc->pressed = -1; doc->sel_anchor.item = doc->sel_focus.item = -1; }
 static void clear_items(Doc *doc) {
     for (size_t i = 0; i < doc->count; i++) {
         Item *it = &doc->items[i];
         if (it->free_data) it->free_data(it->data);
+        if (it->sel_owned) rich_free(it->sel);
         free(it->text);
     }
     doc->count = 0;
@@ -32,31 +36,18 @@ int doc_add(Doc *doc, const RECT *rc, ItemPaint paint) {
     return (int)doc->count++;
 }
 
-// MARK: - Text
-
-static void paint_text(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    RECT r = *rc;
-    draw_text(hdc, it->text, &r, it->font, it->color, it->flags);
-}
-int doc_text_at(Doc *doc, const RECT *rc, const char *text, FontId f, COLORREF color, UINT flags) {
-    int i = doc_add(doc, rc, paint_text);
-    Item *it = &doc->items[i];
-    it->text = xstrdup(text ? text : ""); it->font = f; it->color = color; it->flags = flags;
-    return i;
-}
-int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color, UINT flags) {
-    bool single = (flags & DT_SINGLELINE) != 0;
-    int h = single ? font_height(doc->hdc, f) : measure_text(doc->hdc, text, w, f, flags & ~DT_VCENTER);
-    RECT rc = { x, doc->y, x + w, doc->y + h };
-    int i = doc_text_at(doc, &rc, text, f, color, flags | (single ? 0 : DT_WORDBREAK | DT_EDITCONTROL));
-    doc->y += h;
-    return i;
-}
-
 // MARK: - Rich text
 
-typedef struct { int x, y, w, h, line; FontId font; COLORREF color; bool code, link, strike; char *url; wchar_t *text; } Run;
-typedef struct { Run *runs; size_t count, cap; int height; } Rich;
+// A run is one word (with its trailing spaces) of one span on one line. `start` and `len` place it in the plain text.
+typedef struct { int x, y, w, wt, h, pad, line; size_t start, len; FontId font; COLORREF color; bool code, link, strike; char *url; wchar_t *text; } Run;
+struct Rich {
+    Run *runs; size_t count, cap; int height;
+    wchar_t *plain; size_t plain_len;   // the text without markup, what a selection copies
+    int *line_y, *line_h; size_t *line_start; int lines;
+    bool single;                        // a single line, clipped to its item
+};
+enum { ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT };
+static bool item_selection(Doc *doc, Item *it, size_t *from, size_t *to);
 
 static FontId rich_font(FontId base, unsigned flags) {
     if (flags & SPAN_CODE) return (base == FONT_FOOTNOTE || base == FONT_CAPTION || base == FONT_CAPTION2) ? FONT_MONO_SMALL : FONT_MONO;
@@ -84,7 +75,19 @@ static void rich_free(void *data) {
     Rich *r = data;
     if (!r) return;
     for (size_t i = 0; i < r->count; i++) { free(r->runs[i].text); free(r->runs[i].url); }
-    free(r->runs); free(r);
+    free(r->runs); free(r->plain); free(r->line_y); free(r->line_h); free(r->line_start); free(r);
+}
+/// Moves every run, as when text sits after a glyph or is centred vertically.
+static void rich_offset(Rich *r, int dx, int dy) {
+    for (size_t i = 0; i < r->count; i++) { r->runs[i].x += dx; r->runs[i].y += dy; }
+    for (int l = 0; l < r->lines; l++) r->line_y[l] += dy;
+}
+/// Width of a run's text without its trailing spaces, with the font already selected.
+static int trimmed_width(HDC hdc, const wchar_t *text, size_t len) {
+    while (len && text[len - 1] == L' ') len--;
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32W(hdc, text, (int)len, &sz);
+    return sz.cx;
 }
 
 static Run *rich_push(Rich *r) {
@@ -94,26 +97,51 @@ static Run *rich_push(Rich *r) {
     return run;
 }
 
-/// Breaks spans into word runs that fit `width`, line by line.
-static Rich *rich_layout(HDC hdc, const char *markdown, int width, FontId base, COLORREF color) {
+typedef struct { HDC hdc; FontId font; COLORREF color; bool code, link, strike; const char *url; int line_h, pad; } RunStyle;
+static Run *run_add(Rich *r, const RunStyle *st, const wchar_t *p, size_t len, size_t start, int x, int line, int w) {
+    Run *run = rich_push(r);
+    run->x = x; run->line = line; run->w = w; run->h = st->line_h; run->pad = st->pad; run->font = st->font; run->color = st->color;
+    run->code = st->code; run->link = st->link; run->strike = st->strike; run->url = st->link ? xstrdup(st->url) : NULL;
+    run->start = start; run->len = len;
+    run->text = xmalloc((len + 1) * sizeof(wchar_t)); memcpy(run->text, p, len * sizeof(wchar_t)); run->text[len] = 0;
+    run->wt = trimmed_width(st->hdc, p, len) + st->pad * 2;
+    return run;
+}
+static void line_begin(Rich *r, size_t *cap, int line, size_t offset) {
+    if ((size_t)line >= *cap) { *cap = *cap ? *cap * 2 : 16; r->line_start = xrealloc(r->line_start, *cap * sizeof *r->line_start); }
+    r->line_start[line] = offset;
+}
+
+/// Breaks the text into word runs that fit `width`, line by line. `literal` text keeps its characters; otherwise it is inline
+/// Markdown. `gap` is the space under each line; `align` places the lines in `align_w` (the wrap width when 0).
+static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, COLORREF color, bool literal, int gap, int align, int align_w) {
     Rich *r = xcalloc(1, sizeof *r);
-    size_t n; MdSpan *spans = md_inline(markdown, &n);
+    size_t n = 1; MdSpan literal_span = { 0, (char *)source, NULL };
+    MdSpan *spans = literal ? &literal_span : md_inline(source, &n);
     int x = 0, line = 0;
     int pad = px(3);   // code span padding
+    size_t line_cap = 0;
+    line_begin(r, &line_cap, 0, 0);
+    r->plain = xmalloc(sizeof *r->plain); r->plain[0] = 0;
     for (size_t s = 0; s < n; s++) {
-        FontId f = rich_font(base, spans[s].flags);
-        bool code = (spans[s].flags & SPAN_CODE) != 0, link = (spans[s].flags & SPAN_LINK) != 0 && spans[s].url, strike = (spans[s].flags & SPAN_STRIKE) != 0;
-        COLORREF c = code ? theme.accent : link ? theme.accent : strike ? theme.secondary : color;
+        RunStyle st; memset(&st, 0, sizeof st);
+        st.hdc = hdc; st.font = rich_font(base, spans[s].flags);
+        st.code = (spans[s].flags & SPAN_CODE) != 0; st.link = (spans[s].flags & SPAN_LINK) != 0 && spans[s].url; st.strike = (spans[s].flags & SPAN_STRIKE) != 0;
+        st.color = st.code ? theme.accent : st.link ? theme.accent : st.strike ? theme.secondary : color;
+        st.url = spans[s].url; st.pad = st.code ? pad : 0;
         wchar_t *text = utf8_to_wide(spans[s].text);
-        HFONT old = SelectObject(hdc, font(f));
+        size_t tlen = wcslen(text), base_off = r->plain_len;
+        r->plain = xrealloc(r->plain, (r->plain_len + tlen + 1) * sizeof *r->plain);
+        memcpy(r->plain + r->plain_len, text, (tlen + 1) * sizeof *text); r->plain_len += tlen;
+        HFONT old = SelectObject(hdc, font(st.font));
         TEXTMETRICW tm; GetTextMetricsW(hdc, &tm);
-        int line_h = tm.tmHeight + (code ? pad : 0);
+        st.line_h = tm.tmHeight + (st.code ? pad : 0);
         const wchar_t *p = text;
         while (*p) {
-            if (*p == L'\n') { x = 0; line++; p++; continue; }
+            if (*p == L'\n') { x = 0; line++; p++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text)); continue; }
             // A word with its trailing spaces.
             const wchar_t *end = p;
-            if (code) { while (*end && *end != L'\n') end++; }
+            if (st.code) { while (*end && *end != L'\n') end++; }
             else { while (*end && *end != L' ' && *end != L'\n') end++; }
             const wchar_t *fit_end = end;
             while (*end == L' ') end++;
@@ -122,8 +150,8 @@ static Rich *rich_layout(HDC hdc, const char *markdown, int width, FontId base, 
             SIZE fit = { 0, 0 }, full = { 0, 0 };
             GetTextExtentPoint32W(hdc, p, (int)fit_len, &fit);
             GetTextExtentPoint32W(hdc, p, (int)len, &full);
-            int extra = code ? pad * 2 : 0;
-            if (x > 0 && x + fit.cx + extra > width) { x = 0; line++; }
+            int extra = st.pad * 2;
+            if (x > 0 && x + fit.cx + extra > width) { x = 0; line++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text)); }
             if (fit.cx + extra > width && fit_len > 1) {
                 // Break a word longer than the line by characters.
                 size_t k = 1;
@@ -133,77 +161,94 @@ static Rich *rich_layout(HDC hdc, const char *markdown, int width, FontId base, 
                     k = fitting > 0 ? (size_t)fitting : 1;
                     if (k >= fit_len) break;
                     GetTextExtentPoint32W(hdc, p, (int)k, &fit);
-                    Run *run = rich_push(r);
-                    run->x = x; run->line = line; run->w = fit.cx + extra; run->h = line_h; run->font = f; run->color = c; run->code = code; run->link = link; run->strike = strike;
-                    run->url = link ? xstrdup(spans[s].url) : NULL; run->text = xmalloc((k + 1) * sizeof(wchar_t)); memcpy(run->text, p, k * sizeof(wchar_t)); run->text[k] = 0;
-                    p += k; fit_len -= k; len -= k; x = 0; line++;
+                    run_add(r, &st, p, k, base_off + (size_t)(p - text), x, line, fit.cx + extra);
+                    p += k; fit_len -= k; len -= k; x = 0; line++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text));
                 }
                 GetTextExtentPoint32W(hdc, p, (int)len, &full);
             }
-            Run *run = rich_push(r);
-            run->x = x; run->line = line; run->w = full.cx + extra; run->h = line_h; run->font = f; run->color = c; run->code = code; run->link = link; run->strike = strike;
-            run->url = link ? xstrdup(spans[s].url) : NULL;
-            run->text = xmalloc((len + 1) * sizeof(wchar_t)); memcpy(run->text, p, len * sizeof(wchar_t)); run->text[len] = 0;
+            Run *run = run_add(r, &st, p, len, base_off + (size_t)(p - text), x, line, full.cx + extra);
             x += run->w;
             p = end;
         }
         SelectObject(hdc, old);
         free(text);
     }
-    md_spans_free(spans, n);
+    if (!literal) md_spans_free(spans, n);
     // Line heights, then run positions.
-    int lines = 0;
-    for (size_t i = 0; i < r->count; i++) if (r->runs[i].line + 1 > lines) lines = r->runs[i].line + 1;
-    if (!lines) lines = 1;
-    int *heights = xcalloc((size_t)lines, sizeof *heights);
-    int base_h = font_height(hdc, base) + px(3);
-    for (int l = 0; l < lines; l++) heights[l] = base_h;
-    for (size_t i = 0; i < r->count; i++) if (r->runs[i].h + px(3) > heights[r->runs[i].line]) heights[r->runs[i].line] = r->runs[i].h + px(3);
+    r->lines = line + 1;
+    r->line_y = xcalloc((size_t)r->lines, sizeof *r->line_y); r->line_h = xcalloc((size_t)r->lines, sizeof *r->line_h);
+    int base_h = font_height(hdc, base) + gap;
+    for (int l = 0; l < r->lines; l++) r->line_h[l] = base_h;
+    for (size_t i = 0; i < r->count; i++) if (r->runs[i].h + gap > r->line_h[r->runs[i].line]) r->line_h[r->runs[i].line] = r->runs[i].h + gap;
     int y = 0;
-    for (int l = 0; l < lines; l++) {
-        for (size_t i = 0; i < r->count; i++) if (r->runs[i].line == l) r->runs[i].y = y + (heights[l] - px(3) - r->runs[i].h);
-        y += heights[l];
+    for (int l = 0; l < r->lines; l++) {
+        r->line_y[l] = y;
+        for (size_t i = 0; i < r->count; i++) if (r->runs[i].line == l) r->runs[i].y = y + (r->line_h[l] - gap - r->runs[i].h);
+        y += r->line_h[l];
     }
     r->height = y;
-    free(heights);
+    if (align != ALIGN_LEFT) {
+        int aw = align_w > 0 ? align_w : width;
+        for (int l = 0; l < r->lines; l++) {
+            int line_w = 0;
+            for (size_t i = 0; i < r->count; i++) if (r->runs[i].line == l && r->runs[i].x + r->runs[i].wt > line_w) line_w = r->runs[i].x + r->runs[i].wt;
+            int shift = align == ALIGN_CENTER ? (aw - line_w) / 2 : aw - line_w;
+            if (shift > 0) for (size_t i = 0; i < r->count; i++) if (r->runs[i].line == l) r->runs[i].x += shift;
+        }
+    }
     return r;
 }
 
-static void paint_rich(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    Rich *r = it->data;
+static COLORREF selection_color(void) { return blend(theme.accent, theme.background, theme.dark ? 0.4 : 0.3); }
+/// Tints the characters `from`...`to` of the plain text, line by line.
+static void rich_highlight(HDC hdc, const Rich *r, size_t from, size_t to, const RECT *rc, COLORREF color) {
+    for (size_t i = 0; i < r->count; i++) {
+        const Run *run = &r->runs[i];
+        size_t s = from > run->start ? from : run->start, e = to < run->start + run->len ? to : run->start + run->len;
+        if (s >= e) continue;
+        HFONT old = SelectObject(hdc, font(run->font));
+        SIZE a = { 0, 0 }, b = { 0, 0 };
+        GetTextExtentPoint32W(hdc, run->text, (int)(s - run->start), &a);
+        GetTextExtentPoint32W(hdc, run->text, (int)(e - run->start), &b);
+        SelectObject(hdc, old);
+        int x = rc->left + run->x + run->pad;
+        RECT h = { x + a.cx, rc->top + r->line_y[run->line], x + b.cx, rc->top + r->line_y[run->line] + r->line_h[run->line] };
+        if (r->single && h.right > rc->right) h.right = rc->right;
+        if (h.right > h.left) fill_rect(hdc, &h, color);
+    }
+}
+
+/// Paints runs at `rc`, with the selection behind them; `it` may be NULL for text that is not an item (a table cell).
+static void rich_paint(Doc *doc, Item *it, Rich *r, HDC hdc, const RECT *rc) {
     if (!r) return;
+    size_t from, to;
+    if (it && item_selection(doc, it, &from, &to)) rich_highlight(hdc, r, from, to, rc, selection_color());
     for (size_t i = 0; i < r->count; i++) {
         Run *run = &r->runs[i];
         RECT rr = { rc->left + run->x, rc->top + run->y, rc->left + run->x + run->w, rc->top + run->y + run->h };
         if (run->code) {
-            RECT bg = rr; bg.right = bg.left + run->w;
             // Trailing spaces stay outside the tint.
-            size_t len = wcslen(run->text); while (len && run->text[len - 1] == L' ') len--;
-            SIZE sz = { 0, 0 }; HFONT old = SelectObject(hdc, font(run->font)); GetTextExtentPoint32W(hdc, run->text, (int)len, &sz); SelectObject(hdc, old);
-            bg.right = bg.left + sz.cx + px(6);
+            RECT bg = { rr.left, rr.top, rr.left + run->wt, rr.bottom };
             fill_round_rect(hdc, &bg, px(4), theme.code, theme.code);
-            rr.left += px(3);
         }
-        draw_textw(hdc, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
-        if (run->strike) {
-            size_t len = wcslen(run->text); while (len && run->text[len - 1] == L' ') len--;
-            SIZE sz = { 0, 0 }; HFONT old = SelectObject(hdc, font(run->font)); GetTextExtentPoint32W(hdc, run->text, (int)len, &sz); SelectObject(hdc, old);
-            int mid = rr.bottom - run->h / 2;
-            draw_line(hdc, rr.left, mid, rr.left + sz.cx, mid, run->color);
-        }
-        if (run->link) {
-            size_t len = wcslen(run->text); while (len && run->text[len - 1] == L' ') len--;
-            SIZE sz = { 0, 0 }; HFONT old = SelectObject(hdc, font(run->font)); GetTextExtentPoint32W(hdc, run->text, (int)len, &sz); SelectObject(hdc, old);
-            draw_line(hdc, rr.left, rr.bottom - 1, rr.left + sz.cx, rr.bottom - 1, blend(theme.accent, theme.background, 0.6));
-        }
+        rr.left += run->pad;
+        if (r->single) {
+            if (rr.left >= rc->right) continue;
+            if (rr.right > rc->right) rr.right = rc->right;
+            draw_textw(hdc, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        } else draw_textw(hdc, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+        int text_w = run->wt - run->pad * 2;
+        if (run->strike) { int mid = rr.bottom - run->h / 2; draw_line(hdc, rr.left, mid, rr.left + text_w, mid, run->color); }
+        if (run->link) draw_line(hdc, rr.left, rr.bottom - 1, rr.left + text_w, rr.bottom - 1, blend(theme.accent, theme.background, 0.6));
     }
 }
+static void paint_rich(Doc *doc, Item *it, HDC hdc, const RECT *rc) { rich_paint(doc, it, it->data, hdc, rc); }
 int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF color) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, color);
+    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, color, false, px(3), ALIGN_LEFT, 0);
     RECT rc = { x, doc->y, x + w, doc->y + r->height };
     int i = doc_add(doc, &rc, paint_rich);
     Item *it = &doc->items[i];
-    it->data = r; it->free_data = rich_free; it->text = xstrdup(markdown ? markdown : "");
+    it->data = r; it->free_data = rich_free; it->sel = r; it->text = xstrdup(markdown ? markdown : "");
     bool has_link = false;
     for (size_t k = 0; k < r->count && !has_link; k++) has_link = r->runs[k].link;
     if (has_link) { it->action = ACTION_OPEN_LINK; it->hand = true; }
@@ -211,7 +256,7 @@ int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF
     return i;
 }
 int doc_rich_height(Doc *doc, int w, const char *markdown, FontId base) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, theme.text);
+    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, theme.text, false, px(3), ALIGN_LEFT, 0);
     int h = r->height;
     rich_free(r);
     return h;
@@ -227,6 +272,59 @@ const char *doc_link_at(Doc *doc, int index, int x, int y) {
         if (x >= rx && x < rx + run->w && y >= ry && y < ry + run->h + px(3)) return run->url;
     }
     return NULL;
+}
+
+// MARK: - Text
+
+/// Text with an ellipsis is drawn by DrawText and cannot be selected; everything else is laid out in runs.
+static bool uses_runs(UINT flags) { return !(flags & (DT_END_ELLIPSIS | DT_PATH_ELLIPSIS | DT_WORD_ELLIPSIS)); }
+static char *expand_tabs(const char *text) {
+    size_t col = 0, cap = strlen(text) * 2 + 16, n = 0;
+    char *out = xmalloc(cap);
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        if (n + 9 >= cap) { cap *= 2; out = xrealloc(out, cap); }
+        if (*p == '\t') { size_t spaces = 8 - col % 8; memset(out + n, ' ', spaces); n += spaces; col += spaces; }
+        else { out[n++] = (char)*p; if (*p == '\n') col = 0; else if ((*p & 0xC0) != 0x80) col++; }
+    }
+    out[n] = 0;
+    return out;
+}
+static void paint_text(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    RECT r = *rc;
+    draw_text(hdc, it->text, &r, it->font, it->color, it->flags);
+}
+/// Lays an item's text out in runs following its DT_ flags, so it paints and selects as one.
+static void text_runs(Item *it, HDC hdc) {
+    UINT flags = it->flags;
+    bool single = (flags & DT_SINGLELINE) != 0;
+    int w = it->rc.right - it->rc.left, h = it->rc.bottom - it->rc.top;
+    int align = (flags & DT_CENTER) ? ALIGN_CENTER : (flags & DT_RIGHT) ? ALIGN_RIGHT : ALIGN_LEFT;
+    char *text = (flags & DT_EXPANDTABS) ? expand_tabs(it->text) : NULL;
+    if (single) { char *one = str_replace(text ? text : it->text, "\n", " "); free(text); text = one; }
+    Rich *r = rich_layout(hdc, text ? text : it->text, single ? 100000 : w, it->font, it->color, true, 0, align, w);
+    free(text);
+    r->single = single;
+    if (single) {
+        int dy = (flags & DT_VCENTER) ? (h - r->height) / 2 : (flags & DT_BOTTOM) ? h - r->height : 0;
+        if (dy) rich_offset(r, 0, dy);
+    }
+    it->data = r; it->free_data = rich_free; it->sel = r; it->paint = paint_rich;
+}
+int doc_text_at(Doc *doc, const RECT *rc, const char *text, FontId f, COLORREF color, UINT flags) {
+    int i = doc_add(doc, rc, paint_text);
+    Item *it = &doc->items[i];
+    it->text = xstrdup(text ? text : ""); it->font = f; it->color = color; it->flags = flags;
+    if (uses_runs(flags)) text_runs(it, doc->hdc);
+    return i;
+}
+int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color, UINT flags) {
+    bool single = (flags & DT_SINGLELINE) != 0;
+    RECT rc = { x, doc->y, x + w, doc->y + (single ? font_height(doc->hdc, f) : 0) };
+    int i = doc_text_at(doc, &rc, text, f, color, flags | (single ? 0 : DT_WORDBREAK | DT_EDITCONTROL));
+    Item *it = &doc->items[i];
+    if (!single) it->rc.bottom = it->rc.top + (it->sel ? it->sel->height : measure_text(doc->hdc, text, w, f, flags & ~DT_VCENTER));
+    doc->y = it->rc.bottom;
+    return i;
 }
 
 // MARK: - Boxes
@@ -279,17 +377,19 @@ static void paint_label(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     LabelData *d = it->data;
     RECT g = { rc->left, rc->top, rc->left + d->glyph_w, rc->top + font_height(hdc, it->font) + px(2) };
     draw_glyph(hdc, d->glyph, &g, d->glyph_font, it->color);
-    RECT t = { rc->left + d->glyph_w + px(6), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, it->text, &t, it->font, it->color, it->flags);
+    rich_paint(doc, it, it->sel, hdc, rc);
 }
 int doc_label(Doc *doc, int x, int w, wchar_t glyph, const char *text, FontId f, COLORREF color) {
     LabelData *d = xcalloc(1, sizeof *d);
     d->glyph = glyph; d->glyph_font = FONT_ICON_SMALL; d->glyph_w = px(16);
-    int h = measure_text(doc->hdc, text, w - d->glyph_w - px(6), f, DT_WORDBREAK);
+    Rich *r = rich_layout(doc->hdc, text ? text : "", w - d->glyph_w - px(6), f, color, true, 0, ALIGN_LEFT, 0);
+    rich_offset(r, d->glyph_w + px(6), 0);
+    int h = r->height;
     RECT rc = { x, doc->y, x + w, doc->y + h };
     int i = doc_add(doc, &rc, paint_label);
     Item *it = &doc->items[i];
-    it->data = d; it->free_data = free; it->text = xstrdup(text ? text : ""); it->font = f; it->color = color; it->flags = DT_WORDBREAK | DT_EDITCONTROL;
+    it->data = d; it->free_data = free; it->sel = r; it->sel_owned = true;
+    it->text = xstrdup(text ? text : ""); it->font = f; it->color = color; it->flags = DT_WORDBREAK | DT_EDITCONTROL;
     doc->y += h;
     return i;
 }
@@ -528,10 +628,6 @@ static void paint_code_header(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     draw_glyph(hdc, d->copied ? 0xE73E : 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
     draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.border);
 }
-static void paint_code_text(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    RECT r = *rc;
-    draw_text(hdc, it->text, &r, FONT_MONO_SMALL, theme.text, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL | DT_EXPANDTABS);
-}
 static void quote_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(3), rc->bottom }; fill_round_rect(hdc, &r, px(1), theme.border, theme.border); }
 static void paint_task_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     bool checked = it->arg != 0;
@@ -574,8 +670,7 @@ static void paint_table(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
                 if (shift < 0) shift = 0;
             }
             RECT cr = { rc->left + t->col_x[c] + pad + shift, rc->top + t->row_y[r] + px(5), rc->left + t->col_x[c] + t->col_w[c] - pad, rc->top + t->row_y[r] + t->row_h[r] };
-            Item fake; memset(&fake, 0, sizeof fake); fake.data = cell;
-            paint_rich(doc, &fake, hdc, &cr);
+            rich_paint(doc, NULL, cell, hdc, &cr);
         }
     }
 }
@@ -592,7 +687,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     int *want = xcalloc(t->cols, sizeof *want);
     for (size_t r = 0; r < t->rows; r++)
         for (size_t c = 0; c < t->cols; c++) {
-            Rich *probe = rich_layout(doc->hdc, b->cells[r * t->cols + c], 100000, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text);
+            Rich *probe = rich_layout(doc->hdc, b->cells[r * t->cols + c], 100000, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
             int widest = 0;
             for (size_t k = 0; k < probe->count; k++) if (probe->runs[k].x + probe->runs[k].w > widest) widest = probe->runs[k].x + probe->runs[k].w;
             rich_free(probe);
@@ -620,7 +715,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
         int h = 0;
         for (size_t c = 0; c < t->cols; c++) {
             int cell_w = t->col_w[c] - 2 * pad; if (cell_w < px(16)) cell_w = px(16);
-            Rich *cell = rich_layout(doc->hdc, b->cells[r * t->cols + c], cell_w, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text);
+            Rich *cell = rich_layout(doc->hdc, b->cells[r * t->cols + c], cell_w, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
             t->cells[r * t->cols + c] = cell;
             if (cell->height > h) h = cell->height;
         }
@@ -684,11 +779,7 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
             hi->data = d; hi->free_data = code_free; hi->action = ACTION_COPY_CODE; hi->arg = (intptr_t)d->code; hi->hand = true;
             doc->y += header_h;
             doc_space(doc, px(8));
-            int th = measure_text(doc->hdc, b->text, w - px(24), FONT_MONO_SMALL, DT_WORDBREAK | DT_EXPANDTABS);
-            RECT tr = { x + px(12), doc->y, x + w - px(12), doc->y + th };
-            int ti = doc_add(doc, &tr, paint_code_text);
-            doc->items[ti].text = xstrdup(b->text);
-            doc->y += th;
+            doc_text(doc, x + px(12), w - px(24), b->text, FONT_MONO_SMALL, theme.text, DT_WORDBREAK | DT_EXPANDTABS);
             doc_box_end(doc, box, px(10));
             break;
         }
@@ -716,7 +807,8 @@ int doc_hit(Doc *doc, int x, int y) {
         if (!it->action) continue;
         if (x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) {
             if (it->paint == paint_segments) it->arg = ((SegmentData *)it->data)->arg_base + segment_at(it, x);
-            if (it->paint == paint_rich && !doc_link_at(doc, (int)i, x, y)) continue;
+            // Linked text is clickable on its links alone; the rest of it selects.
+            if (it->action == ACTION_OPEN_LINK && !doc_link_at(doc, (int)i, x, y)) continue;
             return (int)i;
         }
     }
@@ -724,10 +816,159 @@ int doc_hit(Doc *doc, int x, int y) {
 }
 char *doc_item_plain_text(Doc *doc, int index) {
     Item *it = doc_item(doc, index);
-    if (!it || !it->text) return NULL;
+    if (!it) return NULL;
+    if (it->sel) return wide_to_utf8(it->sel->plain);
+    if (!it->text) return NULL;
     return it->paint == paint_rich ? md_plain(it->text) : xstrdup(it->text);
 }
 int doc_find(Doc *doc, int id) {
     for (size_t i = 0; i < doc->count; i++) if (doc->items[i].id == id) return (int)i;
     return -1;
+}
+
+// MARK: - Selection
+
+static bool pos_before(DocPos a, DocPos b) { return a.item < b.item || (a.item == b.item && a.offset < b.offset); }
+static void clamp_pos(Doc *doc, DocPos *p) {
+    Rich *r = doc->items[p->item].sel;
+    if (!r) p->offset = 0;
+    else if (p->offset < 0) p->offset = 0;
+    else if ((size_t)p->offset > r->plain_len) p->offset = (int)r->plain_len;
+}
+/// The selection in document order, clamped to the items laid out; false when it is empty.
+static bool selection_range(Doc *doc, DocPos *a, DocPos *b) {
+    DocPos s = doc->sel_anchor, e = doc->sel_focus;
+    if (s.item < 0 || e.item < 0 || (size_t)s.item >= doc->count || (size_t)e.item >= doc->count) return false;
+    if (pos_before(e, s)) { DocPos t = s; s = e; e = t; }
+    clamp_pos(doc, &s); clamp_pos(doc, &e);
+    *a = s; *b = e;
+    return pos_before(s, e);
+}
+/// The part of an item's plain text that is selected.
+static bool item_selection(Doc *doc, Item *it, size_t *from, size_t *to) {
+    if (!it || !it->sel || it < doc->items || it >= doc->items + doc->count) return false;
+    int i = (int)(it - doc->items);
+    DocPos a, b;
+    if (!selection_range(doc, &a, &b) || i < a.item || i > b.item) return false;
+    *from = i == a.item ? (size_t)a.offset : 0;
+    *to = i == b.item ? (size_t)b.offset : it->sel->plain_len;
+    return *from < *to;
+}
+bool doc_has_selection(Doc *doc) { DocPos a, b; return selection_range(doc, &a, &b); }
+void doc_clear_selection(Doc *doc) {
+    doc->sel_anchor.item = doc->sel_focus.item = -1; doc->sel_anchor.offset = doc->sel_focus.offset = 0;
+    doc->selecting = false;
+}
+int doc_text_item_at(Doc *doc, int x, int y) {
+    for (size_t i = doc->count; i-- > 0;) {
+        Item *it = &doc->items[i];
+        if (it->sel && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
+    }
+    return -1;
+}
+
+/// The character boundary nearest `x` within a run's text; `x` is from the text's left edge.
+static size_t run_char_at(HDC hdc, const Run *run, int x) {
+    if (x <= 0 || !run->len) return 0;
+    HFONT old = SelectObject(hdc, font(run->font));
+    int fit = 0; SIZE sz = { 0, 0 };
+    GetTextExtentExPointW(hdc, run->text, (int)run->len, x, &fit, NULL, &sz);
+    size_t k = fit < 0 ? 0 : (size_t)fit;
+    if (k < run->len) {
+        SIZE a = { 0, 0 }, b = { 0, 0 };
+        GetTextExtentPoint32W(hdc, run->text, (int)k, &a);
+        GetTextExtentPoint32W(hdc, run->text, (int)k + 1, &b);
+        if (x > (a.cx + b.cx) / 2) k++;
+    }
+    SelectObject(hdc, old);
+    return k;
+}
+/// The plain-text offset nearest a point relative to the runs' origin.
+static size_t rich_hit(HDC hdc, const Rich *r, int x, int y) {
+    if (!r->lines) return 0;
+    if (y < r->line_y[0]) return 0;
+    int last = r->lines - 1;
+    if (y >= r->line_y[last] + r->line_h[last]) return r->plain_len;
+    int l = last;
+    for (int k = 0; k < r->lines; k++) if (y < r->line_y[k] + r->line_h[k]) { l = k; break; }
+    const Run *first = NULL, *end = NULL;
+    for (size_t i = 0; i < r->count; i++) {
+        const Run *run = &r->runs[i];
+        if (run->line != l) continue;
+        if (!first) first = run;
+        end = run;
+        if (x < run->x + run->w) {
+            if (x < run->x) return run->start;
+            return run->start + run_char_at(hdc, run, x - run->x - run->pad);
+        }
+    }
+    if (!first) return r->line_start[l];   // a blank line
+    return end->start + end->len;
+}
+bool doc_position_at(Doc *doc, HDC hdc, int x, int y, DocPos *pos) {
+    // The item spanning y and nearest x; failing that, the nearest item above (its end) or below (its start).
+    int best = -1, best_d = 0;
+    for (size_t i = 0; i < doc->count; i++) {
+        Item *it = &doc->items[i];
+        if (!it->sel || y < it->rc.top || y >= it->rc.bottom) continue;
+        int d = x < it->rc.left ? it->rc.left - x : x >= it->rc.right ? x - it->rc.right + 1 : 0;
+        if (best < 0 || d < best_d) { best = (int)i; best_d = d; }
+    }
+    if (best >= 0) {
+        Item *it = &doc->items[best];
+        pos->item = best; pos->offset = (int)rich_hit(hdc, it->sel, x - it->rc.left, y - it->rc.top);
+        return true;
+    }
+    for (size_t i = 0; i < doc->count; i++) {
+        Item *it = &doc->items[i];
+        if (!it->sel) continue;
+        int d = y < it->rc.top ? it->rc.top - y : y - it->rc.bottom + 1;
+        if (best < 0 || d < best_d) { best = (int)i; best_d = d; }
+    }
+    if (best < 0) return false;
+    Item *it = &doc->items[best];
+    pos->item = best; pos->offset = y < it->rc.top ? 0 : (int)it->sel->plain_len;
+    return true;
+}
+void doc_select_all(Doc *doc) {
+    int first = -1, last = -1;
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].sel) { if (first < 0) first = (int)i; last = (int)i; }
+    if (first < 0) return;
+    doc->sel_anchor.item = first; doc->sel_anchor.offset = 0;
+    doc->sel_focus.item = last; doc->sel_focus.offset = (int)doc->items[last].sel->plain_len;
+}
+void doc_select_word(Doc *doc, DocPos pos) {
+    Item *it = doc_item(doc, pos.item);
+    if (!it || !it->sel || !it->sel->plain_len) return;
+    const wchar_t *p = it->sel->plain; size_t n = it->sel->plain_len;
+    size_t o = pos.offset < 0 ? 0 : (size_t)pos.offset >= n ? n - 1 : (size_t)pos.offset;
+    bool space = iswspace(p[o]) != 0;
+    size_t s = o, e = o + 1;
+    while (s > 0 && (iswspace(p[s - 1]) != 0) == space && p[s - 1] != L'\n') s--;
+    while (e < n && (iswspace(p[e]) != 0) == space && p[e] != L'\n') e++;
+    doc->sel_anchor.item = doc->sel_focus.item = pos.item;
+    doc->sel_anchor.offset = (int)s; doc->sel_focus.offset = (int)e;
+}
+char *doc_selection_text(Doc *doc) {
+    DocPos a, b;
+    if (!selection_range(doc, &a, &b)) return NULL;
+    wchar_t *out = NULL; size_t len = 0, cap = 0;
+    int prev_bottom = 0; bool any = false;
+    for (int i = a.item; i <= b.item; i++) {
+        Item *it = &doc->items[i];
+        if (!it->sel) continue;
+        size_t from = i == a.item ? (size_t)a.offset : 0, to = i == b.item ? (size_t)b.offset : it->sel->plain_len;
+        if (from >= to) continue;
+        // Items side by side (a bullet and its text) join with a space; stacked ones take a line each.
+        const wchar_t *sep = !any ? L"" : it->rc.top < prev_bottom - px(2) ? L" " : L"\n";
+        size_t need = len + wcslen(sep) + (to - from) + 1;
+        if (need > cap) { cap = need * 2; out = xrealloc(out, cap * sizeof *out); }
+        wcscpy(out + len, sep); len += wcslen(sep);
+        memcpy(out + len, it->sel->plain + from, (to - from) * sizeof *out); len += to - from; out[len] = 0;
+        prev_bottom = it->rc.bottom; any = true;
+    }
+    if (!out) return NULL;
+    char *utf8 = wide_to_utf8(out);
+    free(out);
+    return utf8;
 }
