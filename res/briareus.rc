@@ -1,0 +1,88 @@
+// Briareus for Windows: icon, manifest, dialogs and version.
+#include <windows.h>
+#include <commctrl.h>
+#include "resource.h"
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+IDI_APP ICON "briareus.ico"
+// Id 2 (ISOLATIONAWARE_MANIFEST_RESOURCE_ID) so it does not collide with the default manifest MinGW links; main.c activates it.
+IDR_MANIFEST RT_MANIFEST "briareus.manifest"
+
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE "Briareus"
+END
+
+IDD_NEW_CONVERSATION DIALOGEX 0, 0, 340, 262
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "New conversation"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_PROJECT_NAME, 12, 10, 316, 10
+    EDITTEXT        IDC_PROMPT, 12, 24, 316, 96, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL
+    LTEXT           "", IDC_RECORDING, 12, 125, 200, 10
+    PUSHBUTTON      "Record a voice note", IDC_MIC, 228, 123, 100, 14
+    LTEXT           "Branch", IDC_BRANCH_LABEL, 12, 146, 60, 10
+    COMBOBOX        IDC_BRANCH, 76, 144, 252, 120, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Model", IDC_MODEL_LABEL, 12, 166, 60, 10
+    COMBOBOX        IDC_MODEL, 76, 164, 252, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Effort", IDC_EFFORT_LABEL, 12, 186, 60, 10
+    COMBOBOX        IDC_EFFORT, 76, 184, 252, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Starting a conversation runs a paid agent using this project's configured provider and model.", IDC_NOTE, 12, 204, 316, 18
+    LTEXT           "", IDC_ERROR, 12, 222, 316, 18
+    LTEXT           "The request may have completed. Close this window and refresh the conversations before starting again.", IDC_UNCERTAIN, 12, 222, 200, 18, NOT WS_VISIBLE
+    PUSHBUTTON      "Return to conversations", IDC_RETURN, 220, 224, 108, 14, NOT WS_VISIBLE
+    DEFPUSHBUTTON   "Start", IDC_START, 226, 242, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 280, 242, 48, 14
+END
+
+IDD_RENAME DIALOGEX 0, 0, 260, 66
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Rename conversation"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Title", -1, 12, 12, 40, 10
+    EDITTEXT        IDC_TITLE, 12, 24, 236, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "Save", IDOK, 146, 46, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 200, 46, 48, 14
+END
+
+IDD_ACTION_INPUT DIALOGEX 0, 0, 340, 200
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Give feedback"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_HINT, 12, 10, 316, 10
+    EDITTEXT        IDC_INPUT, 12, 24, 316, 110, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL
+    LTEXT           "", IDC_RECORDING, 12, 139, 200, 10
+    PUSHBUTTON      "Record a voice note", IDC_MIC, 228, 137, 100, 14
+    LTEXT           "", IDC_NOTE, 12, 156, 316, 22
+    DEFPUSHBUTTON   "Start", IDC_START, 226, 180, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 280, 180, 48, 14
+END
+
+1 VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+FILEOS 0x40004L
+FILETYPE 0x1L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Okanet Solutions"
+            VALUE "FileDescription", "Briareus for Windows"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "Briareus"
+            VALUE "OriginalFilename", "Briareus.exe"
+            VALUE "ProductName", "Briareus"
+            VALUE "ProductVersion", "1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

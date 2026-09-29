@@ -1,0 +1,17 @@
+// The device token lives in Windows Credential Manager, scoped by canonical server origin; only the origin is saved in the registry.
+#ifndef BRIAREUS_CREDENTIALS_H
+#define BRIAREUS_CREDENTIALS_H
+#include <stdbool.h>
+
+/// The saved token for an origin, or NULL when there is none. `*failed` is set when the store itself could not be read.
+char *credentials_read(const char *origin, bool *failed);
+bool credentials_save(const char *token, const char *origin);
+bool credentials_remove(const char *origin);
+/// What a failed store access should say.
+const char *credentials_failure_text(void);
+
+char *settings_read_origin(void);
+void settings_write_origin(const char *origin);
+void settings_remove_origin(void);
+
+#endif

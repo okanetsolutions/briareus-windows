@@ -1,0 +1,20 @@
+// Modal dialogs: new conversation, rename, connection, and an errand's input.
+#ifndef BRIAREUS_DIALOGS_H
+#define BRIAREUS_DIALOGS_H
+#include "board.h"
+#include "models.h"
+#include <windows.h>
+#include <stdbool.h>
+
+/// Starts a conversation; true with the new session when one began.
+bool dialog_new_conversation(HWND owner, const Project *project, Session *started);
+/// A new title, or NULL when cancelled.
+char *dialog_rename(HWND owner, const char *current);
+/// What an errand needs to be told; true with the text (possibly empty when optional) when started.
+bool dialog_action_input(HWND owner, const BoardAction *action, int number, char **input);
+/// Applies the theme to a dialog and its controls.
+void dialog_theme(HWND dialog);
+/// Paints dialog backgrounds and static text in the theme; call from WM_CTLCOLOR* handlers.
+LRESULT dialog_ctl_color(HWND dialog, UINT msg, WPARAM wp, LPARAM lp);
+
+#endif
