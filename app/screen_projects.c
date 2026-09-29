@@ -1,6 +1,7 @@
 // The sidebar, as the dashboard draws it: the ＋ New session strip with the ⚑ switch, the projects with their
 // session counts, and inside a project its conversations; ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
+#include "resource.h"
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -67,10 +68,12 @@ static void sidebar_footer_paint(HDC hdc, const RECT *rc, FooterRects *out, bool
     draw_line(hdc, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(10), h = px(18);
     int left = rc->left + px(16), right = rc->right - px(16);
-    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B";
-    int sw = text_width(hdc, sel, FONT_FOOTNOTE), ow = text_width(hdc, out_, FONT_FOOTNOTE);
+    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B", *version = "v" APP_VERSION_STRING;
+    int sw = text_width(hdc, sel, FONT_FOOTNOTE), ow = text_width(hdc, out_, FONT_FOOTNOTE), vw = text_width(hdc, version, FONT_CAPTION2);
     RECT a = { left, y, left + sw, y + h }, c = { right - ow, y, right, y + h };
+    RECT v = { (left + right) / 2 - vw / 2, y, (left + right) / 2 + vw / 2 + 1, y + h };
     draw_text(hdc, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     draw_text(hdc, out_, &c, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     InflateRect(&a, px(4), px(4)); InflateRect(&c, px(4), px(4));
     out->select_rc = a; out->signout_rc = c;
