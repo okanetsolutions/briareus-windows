@@ -40,30 +40,23 @@ char *session_subtitle(const Session *session) {
 
 typedef struct { char *status; } DotData;
 static void dot_free(void *p) { DotData *d = p; free(d->status); free(d); }
-static void paint_dot(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_status_dot(hdc, rc->left + px(6), rc->top + px(9), ((DotData *)it->data)->status); }
+static void paint_dot(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_status_dot(hdc, rc->left + px(4), (rc->top + rc->bottom) / 2, ((DotData *)it->data)->status); }
 
 void doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background) {
-    COLORREF fill = selected ? blend(theme.accent, background, 0.16) : background;
-    int box = doc_box_begin(doc, x, w, px(9), fill, selected ? blend(theme.accent, background, 0.3) : theme.border, px(10));
-    int left = x + px(12), inner = w - px(24);
-    int top = doc->y;
-    RECT dr = { left, top, left + px(14), top + px(18) };
+    int box = doc_box_begin(doc, x, w, px(7), selected ? theme.raise : background, selected ? theme.raise : background, px(8));
+    int left = x + px(8), inner = w - px(16);
+    int top = doc->y, lh = px(23);
+    RECT dr = { left, top, left + px(8), top + lh };
     int di = doc_add(doc, &dr, paint_dot);
     DotData *dd = xcalloc(1, sizeof *dd); dd->status = xstrdup(session_status(session));
     doc_item(doc, di)->data = dd; doc_item(doc, di)->free_data = dot_free;
-    bool closed = str_eq(session_status(session), "closed");
-    int text_x = left + px(18), text_w = inner - px(18);
-    RECT tr = { text_x, top, text_x + text_w, top };
-    int title_h = measure_text(doc->hdc, session_display_title(session), text_w, FONT_BODY_MEDIUM, DT_WORDBREAK);
-    int two_lines = font_height(doc->hdc, FONT_BODY_MEDIUM) * 2 + px(2);
-    if (title_h > two_lines) title_h = two_lines;
-    tr.bottom = top + title_h;
-    doc_text_at(doc, &tr, session_display_title(session), FONT_BODY_MEDIUM, closed ? theme.secondary : theme.text, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
-    doc->y = top + title_h + px(3);
+    RECT tr = { left + px(7) + px(7), top, left + inner, top + lh };
+    doc_text_at(doc, &tr, session_display_title(session), FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc->y = top + lh + px(2);
     char *sub = session_subtitle(session);
-    doc_text(doc, text_x, text_w, sub, FONT_CAPTION, theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_text(doc, left, inner, sub, FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS);
     free(sub);
-    doc_box_end(doc, box, px(9));
+    doc_box_end(doc, box, px(7));
     doc_box_action(doc, box, action, arg);
 }
 
@@ -148,12 +141,12 @@ static void linked_free(void *p) { LinkedData *d = p; free(d->reference); free(d
 static void paint_linked(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     LinkedData *d = it->data;
     int x = rc->left;
-    RECT g = { x, rc->top, x + px(14), rc->bottom }; draw_glyph(hdc, 0xE71B, &g, FONT_ICON_SMALL, theme.tertiary); x += px(18);
-    int rw = text_width(hdc, d->reference, FONT_MONO_SMALL);
-    RECT r = { x, rc->top, x + rw, rc->bottom }; draw_text(hdc, d->reference, &r, FONT_MONO_SMALL, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += rw + px(5);
+    RECT g = { x, rc->top, x + px(12), rc->bottom }; draw_text(hdc, "\xE2\x86\xB3", &g, FONT_CAPTION, theme.tertiary, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(16);
+    int rw = text_width(hdc, d->reference, FONT_MONO_CAPTION2);
+    RECT r = { x, rc->top, x + rw, rc->bottom }; draw_text(hdc, d->reference, &r, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += rw + px(5);
     int sw = d->state ? text_width(hdc, d->state, FONT_CAPTION2) + px(6) : 0;
     RECT t = { x, rc->top, rc->right - sw, rc->bottom };
-    draw_text(hdc, d->title, &t, FONT_CAPTION, it->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(hdc, d->title, &t, FONT_CAPTION, it->action ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (d->state) {
         int tw = text_width(hdc, d->title, FONT_CAPTION);
         int sx = x + (tw < rc->right - sw - x ? tw : rc->right - sw - x) + px(6);
@@ -168,72 +161,62 @@ void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *r
     else if (board_link_not_planned(link)) { d->state = xstrdup("not planned"); d->state_color = theme.warning; }
     else if (str_eq(link->state, "open")) { d->state = xstrdup("open"); d->state_color = theme.success; }
     else if (str_eq(link->state, "closed")) { d->state = xstrdup("closed"); d->state_color = theme.secondary; }
-    int h = font_height(doc->hdc, FONT_CAPTION) + px(6);
+    int h = px(20);
     int i = doc_custom(doc, x, w, h, paint_linked, d, linked_free, action, arg);
-    doc_item(doc, i)->color = theme.text;
+    doc_item(doc, i)->color = theme.ink;
 }
 
-typedef struct { wchar_t glyph; COLORREF color; } GlyphData;
-static void paint_glyph_item(Doc *doc, Item *it, HDC hdc, const RECT *rc) { GlyphData *d = it->data; draw_glyph(hdc, d->glyph, rc, FONT_ICON, d->color); }
-static void add_glyph(Doc *doc, int x, int y, wchar_t glyph, COLORREF color) {
-    RECT rc = { x, y, x + px(18), y + px(20) };
-    int i = doc_add(doc, &rc, paint_glyph_item);
-    GlyphData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->color = color;
-    doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = free;
+/// One 12px muted line of facts, `·` between them, the last one pushed to the right edge.
+typedef struct { char **parts; COLORREF *colors; bool *mono; size_t count; char *right; } MetaData;
+static void meta_free(void *p) { MetaData *d = p; str_array_free(d->parts, d->count); free(d->colors); free(d->mono); free(d->right); free(d); }
+static void paint_meta(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    MetaData *d = it->data;
+    int x = rc->left, right = rc->right;
+    if (d->right) { int rw = text_width(hdc, d->right, FONT_CAPTION); RECT rr = { right - rw, rc->top, right, rc->bottom }; draw_text(hdc, d->right, &rr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= rw + px(8); }
+    int dot_w = text_width(hdc, "\xC2\xB7", FONT_CAPTION);
+    for (size_t i = 0; i < d->count && x < right; i++) {
+        if (i) { RECT dr = { x + px(6), rc->top, x + px(6) + dot_w, rc->bottom }; draw_text(hdc, "\xC2\xB7", &dr, FONT_CAPTION, theme.line, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(6) * 2 + dot_w; }
+        FontId f = d->mono[i] ? FONT_MONO_CAPTION2 : FONT_CAPTION;
+        int w = text_width(hdc, d->parts[i], f);
+        if (x + w > right) w = right - x;
+        RECT pr = { x, rc->top, x + w, rc->bottom };
+        draw_text(hdc, d->parts[i], &pr, f, d->colors[i], DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        x += w;
+    }
 }
-static void updated_text(Doc *doc, int right, int y, bool has, time_t when) {
-    if (!has) return;
-    char *rel = format_relative(when);
-    int w = text_width(doc->hdc, rel, FONT_CAPTION2);
-    RECT rc = { right - w, y, right, y + font_height(doc->hdc, FONT_CAPTION2) + px(2) };
-    doc_text_at(doc, &rc, rel, FONT_CAPTION2, theme.secondary, DT_RIGHT | DT_SINGLELINE);
-    free(rel);
+typedef struct { MetaData *d; } MetaBuilder;
+static void meta_add(MetaData *d, const char *text, COLORREF color, bool mono) {
+    d->parts = xrealloc(d->parts, (d->count + 1) * sizeof *d->parts); d->colors = xrealloc(d->colors, (d->count + 1) * sizeof *d->colors); d->mono = xrealloc(d->mono, (d->count + 1) * sizeof *d->mono);
+    d->parts[d->count] = xstrdup(text); d->colors[d->count] = color; d->mono[d->count] = mono; d->count++;
 }
+static void doc_meta(Doc *doc, int x, int w, MetaData *d) { doc_custom(doc, x, w, px(20), paint_meta, d, meta_free, 0, 0); }
 
 void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count) {
-    int box = doc_box_begin(doc, x, w, px(10), theme.elevated, theme.border, px(10));
-    int left = x + px(12), inner = w - px(24);
-    COLORREF tint = pull_conflicting(pull) ? theme.danger : pull->draft ? theme.secondary : theme.success;
-    add_glyph(doc, left, doc->y, 0xE8AB, tint);
-    int tx = left + px(26), tw = inner - px(26);
-    doc_text(doc, tx, tw, pull->title, FONT_BODY_MEDIUM, theme.text, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
+    int box = doc_box_begin(doc, x, w, px(10), theme.raise, theme.line, px(12));
+    int ix = x + px(12), iw = w - px(24);
+    doc_text(doc, ix, iw, pull->title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(4));
-    int y = doc->y;
-    char *number = xstrfmt("#%d", pull->number);
-    int nw = text_width(doc->hdc, number, FONT_MONO_SMALL);
-    RECT nr = { tx, y, tx + nw, y + font_height(doc->hdc, FONT_MONO_SMALL) + px(2) };
-    doc_text_at(doc, &nr, number, FONT_MONO_SMALL, theme.secondary, DT_LEFT | DT_SINGLELINE);
-    free(number);
-    int rel_w = pull->has_updated ? px(60) : 0;
-    RECT br = { tx + nw + px(6), y, tx + tw - rel_w, nr.bottom };
-    doc_text_at(doc, &br, pull->branch, FONT_MONO_SMALL, theme.secondary, DT_LEFT | DT_SINGLELINE | DT_PATH_ELLIPSIS);
-    updated_text(doc, tx + tw, y, pull->has_updated, pull->updated_at);
-    doc->y = nr.bottom + px(5);
-    BadgeSpec badges[6]; char stack_text[32];
-    size_t bn = pull_badges(pull, stack, badges, 6, stack_text, sizeof stack_text);
-    if (bn) { doc_badges(doc, tx, tw, badges, bn, theme.elevated); doc_space(doc, px(5)); }
-    if (pull->label_count) { doc_label_chips(doc, tx, tw, pull->labels, pull->label_count, theme.elevated); doc_space(doc, px(5)); }
-    if (pull->author || pull->assignee_count || pull->reviewer_count) {
-        Str who; str_init(&who);
-        if (pull->author) str_appendf(&who, "by @%s", pull->author);
-        char *assigned = people(pull->assignees, pull->assignee_count, 2);
-        str_appendf(&who, "%s%s", who.len ? " \xC2\xB7 " : "", pull->assignee_count ? "assigned " : "unassigned");
-        if (pull->assignee_count) str_appendz(&who, assigned);
-        free(assigned);
-        if (pull->reviewer_count) {
-            str_appendz(&who, " \xC2\xB7 review ");
-            for (size_t i = 0; i < pull->reviewer_count && i < 2; i++) {
-                const char *mark = str_eq(pull->reviewers[i].state, "approved") ? "\xE2\x9C\x93" : str_eq(pull->reviewers[i].state, "changes_requested") ? "\xE2\x9C\x97"
-                                 : str_eq(pull->reviewers[i].state, "requested") ? "\xE2\x97\x8B" : "\xE2\x9C\x8E";
-                str_appendf(&who, "%s%s @%s", i ? ", " : "", mark, pull->reviewers[i].user);
-            }
-            if (pull->reviewer_count > 2) str_appendf(&who, " +%zu", pull->reviewer_count - 2);
-        }
-        doc_text(doc, tx, tw, who.data, FONT_CAPTION, theme.secondary, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
-        str_free(&who);
+    MetaData *d = xcalloc(1, sizeof *d);
+    char *number = xstrfmt("#%d", pull->number); meta_add(d, number, theme.muted, false); free(number);
+    if (pull->draft) meta_add(d, "draft", theme.muted, false);
+    if (pull_has_conflicts(pull)) meta_add(d, "\xE2\x9A\xA0 conflicts", theme.danger, false);
+    if (pull->checks) {
+        if (str_eq(pull->checks, "success")) meta_add(d, "\xE2\x9C\x93 checks", theme.ok, false);
+        else if (str_eq(pull->checks, "failure") || str_eq(pull->checks, "error")) meta_add(d, "\xE2\x9C\x97 checks", theme.danger, false);
+        else meta_add(d, "\xE2\x80\xA6 checks", theme.warn, false);
     }
-    for (size_t i = 0; i < pull->issue_count; i++) doc_linked_row(doc, tx, tw, &pull->issues[i], repo, 0, 0);
-    if (button_count) { doc_space(doc, px(8)); doc_button_row(doc, tx, tw, buttons, button_count); }
+    ReviewStatus review = review_status_of_reviewers(pull->review_decision, pull->reviewers, pull->reviewer_count);
+    if (review != REVIEW_NONE) { COLORREF c; review_glyph(review, &c); meta_add(d, review_status_text(review), c, false); }
+    if (stack) { char *label = stack_position_label(stack, 0); char *text = xstrfmt("stack %s", label); meta_add(d, text, theme.accent, false); free(text); free(label); }
+    if (pull->assignee_count) { char *a = people(pull->assignees, pull->assignee_count, 2); meta_add(d, a, theme.muted, false); free(a); }
+    else meta_add(d, "unassigned", theme.tertiary, false);
+    if (pull->author) { char *a = xstrfmt("@%s", pull->author); meta_add(d, a, theme.muted, false); free(a); }
+    if (!str_empty(pull->branch)) meta_add(d, pull->branch, theme.muted, true);
+    if (pull->has_updated) d->right = format_relative(pull->updated_at);
+    doc_meta(doc, ix, iw, d);
+    if (pull->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, pull->labels, pull->label_count, theme.raise); }
+    for (size_t i = 0; i < pull->issue_count; i++) { doc_space(doc, px(4)); doc_linked_row(doc, ix, iw, &pull->issues[i], repo, 0, 0); }
+    if (button_count) { doc_space(doc, px(8)); doc_button_row(doc, ix, iw, buttons, button_count); }
     doc_box_end(doc, box, px(10));
     doc_box_action(doc, box, action, arg);
 }
@@ -258,35 +241,32 @@ static void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue)
 }
 
 void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg) {
-    int box = doc_box_begin(doc, x, w, px(10), theme.elevated, theme.border, px(10));
-    int left = x + px(12), inner = w - px(24);
-    add_glyph(doc, left, doc->y, issue_is_epic(issue) ? 0xE81E : 0xEA3A, issue->pull_count ? theme.accent : theme.success);
-    int tx = left + px(26), tw = inner - px(26);
-    doc_text(doc, tx, tw, issue->title, FONT_BODY_MEDIUM, theme.text, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
+    int box = doc_box_begin(doc, x, w, px(10), theme.raise, theme.line, px(12));
+    int ix = x + px(12), iw = w - px(24);
+    char *title = xstrfmt("%s%s", issue_is_epic(issue) ? "\xE2\x97\x8E " : "", issue->title);
+    doc_text(doc, ix, iw, title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
+    free(title);
     doc_space(doc, px(4));
-    Str meta; str_init(&meta);
-    str_appendf(&meta, "#%d", issue->number);
-    if (issue->author) str_appendf(&meta, " \xC2\xB7 @%s", issue->author);
-    if (issue->assignee_count) { char *a = people(issue->assignees, issue->assignee_count, 2); str_appendf(&meta, " \xC2\xB7 assigned %s", a); free(a); }
-    else str_appendz(&meta, " \xC2\xB7 unassigned");
-    if (issue->comments > 0) str_appendf(&meta, " \xC2\xB7 %d comment%s", issue->comments, issue->comments == 1 ? "" : "s");
-    if (issue->milestone) str_appendf(&meta, " \xC2\xB7 %s", issue->milestone);
-    int y = doc->y;
-    int rel_w = issue->has_updated ? px(60) : 0;
-    RECT mr = { tx, y, tx + tw - rel_w, y + font_height(doc->hdc, FONT_CAPTION) + px(2) };
-    doc_text_at(doc, &mr, meta.data, FONT_CAPTION, theme.secondary, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    str_free(&meta);
-    updated_text(doc, tx + tw, y, issue->has_updated, issue->updated_at);
-    doc->y = mr.bottom + px(5);
-    if (issue_is_epic(issue)) { doc_epic_progress(doc, tx, tw, issue); doc_space(doc, px(4)); }
-    if (issue->label_count) { doc_label_chips(doc, tx, tw, issue->labels, issue->label_count, theme.elevated); doc_space(doc, px(4)); }
+    MetaData *d = xcalloc(1, sizeof *d);
+    char *number = xstrfmt("#%d", issue->number); meta_add(d, number, theme.muted, false); free(number);
+    if (issue->author) { char *a = xstrfmt("@%s", issue->author); meta_add(d, a, theme.muted, false); free(a); }
+    if (issue->assignee_count) { char *a = people(issue->assignees, issue->assignee_count, 2); meta_add(d, a, theme.muted, false); free(a); }
+    else meta_add(d, "unassigned", theme.tertiary, false);
+    if (issue->comments > 0) { char *c = xstrfmt("%d comment%s", issue->comments, issue->comments == 1 ? "" : "s"); meta_add(d, c, theme.muted, false); free(c); }
+    if (issue->milestone) meta_add(d, issue->milestone, theme.muted, false);
+    if (issue->pull_count) meta_add(d, issue->pull_count == 1 ? "1 pull request" : "pull requests", theme.ok, false);
+    if (issue->has_updated) d->right = format_relative(issue->updated_at);
+    doc_meta(doc, ix, iw, d);
+    if (issue_is_epic(issue)) { doc_space(doc, px(4)); doc_epic_progress(doc, ix, iw, issue); }
+    if (issue->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, issue->labels, issue->label_count, theme.raise); }
     if (!nested && issue->has_parent) {
         char *ref = board_link_reference(&issue->parent, repo);
         char *text = xstrfmt("Part of %s %s", ref, issue->parent.title);
-        doc_label(doc, tx, tw, 0xE8AB, text, FONT_CAPTION, theme.secondary);
+        doc_space(doc, px(4));
+        doc_text(doc, ix, iw, text, FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS);
         free(text); free(ref);
     }
-    for (size_t i = 0; i < issue->pull_count; i++) doc_linked_row(doc, tx, tw, &issue->pulls[i], repo, 0, 0);
+    for (size_t i = 0; i < issue->pull_count; i++) { doc_space(doc, px(4)); doc_linked_row(doc, ix, iw, &issue->pulls[i], repo, 0, 0); }
     doc_box_end(doc, box, px(10));
     doc_box_action(doc, box, action, arg);
 }

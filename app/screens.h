@@ -11,6 +11,10 @@ Screen *projects_screen_new(void);
 Screen *connection_screen_new(void);
 Screen *sessions_screen_new(const Project *project);
 Screen *placeholder_screen_new(void);
+/// The dashboard's opening view: Welcome back, and the composer that starts a session on a project.
+Screen *new_session_screen_new(const Project *project, const Project *projects, size_t count);
+/// The projects the sidebar lists, for the screens that pick one.
+const Project *projects_list(size_t *count);
 /// After a conversation was deleted: drops it from the saved list and from the sidebar, which then asks the server again.
 void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
@@ -18,6 +22,8 @@ Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
 Screen *pull_files_screen_new(const Project *project, int number);
 Screen *file_diff_screen_new(const PullFile *file);
+/// The column beside a conversation: its pull request, commits, reviews and findings, as the dashboard's `#pr-panel`.
+Screen *pull_panel_screen_new(const char *repo, int number);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
 /// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
 Screen *findings_screen_new(void);
@@ -33,6 +39,9 @@ void app_push_detail(Screen *screen);
 void app_clear_detail(void);
 Pane *app_sidebar_pane(void);
 Pane *app_detail_pane(void);
+/// The column on the right of a conversation, the dashboard's pull request panel; NULL takes it away.
+Pane *app_panel_pane(void);
+void app_set_panel(Screen *screen);
 HWND app_window(void);
 
 /// A confirmation with one continue button; true when confirmed.

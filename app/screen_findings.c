@@ -619,7 +619,7 @@ static void layout_finding(FindingsScreen *s, Doc *doc, int fx, int fw, size_t r
     int round = round_number(held);
     intptr_t arg = (intptr_t)(r * FINDING_STRIDE + k);
     doc_rule(doc, fx, fw);
-    doc_space(doc, px(6));
+    doc_space(doc, px(8));
     COLORREF sev_color;
     BadgeSpec sev = { 0, severity_label(json_str(json_get(f, "severity")), &sev_color), 0, false };
     sev.color = sev_color;
@@ -629,15 +629,15 @@ static void layout_finding(FindingsScreen *s, Doc *doc, int fx, int fw, size_t r
     int chip_h = doc->y - top;
     doc->y = top;
     const char *ft = json_str(json_get(f, "title"));
-    int ti = doc_text(doc, fx + chip_w + px(6), fw - chip_w - px(6), ft ? ft : "Finding", FONT_CALLOUT, theme.text, DT_WORDBREAK);
+    int ti = doc_text(doc, fx + chip_w + px(6), fw - chip_w - px(6), ft ? ft : "Finding", FONT_FOOTNOTE, theme.ink, DT_WORDBREAK);
     clickable(doc, ti, ACT_OPEN_FINDING, arg);
     if (doc->y < top + chip_h) doc->y = top + chip_h;
     const char *file = json_str_nonempty(json_get(f, "file"));
     if (file) {
         int line = json_int_or(json_get(f, "line"), 0);
         char *loc = line ? xstrfmt("%s:%d \xE2\x86\x97", file, line) : xstrfmt("%s \xE2\x86\x97", file);
-        doc_space(doc, px(3));
-        int li = doc_text(doc, fx, fw, loc, FONT_MONO_CAPTION2, theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS);
+        doc_space(doc, px(4));
+        int li = doc_text(doc, fx, fw, loc, FONT_MONO_CAPTION2, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS);
         clickable(doc, li, ACT_OPEN_FINDING, arg);
         free(loc);
     }
@@ -654,15 +654,15 @@ static void layout_finding(FindingsScreen *s, Doc *doc, int fx, int fw, size_t r
         static const char *const titles[] = { "Fix", "Optional", "Dismiss" };
         const char *decision = decision_of(s, sid, round, f);
         int selected = str_eq(decision, "fix") ? 0 : str_eq(decision, "optional") ? 1 : str_eq(decision, "dismissed") ? 2 : -1;
-        doc_space(doc, px(6));
-        int sw = fw < px(260) ? fw : px(260);
-        doc_segments(doc, fx, sw, titles, 3, selected, ACT_VERDICT, arg * 4, !busy);
-        doc_space(doc, px(5));
+        doc_space(doc, px(4));
+        doc_segments(doc, fx, fw, titles, 3, selected, ACT_VERDICT, arg * 4, !busy);
+        doc_space(doc, px(4));
         const char *reason = reason_of(s, sid, round, f);
-        const char *placeholder = selected == 0 || selected < 0 ? "Comment (saved to the pull request)" : "Why (recorded on the pull request)";
-        int cb = doc_box_begin(doc, fx, fw, px(5), theme.surface, theme.border, px(6));
-        doc_text(doc, fx + px(8), fw - px(16), *reason ? reason : placeholder, FONT_CAPTION, *reason ? theme.text : theme.secondary, DT_WORDBREAK);
-        doc_box_end(doc, cb, px(5));
+        const char *placeholder = "Comment (saved to the pull request)";
+        int cb = doc_box_begin(doc, fx, fw, px(3), theme.field, theme.line, px(4));
+        doc_item(doc, cb)->hover_fill = false;
+        doc_text(doc, fx + px(6), fw - px(12), *reason ? reason : placeholder, FONT_CAPTION2, *reason ? theme.ink : theme.muted, DT_WORDBREAK);
+        doc_box_end(doc, cb, px(3));
         if (!busy) doc_box_action(doc, cb, ACT_COMMENT, arg);
     } else {
         bool replying = writing(s, WRITE_REPLY, sid, key), deleting = writing(s, WRITE_DELETE, sid, key);
@@ -690,7 +690,7 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
     bool sending = writing(s, WRITE_COMPLETE, sid, NULL), saving = writing(s, WRITE_SAVE, sid, NULL);
     const Json *findings = json_get(held, "findings");
     size_t n = json_count(findings);
-    int box = doc_box_begin(doc, x, w, px(12), theme.elevated, theme.border, px(10));
+    int box = doc_box_begin(doc, x, w, px(10), theme.raise, theme.line, px(8));
     doc_item(doc, box)->hover_fill = false;
     int ix = x + px(12), iw = w - px(24);
     // The conversation's title, and what round this is and since when.
@@ -699,20 +699,20 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
     time_t held_at;
     if (board_date_parse(json_str(json_get(held, "heldAt")), &held_at)) { char *when = format_event_time(held_at); str_appendf(&meta, " \xC2\xB7 held since %s", when); free(when); }
     const char *title = session_display_title(ses);
-    int top = doc->y, th = font_height(doc->hdc, FONT_SUBHEADLINE_SEMIBOLD) + px(2);
-    int tw = text_width(doc->hdc, title, FONT_SUBHEADLINE_SEMIBOLD) + px(4), mw = text_width(doc->hdc, meta.data, FONT_CAPTION) + px(4);
+    int top = doc->y, th = px(22);
+    int tw = text_width(doc->hdc, title, FONT_BODY_SEMIBOLD) + px(4), mw = text_width(doc->hdc, meta.data, FONT_CAPTION) + px(4);
     if (tw + px(8) + mw <= iw) {
         RECT tr = { ix, top, ix + tw, top + th };
-        int ti = doc_text_at(doc, &tr, title, FONT_SUBHEADLINE_SEMIBOLD, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        int ti = doc_text_at(doc, &tr, title, FONT_BODY_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         clickable(doc, ti, ACT_OPEN_SESSION, (intptr_t)r);
         RECT mr = { ix + tw + px(8), top, ix + iw, top + th };
-        doc_text_at(doc, &mr, meta.data, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        doc_text_at(doc, &mr, meta.data, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         doc->y = top + th;
     } else {
-        int ti = doc_text(doc, ix, iw, title, FONT_SUBHEADLINE_SEMIBOLD, theme.text, DT_WORDBREAK);
+        int ti = doc_text(doc, ix, iw, title, FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK);
         clickable(doc, ti, ACT_OPEN_SESSION, (intptr_t)r);
         doc_space(doc, px(2));
-        doc_text(doc, ix, iw, meta.data, FONT_CAPTION, theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS);
+        doc_text(doc, ix, iw, meta.data, FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS);
     }
     str_free(&meta);
     if (json_is_set(json_get(held, "stale"))) {
@@ -728,7 +728,7 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
     else if (!manage) how = xstrfmt("%s. This device is read-only: the verdicts are given on the dashboard.", count);
     else how = xstrfmt("%s. Give each one a verdict and a comment if you have one; Save comments keeps them here and on the pull request, and Complete appears once every finding is marked.", count);
     doc_space(doc, px(4));
-    doc_text(doc, ix, iw, how, FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    doc_text(doc, ix, iw, how, FONT_CAPTION, theme.muted, DT_WORDBREAK);
     free(how); free(count);
     if (mine && manage && n && store_supports("complete_findings")) {
         ButtonSpec all[2] = { { 0, "Fix all", BUTTON_PLAIN, ACT_FIX_ALL, (intptr_t)r, !busy }, { 0, "Clear", BUTTON_PLAIN, ACT_CLEAR_ALL, (intptr_t)r, !busy } };
@@ -743,9 +743,10 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
         doc_space(doc, px(8));
         if (mine) {
             const char *note = note_of(s, sid, round);
-            int nb = doc_box_begin(doc, ix, iw, px(6), theme.surface, theme.border, px(6));
-            doc_text(doc, ix + px(8), iw - px(16), *note ? note : "A note for the pull request and the fix session (optional)", FONT_CAPTION, *note ? theme.text : theme.secondary, DT_WORDBREAK);
-            doc_box_end(doc, nb, px(6));
+            int nb = doc_box_begin(doc, ix, iw, px(3), theme.field, theme.line, px(4));
+            doc_item(doc, nb)->hover_fill = false;
+            doc_text(doc, ix + px(6), iw - px(12), *note ? note : "A note for the pull request and the fix session (optional)", FONT_CAPTION2, *note ? theme.ink : theme.muted, DT_WORDBREAK);
+            doc_box_end(doc, nb, px(3));
             if (!busy) doc_box_action(doc, nb, ACT_NOTE, (intptr_t)r);
             doc_space(doc, px(8));
             size_t fixes = 0, unruled = 0;
@@ -787,8 +788,8 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
     }
     if (card && card->info) { doc_space(doc, px(6)); doc_text(doc, ix, iw, card->info, FONT_CAPTION, card->info_danger ? theme.danger : theme.secondary, DT_WORDBREAK); }
     if (card && card->error) { doc_space(doc, px(6)); doc_notice(doc, ix, iw, card->error); }
-    doc_box_end(doc, box, px(12));
-    doc_space(doc, px(10));
+    doc_box_end(doc, box, px(10));
+    doc_space(doc, px(12));
 }
 
 static void layout_group(FindingsScreen *s, Doc *doc, int x, int w, const Group *g) {
@@ -796,14 +797,14 @@ static void layout_group(FindingsScreen *s, Doc *doc, int x, int w, const Group 
     for (size_t i = 0; i < g->count; i++) findings += json_count(json_get(s->rounds[g->rounds[i]].held, "findings"));
     char *heading = xstrfmt("%s \xC2\xB7 PR #%d \xE2\x86\x97", g->repo, g->pr);
     char *count = g->count > 1 ? xstrfmt("%zu finding%s across %zu reviews", findings, findings == 1 ? "" : "s", g->count) : xstrfmt("%zu finding%s", findings, findings == 1 ? "" : "s");
-    int top = doc->y, h = font_height(doc->hdc, FONT_SUBHEADLINE_SEMIBOLD) + px(4);
-    int hw = text_width(doc->hdc, heading, FONT_SUBHEADLINE_SEMIBOLD) + px(4);
+    int top = doc->y, h = px(22);
+    int hw = text_width(doc->hdc, heading, FONT_BODY_SEMIBOLD) + px(4);
     if (hw > w - px(80)) hw = w - px(80);
-    RECT hr = { x + px(4), top, x + px(4) + hw, top + h };
-    int hi = doc_text_at(doc, &hr, heading, FONT_SUBHEADLINE_SEMIBOLD, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT hr = { x, top, x + hw, top + h };
+    int hi = doc_text_at(doc, &hr, heading, FONT_BODY_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     clickable(doc, hi, ACT_OPEN_PR, (intptr_t)g->rounds[0]);
     RECT cr = { hr.right + px(8), top, x + w, top + h };
-    doc_text_at(doc, &cr, count, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_text_at(doc, &cr, count, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc->y = top + h + px(6);
     free(heading); free(count);
     for (size_t i = 0; i < g->count; i++) layout_round(s, doc, x, w, g->rounds[i]);
@@ -813,8 +814,8 @@ static void layout_group(FindingsScreen *s, Doc *doc, int x, int w, const Group 
 static void findings_layout(Screen *base, Doc *doc) {
     FindingsScreen *s = (FindingsScreen *)base;
     s->doc_stale = false;
-    int w = doc->width, x = px(4), iw = w - px(8);
-    doc_space(doc, px(10));
+    int w = doc->width, x = 0, iw = w;
+    doc_space(doc, px(14));
     if (s->error) { doc_notice(doc, x, iw, s->error); doc_space(doc, px(10)); }
     for (size_t i = 0; i < s->outcome_count; i++) layout_outcome(s, doc, x, iw, i);
     if (s->round_count) {
@@ -822,15 +823,14 @@ static void findings_layout(Screen *base, Doc *doc) {
         for (size_t i = 0; i < n; i++) layout_group(s, doc, x, iw, &groups[i]);
         groups_free(groups, n);
     } else if (s->loaded) {
-        doc_space(doc, px(28));
-        doc_text(doc, x + px(12), iw - px(24), "No review is waiting. Findings arrive here from \xE2\x8C\x95 Code review and from every review-loop round.", FONT_CALLOUT, theme.secondary, DT_CENTER | DT_WORDBREAK);
+        doc_text(doc, x, iw, "No review is waiting. Findings arrive here from \xE2\x8C\x95 Code review and from every review-loop round.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     }
     if (!s->loaded) doc_loading(doc, 0, w, "Loading findings\xE2\x80\xA6");
     doc_space(doc, px(12));
 }
 static void findings_header(Screen *base, HeaderInfo *info) {
     FindingsScreen *s = (FindingsScreen *)base;
-    snprintf(info->title, sizeof info->title, "Findings");
+    snprintf(info->title, sizeof info->title, "\xE2\x9A\x91 Findings");
     Group *groups; size_t n = build_groups(s, &groups);
     groups_free(groups, n);
     char *sub = findings_subtitle(s->round_count, n);
