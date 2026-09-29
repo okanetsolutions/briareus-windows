@@ -10,7 +10,7 @@
 
 enum {
     ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
-    ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_MESSAGE_TEXT, ACT_FINDING_LINK,
+    ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_FINDING_LINK,
     ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
@@ -160,7 +160,8 @@ static void mutate_done(void *owner, Request *req) {
         free(sent);
     }
     if (str_eq(name, "delete")) {
-        char *key = cache_key(s); cache_remove(g_store.cache, key); free(key);
+        // The sidebar drops the row now instead of at its next poll; the transcript goes with it.
+        sessions_forget(session_repo(&s->initial), session_id(&s->initial));
         // Beside the list there is nothing to go back to: the right-hand side empties instead.
         Pane *pane = s->base.pane;
         if (pane_depth(pane) > 1) pane_pop(pane); else app_clear_detail();
@@ -300,8 +301,7 @@ static void layout_tool(ConversationScreen *s, Doc *doc, int x, int w, const Eve
         char *shown = cut ? xstrfmt("%.*s\n\xE2\x80\xA6", (int)(cut - trimmed), trimmed) : xstrdup(trimmed);
         int box = doc_box_begin(doc, x + px(30), w - px(30), px(10), theme.code, theme.border, px(10));
         doc_item(doc, box)->hover_fill = false;
-        int ti = doc_text(doc, x + px(40), w - px(50), shown, FONT_MONO_SMALL, theme.text, DT_WORDBREAK | DT_EXPANDTABS);
-        doc_item(doc, ti)->action = ACT_MESSAGE_TEXT;
+        doc_text(doc, x + px(40), w - px(50), shown, FONT_MONO_SMALL, theme.text, DT_WORDBREAK | DT_EXPANDTABS);
         doc_box_end(doc, box, px(10));
         free(shown);
         doc_space(doc, px(4));
@@ -345,8 +345,7 @@ static void layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Ev
         int bx = x + w - text_w;
         int box = doc_box_begin(doc, bx, text_w, px(10), theme.bubble, theme.bubble, px(16));
         doc_item(doc, box)->hover_fill = false;
-        int ti = doc_text(doc, bx + px(14), text_w - px(28), e->text, FONT_BODY, theme.text, DT_WORDBREAK | DT_EDITCONTROL);
-        doc_item(doc, ti)->action = ACT_MESSAGE_TEXT;
+        doc_text(doc, bx + px(14), text_w - px(28), e->text, FONT_BODY, theme.text, DT_WORDBREAK | DT_EDITCONTROL);
         doc_box_end(doc, box, px(10));
         size_t an = json_count(e->attachments);
         for (size_t i = 0; i < an; i++) {
@@ -360,9 +359,7 @@ static void layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Ev
         }
         add_time(doc, x, w, e, true);
     } else if (str_eq(e->kind, "text")) {
-        int start = (int)doc->count;
         doc_markdown(doc, x, w, e->text ? e->text : "", FONT_BODY);
-        for (size_t i = (size_t)start; i < doc->count; i++) if (!doc->items[i].action && doc->items[i].text) doc->items[i].action = ACT_MESSAGE_TEXT;
         add_time(doc, x, w, e, false);
     } else if (str_eq(e->kind, "ask")) {
         int box = doc_box_begin(doc, x, w, px(14), theme.elevated, blend(theme.accent, theme.background, 0.4), px(16));
@@ -397,8 +394,7 @@ static void layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Ev
         doc_custom(doc, x, w, px(22), paint_turn_footer, d, footer_free, 0, 0);
     } else if (e->text) {
         if (str_eq(e->kind, "stderr") || str_eq(e->kind, "claude")) {
-            int ti = doc_text(doc, x, w, e->text, FONT_MONO_SMALL, str_eq(e->kind, "stderr") ? theme.danger : theme.secondary, DT_WORDBREAK | DT_EDITCONTROL);
-            doc_item(doc, ti)->action = ACT_MESSAGE_TEXT;
+            doc_text(doc, x, w, e->text, FONT_MONO_SMALL, str_eq(e->kind, "stderr") ? theme.danger : theme.secondary, DT_WORDBREAK | DT_EDITCONTROL);
         } else {
             // Dashboard notices (review loops, interruptions).
             doc_label(doc, x, w, 0xE946, e->text, FONT_FOOTNOTE, theme.secondary);
@@ -688,22 +684,6 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
     case ACT_REOPEN: confirm_and_mutate(s, "reopen"); break;
     }
 }
-static void conversation_context(Screen *base, int action, intptr_t arg, POINT pt) {
-    ConversationScreen *s = (ConversationScreen *)base;
-    (void)arg;
-    if (action != ACT_MESSAGE_TEXT) return;
-    Pane *pane = base->pane;
-    HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, MENU_COPY, L"Copy text");
-    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(pane), NULL);
-    DestroyMenu(menu);
-    if (chosen == MENU_COPY) {
-        char *text = pane_hovered_text(pane);
-        if (text) { copy_to_clipboard(pane_hwnd(pane), text); free(text); }
-    }
-    (void)s;
-}
-
 // MARK: - Footer (composer)
 
 static int composer_height(ConversationScreen *s, HDC hdc) {
@@ -896,7 +876,7 @@ static void conversation_destroy(Screen *base) {
 
 static const ScreenVTable conversation_vt = {
     .destroy = conversation_destroy, .layout = conversation_layout, .header = conversation_header, .action = conversation_action,
-    .context = conversation_context, .timer = conversation_timer, .footer_height = conversation_footer_height,
+    .timer = conversation_timer, .footer_height = conversation_footer_height,
     .footer_layout = conversation_footer_layout, .footer_paint = conversation_footer_paint, .footer_click = conversation_footer_click,
     .visible = conversation_visible, .command = conversation_command, .key = conversation_key, .refresh = conversation_refresh,
     .scrolled = conversation_scrolled, .activated = conversation_activated,

@@ -96,6 +96,3 @@ void pane_activate_all(bool active);
 void screen_release(Screen *screen);
 
 #endif
-
-/// Plain text of the item under the cursor, for a context menu; NULL without one.
-char *pane_hovered_text(Pane *pane);

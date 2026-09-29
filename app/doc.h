@@ -9,6 +9,7 @@
 
 typedef struct Doc Doc;
 typedef struct Item Item;
+typedef struct Rich Rich;   // text laid out in runs, for painting and selecting
 typedef void (*ItemPaint)(Doc *doc, Item *item, HDC hdc, const RECT *rc);
 typedef void (*ItemFree)(void *data);
 
@@ -24,7 +25,12 @@ struct Item {
     bool hover_fill;      // a hovered clickable item is tinted
     bool hand;            // hand cursor
     int id;               // a screen's own marker, such as the bottom anchor
+    Rich *sel;            // the item's text in runs, relative to rc, when it can be selected
+    bool sel_owned;       // `sel` is freed with the item (otherwise it is `data`)
 };
+
+/// A character position: an item and an offset into its plain text.
+typedef struct { int item, offset; } DocPos;
 
 struct Doc {
     Item *items; size_t count, cap;
@@ -34,6 +40,8 @@ struct Doc {
     int content_width;    // widest item, for horizontal scrolling
     int hover;            // index of the hovered item or -1
     int pressed;
+    DocPos sel_anchor, sel_focus;   // the text selection's ends, in either order; item -1 when there is none
+    bool selecting;                 // the mouse is dragging the selection
 };
 
 void doc_init(Doc *doc);
@@ -101,6 +109,20 @@ const char *doc_link_at(Doc *doc, int index, int x, int y);
 char *doc_item_plain_text(Doc *doc, int index);
 /// The first item with this id, or -1.
 int doc_find(Doc *doc, int id);
+
+// Selection: text items are selected with the mouse across items, as in a browser. The selection survives a layout at the
+// same items; the pane clears it when a screen changes.
+/// The text position nearest a content point; false when the document has no text.
+bool doc_position_at(Doc *doc, HDC hdc, int x, int y, DocPos *pos);
+/// The selectable text item under a content point, or -1.
+int doc_text_item_at(Doc *doc, int x, int y);
+bool doc_has_selection(Doc *doc);
+void doc_clear_selection(Doc *doc);
+void doc_select_all(Doc *doc);
+/// Selects the word around a position.
+void doc_select_word(Doc *doc, DocPos pos);
+/// The selected text as UTF-8, items on separate lines; NULL when nothing is selected.
+char *doc_selection_text(Doc *doc);
 
 /// Standard actions items may carry; screens use values from 1000 up.
 enum { ACTION_NONE = 0, ACTION_OPEN_LINK = 1, ACTION_COPY_CODE = 2 };
