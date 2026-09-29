@@ -160,7 +160,8 @@ static void mutate_done(void *owner, Request *req) {
         free(sent);
     }
     if (str_eq(name, "delete")) {
-        char *key = cache_key(s); cache_remove(g_store.cache, key); free(key);
+        // The sidebar drops the row now instead of at its next poll; the transcript goes with it.
+        sessions_forget(session_repo(&s->initial), session_id(&s->initial));
         // Beside the list there is nothing to go back to: the right-hand side empties instead.
         Pane *pane = s->base.pane;
         if (pane_depth(pane) > 1) pane_pop(pane); else app_clear_detail();

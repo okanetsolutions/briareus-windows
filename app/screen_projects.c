@@ -129,6 +129,7 @@ typedef struct {
     Poller poller;
 } SessionsScreen;
 
+static void sessions_layout(Screen *base, Doc *doc);
 static char *sessions_key(SessionsScreen *s) { return xstrfmt("sessions:%s", s->project.repo); }
 
 static void sessions_show(SessionsScreen *s, const Json *value, bool from_server) {
@@ -171,6 +172,40 @@ static void sessions_load(SessionsScreen *s) {
     if (s->req) return;
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
     store_call("sessions", args, 0, s, sessions_done, 0, &s->req);
+}
+
+void sessions_forget(const char *repo, const char *id) {
+    if (str_empty(repo) || str_empty(id)) return;
+    // The saved list, so a restart does not bring the conversation back.
+    char *key = xstrfmt("sessions:%s", repo);
+    Json *saved = cache_value(g_store.cache, key);
+    if (saved) {
+        Session *items; size_t n;
+        if (sessions_parse(saved, &items, &n)) {
+            Json *list = json_array();
+            for (size_t i = 0; i < n; i++) if (!str_eq(session_id(&items[i]), id)) json_array_push(list, json_clone(items[i].raw));
+            cache_store(g_store.cache, list, key);
+            json_free(list); sessions_free(items, n);
+        }
+        json_free(saved);
+    }
+    free(key);
+    char *transcript = xstrfmt("transcript:%s", id); cache_remove(g_store.cache, transcript); free(transcript);
+    // The list on screen, right away rather than at its next poll.
+    Screen *top = pane_top(app_sidebar_pane());
+    if (!top || top->vt->layout != sessions_layout) return;
+    SessionsScreen *s = (SessionsScreen *)top;
+    if (!str_eq(s->project.repo, repo)) return;
+    for (size_t i = 0; i < s->count; i++) {
+        if (!str_eq(session_id(&s->sessions[i]), id)) continue;
+        session_free(&s->sessions[i]);
+        memmove(&s->sessions[i], &s->sessions[i + 1], (s->count - i - 1) * sizeof *s->sessions);
+        s->count--;
+        break;
+    }
+    pane_relayout(s->base.pane);
+    // And the server's word on it, in case the list changed in other ways too.
+    request_cancel(&s->req); sessions_load(s);
 }
 
 static void sessions_destroy(Screen *base) {
