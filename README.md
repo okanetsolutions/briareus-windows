@@ -1,6 +1,6 @@
 # Briareus for Windows
 
-A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), the dashboard for running coding agents against your projects, written in C11 with no third-party dependencies. It is a port of [Briareus for iPhone and iPad](https://github.com/okanetsolutions/briareus-ios): it talks to the same versioned mobile API (`/api/mobile/v1`) and works with any Briareus server you can reach over HTTPS. Requires Windows 10 version 1809 or later.
+A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), the dashboard for running coding agents against your projects, written in C11 with no third-party dependencies. It talks to the server's versioned mobile API (`/api/mobile/v1`) and works with any Briareus server you can reach over HTTPS. Requires Windows 10 version 1809 or later.
 
 ## What it does
 
@@ -46,7 +46,7 @@ There is nothing to install besides the compiler. The executable is statically l
 mingw32-make test
 ```
 
-The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`, a port of the iOS app's core tests plus the Windows renderer's Markdown extensions: origin validation, credential headers, operation bodies, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, errands, issue nesting, merge warnings and the saved-response cache. HTTP is stubbed through the client's pluggable transport.
+The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`: origin validation, credential headers, operation bodies, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, errands, issue nesting, merge warnings and the saved-response cache. HTTP is stubbed through the client's pluggable transport.
 
 ## Project layout
 
