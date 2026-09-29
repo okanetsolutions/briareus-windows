@@ -19,6 +19,12 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
 Screen *pull_files_screen_new(const Project *project, int number);
 Screen *file_diff_screen_new(const PullFile *file);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
+/// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
+Screen *findings_screen_new(void);
+/// How many rounds the saved conversations of these projects hold, for the sidebar's count.
+size_t findings_waiting(const Project *projects, size_t count);
+/// The Findings screen read the conversations again: the sidebar counts once more.
+void projects_recount_findings(void);
 
 /// Shows a screen as the detail pane's root, unless one with the same id already is.
 void app_show_detail(Screen *screen);

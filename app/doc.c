@@ -605,6 +605,12 @@ int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, CO
     return i;
 }
 
+int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count) {
+    int total = 0;
+    for (size_t i = 0; i < count; i++) { int h; total += badge_width(doc->hdc, &badges[i], badges[i].text ? badges[i].text : "", &h) + (i ? px(5) : 0); }
+    return total;
+}
+
 int doc_section(Doc *doc, int x, int w, const char *title) {
     doc_space(doc, px(14));
     int i = doc_text(doc, x + px(4), w - px(8), title, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);

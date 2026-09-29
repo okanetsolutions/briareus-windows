@@ -244,6 +244,34 @@ static void test_session_reads_review_loop_and_held_triage(void) {
     CHECK(session_held_triage(&s[2]) == NULL);
     sessions_free(s, n); json_free(list);
 }
+static void test_findings_queue_lists_held_rounds_oldest_first_by_pull_request(void) {
+    Json *list = json_parsez("[{\"id\":\"a\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewLoop\":{\"triage\":{\"round\":2,\"prNumber\":7,\"heldAt\":\"2026-09-29T10:00:00Z\",\"findings\":[{\"key\":\"k1\"}]}},\"prStatus\":{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\"}},"
+                             "{\"id\":\"b\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":{\"standalone\":true,\"mine\":false,\"prNumber\":9,\"heldAt\":\"2026-09-29T09:00:00Z\",\"findings\":[]},\"prStatus\":{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\"}},"
+                             "{\"id\":\"c\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":null,\"reviewLoop\":{\"on\":true,\"triage\":null}},"
+                             "{\"id\":\"d\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":{\"standalone\":true,\"mine\":true,\"prNumber\":7,\"findings\":[{\"key\":\"k3\"}]}}]");
+    Session *s; size_t n; CHECK(sessions_parse(list, &s, &n)); CHECK(n == 4);
+    // A review whose every finding was deleted still waits to be completed; the old helper leaves it out.
+    CHECK(session_held_round(&s[1]) != NULL && session_held_triage(&s[1]) == NULL);
+    CHECK(session_held_round(&s[2]) == NULL);
+    size_t count; HeldRound *rounds = sessions_held_rounds(s, n, &count);
+    CHECK(count == 3);
+    CHECK(rounds[0].index == 3 && rounds[1].index == 1 && rounds[2].index == 0);   // no hold time sorts first, then the oldest
+    CHECK(held_round_is_mine(rounds[2].held) && !held_round_is_mine(rounds[1].held) && held_round_is_mine(rounds[0].held));
+    CHECK(held_round_pr_number(rounds[1].held) == 9);
+    char *own = held_round_pr_url(&s[0], rounds[2].held), *moved = held_round_pr_url(&s[1], rounds[1].held);
+    CHECK_STR(own, "https://github.com/o/r/pull/7"); CHECK_STR(moved, "https://github.com/o/r/pull/9");
+    free(own); free(moved); free(rounds);
+    bool danger;
+    Json *fixing = json_parsez("{\"fixing\":true}"), *nothing = json_parsez("{\"dismissed\":false}"), *done = json_parsez("{\"completed\":true,\"prNumber\":9}");
+    char *t1 = triage_outcome_text(fixing, &danger); CHECK_STR(t1, "Verdicts recorded; a fix session is running."); CHECK(!danger);
+    char *t2 = triage_outcome_text(nothing, &danger); CHECK(str_has_prefix(t2, "Verdicts recorded, but no fix session started")); CHECK(danger);
+    char *t3 = triage_outcome_text(done, &danger); CHECK_STR(t3, "Review completed; what it found stays on PR #9 for its author."); CHECK(!danger);
+    free(t1); free(t2); free(t3); json_free(fixing); json_free(nothing); json_free(done);
+    char *s0 = findings_subtitle(0, 0), *s1 = findings_subtitle(1, 1), *s2 = findings_subtitle(3, 2);
+    CHECK_STR(s0, "nothing is waiting"); CHECK_STR(s1, "1 review waiting for a decision"); CHECK_STR(s2, "3 reviews on 2 pull requests waiting for a decision");
+    free(s0); free(s1); free(s2);
+    sessions_free(s, n); json_free(list);
+}
 static void test_setup_events_are_hidden(void) {
     Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"Installing dependencies\"},{\"seq\":2,\"kind\":\"text\",\"text\":\"Done\"}]");
     Transcript t; transcript_init(&t); transcript_append(&t, events);
@@ -628,6 +656,7 @@ int main(void) {
         { "Retry-After HTTP date", test_retry_after_http_date },
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },
         { "session reads review loop and held triage", test_session_reads_review_loop_and_held_triage },
+        { "findings queue lists held rounds oldest first by pull request", test_findings_queue_lists_held_rounds_oldest_first_by_pull_request },
         { "setup events are hidden", test_setup_events_are_hidden },
         { "optional fields and unknown statuses do not break decoding", test_optional_fields_and_unknown_statuses_do_not_break_decoding },
         { "session finds its pull request", test_session_finds_its_pull_request },

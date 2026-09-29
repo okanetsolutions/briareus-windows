@@ -10,6 +10,8 @@
 bool dialog_new_conversation(HWND owner, const Project *project, Session *started);
 /// A new title, or NULL when cancelled.
 char *dialog_rename(HWND owner, const char *current);
+/// One line of text under a caption and a label, with `ok_label` on its button; NULL when cancelled.
+char *dialog_text(HWND owner, const char *caption, const char *label, const char *ok_label, const char *current);
 /// What an errand needs to be told; true with the text (possibly empty when optional) when started.
 bool dialog_action_input(HWND owner, const BoardAction *action, int number, char **input);
 /// Applies the theme to a dialog and its controls.
