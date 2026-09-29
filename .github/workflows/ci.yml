@@ -24,7 +24,7 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
       - name: Build the app and run the core tests
         run: mingw32-make
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Briareus-windows-x64
           path: build/Briareus.exe
