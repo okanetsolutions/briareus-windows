@@ -1,4 +1,5 @@
 // The connection: the paired dashboard, the projects the token permits, and how to end it.
+#include "resource.h"
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
@@ -85,7 +86,7 @@ static void connection_layout(Screen *base, Doc *doc) {
              FONT_CAPTION, theme.secondary, DT_WORDBREAK);
     if (s->error) { doc_space(doc, px(12)); doc_notice_box(doc, 0, w, s->error); }
     doc_space(doc, px(20));
-    doc_text(doc, px(4), w - px(8), "Briareus for Windows \xC2\xB7 1.0", FONT_FOOTNOTE, theme.tertiary, DT_LEFT | DT_SINGLELINE);
+    doc_text(doc, px(4), w - px(8), "Briareus for Windows \xC2\xB7 " APP_VERSION_STRING, FONT_FOOTNOTE, theme.tertiary, DT_LEFT | DT_SINGLELINE);
     doc_space(doc, px(16));
 }
 
