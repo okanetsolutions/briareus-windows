@@ -1,0 +1,6 @@
+# Sources are stored with LF; Windows checkouts keep them as committed.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.rc text
+*.ico binary
+*.png binary
