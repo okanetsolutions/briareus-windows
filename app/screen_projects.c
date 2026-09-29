@@ -9,7 +9,7 @@
 
 // MARK: - Projects
 
-enum { ACT_CONNECTION = 1000, ACT_OPEN_PROJECT };
+enum { ACT_CONNECTION = 1000, ACT_OPEN_PROJECT, ACT_FINDINGS };
 enum { TIMER_POLL = 1 };
 
 typedef struct {
@@ -19,7 +19,9 @@ typedef struct {
     char *error;
     Request *req;
     Poller poller;
+    size_t waiting;   // review rounds waiting for a decision, counted from what the conversations saved
 } ProjectsScreen;
+static void projects_layout(Screen *base, Doc *doc);
 
 static void projects_show(ProjectsScreen *s, const Json *value) {
     Project *items; size_t n;
@@ -36,6 +38,7 @@ static void projects_done(void *owner, Request *req) {
         Json *list = projects_json(s->projects, s->count);
         cache_store(g_store.cache, list, "projects");
         json_free(list);
+        s->waiting = findings_waiting(s->projects, s->count);
     } else {
         char *text = request_error_text(req); set_string(&s->error, text); free(text);
         s->loaded = true;
@@ -47,10 +50,17 @@ static void projects_done(void *owner, Request *req) {
 static void projects_load(ProjectsScreen *s) {
     if (!s->loaded) {
         Json *saved = cache_value(g_store.cache, "projects");
-        if (saved) { projects_show(s, saved); json_free(saved); pane_relayout(s->base.pane); }
+        if (saved) { projects_show(s, saved); json_free(saved); s->waiting = findings_waiting(s->projects, s->count); pane_relayout(s->base.pane); }
     }
     if (s->req) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->req);
+}
+void projects_recount_findings(void) {
+    Screen *root = pane_root(app_sidebar_pane());
+    if (!root || root->vt->layout != projects_layout) return;
+    ProjectsScreen *s = (ProjectsScreen *)root;
+    s->waiting = findings_waiting(s->projects, s->count);
+    pane_relayout(root->pane);
 }
 
 static void projects_destroy(Screen *base) {
@@ -65,6 +75,29 @@ static void projects_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(8));
     if (!store_can_manage()) { doc_label(doc, px(4), w - px(8), 0xE7B3, "Read-only access", FONT_SUBHEADLINE, theme.secondary); doc_space(doc, px(8)); }
     if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(8)); }
+    if (s->loaded) {
+        // The findings queue, as the dashboard keeps it beside the projects, with how many rounds wait.
+        const char *selected_id = pane_selected_id(base->pane);
+        bool selected = selected_id && str_eq(selected_id, "findings");
+        COLORREF fill = selected ? blend(theme.accent, theme.background, 0.16) : theme.elevated;
+        int row = doc_box_begin(doc, 0, w, px(10), fill, selected ? blend(theme.accent, theme.background, 0.3) : theme.border, px(10));
+        int top = doc->y, lh = font_height(doc->hdc, FONT_BODY) + px(2);
+        char *count = s->waiting ? xstrfmt("%zu", s->waiting) : NULL;
+        int cw = count ? text_width(doc->hdc, count, FONT_CAPTION_SEMIBOLD) + px(16) : 0;
+        RECT lr = { px(12), top, w - px(12) - cw, top + lh };
+        { wchar_t g[2] = { 0xE7C1, 0 }; char *u = wide_to_utf8(g); doc_text_at(doc, &lr, u, FONT_ICON_SMALL, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(u); }
+        RECT tr = { px(12) + px(24), top, w - px(12) - cw, top + lh };
+        doc_text_at(doc, &tr, "Findings", FONT_BODY, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (count) {
+            RECT cr = { w - px(12) - cw + px(4), top, w - px(12), top + lh };
+            doc_text_at(doc, &cr, count, FONT_CAPTION_SEMIBOLD, theme.accent, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            free(count);
+        }
+        doc->y = top + lh;
+        doc_box_end(doc, row, px(10));
+        doc_box_action(doc, row, ACT_FINDINGS, 0);
+        doc_space(doc, px(10));
+    }
     for (size_t i = 0; i < s->count; i++) {
         const Project *p = &s->projects[i];
         int box = doc_box_begin(doc, 0, w, px(10), theme.elevated, theme.border, px(10));
@@ -89,6 +122,7 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (action == ACT_CONNECTION) { pane_push(base->pane, connection_screen_new()); return; }
+    if (action == ACT_FINDINGS) { app_show_detail(findings_screen_new()); return; }
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 static void projects_timer(Screen *base, UINT id) {

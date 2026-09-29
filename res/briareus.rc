@@ -43,7 +43,7 @@ STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMEN
 CAPTION "Rename conversation"
 FONT 10, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "Title", -1, 14, 12, 60, 10
+    LTEXT           "Title", IDC_TITLE_LABEL, 14, 12, 248, 10
     EDITTEXT        IDC_TITLE, 16, 26, 248, 16, ES_AUTOHSCROLL | NOT WS_BORDER, 0
     PUSHBUTTON      "Save", IDOK, 148, 54, 56, 18, BS_OWNERDRAW
     PUSHBUTTON      "Cancel", IDCANCEL, 210, 54, 56, 18, BS_OWNERDRAW
@@ -64,8 +64,8 @@ BEGIN
 END
 
 1 VERSIONINFO
-FILEVERSION 1,2,0,0
-PRODUCTVERSION 1,2,0,0
+FILEVERSION 1,3,0,0
+PRODUCTVERSION 1,3,0,0
 FILEOS 0x40004L
 FILETYPE 0x1L
 BEGIN
@@ -75,11 +75,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Okanet Solutions"
             VALUE "FileDescription", "Briareus for Windows"
-            VALUE "FileVersion", "1.2.0.0"
+            VALUE "FileVersion", "1.3.0.0"
             VALUE "InternalName", "Briareus"
             VALUE "OriginalFilename", "Briareus.exe"
             VALUE "ProductName", "Briareus"
-            VALUE "ProductVersion", "1.2.0"
+            VALUE "ProductVersion", "1.3.0"
         END
     END
     BLOCK "VarFileInfo"

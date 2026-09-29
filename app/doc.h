@@ -97,6 +97,8 @@ int doc_labeled(Doc *doc, int x, int w, const char *label, const char *value, CO
 /// A line of wrapped badges and chips from a list, laid out left to right; advances. See BadgeSpec.
 typedef struct { wchar_t glyph; const char *text; COLORREF color; bool chip; } BadgeSpec;
 int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, COLORREF background);
+/// The width a line of badges takes, for text laid beside them.
+int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count);
 /// A section header in small caps style, as an inset grouped list has; advances.
 int doc_section(Doc *doc, int x, int w, const char *title);
 

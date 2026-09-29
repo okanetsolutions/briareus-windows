@@ -77,6 +77,26 @@ bool sessions_parse(const Json *list_or_array, Session **out, size_t *count);
 Json *sessions_json(const Session *sessions, size_t count);
 void sessions_free(Session *sessions, size_t count);
 
+// MARK: - Findings
+
+/// The review round a conversation holds for a decision, as the dashboard's Findings screen queues them: a loop's round
+/// or a hand-started review, even one whose every finding was deleted. NULL without one.
+const Json *session_held_round(const Session *s);
+typedef struct { size_t index; const Json *held; } HeldRound;
+/// The conversations holding a round, the oldest hold first, as the dashboard lists them.
+HeldRound *sessions_held_rounds(const Session *sessions, size_t count, size_t *out_count);
+/// The pull request a round is about, as a link: the conversation's own when that is the same pull request, and built
+/// from the number otherwise (a conversation that moved on to another pull request still holds this round). New string.
+char *held_round_pr_url(const Session *s, const Json *held);
+/// A hand-started review says whose pull request it is; a loop round is always the user's, and takes verdicts.
+bool held_round_is_mine(const Json *held);
+/// The pull request number a round was left on; 0 without one.
+int held_round_pr_number(const Json *held);
+/// What `complete_findings` answered, in the dashboard's words; `*danger` is set when the verdicts led nowhere.
+char *triage_outcome_text(const Json *outcome, bool *danger);
+/// The Findings screen's subtitle: "nothing is waiting", or how many reviews and pull requests wait for a decision.
+char *findings_subtitle(size_t rounds, size_t pull_requests);
+
 // MARK: - Transcript
 
 typedef struct {

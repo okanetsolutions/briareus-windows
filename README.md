@@ -15,6 +15,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Starts conversations on a chosen branch, provider, model and effort, or on the project default.
 - Sends follow-ups (Enter sends, Shift+Enter breaks a line), renames, stops, closes, reopens and deletes sessions.
 - Turns the review loop on or off and completes the triage of held findings from inside a conversation.
+- Keeps a Findings screen, as the dashboard does: every review round waiting for a decision across the projects, grouped by pull request, with a count beside the projects. A round on your own pull request takes a verdict (fix, optional, dismiss) and a comment on each finding, saves them to the pull request, and completes into the fix session; a review of somebody else's takes replies on its findings' threads, deletes a finding from the review, and is taken off the queue. What a completion led to stays on the screen until dismissed.
 - Records voice notes with the microphone (AAC through Media Foundation, WAV as a fallback) and has the server transcribe them into the message box. On a server that cannot transcribe, the microphone says what the server is missing.
 - Keeps the projects and conversations in a column on the left and the chosen conversation on the right, as the dashboard does. A window too narrow for both falls back to a single column with a back button.
 

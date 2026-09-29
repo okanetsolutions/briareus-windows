@@ -437,7 +437,7 @@ bool dialog_new_conversation(HWND owner, const Project *project, Session *starte
 
 // MARK: - Rename
 
-typedef struct { const char *current; char *result; } RenameState;
+typedef struct { const char *caption, *label, *ok_label, *current; char *result; } RenameState;
 static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
     RenameState *r = (RenameState *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
     switch (msg) {
@@ -446,6 +446,9 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
         dialog_theme(dialog);
         dialog_prepare_edit(dialog, IDC_TITLE);
         SendMessageW(dialog, DM_SETDEFID, IDOK, 0);
+        { wchar_t *caption = utf8_to_wide(r->caption); SetWindowTextW(dialog, caption); free(caption); }
+        set_control_text(dialog, IDC_TITLE_LABEL, r->label);
+        set_control_text(dialog, IDOK, r->ok_label);
         set_control_text(dialog, IDC_TITLE, r->current);
         SendMessageW(GetDlgItem(dialog, IDC_TITLE), EM_SETSEL, 0, -1);
         SetFocus(GetDlgItem(dialog, IDC_TITLE));
@@ -463,11 +466,12 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
     }
     return FALSE;
 }
-char *dialog_rename(HWND owner, const char *current) {
-    RenameState r = { current, NULL };
+char *dialog_text(HWND owner, const char *caption, const char *label, const char *ok_label, const char *current) {
+    RenameState r = { caption, label, ok_label, current ? current : "", NULL };
     if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_RENAME), owner, rename_proc, (LPARAM)&r) != IDOK) { free(r.result); return NULL; }
     return r.result;
 }
+char *dialog_rename(HWND owner, const char *current) { return dialog_text(owner, "Rename conversation", "Title", "Save", current); }
 
 // MARK: - Action input
 

@@ -25,6 +25,7 @@
 
 #define IDD_RENAME              300
 #define IDC_TITLE               301
+#define IDC_TITLE_LABEL         302
 
 #define IDD_CONNECTION          400
 #define IDC_SERVER              401
