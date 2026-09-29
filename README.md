@@ -1,5 +1,7 @@
 # Briareus for Windows
 
+[![CI](https://github.com/okanetsolutions/briareus-windows/actions/workflows/ci.yml/badge.svg)](https://github.com/okanetsolutions/briareus-windows/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/okanetsolutions/briareus-windows)](https://github.com/okanetsolutions/briareus-windows/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), the dashboard for running coding agents against your projects, written in C11 with no third-party dependencies. It talks to the server's versioned mobile API (`/api/mobile/v1`) and works with any Briareus server you can reach over HTTPS. Requires Windows 10 version 1809 or later.
 
 ## What it does
@@ -73,3 +75,7 @@ A revoked or expired token returns the app to pairing. Forgetting the connection
 - Saved responses live under `%LOCALAPPDATA%\Okanet\Briareus\Responses`, encrypted with EFS where the volume allows it. They are erased when the connection is forgotten, revoked, expired or replaced by another device token, and entries untouched for 30 days are dropped.
 - Voice notes are sent to your server for transcription and nowhere else.
 - No analytics or telemetry.
+
+## Contributing and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Every pull request is built and tested with GCC and MSVC by the CI workflow, and pushing a `v*` tag publishes a release. Licensed under the [MIT License](LICENSE).

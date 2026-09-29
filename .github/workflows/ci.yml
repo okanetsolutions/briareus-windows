@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mingw:
+    name: Build and test (MinGW-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
+      - name: Build the app and run the core tests
+        run: mingw32-make
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Briareus-windows-x64
+          path: build/Briareus.exe
+
+  msvc:
+    name: Build and test (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build the app and run the core tests
+        shell: cmd
+        run: build.bat

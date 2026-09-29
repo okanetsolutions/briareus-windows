@@ -1,0 +1,38 @@
+name: Release
+
+# Pushing a tag such as v1.2.0 builds the app, strips it and publishes a GitHub release with the executable and a zip.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make zip
+      - name: Build the app and run the core tests
+        run: mingw32-make
+      - name: Strip and package
+        run: |
+          mkdir -p build/release
+          strip -o build/release/Briareus.exe build/Briareus.exe
+          cd build/release && zip Briareus-windows-x64.zip Briareus.exe
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Briareus for Windows ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            build/release/Briareus.exe
+            build/release/Briareus-windows-x64.zip
