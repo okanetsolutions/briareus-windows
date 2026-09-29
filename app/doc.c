@@ -127,7 +127,7 @@ static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, CO
         RunStyle st; memset(&st, 0, sizeof st);
         st.hdc = hdc; st.font = rich_font(base, spans[s].flags);
         st.code = (spans[s].flags & SPAN_CODE) != 0; st.link = (spans[s].flags & SPAN_LINK) != 0 && spans[s].url; st.strike = (spans[s].flags & SPAN_STRIKE) != 0;
-        st.color = st.code ? theme.accent : st.link ? theme.accent : st.strike ? theme.secondary : color;
+        st.color = st.link ? theme.accent : st.strike ? theme.muted : color;
         st.url = spans[s].url; st.pad = st.code ? pad : 0;
         wchar_t *text = utf8_to_wide(spans[s].text);
         size_t tlen = wcslen(text), base_off = r->plain_len;
@@ -229,7 +229,7 @@ static void rich_paint(Doc *doc, Item *it, Rich *r, HDC hdc, const RECT *rc) {
         if (run->code) {
             // Trailing spaces stay outside the tint.
             RECT bg = { rr.left, rr.top, rr.left + run->wt, rr.bottom };
-            fill_round_rect(hdc, &bg, px(4), theme.code, theme.code);
+            fill_round_rect(hdc, &bg, px(4), theme.sunken, theme.sunken);
         }
         rr.left += run->pad;
         if (r->single) {
@@ -244,7 +244,7 @@ static void rich_paint(Doc *doc, Item *it, Rich *r, HDC hdc, const RECT *rc) {
 }
 static void paint_rich(Doc *doc, Item *it, HDC hdc, const RECT *rc) { rich_paint(doc, it, it->data, hdc, rc); }
 int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF color) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, color, false, px(3), ALIGN_LEFT, 0);
+    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, color, false, px(4), ALIGN_LEFT, 0);
     RECT rc = { x, doc->y, x + w, doc->y + r->height };
     int i = doc_add(doc, &rc, paint_rich);
     Item *it = &doc->items[i];
@@ -256,7 +256,7 @@ int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF
     return i;
 }
 int doc_rich_height(Doc *doc, int w, const char *markdown, FontId base) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, theme.text, false, px(3), ALIGN_LEFT, 0);
+    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, theme.text, false, px(4), ALIGN_LEFT, 0);
     int h = r->height;
     rich_free(r);
     return h;
@@ -330,10 +330,11 @@ int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color,
 // MARK: - Boxes
 
 static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    COLORREF fill = it->fill;
-    if (it->action && it->hover_fill && doc->hover >= 0 && &doc->items[doc->hover] == it) fill = blend(theme.text, it->fill, theme.dark ? 0.06 : 0.04);
-    if (it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it) fill = blend(theme.text, it->fill, 0.09);
-    fill_round_rect(hdc, rc, it->radius, fill, it->border);
+    COLORREF fill = it->fill, border = it->border;
+    bool hovered = it->action && it->hover_fill && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    if (hovered) { if (it->border != it->fill) border = theme.accent_dim; else fill = theme.raise; }
+    if (it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it) fill = blend(theme.ink, fill, 0.06);
+    fill_round_rect(hdc, rc, it->radius, fill, border);
 }
 int doc_box_begin(Doc *doc, int x, int w, int pad, COLORREF fill, COLORREF border, int radius) {
     RECT rc = { x, doc->y, x + w, doc->y + pad };
@@ -393,10 +394,10 @@ int doc_label(Doc *doc, int x, int w, wchar_t glyph, const char *text, FontId f,
     doc->y += h;
     return i;
 }
-int doc_notice(Doc *doc, int x, int w, const char *message) { return doc_label(doc, x, w, 0xE7BA, message, FONT_CALLOUT, theme.danger); }
+int doc_notice(Doc *doc, int x, int w, const char *message) { return doc_text(doc, x, w, message, FONT_FOOTNOTE, theme.danger, DT_LEFT | DT_WORDBREAK); }
 int doc_notice_box(Doc *doc, int x, int w, const char *message) {
-    COLORREF fill = blend(theme.danger, theme.background, 0.08);
-    int box = doc_box_begin(doc, x, w, px(12), fill, fill, px(12));
+    COLORREF fill = blend(theme.danger, theme.canvas, 0.15);
+    int box = doc_box_begin(doc, x, w, px(10), fill, theme.danger, px(8));
     doc->items[box].hover_fill = false;
     doc_notice(doc, x + px(12), w - px(24), message);
     doc_box_end(doc, box, px(12));
@@ -413,45 +414,38 @@ static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     COLORREF fill, border, text;
     switch (d->style) {
     case BUTTON_PROMINENT:
-        fill = d->enabled ? theme.accent : blend(theme.secondary, theme.background, 0.35); border = fill; text = theme.white;
-        if (hovered) fill = border = blend(theme.text, theme.accent, 0.1);
+        fill = border = hovered ? theme.accent_dim : theme.accent; text = theme.on_accent;
+        if (!d->enabled) { fill = border = blend(theme.accent, theme.raise, 0.5); }
         break;
     case BUTTON_DESTRUCTIVE:
-        fill = blend(theme.danger, theme.background, hovered ? 0.16 : 0.1); border = blend(theme.danger, theme.background, 0.3); text = theme.danger; break;
+        fill = theme.raise; border = hovered ? theme.danger : theme.line; text = hovered ? theme.danger : theme.ink; break;
     case BUTTON_PLAIN:
-        fill = hovered ? blend(theme.accent, theme.background, 0.08) : theme.background; border = fill; text = theme.accent; break;
+        fill = border = it->fill ? it->fill : theme.canvas; text = theme.accent; break;
     default:
-        fill = hovered ? blend(theme.text, theme.surface, 0.05) : theme.surface; border = theme.border; text = theme.text; break;
+        fill = theme.raise; border = hovered ? theme.accent_dim : theme.line; text = theme.ink; break;
     }
-    if (pressed) fill = blend(theme.text, fill, 0.12);
-    if (!d->enabled) text = blend(text, fill, 0.5);
-    int h = rc->bottom - rc->top;
-    fill_round_rect(hdc, rc, d->compact ? px(6) : h / 2, fill, border);
-    RECT t = *rc;
-    if (d->compact) {
-        // Glyph, then the text, both centred as one.
-        int gw = d->glyph ? px(13) + px(5) : 0;
-        int tw = text_width(hdc, it->text, FONT_CAPTION_SEMIBOLD);
-        int cx = rc->left + ((rc->right - rc->left) - gw - tw) / 2;
-        if (cx < rc->left + px(6)) cx = rc->left + px(6);
-        if (d->glyph) {
-            RECT g = { cx, rc->top, cx + px(13), rc->bottom };
-            draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, text);
-        }
-        t.left = cx + gw; t.right = rc->right - px(4);
-        draw_text(hdc, it->text, &t, FONT_CAPTION_SEMIBOLD, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (pressed) fill = blend(theme.ink, fill, 0.08);
+    if (!d->enabled && d->style != BUTTON_PROMINENT) text = theme.muted;
+    if (d->style == BUTTON_PLAIN) {
+        RECT t = *rc;
+        draw_text(hdc, it->text, &t, FONT_CAPTION, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (hovered) { int tw = text_width(hdc, it->text, FONT_CAPTION); draw_line(hdc, rc->left, rc->bottom - px(3), rc->left + tw, rc->bottom - px(3), text); }
         return;
     }
-    draw_text(hdc, it->text, &t, FONT_SUBHEADLINE_SEMIBOLD, text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_round_rect(hdc, rc, px(7), fill, border);
+    RECT t = { rc->left + px(10), rc->top, rc->right - px(10) + 2, rc->bottom };
+    draw_text(hdc, it->text, &t, FONT_FOOTNOTE, text, (d->compact ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
+static int button_height(HDC hdc) { return font_height(hdc, FONT_FOOTNOTE) + px(12); }   // 18px line + 5px padding + 1px border, each side
+static int button_width(HDC hdc, const char *text) { return px(10) * 2 + text_width(hdc, text, FONT_FOOTNOTE) + 2; }
 int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int action, intptr_t arg, bool enabled) {
-    int h = font_height(doc->hdc, FONT_SUBHEADLINE_SEMIBOLD) + px(14);
-    int tw = text_width(doc->hdc, text, FONT_SUBHEADLINE_SEMIBOLD) + px(28);
+    int h = style == BUTTON_PLAIN ? font_height(doc->hdc, FONT_CAPTION) + px(6) : button_height(doc->hdc);
+    int tw = style == BUTTON_PLAIN ? text_width(doc->hdc, text, FONT_CAPTION) + px(2) : button_width(doc->hdc, text);
     int width = w > 0 ? w : w < 0 ? doc->width - x : tw;
     RECT rc = { x, doc->y, x + width, doc->y + h };
     int i = doc_add(doc, &rc, paint_button);
     Item *it = &doc->items[i];
-    ButtonData *d = xcalloc(1, sizeof *d); d->style = style; d->enabled = enabled;
+    ButtonData *d = xcalloc(1, sizeof *d); d->style = style; d->enabled = enabled; d->compact = w <= 0;
     it->data = d; it->free_data = free; it->text = xstrdup(text);
     if (enabled) { it->action = action; it->arg = arg; it->hand = true; }
     doc->y += h;
@@ -459,14 +453,16 @@ int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int 
 }
 
 int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t count) {
-    int h = font_height(doc->hdc, FONT_CAPTION_SEMIBOLD) + px(11);
+    // `flex flex-wrap items-center gap-1.5`: the buttons wrap, 6px apart.
     int gap = px(6), cx = 0, cy = 0, first = -1;
     for (size_t k = 0; k < count; k++) {
         const ButtonSpec *b = &buttons[k];
-        int bw = px(11) * 2 + (b->glyph ? px(13) + px(5) : 0) + text_width(doc->hdc, b->text, FONT_CAPTION_SEMIBOLD);
+        int h = b->style == BUTTON_PLAIN ? font_height(doc->hdc, FONT_CAPTION) + px(6) : button_height(doc->hdc);
+        int bw = b->style == BUTTON_PLAIN ? text_width(doc->hdc, b->text, FONT_CAPTION) + px(2) : button_width(doc->hdc, b->text);
         if (bw > w) bw = w;
-        if (cx > 0 && cx + bw > w) { cx = 0; cy += h + gap; }
-        RECT rc = { x + cx, doc->y + cy, x + cx + bw, doc->y + cy + h };
+        if (cx > 0 && cx + bw > w) { cx = 0; cy += button_height(doc->hdc) + gap; }
+        int row_h = button_height(doc->hdc);
+        RECT rc = { x + cx, doc->y + cy + (row_h - h) / 2, x + cx + bw, doc->y + cy + (row_h - h) / 2 + h };
         int i = doc_add(doc, &rc, paint_button);
         Item *it = &doc->items[i];
         ButtonData *d = xcalloc(1, sizeof *d); d->style = b->style; d->enabled = b->enabled; d->compact = true; d->glyph = b->glyph;
@@ -475,36 +471,39 @@ int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t cou
         if (first < 0) first = i;
         cx += bw + gap;
     }
-    if (count) doc->y += cy + h;
+    if (count) doc->y += cy + button_height(doc->hdc);
     return first;
 }
 
 typedef struct { char **titles; size_t count; int selected; bool enabled; int action; intptr_t arg_base; } SegmentData;
 static void segments_free(void *p) { SegmentData *d = p; str_array_free(d->titles, d->count); free(d); }
+static int segment_width(HDC hdc, const char *title) { return px(6) * 2 + text_width(hdc, title, FONT_CAPTION2) + 2; }
 static void paint_segments(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     SegmentData *d = it->data;
-    int h = rc->bottom - rc->top;
-    fill_round_rect(hdc, rc, px(8), theme.surface, theme.surface);
-    int w = (rc->right - rc->left) / (int)(d->count ? d->count : 1);
+    int x = rc->left;
     for (size_t i = 0; i < d->count; i++) {
-        RECT seg = { rc->left + (int)i * w + px(2), rc->top + px(2), rc->left + (int)(i + 1) * w - px(2), rc->bottom - px(2) };
+        int w = segment_width(hdc, d->titles[i]);
+        RECT seg = { x, rc->top, x + w, rc->bottom };
         bool selected = (int)i == d->selected;
-        if (selected) fill_round_rect(hdc, &seg, px(6), theme.elevated, theme.border);
-        COLORREF c = d->enabled ? (selected ? theme.text : theme.secondary) : blend(theme.secondary, theme.surface, 0.5);
-        draw_text(hdc, d->titles[i], &seg, selected ? FONT_CAPTION_SEMIBOLD : FONT_CAPTION_MEDIUM, c, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        COLORREF c = selected ? (i == 0 ? theme.danger : theme.accent) : theme.muted;
+        if (!d->enabled) c = blend(c, theme.raise, 0.5);
+        fill_round_rect(hdc, &seg, px(4), it->fill ? it->fill : theme.raise, selected ? c : theme.line);
+        draw_text(hdc, d->titles[i], &seg, FONT_CAPTION2, c, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        x += w + px(4);
     }
-    (void)h;
 }
 int doc_segments(Doc *doc, int x, int w, const char *const *titles, size_t count, int selected, int action, intptr_t arg_base, bool enabled) {
-    int h = font_height(doc->hdc, FONT_CAPTION_SEMIBOLD) + px(14);
-    RECT rc = { x, doc->y, x + w, doc->y + h };
+    int h = font_height(doc->hdc, FONT_CAPTION2) + px(4);
+    int total = 0;
+    for (size_t k = 0; k < count; k++) total += segment_width(doc->hdc, titles[k]) + (k ? px(4) : 0);
+    RECT rc = { x, doc->y, x + (total < w ? total : w), doc->y + h };
     int i = doc_add(doc, &rc, paint_segments);
     Item *it = &doc->items[i];
     SegmentData *d = xcalloc(1, sizeof *d);
     d->titles = xmalloc((count ? count : 1) * sizeof *d->titles);
     for (size_t k = 0; k < count; k++) d->titles[k] = xstrdup(titles[k]);
     d->count = count; d->selected = selected; d->enabled = enabled; d->action = action; d->arg_base = arg_base;
-    it->data = d; it->free_data = segments_free;
+    it->data = d; it->free_data = segments_free; it->fill = theme.raise;
     if (enabled) { it->action = action; it->arg = arg_base; it->hand = true; }
     doc->y += h;
     return i;
@@ -513,30 +512,30 @@ int doc_segments(Doc *doc, int x, int w, const char *const *titles, size_t count
 static int segment_at(Item *it, int x) {
     SegmentData *d = it->data;
     if (!d->count) return 0;
-    int w = (it->rc.right - it->rc.left) / (int)d->count;
-    int idx = (x - it->rc.left) / (w ? w : 1);
-    if (idx < 0) idx = 0;
-    if ((size_t)idx >= d->count) idx = (int)d->count - 1;
+    HDC hdc = GetDC(NULL);
+    int cx = it->rc.left, idx = (int)d->count - 1;
+    for (size_t i = 0; i < d->count; i++) {
+        int w = segment_width(hdc, d->titles[i]);
+        if (x < cx + w + px(2)) { idx = (int)i; break; }
+        cx += w + px(4);
+    }
+    ReleaseDC(NULL, hdc);
     return idx;
 }
 
 int doc_loading(Doc *doc, int x, int w, const char *text) {
-    doc_space(doc, px(16));
-    int i = doc_text(doc, x, w, text ? text : "Loading\xE2\x80\xA6", FONT_CALLOUT, theme.secondary, DT_CENTER);
-    doc_space(doc, px(16));
+    doc_space(doc, px(8));
+    int i = doc_text(doc, x + px(8), w - px(16), text ? text : "Loading\xE2\x80\xA6", FONT_FOOTNOTE, theme.muted, DT_LEFT);
+    doc_space(doc, px(8));
     return i;
 }
 
-typedef struct { wchar_t glyph; } EmptyData;
-static void paint_empty_glyph(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_glyph(hdc, ((EmptyData *)it->data)->glyph, rc, FONT_ICON_HUGE, theme.tertiary); }
 int doc_empty_state(Doc *doc, int x, int w, wchar_t glyph, const char *title, const char *detail) {
-    doc_space(doc, px(40));
-    EmptyData *d = xcalloc(1, sizeof *d); d->glyph = glyph;
-    int first = doc_custom(doc, x, w, px(44), paint_empty_glyph, d, free, 0, 0);
+    (void)glyph;
     doc_space(doc, px(8));
-    doc_text(doc, x, w, title, FONT_HEADLINE, theme.secondary, DT_CENTER);
-    if (detail) { doc_space(doc, px(4)); doc_text(doc, x + w / 6, w * 2 / 3, detail, FONT_FOOTNOTE, theme.secondary, DT_CENTER); }
-    doc_space(doc, px(24));
+    int first = doc_text(doc, x + px(8), w - px(16), title, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    if (detail) { doc_space(doc, px(2)); doc_text(doc, x + px(8), w - px(16), detail, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); }
+    doc_space(doc, px(8));
     return first;
 }
 
@@ -612,9 +611,9 @@ int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count) {
 }
 
 int doc_section(Doc *doc, int x, int w, const char *title) {
-    doc_space(doc, px(14));
-    int i = doc_text(doc, x + px(4), w - px(8), title, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    doc_space(doc, px(6));
+    doc_space(doc, px(12));
+    int i = doc_text(doc, x, w, title, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_space(doc, px(4));
     return i;
 }
 
@@ -634,7 +633,7 @@ static void paint_code_header(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     draw_glyph(hdc, d->copied ? 0xE73E : 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
     draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.border);
 }
-static void quote_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(3), rc->bottom }; fill_round_rect(hdc, &r, px(1), theme.border, theme.border); }
+static void quote_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(2), rc->bottom }; fill_rect(hdc, &r, theme.line); }
 static void paint_task_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     bool checked = it->arg != 0;
     fill_round_rect(hdc, rc, px(3), checked ? theme.accent : theme.elevated, checked ? theme.accent : blend(theme.text, theme.background, 0.35));
@@ -655,9 +654,8 @@ static void paint_table(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     // Header tint, zebra rows and a grid.
     for (size_t r = 0; r < t->rows; r++) {
         RECT row = { rc->left, rc->top + t->row_y[r], rc->right, rc->top + t->row_y[r] + t->row_h[r] };
-        if (r == 0) fill_rect(hdc, &row, theme.surface);
-        else if (r % 2 == 0) fill_rect(hdc, &row, blend(theme.text, theme.background, 0.02));
-        draw_line(hdc, rc->left, row.bottom, rc->right, row.bottom, theme.border);
+        if (r == 0) fill_rect(hdc, &row, theme.raise);
+        draw_line(hdc, rc->left, row.bottom, rc->right, row.bottom, theme.line);
     }
     draw_line(hdc, rc->left, rc->top, rc->right, rc->top, theme.border);
     for (size_t c = 0; c <= t->cols; c++) {
@@ -738,15 +736,15 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
 
 void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
     size_t n; MdBlock *blocks = md_parse(source, &n);
-    int gap = px(10);
+    int gap = px(6);
     for (size_t i = 0; i < n; i++) {
         if (i) doc_space(doc, gap);
         MdBlock *b = &blocks[i];
         switch (b->kind) {
         case MD_PARAGRAPH: doc_rich(doc, x, w, b->text, base, theme.text); break;
         case MD_HEADING:
-            doc_space(doc, px(4));
-            doc_rich(doc, x, w, b->text, b->level == 1 ? FONT_TITLE3 : b->level == 2 ? FONT_HEADLINE : FONT_SUBHEADLINE_SEMIBOLD, theme.text);
+            doc_space(doc, px(6));
+            doc_rich(doc, x, w, b->text, FONT_TITLE3, theme.text);
             break;
         case MD_BULLET: {
             int indent = b->indent * px(16);
@@ -769,13 +767,13 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
         }
         case MD_QUOTE: {
             int top = doc->y;
-            doc_rich(doc, x + px(12), w - px(12), b->text, base, theme.secondary);
-            RECT bar = { x, top, x + px(3), doc->y };
+            doc_rich(doc, x + px(12), w - px(12), b->text, base, theme.muted);
+            RECT bar = { x, top, x + px(2), doc->y };
             doc_add(doc, &bar, quote_bar);
             break;
         }
         case MD_CODE: {
-            int box = doc_box_begin(doc, x, w, 0, theme.code, theme.border, px(10));
+            int box = doc_box_begin(doc, x, w, 0, theme.sunken, theme.line, px(8));
             doc->items[box].hover_fill = false;
             int header_h = font_height(doc->hdc, FONT_MONO_CAPTION2) + px(12);
             RECT hr = { x, doc->y, x + w, doc->y + header_h };
@@ -784,8 +782,8 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
             Item *hi = &doc->items[header];
             hi->data = d; hi->free_data = code_free; hi->action = ACTION_COPY_CODE; hi->arg = (intptr_t)d->code; hi->hand = true;
             doc->y += header_h;
-            doc_space(doc, px(8));
-            doc_text(doc, x + px(12), w - px(24), b->text, FONT_MONO_SMALL, theme.text, DT_WORDBREAK | DT_EXPANDTABS);
+            doc_space(doc, px(6));
+            doc_text(doc, x + px(10), w - px(20), b->text, FONT_MONO, theme.text, DT_WORDBREAK | DT_EXPANDTABS);
             doc_box_end(doc, box, px(10));
             break;
         }

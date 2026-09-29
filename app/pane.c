@@ -17,7 +17,8 @@ struct Pane {
     int header_h, footer_h;
     HeaderInfo header;
     RECT button_rects[HEADER_BUTTONS]; RECT back_rect; RECT bottom_button_rect;
-    int hover_button;       // -1 none, -2 back, -3 bottom button, 0...3 header buttons
+    int hover_button;       // -1 none, -2 back, -3 bottom button, -4 the title's ✎, 0...7 header buttons
+    RECT title_action_rect;
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
     char *selected_id;
@@ -31,7 +32,9 @@ struct Pane {
 
 static Pane **all_panes; static size_t pane_count;
 
-static int margin(Pane *p) { return px(p->sidebar ? 12 : 16); }
+// The dashboard's own padding: the sidebar is `p-2.5` (10px), the main column's lists are `px-[18px]`.
+static int margin(Pane *p) { return px(p->sidebar ? 10 : 18); }
+static COLORREF pane_bg(Pane *p) { return p->sidebar ? theme.sidebar : theme.canvas; }
 
 static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
@@ -175,8 +178,10 @@ static void refresh_header(Pane *p) {
     Screen *s = pane_top(p);
     memset(&p->header, 0, sizeof p->header);
     if (s && s->vt->header) s->vt->header(s, &p->header);
-    bool has_header = s && (p->header.title[0] || p->header.button_count || shows_back(p));
-    p->header_h = has_header ? px(p->header.large ? 60 : 52) : 0;
+    bool has_header = s && (p->header.title[0] || p->header.button_count || (shows_back(p) && !p->sidebar));
+    // `px-[18px] py-2.5` around a 15px title (22px line) and a 13px subtitle (18px line), or 30px buttons, plus the border.
+    int content = p->header.subtitle[0] ? px(40) : (p->header.button_count || shows_back(p)) ? px(32) : px(22);
+    p->header_h = has_header ? content + px(20) + 1 : 0;
 }
 
 static void layout_if_needed(Pane *p, HDC hdc) {
@@ -208,80 +213,91 @@ static void layout_if_needed(Pane *p, HDC hdc) {
 
 static int header_button_width(HDC hdc, const HeaderButton *b, bool labels) {
     if (!b->label[0] || !labels) return px(32);
-    return px(10) + px(13) + px(5) + text_width(hdc, b->label, FONT_CAPTION_SEMIBOLD) + px(10);
+    return px(10) * 2 + text_width(hdc, b->label, FONT_FOOTNOTE) + 2;
+}
+/// A `.btn-icon`: a 32px square with a border, as the dashboard's ☰ ＋ ⓘ and ⟳.
+static void paint_icon_button(HDC hdc, const RECT *rc, bool hovered) {
+    fill_round_rect(hdc, rc, px(8), theme.raise, hovered ? theme.accent_dim : theme.line);
 }
 static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
     if (!p->header_h) return;
     RECT hr = { rc->left, rc->top, rc->right, rc->top + p->header_h };
-    fill_rect(hdc, &hr, theme.background);
-    draw_line(hdc, hr.left, hr.bottom - 1, hr.right, hr.bottom - 1, theme.border);
-    int x = px(8);
+    fill_rect(hdc, &hr, pane_bg(p));
+    draw_line(hdc, hr.left, hr.bottom - 1, hr.right, hr.bottom - 1, theme.line);
+    int x = px(18);
     int size = px(32);
-    int cy = hr.top + p->header_h / 2;
+    int cy = hr.top + (p->header_h - 1) / 2;
     memset(&p->back_rect, 0, sizeof p->back_rect);
     if (shows_back(p)) {
         RECT br = { x, cy - size / 2, x + size, cy + size / 2 };
         p->back_rect = br;
-        if (p->hover_button == -2) fill_round_rect(hdc, &br, size / 2, blend(theme.text, theme.background, 0.06), blend(theme.text, theme.background, 0.06));
-        draw_glyph(hdc, 0xE72B, &br, FONT_ICON, theme.accent);
-        x += size + px(6);
-    } else x = px(16);
-    int right = hr.right - px(8);
-    // Labelled buttons draw as pills; when together they would leave the title no room, all fall back to glyphs.
+        paint_icon_button(hdc, &br, p->hover_button == -2);
+        draw_text(hdc, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        x += size + px(8);
+    }
+    int right = hr.right - px(18);
+    // The dashboard's `.btn` pills, 8px apart; when they would leave the title no room at all, they fall back to icons.
     int labelled_w = 0;
-    for (int i = 0; i < p->header.button_count; i++) labelled_w += header_button_width(hdc, &p->header.buttons[i], true) + px(4);
-    bool labels = labelled_w <= right - x - px(160);
+    for (int i = 0; i < p->header.button_count; i++) labelled_w += header_button_width(hdc, &p->header.buttons[i], true) + px(8);
+    bool labels = labelled_w <= right - x - px(120);
     for (int i = p->header.button_count - 1; i >= 0; i--) {
         HeaderButton *b = &p->header.buttons[i];
         bool pill = b->label[0] && labels;
-        int bw = header_button_width(hdc, b, labels), bh = pill ? px(28) : size;
+        int bw = header_button_width(hdc, b, labels), bh = pill ? px(30) : size;
         RECT br = { right - bw, cy - bh / 2, right, cy + bh / 2 };
         p->button_rects[i] = br;
         bool hovered = p->hover_button == i && b->enabled;
-        COLORREF c = b->destructive ? theme.danger : theme.accent;
-        if (!b->enabled) c = blend(c, theme.background, 0.4);
+        COLORREF border = hovered ? (b->destructive ? theme.danger : theme.accent_dim) : theme.line;
+        COLORREF text = !b->enabled ? theme.muted : (hovered && b->destructive) ? theme.danger : theme.ink;
         if (pill) {
-            fill_round_rect(hdc, &br, px(6), hovered ? blend(theme.text, theme.surface, 0.05) : theme.surface, theme.border);
-            RECT g = { br.left + px(10), br.top, br.left + px(10) + px(13), br.bottom };
-            draw_glyph(hdc, b->glyph, &g, FONT_ICON_SMALL, c);
-            RECT t = { g.right + px(5), br.top, br.right - px(10), br.bottom };
-            draw_text(hdc, b->label, &t, FONT_CAPTION_SEMIBOLD, b->enabled ? theme.text : blend(theme.text, theme.background, 0.4), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            fill_round_rect(hdc, &br, px(7), theme.raise, border);
+            RECT t = { br.left + px(10), br.top, br.right - px(10) + 2, br.bottom };
+            draw_text(hdc, b->label, &t, FONT_FOOTNOTE, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         } else {
-            if (hovered) fill_round_rect(hdc, &br, size / 2, blend(theme.text, theme.background, 0.06), blend(theme.text, theme.background, 0.06));
-            draw_glyph(hdc, b->glyph, &br, FONT_ICON, c);
+            fill_round_rect(hdc, &br, px(8), theme.raise, border);
+            draw_glyph(hdc, b->glyph, &br, FONT_ICON_SMALL, text);
         }
-        right -= bw + px(4);
+        right -= bw + px(8);
     }
-    RECT tr = { x, hr.top, right - px(6), hr.bottom - 1 };
-    if (p->header.large) {
-        draw_text(hdc, p->header.title, &tr, FONT_LARGE_TITLE, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    } else if (p->header.subtitle[0]) {
-        int th = font_height(hdc, FONT_HEADLINE), sh = font_height(hdc, FONT_CAPTION);
-        int top = cy - (th + sh + px(1)) / 2;
-        RECT t1 = { tr.left, top, tr.right, top + th };
-        draw_text(hdc, p->header.title, &t1, FONT_HEADLINE, theme.text, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-        RECT t2 = { tr.left, top + th + px(1), tr.right, top + th + px(1) + sh };
+    RECT tr = { x, hr.top, right - px(8), hr.bottom - 1 };
+    memset(&p->title_action_rect, 0, sizeof p->title_action_rect);
+    // `#btn-edit-title`: a ✎ right after the title, 13px muted, ink on hover.
+    int pencil_w = p->header.title_action ? px(8) + text_width(hdc, "\xE2\x9C\x8E", FONT_FOOTNOTE) + px(8) : 0;
+    if (p->header.subtitle[0]) {
+        int th = px(22), sh = px(18);
+        int top = cy - (th + sh) / 2;
+        RECT t1 = { tr.left, top, tr.right - pencil_w, top + th };
+        draw_text(hdc, p->header.title, &t1, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (pencil_w) {
+            int tw = text_width(hdc, p->header.title, FONT_HEADLINE);
+            int px_ = t1.left + (tw < t1.right - t1.left ? tw : t1.right - t1.left);
+            RECT pr = { px_ + px(2), top, px_ + pencil_w, top + th };
+            p->title_action_rect = pr;
+            draw_text(hdc, "\xE2\x9C\x8E", &pr, FONT_FOOTNOTE, p->hover_button == -4 ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        RECT t2 = { tr.left, top + th, tr.right, top + th + sh };
         if (p->header.status[0]) { draw_status_dot(hdc, t2.left + px(4), (t2.top + t2.bottom) / 2, p->header.status); t2.left += px(13); }
-        draw_text(hdc, p->header.subtitle, &t2, FONT_CAPTION, theme.secondary, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(hdc, p->header.subtitle, &t2, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
-        draw_text(hdc, p->header.title, &tr, FONT_HEADLINE, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(hdc, p->header.title, &tr, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
 
 static void paint_scrollbar(Pane *p, HDC hdc, const RECT *content) {
+    // `::-webkit-scrollbar { width: 10px }` with a `#3c3b38` thumb and no track.
     int m = max_scroll(p);
     memset(&p->thumb_rect, 0, sizeof p->thumb_rect);
     if (m <= 0) return;
-    int track = content->bottom - content->top - px(8);
+    int track = content->bottom - content->top;
     int visible = content->bottom - content->top;
     int total = p->content_height + px(12);
     int thumb = total > 0 ? track * visible / total : track;
     if (thumb < px(28)) thumb = px(28);
-    int y = content->top + px(4) + (track - thumb) * p->scroll_y / m;
-    RECT r = { content->right - px(8), y, content->right - px(3), y + thumb };
+    int y = content->top + (track - thumb) * p->scroll_y / m;
+    RECT r = { content->right - px(10), y, content->right, y + thumb };
     p->thumb_rect = r;
-    COLORREF c = blend(theme.text, theme.background, p->dragging_thumb ? 0.4 : 0.22);
-    fill_round_rect(hdc, &r, px(2), c, c);
+    COLORREF c = p->dragging_thumb ? blend(theme.ink, RGB(0x3C, 0x3B, 0x38), 0.15) : RGB(0x3C, 0x3B, 0x38);
+    fill_round_rect(hdc, &r, px(6), c, c);
 }
 
 static void paint(Pane *p, HDC target) {
@@ -296,7 +312,7 @@ static void paint(Pane *p, HDC target) {
     }
     HDC hdc = p->mem_dc;
     layout_if_needed(p, hdc);
-    fill_rect(hdc, &rc, theme.background);
+    fill_rect(hdc, &rc, pane_bg(p));
     Screen *s = pane_top(p);
     RECT content = pane_content_rect(p);
     // Content, clipped.
@@ -311,11 +327,11 @@ static void paint(Pane *p, HDC target) {
     DeleteObject(clip);
     paint_scrollbar(p, hdc, &content);
     if (p->show_bottom_button && !pane_at_bottom(p) && p->doc.count) {
-        int size = px(36);
+        int size = px(32);
         RECT b = { (content.left + content.right) / 2 - size / 2, content.bottom - size - px(10), (content.left + content.right) / 2 + size / 2, content.bottom - px(10) };
         p->bottom_button_rect = b;
-        fill_round_rect(hdc, &b, size / 2, p->hover_button == -3 ? blend(theme.text, theme.elevated, 0.06) : theme.elevated, theme.border);
-        draw_glyph(hdc, 0xE74B, &b, FONT_ICON, theme.text);
+        fill_round_rect(hdc, &b, px(8), theme.raise, p->hover_button == -3 ? theme.accent_dim : theme.line);
+        draw_glyph(hdc, 0xE74B, &b, FONT_ICON_SMALL, theme.ink);
     } else memset(&p->bottom_button_rect, 0, sizeof p->bottom_button_rect);
     if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, hdc, &fr); }
     paint_header(p, hdc, &rc);
@@ -332,6 +348,7 @@ static POINT to_content(Pane *p, int x, int y) {
 static bool in_rect(const RECT *r, int x, int y) { return x >= r->left && x < r->right && y >= r->top && y < r->bottom; }
 static int header_hit(Pane *p, int x, int y) {
     if (shows_back(p) && in_rect(&p->back_rect, x, y)) return -2;
+    if (p->header.title_action && in_rect(&p->title_action_rect, x, y)) return -4;
     for (int i = 0; i < p->header.button_count; i++) if (in_rect(&p->button_rects[i], x, y)) return i;
     if (p->show_bottom_button && in_rect(&p->bottom_button_rect, x, y)) return -3;
     return -1;
@@ -406,10 +423,10 @@ static void mouse_move(Pane *p, int x, int y) {
     if (p->doc.selecting) { drag_selection(p, x, y); return; }
     if (p->dragging_thumb) {
         RECT content = pane_content_rect(p);
-        int track = content.bottom - content.top - px(8);
+        int track = content.bottom - content.top;
         int thumb = p->thumb_rect.bottom - p->thumb_rect.top;
         int m = max_scroll(p);
-        if (track - thumb > 0) set_scroll(p, (y - p->drag_offset - content.top - px(4)) * m / (track - thumb));
+        if (track - thumb > 0) set_scroll(p, (y - p->drag_offset - content.top) * m / (track - thumb));
         return;
     }
     int button = header_hit(p, x, y);
@@ -467,6 +484,7 @@ static void mouse_up(Pane *p, int x, int y) {
         if (header_hit(p, x, y) == b) {
             if (b == -2) { if (p->depth > 1) pane_pop(p); else if (p->root_back_cb) p->root_back_cb(p->root_back_ctx); }
             else if (b == -3) { set_scroll(p, max_scroll(p)); }
+            else if (b == -4) { if (s && s->vt->action) s->vt->action(s, p->header.title_action, 0, sp); }
             else if (s && p->header.buttons[b].enabled && s->vt->action) s->vt->action(s, p->header.buttons[b].action, 0, sp);
         }
         InvalidateRect(p->hwnd, NULL, FALSE);
@@ -582,8 +600,8 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: case WM_CTLCOLORLISTBOX: {
         HDC hdc = (HDC)wp;
-        SetTextColor(hdc, theme.text); SetBkColor(hdc, theme.elevated);
-        if (!p->edit_brush) p->edit_brush = CreateSolidBrush(theme.elevated);
+        SetTextColor(hdc, theme.ink); SetBkColor(hdc, theme.raise);
+        if (!p->edit_brush) p->edit_brush = CreateSolidBrush(theme.raise);
         return (LRESULT)p->edit_brush;
     }
     case WM_THEMECHANGED: if (p->edit_brush) { DeleteObject(p->edit_brush); p->edit_brush = NULL; } p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;

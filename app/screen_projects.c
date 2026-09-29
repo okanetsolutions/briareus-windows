@@ -1,4 +1,5 @@
-// The sidebar: the projects the device may see, and one project's conversations.
+// The sidebar, as the dashboard draws it: the ＋ New session strip with the ⚑ switch, the projects with their
+// session counts, and inside a project its conversations; ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
 #include "screens.h"
 #include "str.h"
@@ -7,29 +8,291 @@
 #include <stdlib.h>
 #include <string.h>
 
+// MARK: - What both sidebar screens draw
+
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT };
+enum { STRIP_H = 32, ICON_W = 32, STRIP_GAP = 6 };
+
+static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
+
+typedef struct { char text[40]; int badge; bool active, wide; } StripData;
+static void paint_strip(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    StripData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
+    fill_round_rect(hdc, rc, px(8), theme.raise, border);
+    if (d->wide) {
+        RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
+        draw_text(hdc, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    } else {
+        RECT t = *rc;
+        draw_text(hdc, d->text, &t, FONT_EMOJI, d->active ? theme.accent : theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (d->badge) {
+        // `absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-accent px-1 text-[10px] font-semibold leading-4`
+        char n[16]; snprintf(n, sizeof n, "%d", d->badge);
+        int tw = text_width(hdc, n, FONT_TINY_SEMIBOLD) + px(8);
+        if (tw < px(16)) tw = px(16);
+        RECT b = { rc->right + px(6) - tw, rc->top - px(6), rc->right + px(6), rc->top - px(6) + px(16) };
+        fill_round_rect(hdc, &b, px(8), theme.accent, theme.accent);
+        draw_text(hdc, n, &b, FONT_TINY_SEMIBOLD, theme.on_accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+static void strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, int badge, bool active, int action) {
+    int i = doc_add(doc, rc, paint_strip);
+    StripData *d = xcalloc(1, sizeof *d);
+    snprintf(d->text, sizeof d->text, "%s", text); d->wide = wide; d->badge = badge; d->active = active;
+    Item *it = doc_item(doc, i);
+    it->data = d; it->free_data = free; it->action = action; it->hand = true;
+}
+/// The strip; `selected` is the detail pane's root id, for the ⚑ switch's accent.
+static void sidebar_top(Doc *doc, int w, const char *selected) {
+    doc_space(doc, px(10));
+    int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
+    int icons_w = iw;
+    RECT nr = { 0, y, w - icons_w - gap, y + h };
+    strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
+    int x = w - icons_w;
+    RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
+    doc->y = y + h;
+    doc_space(doc, px(14));
+}
+
+/// The foot: `☑ Select` and `⎋`, 13px muted, above a border.
+static int sidebar_footer_height(int width) { (void)width; return px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
+typedef struct { RECT select_rc, signout_rc; } FooterRects;
+static void sidebar_footer_paint(HDC hdc, const RECT *rc, FooterRects *out, bool select_on) {
+    fill_rect(hdc, rc, theme.sidebar);
+    int top = rc->top + px(6);
+    draw_line(hdc, rc->left + px(10), top, rc->right - px(10), top, theme.line);
+    int y = top + 1 + px(10), h = px(18);
+    int left = rc->left + px(16), right = rc->right - px(16);
+    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B";
+    int sw = text_width(hdc, sel, FONT_FOOTNOTE), ow = text_width(hdc, out_, FONT_FOOTNOTE);
+    RECT a = { left, y, left + sw, y + h }, c = { right - ow, y, right, y + h };
+    draw_text(hdc, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, out_, &c, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    InflateRect(&a, px(4), px(4)); InflateRect(&c, px(4), px(4));
+    out->select_rc = a; out->signout_rc = c;
+}
+static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
+static void sign_out(void) {
+    if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. The token itself is revoked from Connection.", "Sign out", true)) return;
+    store_forget();
+}
+/// The strip's own actions, the same on both screens. True when handled.
+static bool sidebar_common_action(Pane *pane, int action) {
+    switch (action) {
+    case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
+    case ACT_SIGN_OUT: sign_out(); return true;
+    }
+    return false;
+}
+
+// MARK: - Rows
+
+typedef struct { char *name; int count; bool busy, selected, chevron; } ProjectRowData;
+static void project_row_free(void *p) { ProjectRowData *d = p; free(d->name); free(d); }
+static void paint_project_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    ProjectRowData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    if (hovered || d->selected) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    int right = rc->right - px(8);
+    if (d->chevron) { RECT c = { right - px(6), rc->top, right, rc->bottom }; draw_text(hdc, "\xE2\x80\xBA", &c, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= px(6) + px(8); }
+    char n[16]; snprintf(n, sizeof n, "%d", d->count);
+    int nw = text_width(hdc, n, FONT_CAPTION);
+    RECT cr = { right - nw, rc->top, right, rc->bottom }; draw_text(hdc, n, &cr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    right -= nw + px(8);
+    if (d->busy) { draw_status_dot(hdc, right - px(4), (rc->top + rc->bottom) / 2, "running"); right -= px(7) + px(8); }
+    RECT t = { rc->left + px(8), rc->top, right, rc->bottom };
+    draw_text(hdc, d->name, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+static void doc_project_row(Doc *doc, int w, const char *name, int count, bool busy, bool selected, bool chevron, int h, int action, intptr_t arg) {
+    ProjectRowData *d = xcalloc(1, sizeof *d);
+    d->name = xstrdup(name); d->count = count; d->busy = busy; d->selected = selected; d->chevron = chevron;
+    doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, action, arg);
+}
+
+static void paint_back_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    if (hovered) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    COLORREF c = hovered ? theme.ink : theme.muted;
+    RECT a = { rc->left + px(8), rc->top, rc->left + px(8) + px(8), rc->bottom };
+    draw_text(hdc, "\xE2\x80\xB9", &a, FONT_FOOTNOTE, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT t = { a.right + px(6), rc->top, rc->right, rc->bottom };
+    draw_text(hdc, "All projects", &t, FONT_CAPTION, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+/// A conversation as the dashboard lists it: its mark, title, and a line of provider, branch, state and age.
+typedef struct {
+    char *title, *provider, *branch, *state, *ago, *pr_state;
+    bool lit, select_mode, picked, orchestrator, zeus;
+    int meta_h;
+} SessionRowData;
+static void session_row_free(void *p) { SessionRowData *d = p; free(d->title); free(d->provider); free(d->branch); free(d->state); free(d->ago); free(d->pr_state); free(d); }
+static int chip_w(HDC hdc, const char *text) { return px(5) * 2 + text_width(hdc, text, FONT_CAPTION2) + 2; }
+/// Lays the metadata chips out at `width`, wrapping as `flex-wrap` does; NULL hdc rects only measure. Returns the height.
+static int meta_layout(HDC hdc, SessionRowData *d, int width, RECT *rects) {
+    // provider chip, branch chip (at most 45% wide), state, age; `gap-2` between them, 20px lines.
+    int lh = px(20), gap = px(8), x = 0, y = 0;
+    const char *branch = d->orchestrator ? (d->zeus ? "\xE2\x9A\xA1 zeus" : "\xF0\x9F\xA7\xAD orchestrator") : d->branch;
+    int widths[4] = { chip_w(hdc, d->provider), branch && *branch ? chip_w(hdc, branch) : 0, text_width(hdc, d->state, FONT_CAPTION), text_width(hdc, d->ago, FONT_CAPTION) };
+    if (widths[1] > width * 45 / 100) widths[1] = width * 45 / 100;
+    for (int i = 0; i < 4; i++) {
+        if (!widths[i]) { SetRectEmpty(&rects[i]); continue; }
+        if (x > 0 && x + widths[i] > width) { x = 0; y += lh; }
+        RECT r = { x, y, x + widths[i], y + lh }; rects[i] = r;
+        x += widths[i] + gap;
+    }
+    return y + lh;
+}
+/// GitHub's pull request mark, drawn in 13px: a branch with a commit at each end and the merge ring beside it.
+static void draw_pr_mark(HDC hdc, int x, int y, COLORREF color) {
+    int s = px(13);
+    HPEN pen = CreatePen(PS_SOLID, px(1) + 1, color);
+    HGDIOBJ old = SelectObject(hdc, pen);
+    int lx = x + s * 3 / 13, top = y + s * 3 / 13, bottom = y + s * 11 / 13, rx = x + s * 10 / 13;
+    MoveToEx(hdc, lx, top, NULL); LineTo(hdc, lx, bottom);
+    MoveToEx(hdc, rx, bottom, NULL); LineTo(hdc, rx, y + s * 5 / 13);
+    MoveToEx(hdc, rx, y + s * 4 / 13, NULL); LineTo(hdc, x + s * 6 / 13, y + s * 4 / 13);
+    SelectObject(hdc, old); DeleteObject(pen);
+    int r = s * 2 / 13 + 1;
+    fill_circle(hdc, lx, top, r, color); fill_circle(hdc, lx, bottom, r, color); fill_circle(hdc, rx, bottom, r, color);
+}
+static void paint_session_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    SessionRowData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    if (hovered || d->lit) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    int x = rc->left + px(8), top = rc->top + px(7);
+    if (d->select_mode) {
+        RECT box = { x, top + px(4), x + px(13), top + px(4) + px(13) };
+        fill_round_rect(hdc, &box, px(2), d->picked ? theme.accent : theme.field, d->picked ? theme.accent : theme.line_strong);
+        if (d->picked) draw_glyph(hdc, 0xE73E, &box, FONT_ICON_SMALL, theme.on_accent);
+        x += px(13) + px(8);
+    }
+    x += px(8) + px(8);   // the fold gutter and the gap after it
+    int right = rc->right - px(8), line_h = px(23);
+    // Line one: the mark and the title.
+    RECT l1 = { x, top, right, top + line_h };
+    int mark_w;
+    if (d->pr_state) {
+        COLORREF c = str_eq(d->pr_state, "open") ? theme.ok : str_eq(d->pr_state, "merged") ? theme.accent : str_eq(d->pr_state, "closed") ? theme.danger : theme.muted;
+        draw_pr_mark(hdc, x, top + (line_h - px(13)) / 2, c);
+        mark_w = px(13);
+    } else { draw_status_dot(hdc, x + px(3), top + line_h / 2, d->state); mark_w = px(7); }
+    l1.left = x + mark_w + px(7);
+    draw_text(hdc, d->title, &l1, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // Line two: the chips, wrapped as they were measured.
+    RECT rects[4];
+    meta_layout(hdc, d, right - x, rects);
+    int my = top + line_h + px(2);
+    const char *branch = d->orchestrator ? (d->zeus ? "\xE2\x9A\xA1 zeus" : "\xF0\x9F\xA7\xAD orchestrator") : d->branch;
+    const char *texts[4] = { d->provider, branch, d->state, d->ago };
+    for (int i = 0; i < 4; i++) {
+        if (IsRectEmpty(&rects[i])) continue;
+        RECT r = { x + rects[i].left, my + rects[i].top, x + rects[i].right, my + rects[i].bottom };
+        if (i < 2) {
+            RECT chip = { r.left, r.top + px(1), r.right, r.bottom - px(1) };
+            fill_round_rect(hdc, &chip, px(4), hovered || d->lit ? theme.raise : theme.sidebar, theme.line);
+            RECT t = { chip.left + px(5), chip.top, chip.right - px(5) + 2, chip.bottom };
+            draw_text(hdc, texts[i], &t, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        } else draw_text(hdc, texts[i], &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+/// The dashboard's `sessionState`: an idle conversation with a question up is "waiting".
+static const char *session_state(const Session *s) {
+    if (str_eq(session_status(s), "idle") && json_bool_is(json_get(s->raw, "awaitingAnswer"), true)) return "waiting";
+    return session_status(s);
+}
+static char *session_age(const Session *s) {
+    time_t when;
+    if (!board_date_parse(json_str(json_get(s->raw, "createdAt")), &when)) return xstrdup("");
+    return format_relative(when);
+}
+static void doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg) {
+    SessionRowData *d = xcalloc(1, sizeof *d);
+    d->title = xstrdup(session_display_title(s));
+    d->provider = xstrdup(session_provider(s) ? session_provider(s) : "");
+    d->branch = xstrdup(json_str_nonempty(json_get(s->raw, "branch")) ? json_str(json_get(s->raw, "branch")) : "");
+    d->state = xstrdup(session_state(s)); d->ago = session_age(s);
+    d->orchestrator = json_bool_is(json_get(s->raw, "orchestrator"), true) || json_bool_is(json_get(s->raw, "zeus"), true);
+    d->zeus = json_bool_is(json_get(s->raw, "zeus"), true);
+    const Json *pr = json_get(s->raw, "prStatus");
+    const char *pr_state = json_str(json_get(pr, "state"));
+    if (pr_state) d->pr_state = xstrdup(str_eq(pr_state, "open") && json_bool_is(json_get(pr, "draft"), true) ? "draft" : pr_state);
+    d->lit = lit; d->select_mode = select_mode; d->picked = picked;
+    int x = px(8) + (select_mode ? px(13) + px(8) : 0) + px(16);
+    RECT rects[4];
+    d->meta_h = meta_layout(doc->hdc, d, w - x - px(8), rects);
+    int h = px(7) + px(23) + px(2) + d->meta_h + px(7);
+    doc_custom(doc, 0, w, h, paint_session_row, d, session_row_free, action, arg);
+}
+
 // MARK: - Projects
 
-enum { ACT_CONNECTION = 1000, ACT_OPEN_PROJECT, ACT_FINDINGS };
+enum { ACT_OPEN_PROJECT = 1000 };
 enum { TIMER_POLL = 1 };
 
 typedef struct {
     Screen base;
     Project *projects; size_t count;
+    int *counts; bool *busy;   // per project: how many conversations, and whether one is working
     bool loaded;
     char *error;
-    Request *req;
+    Request *req, *req_sessions;
+    size_t reading;            // the project whose conversations are being counted
     Poller poller;
-    size_t waiting;   // review rounds waiting for a decision, counted from what the conversations saved
+    FooterRects footer;
 } ProjectsScreen;
 static void projects_layout(Screen *base, Doc *doc);
 
+/// What the saved lists say about each project's conversations, before the server is asked.
+static void projects_count(ProjectsScreen *s) {
+    free(s->counts); free(s->busy);
+    s->counts = xcalloc(s->count ? s->count : 1, sizeof *s->counts); s->busy = xcalloc(s->count ? s->count : 1, sizeof *s->busy);
+    for (size_t i = 0; i < s->count; i++) {
+        char *key = xstrfmt("sessions:%s", s->projects[i].repo);
+        Json *list = cache_value(g_store.cache, key);
+        free(key);
+        if (!list) continue;
+        Session *sessions; size_t m;
+        if (sessions_parse(list, &sessions, &m)) {
+            s->counts[i] = (int)m;
+            for (size_t k = 0; k < m; k++) if (session_is_active(&sessions[k])) s->busy[i] = true;
+            sessions_free(sessions, m);
+        }
+        json_free(list);
+    }
+    g_waiting = findings_waiting(s->projects, s->count);
+}
 static void projects_show(ProjectsScreen *s, const Json *value) {
     Project *items; size_t n;
     if (!projects_parse(value, &items, &n)) return;
     projects_free(s->projects, s->count);
     s->projects = items; s->count = n; s->loaded = true;
+    projects_count(s);
 }
-
+static void count_next(ProjectsScreen *s);
+static void count_done(void *owner, Request *req) {
+    ProjectsScreen *s = owner;
+    if (req->ok && s->reading < s->count) {
+        Session *items; size_t n;
+        if (sessions_parse(req->result, &items, &n)) {
+            char *key = xstrfmt("sessions:%s", s->projects[s->reading].repo);
+            Json *list = sessions_json(items, n);
+            cache_store(g_store.cache, list, key);
+            json_free(list); free(key);
+            sessions_free(items, n);
+        }
+    }
+    s->reading++;
+    count_next(s);
+}
+static void count_next(ProjectsScreen *s) {
+    if (s->reading >= s->count) { projects_count(s); poller_finished(&s->poller, false, -1); pane_relayout(s->base.pane); return; }
+    Json *args = json_object(); json_set_str(args, "repo", s->projects[s->reading].repo);
+    store_call("sessions", args, 0, s, count_done, 0, &s->req_sessions);
+}
 static void projects_done(void *owner, Request *req) {
     ProjectsScreen *s = owner;
     if (req->ok) {
@@ -38,7 +301,9 @@ static void projects_done(void *owner, Request *req) {
         Json *list = projects_json(s->projects, s->count);
         cache_store(g_store.cache, list, "projects");
         json_free(list);
-        s->waiting = findings_waiting(s->projects, s->count);
+        pane_relayout(s->base.pane);
+        // Every project's conversations, for the counts and the dots.
+        if (store_supports("sessions")) { s->reading = 0; count_next(s); return; }
     } else {
         char *text = request_error_text(req); set_string(&s->error, text); free(text);
         s->loaded = true;
@@ -46,83 +311,56 @@ static void projects_done(void *owner, Request *req) {
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
     pane_relayout(s->base.pane);
 }
-
 static void projects_load(ProjectsScreen *s) {
     if (!s->loaded) {
         Json *saved = cache_value(g_store.cache, "projects");
-        if (saved) { projects_show(s, saved); json_free(saved); s->waiting = findings_waiting(s->projects, s->count); pane_relayout(s->base.pane); }
+        if (saved) { projects_show(s, saved); json_free(saved); pane_relayout(s->base.pane); }
     }
-    if (s->req) return;
+    if (s->req || s->req_sessions) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->req);
 }
 void projects_recount_findings(void) {
     Screen *root = pane_root(app_sidebar_pane());
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
-    s->waiting = findings_waiting(s->projects, s->count);
+    projects_count(s);
     pane_relayout(root->pane);
+    Screen *top = pane_top(root->pane);
+    if (top != root) pane_relayout(top->pane);
 }
 
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;
-    request_cancel(&s->req); poller_stop(&s->poller);
-    projects_free(s->projects, s->count); free(s->error);
+    request_cancel(&s->req); request_cancel(&s->req_sessions); poller_stop(&s->poller);
+    projects_free(s->projects, s->count); free(s->counts); free(s->busy); free(s->error);
     screen_release(base);
 }
 static void projects_layout(Screen *base, Doc *doc) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     int w = doc->width;
-    doc_space(doc, px(8));
-    if (!store_can_manage()) { doc_label(doc, px(4), w - px(8), 0xE7B3, "Read-only access", FONT_SUBHEADLINE, theme.secondary); doc_space(doc, px(8)); }
-    if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(8)); }
-    if (s->loaded) {
-        // The findings queue, as the dashboard keeps it beside the projects, with how many rounds wait.
-        const char *selected_id = pane_selected_id(base->pane);
-        bool selected = selected_id && str_eq(selected_id, "findings");
-        COLORREF fill = selected ? blend(theme.accent, theme.background, 0.16) : theme.elevated;
-        int row = doc_box_begin(doc, 0, w, px(10), fill, selected ? blend(theme.accent, theme.background, 0.3) : theme.border, px(10));
-        int top = doc->y, lh = font_height(doc->hdc, FONT_BODY) + px(2);
-        char *count = s->waiting ? xstrfmt("%zu", s->waiting) : NULL;
-        int cw = count ? text_width(doc->hdc, count, FONT_CAPTION_SEMIBOLD) + px(16) : 0;
-        RECT lr = { px(12), top, w - px(12) - cw, top + lh };
-        { wchar_t g[2] = { 0xE7C1, 0 }; char *u = wide_to_utf8(g); doc_text_at(doc, &lr, u, FONT_ICON_SMALL, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(u); }
-        RECT tr = { px(12) + px(24), top, w - px(12) - cw, top + lh };
-        doc_text_at(doc, &tr, "Findings", FONT_BODY, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        if (count) {
-            RECT cr = { w - px(12) - cw + px(4), top, w - px(12), top + lh };
-            doc_text_at(doc, &cr, count, FONT_CAPTION_SEMIBOLD, theme.accent, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            free(count);
-        }
-        doc->y = top + lh;
-        doc_box_end(doc, row, px(10));
-        doc_box_action(doc, row, ACT_FINDINGS, 0);
-        doc_space(doc, px(10));
-    }
+    sidebar_top(doc, w, pane_selected_id(base->pane));
+    if (!store_can_manage()) { doc_text(doc, px(8), w - px(16), "\xF0\x9F\x94\x92 Read-only access", FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(8)); }
+    if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     for (size_t i = 0; i < s->count; i++) {
         const Project *p = &s->projects[i];
-        int box = doc_box_begin(doc, 0, w, px(10), theme.elevated, theme.border, px(10));
-        int left = px(12), inner = w - px(24);
-        doc_text(doc, left, inner, project_title(p), FONT_BODY_MEDIUM, theme.text, DT_SINGLELINE | DT_END_ELLIPSIS);
-        if (!str_eq(project_title(p), p->repo)) { doc_space(doc, px(2)); doc_text(doc, left, inner, p->repo, FONT_CAPTION, theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS); }
-        doc_box_end(doc, box, px(10));
-        doc_box_action(doc, box, ACT_OPEN_PROJECT, (intptr_t)i);
-        doc_space(doc, px(6));
+        doc_project_row(doc, w, project_title(p), s->counts ? s->counts[i] : 0, s->busy ? s->busy[i] : false, false, true, px(39), ACT_OPEN_PROJECT, (intptr_t)i);
     }
-    if (s->loaded && !s->count && !s->error) doc_empty_state(doc, 0, w, 0xE8B7, "No projects", "Grant this device access to a project in web Settings.");
+    if (s->loaded && !s->count && !s->error) doc_text(doc, px(8), w - px(16), "No projects yet. Add one in Settings \xE2\x86\x92 Projects on the web dashboard.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading projects\xE2\x80\xA6");
+    doc_space(doc, px(8));
 }
-static void projects_header(Screen *base, HeaderInfo *info) {
-    (void)base;
-    snprintf(info->title, sizeof info->title, "Projects");
-    info->large = true;
-    info->buttons[0].glyph = 0xE968; info->buttons[0].action = ACT_CONNECTION; info->buttons[0].enabled = true; info->buttons[0].tip = "Connection";
-    info->button_count = 1;
+static void projects_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
+static int projects_footer_height(Screen *base, int width) { (void)base; return sidebar_footer_height(width); }
+static void projects_footer_paint(Screen *base, HDC hdc, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(hdc, rc, &s->footer, false); }
+static void projects_footer_click(Screen *base, POINT pt) {
+    ProjectsScreen *s = (ProjectsScreen *)base;
+    if (in_rect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
 static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     ProjectsScreen *s = (ProjectsScreen *)base;
-    if (action == ACT_CONNECTION) { pane_push(base->pane, connection_screen_new()); return; }
-    if (action == ACT_FINDINGS) { app_show_detail(findings_screen_new()); return; }
+    if (sidebar_common_action(base->pane, action)) return;
+    if (action == ACT_NEW) { app_show_detail(new_session_screen_new(s->count ? &s->projects[0] : NULL, s->projects, s->count)); return; }
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 static void projects_timer(Screen *base, UINT id) {
@@ -131,36 +369,48 @@ static void projects_timer(Screen *base, UINT id) {
 }
 static void projects_visible(Screen *base, bool shown) {
     ProjectsScreen *s = (ProjectsScreen *)base;
-    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 30000); else { poller_stop(&s->poller); request_cancel(&s->req); }
+    if (shown) { projects_count(s); poller_start(&s->poller, base->pane, TIMER_POLL, 30000); }
+    else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_sessions); }
 }
-static void projects_refresh(Screen *base) { ProjectsScreen *s = (ProjectsScreen *)base; request_cancel(&s->req); projects_load(s); }
+static void projects_refresh(Screen *base) { ProjectsScreen *s = (ProjectsScreen *)base; request_cancel(&s->req); request_cancel(&s->req_sessions); projects_load(s); }
 static void projects_activated(Screen *base, bool active) { if (active) projects_visible(base, true); }
 
 static const ScreenVTable projects_vt = {
     .destroy = projects_destroy, .layout = projects_layout, .header = projects_header, .action = projects_action,
     .timer = projects_timer, .visible = projects_visible, .refresh = projects_refresh, .activated = projects_activated,
+    .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
 };
 Screen *projects_screen_new(void) {
     ProjectsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &projects_vt; s->base.id = xstrdup("projects");
     return &s->base;
 }
+const Project *projects_list(size_t *count) {
+    Screen *root = pane_root(app_sidebar_pane());
+    if (!root || root->vt->layout != projects_layout) { *count = 0; return NULL; }
+    ProjectsScreen *s = (ProjectsScreen *)root;
+    *count = s->count;
+    return s->projects;
+}
 
 // MARK: - Sessions
 
-enum { ACT_PULLS = 1100, ACT_OPEN_SESSION, ACT_TOGGLE_CLOSED, ACT_NEW };
-enum { ID_SEARCH = 201 };
+enum { ACT_BACK = 1100, ACT_BOARD, ACT_OPEN_SESSION, ACT_PICK, ACT_SELECT_ALL, ACT_BULK_CLOSE, ACT_BULK_DELETE, ACT_DELETE_ALL };
 
 typedef struct {
     Screen base;
     Project project;
     Session *sessions; size_t count;
-    bool loaded, show_closed, creating;
+    bool loaded;
     char *error;
-    HWND search; RECT search_rc; bool search_placed;
-    char *query;
-    Request *req;
+    Request *req, *req_bulk;
     Poller poller;
+    FooterRects footer;
+    bool select_mode;
+    char **picked; size_t picked_count;
+    // a bulk close or delete works through the picked conversations one at a time
+    char **queue; size_t queue_count, queue_done; bool queue_delete;
+    char *bulk_error;
 } SessionsScreen;
 
 static void sessions_layout(Screen *base, Doc *doc);
@@ -189,6 +439,7 @@ static void sessions_done(void *owner, Request *req) {
         Json *list = sessions_json(s->sessions, s->count);
         cache_store(g_store.cache, list, key);
         json_free(list); free(key);
+        projects_recount_findings();
     } else {
         char *text = request_error_text(req); set_string(&s->error, text); free(text);
         s->loaded = true;
@@ -242,154 +493,175 @@ void sessions_forget(const char *repo, const char *id) {
     request_cancel(&s->req); sessions_load(s);
 }
 
-static void sessions_destroy(Screen *base) {
-    SessionsScreen *s = (SessionsScreen *)base;
-    request_cancel(&s->req); poller_stop(&s->poller);
-    if (s->search) DestroyWindow(s->search);
-    sessions_free(s->sessions, s->count); project_free(&s->project); free(s->error); free(s->query);
-    screen_release(base);
+static bool is_picked(SessionsScreen *s, const char *id) { for (size_t i = 0; i < s->picked_count; i++) if (str_eq(s->picked[i], id)) return true; return false; }
+static void toggle_pick(SessionsScreen *s, const char *id) {
+    for (size_t i = 0; i < s->picked_count; i++) if (str_eq(s->picked[i], id)) { free(s->picked[i]); s->picked[i] = s->picked[--s->picked_count]; return; }
+    s->picked = xrealloc(s->picked, (s->picked_count + 1) * sizeof *s->picked);
+    s->picked[s->picked_count++] = xstrdup(id);
+}
+static void clear_picks(SessionsScreen *s) { str_array_free(s->picked, s->picked_count); s->picked = NULL; s->picked_count = 0; }
+/// Open = still holding a workspace and a database, the only kind Close has anything to release.
+static bool session_open(const Session *ses) { const char *st = session_status(ses); return str_eq(st, "queued") || str_eq(st, "preparing") || str_eq(st, "running") || str_eq(st, "idle"); }
+
+static void bulk_next(SessionsScreen *s);
+static void bulk_done(void *owner, Request *req) {
+    SessionsScreen *s = owner;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->bulk_error, t); free(t); }
+    else if (s->queue_delete) sessions_forget(s->project.repo, json_str(json_get(req->args, "sessionId")));
+    s->queue_done++;
+    bulk_next(s);
+}
+static void bulk_next(SessionsScreen *s) {
+    if (s->queue_done >= s->queue_count) {
+        str_array_free(s->queue, s->queue_count); s->queue = NULL; s->queue_count = s->queue_done = 0;
+        clear_picks(s);
+        request_cancel(&s->req); sessions_load(s);
+        pane_relayout(s->base.pane); pane_footer_changed(s->base.pane);
+        return;
+    }
+    Json *args = json_object(); json_set_str(args, "sessionId", s->queue[s->queue_done]);
+    store_call(s->queue_delete ? "delete" : "close", args, 0, s, bulk_done, 0, &s->req_bulk);
+}
+static void bulk_start(SessionsScreen *s, bool del, bool all) {
+    if (s->req_bulk) return;
+    size_t n = 0;
+    char **ids = xcalloc(s->count ? s->count : 1, sizeof *ids);
+    for (size_t i = 0; i < s->count; i++) {
+        const Session *ses = &s->sessions[i];
+        if (!all && !is_picked(s, session_id(ses))) continue;
+        if (!del && !session_open(ses)) continue;
+        ids[n++] = xstrdup(session_id(ses));
+    }
+    if (!n) { str_array_free(ids, n); return; }
+    char *title = del ? xstrfmt("Delete %zu conversation%s and their logs?", n, n == 1 ? "" : "s") : xstrfmt("Close %zu session%s?", n, n == 1 ? "" : "s");
+    bool ok = app_confirm(title, del ? "This cannot be undone." : "Each one releases its workspace and database; the conversation stays readable.", del ? "Delete" : "Close", del);
+    free(title);
+    if (!ok) { str_array_free(ids, n); return; }
+    set_string(&s->bulk_error, NULL);
+    s->queue = ids; s->queue_count = n; s->queue_done = 0; s->queue_delete = del;
+    bulk_next(s);
 }
 
-static bool session_shown(SessionsScreen *s, const Session *session) {
-    if (!s->show_closed && str_eq(session_status(session), "closed")) return false;
-    return str_empty(s->query) || str_icontains(session_display_title(session), s->query);
-}
-static bool is_selected(SessionsScreen *s, const char *id) {
-    const char *selected = pane_selected_id(s->base.pane);
-    (void)s;
-    return selected && str_eq(selected, id);
+static void sessions_destroy(Screen *base) {
+    SessionsScreen *s = (SessionsScreen *)base;
+    request_cancel(&s->req); request_cancel(&s->req_bulk); poller_stop(&s->poller);
+    sessions_free(s->sessions, s->count); project_free(&s->project); free(s->error); free(s->bulk_error);
+    clear_picks(s); str_array_free(s->queue, s->queue_count);
+    screen_release(base);
 }
 
 static void sessions_layout(Screen *base, Doc *doc) {
     SessionsScreen *s = (SessionsScreen *)base;
     int w = doc->width;
-    doc_space(doc, px(8));
-    // The search field sits in a box the control fills.
-    int box = doc_box_begin(doc, 0, w, px(6), theme.elevated, theme.border, px(10));
-    doc_item(doc, box)->hover_fill = false;
-    RECT sr = { px(30), doc->y, w - px(10), doc->y + px(22) };
-    s->search_rc = sr;
-    RECT gr = { px(8), doc->y, px(28), doc->y + px(22) };
-    int gi = doc_text_at(doc, &gr, "", FONT_ICON_SMALL, theme.secondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    { wchar_t g[2] = { 0xE721, 0 }; char *u = wide_to_utf8(g); free(doc_item(doc, gi)->text); doc_item(doc, gi)->text = u; }
-    doc->y += px(22);
-    doc_box_end(doc, box, px(6));
-    doc_space(doc, px(10));
-    if (store_supports("pulls")) {
-        char *id = xstrfmt("pulls:%s", s->project.repo);
-        bool selected = is_selected(s, id);
-        COLORREF fill = selected ? blend(theme.accent, theme.background, 0.16) : theme.elevated;
-        int row = doc_box_begin(doc, 0, w, px(10), fill, selected ? blend(theme.accent, theme.background, 0.3) : theme.border, px(10));
-        doc_label(doc, px(12), w - px(24), 0xE8AB, "Pull requests", FONT_BODY, theme.text);
-        doc_box_end(doc, row, px(10));
-        doc_box_action(doc, row, ACT_PULLS, 0);
-        doc_space(doc, px(10));
-        free(id);
-    }
-    if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(8)); }
-    size_t active = 0, shown = 0;
-    for (size_t i = 0; i < s->count; i++) if (session_shown(s, &s->sessions[i])) { shown++; if (session_is_active(&s->sessions[i])) active++; }
-    if (active) {
-        doc_section(doc, 0, w, "Active");
-        for (size_t i = 0; i < s->count; i++) {
-            if (!session_shown(s, &s->sessions[i]) || !session_is_active(&s->sessions[i])) continue;
-            char *id = xstrfmt("conversation:%s", session_id(&s->sessions[i]));
-            doc_session_row(doc, 0, w, &s->sessions[i], ACT_OPEN_SESSION, (intptr_t)i, is_selected(s, id), theme.elevated);
-            free(id);
-            doc_space(doc, px(6));
-        }
-    }
-    // Section header with the closed toggle on the right.
-    doc_space(doc, px(14));
-    int y = doc->y;
-    const char *toggle = s->show_closed ? "Hide closed" : "Show closed";
-    int tw = text_width(doc->hdc, toggle, FONT_CAPTION_MEDIUM) + px(16);
-    RECT hr = { px(4), y, w - tw - px(8), y + font_height(doc->hdc, FONT_CAPTION_SEMIBOLD) + px(4) };
-    doc_text_at(doc, &hr, active ? "Recent" : "Conversations", FONT_CAPTION_SEMIBOLD, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    RECT tr = { w - tw, y - px(2), w, hr.bottom + px(2) };
-    int ti = doc_text_at(doc, &tr, toggle, FONT_CAPTION_MEDIUM, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    doc_item(doc, ti)->action = ACT_TOGGLE_CLOSED; doc_item(doc, ti)->hand = true;
-    doc->y = hr.bottom + px(6);
+    const char *selected = pane_selected_id(base->pane);
+    sidebar_top(doc, w, selected);
+    // `‹ All projects`, the project itself (its pull requests), then its conversations.
+    doc_custom(doc, 0, w, px(30), paint_back_row, NULL, NULL, ACT_BACK, 0);
+    doc_space(doc, px(2));
+    char *board_id = xstrfmt("pulls:%s", s->project.repo);
+    doc_project_row(doc, w, project_title(&s->project), (int)s->count, false, str_eq(selected, board_id), false, px(35), ACT_BOARD, 0);
+    free(board_id);
+    doc_space(doc, px(4));
+    if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     for (size_t i = 0; i < s->count; i++) {
-        if (!session_shown(s, &s->sessions[i]) || session_is_active(&s->sessions[i])) continue;
-        char *id = xstrfmt("conversation:%s", session_id(&s->sessions[i]));
-        doc_session_row(doc, 0, w, &s->sessions[i], ACT_OPEN_SESSION, (intptr_t)i, is_selected(s, id), theme.elevated);
+        const Session *ses = &s->sessions[i];
+        char *id = xstrfmt("conversation:%s", session_id(ses));
+        bool lit = s->select_mode ? is_picked(s, session_id(ses)) : str_eq(selected, id);
+        doc_dashboard_session_row(doc, w, ses, lit, s->select_mode, is_picked(s, session_id(ses)), s->select_mode ? ACT_PICK : ACT_OPEN_SESSION, (intptr_t)i);
         free(id);
-        doc_space(doc, px(6));
     }
-    if (s->loaded && !shown) { doc_space(doc, px(8)); doc_text(doc, px(8), w - px(16), str_empty(s->query) ? "No conversations here yet." : "No matching conversations.", FONT_CALLOUT, theme.secondary, DT_LEFT | DT_WORDBREAK); }
+    if (s->loaded && !s->count) doc_text(doc, px(8), w - px(16), "No conversations here yet.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading\xE2\x80\xA6");
-    doc_space(doc, px(12));
+    doc_space(doc, px(8));
 }
-static void sessions_place(Screen *base, const RECT *content, int scroll_y) {
+static void sessions_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
+
+/// The bulk bar above the foot while ☑ Select is on: the count, Select all, ⏻ Close and 🗑 Delete, 🗑 Delete all.
+static int bulk_bar_height(SessionsScreen *s) { return s->select_mode ? px(6) + 1 + px(10) + px(18) + px(6) + px(30) + px(6) + px(18) + px(10) : 0; }
+static int sessions_footer_height(Screen *base, int width) { SessionsScreen *s = (SessionsScreen *)base; return sidebar_footer_height(width) + bulk_bar_height(s); }
+typedef struct { RECT all, close_, delete_, delete_all; } BulkRects;
+static BulkRects g_bulk;
+static void sessions_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
     SessionsScreen *s = (SessionsScreen *)base;
-    int m = px(12);
-    MoveWindow(s->search, content->left + m + s->search_rc.left, content->top + s->search_rc.top - scroll_y, s->search_rc.right - s->search_rc.left, s->search_rc.bottom - s->search_rc.top, TRUE);
-}
-static void sessions_header(Screen *base, HeaderInfo *info) {
-    SessionsScreen *s = (SessionsScreen *)base;
-    snprintf(info->title, sizeof info->title, "%s", project_title(&s->project));
-    if (!str_eq(project_title(&s->project), s->project.repo)) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->project.repo);
-    if (store_supports("start_session")) {
-        info->buttons[0].glyph = 0xE70F; info->buttons[0].action = ACT_NEW; info->buttons[0].enabled = !s->creating; info->buttons[0].tip = "New conversation";
-        info->button_count = 1;
+    fill_rect(hdc, rc, theme.sidebar);
+    int y = rc->top;
+    memset(&g_bulk, 0, sizeof g_bulk);
+    if (s->select_mode) {
+        int left = rc->left + px(16), right = rc->right - px(16);
+        y += px(6); draw_line(hdc, rc->left + px(10), y, rc->right - px(10), y, theme.line); y += 1 + px(10);
+        char *count = xstrfmt("%zu selected", s->picked_count);
+        RECT cr = { left, y, right - px(70), y + px(18) }; draw_text(hdc, count, &cr, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(count);
+        int aw = text_width(hdc, "Select all", FONT_FOOTNOTE);
+        RECT ar = { right - aw, y, right, y + px(18) }; draw_text(hdc, "Select all", &ar, FONT_FOOTNOTE, s->count ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        g_bulk.all = ar;
+        y += px(18) + px(6);
+        int bw = (right - left - px(6)) / 2, bh = px(30);
+        bool can = s->picked_count && !s->req_bulk;
+        RECT c1 = { left, y, left + bw, y + bh }, c2 = { left + bw + px(6), y, right, y + bh };
+        fill_round_rect(hdc, &c1, px(7), theme.raise, theme.line); draw_text(hdc, s->req_bulk && !s->queue_delete ? "Closing\xE2\x80\xA6" : "\xE2\x8F\xBB Close", &c1, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(hdc, &c2, px(7), theme.raise, theme.line); draw_text(hdc, s->req_bulk && s->queue_delete ? "Deleting\xE2\x80\xA6" : "\xF0\x9F\x97\x91 Delete", &c2, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        g_bulk.close_ = c1; g_bulk.delete_ = c2;
+        y += bh + px(6);
+        RECT dr = { left, y, right, y + px(18) }; draw_text(hdc, "\xF0\x9F\x97\x91 Delete all", &dr, FONT_CAPTION, s->count && !s->req_bulk ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        g_bulk.delete_all = dr;
+        y += px(18) + px(10);
+        if (s->bulk_error) { RECT er = { left, y - px(8), right, y + px(6) }; draw_text(hdc, s->bulk_error, &er, FONT_CAPTION2, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
     }
+    RECT foot = { rc->left, y, rc->right, rc->bottom };
+    sidebar_footer_paint(hdc, &foot, &s->footer, s->select_mode);
+}
+static void sessions_footer_click(Screen *base, POINT pt) {
+    SessionsScreen *s = (SessionsScreen *)base;
+    if (in_rect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
+    if (in_rect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
+    if (!s->select_mode) return;
+    if (in_rect(&g_bulk.all, pt)) { clear_picks(s); for (size_t i = 0; i < s->count; i++) toggle_pick(s, session_id(&s->sessions[i])); pane_footer_changed(base->pane); }
+    else if (in_rect(&g_bulk.close_, pt)) bulk_start(s, false, false);
+    else if (in_rect(&g_bulk.delete_, pt)) bulk_start(s, true, false);
+    else if (in_rect(&g_bulk.delete_all, pt)) bulk_start(s, true, true);
 }
 static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     SessionsScreen *s = (SessionsScreen *)base;
+    if (sidebar_common_action(base->pane, action)) return;
     switch (action) {
-    case ACT_PULLS: app_show_detail(pulls_screen_new(&s->project)); break;
-    case ACT_OPEN_SESSION: if ((size_t)arg < s->count) app_show_detail(conversation_screen_new(&s->sessions[arg])); break;
-    case ACT_TOGGLE_CLOSED: s->show_closed = !s->show_closed; pane_relayout(base->pane); break;
-    case ACT_NEW: {
-        if (s->creating) break;
-        s->creating = true; pane_header_changed(base->pane);
-        Session started;
-        bool ok = dialog_new_conversation(app_window(), &s->project, &started);
-        s->creating = false; pane_header_changed(base->pane);
-        if (ok) { app_show_detail(conversation_screen_new(&started)); session_free(&started); }
-        // The list may already know the new conversation.
-        request_cancel(&s->req); sessions_load(s);
+    case ACT_BACK: pane_pop(base->pane); break;
+    case ACT_BOARD: app_show_detail(pulls_screen_new(&s->project)); break;
+    case ACT_NEW: { size_t n; const Project *all = projects_list(&n); app_show_detail(new_session_screen_new(&s->project, all, n)); break; }
+    case ACT_OPEN_SESSION:
+        if ((size_t)arg >= s->count) break;
+        // Ctrl-clicking a row turns ☑ Select on with that row ticked, as the dashboard does.
+        if (GetKeyState(VK_CONTROL) & 0x8000) { s->select_mode = true; toggle_pick(s, session_id(&s->sessions[arg])); pane_footer_changed(base->pane); break; }
+        app_show_detail(conversation_screen_new(&s->sessions[arg]));
         break;
-    }
+    case ACT_PICK: if ((size_t)arg < s->count) { toggle_pick(s, session_id(&s->sessions[arg])); pane_footer_changed(base->pane); } break;
     }
 }
 static void sessions_timer(Screen *base, UINT id) {
     SessionsScreen *s = (SessionsScreen *)base;
-    if (poller_fired(&s->poller, id)) { if (s->creating) poller_finished(&s->poller, false, -1); else sessions_load(s); }
+    if (poller_fired(&s->poller, id)) sessions_load(s);
 }
 static void sessions_visible(Screen *base, bool shown) {
     SessionsScreen *s = (SessionsScreen *)base;
-    ShowWindow(s->search, shown ? SW_SHOW : SW_HIDE);
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 7000); else { poller_stop(&s->poller); request_cancel(&s->req); }
-}
-static void sessions_command(Screen *base, int id, int code, HWND control) {
-    SessionsScreen *s = (SessionsScreen *)base;
-    if (id == ID_SEARCH && code == EN_CHANGE) {
-        int n = GetWindowTextLengthW(control);
-        wchar_t *w = xmalloc(((size_t)n + 1) * sizeof *w); GetWindowTextW(control, w, n + 1);
-        char *q = wide_to_utf8(w); free(w);
-        set_string(&s->query, q); free(q);
-        pane_relayout(base->pane);
-    }
 }
 static void sessions_refresh(Screen *base) { SessionsScreen *s = (SessionsScreen *)base; request_cancel(&s->req); sessions_load(s); }
 static void sessions_activated(Screen *base, bool active) { if (active) { SessionsScreen *s = (SessionsScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
+static bool sessions_key_press(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    (void)ctrl; (void)shift;
+    SessionsScreen *s = (SessionsScreen *)base;
+    if (vk == VK_ESCAPE && s->select_mode) { s->select_mode = false; clear_picks(s); pane_footer_changed(base->pane); return true; }
+    return false;
+}
 
 static const ScreenVTable sessions_vt = {
     .destroy = sessions_destroy, .layout = sessions_layout, .header = sessions_header, .action = sessions_action,
-    .timer = sessions_timer, .place = sessions_place, .visible = sessions_visible, .command = sessions_command,
-    .refresh = sessions_refresh, .activated = sessions_activated,
+    .timer = sessions_timer, .visible = sessions_visible, .refresh = sessions_refresh, .activated = sessions_activated,
+    .footer_height = sessions_footer_height, .footer_paint = sessions_footer_paint, .footer_click = sessions_footer_click, .key = sessions_key_press,
 };
 Screen *sessions_screen_new(const Project *project) {
     SessionsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &sessions_vt; s->base.id = xstrfmt("sessions:%s", project->repo);
     project_copy(&s->project, project);
-    HWND parent = pane_hwnd(app_sidebar_pane());
-    s->search = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_SEARCH, GetModuleHandleW(NULL), NULL);
-    SendMessageW(s->search, WM_SETFONT, (WPARAM)font(FONT_CALLOUT), TRUE);
-    SendMessageW(s->search, EM_SETCUEBANNER, TRUE, (LPARAM)L"Find a conversation");
-    theme_apply_control(s->search);
     return &s->base;
 }

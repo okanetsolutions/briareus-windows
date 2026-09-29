@@ -14,7 +14,8 @@ enum { HEADER_BUTTONS = 8 };
 typedef struct {
     char title[512]; char subtitle[512]; char status[48];   // status draws a dot before the subtitle
     HeaderButton buttons[HEADER_BUTTONS]; int button_count;
-    bool large;   // the sidebar's root shows a large title
+    bool large;         // unused: the dashboard has one title size
+    int title_action;   // when set, a ✎ after the title fires it (the dashboard's Edit session title)
 } HeaderInfo;
 
 typedef struct ScreenVTable {
