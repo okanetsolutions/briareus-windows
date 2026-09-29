@@ -336,8 +336,74 @@ static int header_hit(Pane *p, int x, int y) {
     if (p->show_bottom_button && in_rect(&p->bottom_button_rect, x, y)) return -3;
     return -1;
 }
+
+// MARK: - Text selection
+
+enum { TIMER_AUTOSCROLL = 0x7F01 };
+enum { MENU_COPY = 1, MENU_COPY_TEXT, MENU_SELECT_ALL };
+
+/// The text position under a client point.
+static bool position_at(Pane *p, int x, int y, DocPos *pos) {
+    POINT c = to_content(p, x, y);
+    HDC hdc = GetDC(p->hwnd);
+    bool ok = doc_position_at(&p->doc, hdc, c.x, c.y, pos);
+    ReleaseDC(p->hwnd, hdc);
+    return ok;
+}
+static void copy_selection(Pane *p) {
+    char *text = doc_selection_text(&p->doc);
+    if (!text) return;
+    copy_to_clipboard(p->hwnd, text);
+    free(text);
+}
+static void select_all(Pane *p) { doc_select_all(&p->doc); InvalidateRect(p->hwnd, NULL, FALSE); }
+static void clear_selection(Pane *p) {
+    if (!doc_has_selection(&p->doc) && !p->doc.selecting) return;
+    doc_clear_selection(&p->doc);
+    InvalidateRect(p->hwnd, NULL, FALSE);
+}
+/// Moves the selection's end to the mouse; past the content's edges the view scrolls, on a timer while the mouse stays there.
+static void drag_selection(Pane *p, int x, int y) {
+    RECT content = pane_content_rect(p);
+    bool outside = y < content.top || y >= content.bottom;
+    if (y < content.top) { set_scroll(p, p->scroll_y - px(24)); y = content.top; }
+    else if (y >= content.bottom) { set_scroll(p, p->scroll_y + px(24)); y = content.bottom - 1; }
+    if (outside) SetTimer(p->hwnd, TIMER_AUTOSCROLL, 60, NULL); else KillTimer(p->hwnd, TIMER_AUTOSCROLL);
+    DocPos pos;
+    if (position_at(p, x, y, &pos) && (pos.item != p->doc.sel_focus.item || pos.offset != p->doc.sel_focus.offset)) {
+        p->doc.sel_focus = pos;
+        InvalidateRect(p->hwnd, NULL, FALSE);
+    }
+}
+static void end_selection(Pane *p) {
+    p->doc.selecting = false;
+    KillTimer(p->hwnd, TIMER_AUTOSCROLL);
+    if (GetCapture() == p->hwnd) ReleaseCapture();
+    if (!doc_has_selection(&p->doc)) doc_clear_selection(&p->doc);
+    InvalidateRect(p->hwnd, NULL, FALSE);
+}
+/// The copy menu on a right click over text or a selection; returns false when there is neither.
+static bool context_menu(Pane *p, int x, int y) {
+    POINT c = to_content(p, x, y);
+    int text_item = doc_text_item_at(&p->doc, c.x, c.y);
+    bool has_sel = doc_has_selection(&p->doc);
+    if (!has_sel && text_item < 0) return false;
+    POINT sp = { x, y }; ClientToScreen(p->hwnd, &sp);
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING | (has_sel ? 0 : MF_GRAYED), MENU_COPY, L"Copy\tCtrl+C");
+    if (text_item >= 0) AppendMenuW(menu, MF_STRING, MENU_COPY_TEXT, L"Copy text");
+    AppendMenuW(menu, MF_STRING, MENU_SELECT_ALL, L"Select all\tCtrl+A");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, sp.x, sp.y, 0, p->hwnd, NULL);
+    DestroyMenu(menu);
+    if (chosen == MENU_COPY) copy_selection(p);
+    else if (chosen == MENU_COPY_TEXT) { char *t = doc_item_plain_text(&p->doc, text_item); if (t) { copy_to_clipboard(p->hwnd, t); free(t); } }
+    else if (chosen == MENU_SELECT_ALL) select_all(p);
+    return true;
+}
+
 static void mouse_move(Pane *p, int x, int y) {
     if (!p->tracking) { TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, p->hwnd, 0 }; TrackMouseEvent(&tme); p->tracking = true; }
+    if (p->doc.selecting) { drag_selection(p, x, y); return; }
     if (p->dragging_thumb) {
         RECT content = pane_content_rect(p);
         int track = content.bottom - content.top - px(8);
@@ -365,12 +431,20 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
         POINT c = to_content(p, x, y);
         int item = doc_hit(&p->doc, c.x, c.y);
         if (right) {
+            if (context_menu(p, x, y)) return;
             Screen *s = pane_top(p);
             if (s && s->vt->context) {
                 POINT sp = { x, y }; ClientToScreen(p->hwnd, &sp);
                 Item *it = doc_item(&p->doc, item);
                 s->vt->context(s, it ? it->action : 0, it ? it->arg : (intptr_t)(item), sp);
             }
+            return;
+        }
+        clear_selection(p);
+        if (item < 0) {
+            // Off any control, the press anchors a text selection that a drag extends.
+            DocPos pos;
+            if (position_at(p, x, y, &pos)) { p->doc.sel_anchor = p->doc.sel_focus = pos; p->doc.selecting = true; SetCapture(p->hwnd); }
             return;
         }
         p->doc.pressed = item; SetCapture(p->hwnd); InvalidateRect(p->hwnd, NULL, FALSE);
@@ -383,6 +457,7 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
     }
 }
 static void mouse_up(Pane *p, int x, int y) {
+    if (p->doc.selecting) { end_selection(p); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
     if (GetCapture() == p->hwnd) ReleaseCapture();
     Screen *s = pane_top(p);
@@ -425,7 +500,21 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
-    case WM_LBUTTONDBLCLK: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
+    case WM_LBUTTONDBLCLK: {
+        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        RECT content = pane_content_rect(p);
+        POINT c = to_content(p, x, y);
+        DocPos pos;
+        if (in_rect(&content, x, y) && header_hit(p, x, y) == -1 && doc_hit(&p->doc, c.x, c.y) < 0 && position_at(p, x, y, &pos)) {
+            // A double click takes the word.
+            SetFocus(hwnd);
+            doc_select_word(&p->doc, pos);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        mouse_down(p, x, y, false);
+        return 0;
+    }
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
         if (GetKeyState(VK_SHIFT) & 0x8000) {
@@ -448,14 +537,32 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         Item *it = doc_item(&p->doc, p->doc.hover);
         if (it && it->hand) hand = true;
         if (hand) { SetCursor(LoadCursorW(NULL, IDC_HAND)); return TRUE; }
+        RECT content = pane_content_rect(p);
+        if (p->doc.selecting || in_rect(&content, pt.x, pt.y)) {
+            // Plain text takes the text cursor; text that acts as a button keeps the arrow.
+            POINT c = to_content(p, pt.x, pt.y);
+            Item *t = doc_item(&p->doc, doc_text_item_at(&p->doc, c.x, c.y));
+            if (p->doc.selecting || (t && !t->action)) { SetCursor(LoadCursorW(NULL, IDC_IBEAM)); return TRUE; }
+        }
         SetCursor(LoadCursorW(NULL, IDC_ARROW));
         return TRUE;
     }
-    case WM_TIMER: if (s && s->vt->timer) s->vt->timer(s, (UINT)wp); return 0;
+    case WM_TIMER:
+        if (wp == TIMER_AUTOSCROLL) {
+            if (!p->doc.selecting) { KillTimer(hwnd, TIMER_AUTOSCROLL); return 0; }
+            POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+            drag_selection(p, pt.x, pt.y);
+            return 0;
+        }
+        if (s && s->vt->timer) s->vt->timer(s, (UINT)wp);
+        return 0;
     case WM_COMMAND: if (s && s->vt->command) s->vt->command(s, LOWORD(wp), HIWORD(wp), (HWND)lp); return 0;
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (s && s->vt->key && s->vt->key(s, wp, ctrl, shift)) return 0;
+        if (ctrl && wp == 'C' && doc_has_selection(&p->doc)) { copy_selection(p); return 0; }
+        if (ctrl && wp == 'A') { select_all(p); return 0; }
+        if (wp == VK_ESCAPE && doc_has_selection(&p->doc)) { clear_selection(p); return 0; }
         RECT content = pane_content_rect(p);
         int page = content.bottom - content.top - px(40);
         switch (wp) {
@@ -485,5 +592,3 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
-
-char *pane_hovered_text(Pane *p) { return doc_item_plain_text(&p->doc, p->doc.hover); }
