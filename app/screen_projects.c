@@ -19,7 +19,7 @@ static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badg
 typedef struct { char text[40]; int badge; bool active, wide; } StripData;
 static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StripData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
     fill_round_rect(cv, rc, px(8), theme.raise, border);
     if (d->wide) {
@@ -82,7 +82,6 @@ static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, b
     InflateRect(&a, px(4), px(4)); InflateRect(&c, px(4), px(4));
     out->select_rc = a; out->signout_rc = c;
 }
-static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static void sign_out(void) {
     if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. Revoke the token itself in web Settings.", "Sign out", true)) return;
     store_forget();
@@ -105,7 +104,7 @@ typedef struct { char *name; int count; bool busy, selected, chevron; } ProjectR
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->name); free(d); }
 static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered || d->selected) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     int right = rc->right - px(8);
     if (d->chevron) { RECT c = { right - px(6), rc->top, right, rc->bottom }; draw_text(cv, "\xE2\x80\xBA", &c, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= px(6) + px(8); }
@@ -124,7 +123,7 @@ static void doc_project_row(Doc *doc, int w, const char *name, int count, bool b
 }
 
 static void paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     COLORREF c = hovered ? theme.ink : theme.muted;
     RECT a = { rc->left + px(8), rc->top, rc->left + px(8) + px(8), rc->bottom };
@@ -172,7 +171,7 @@ static void draw_pr_mark(Canvas *cv, int x, int y, COLORREF color) {
 }
 static void paint_session_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SessionRowData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered || d->lit) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(7);
     if (d->select_mode) {
@@ -259,7 +258,7 @@ static void projects_layout(Screen *base, Doc *doc);
 /// What the saved lists say about each project's conversations, before the server is asked.
 static void projects_count(ProjectsScreen *s) {
     free(s->counts); free(s->busy);
-    s->counts = xcalloc(s->count ? s->count : 1, sizeof *s->counts); s->busy = xcalloc(s->count ? s->count : 1, sizeof *s->busy);
+    s->counts = xcalloc(s->count, sizeof *s->counts); s->busy = xcalloc(s->count, sizeof *s->busy);
     for (size_t i = 0; i < s->count; i++) {
         char *key = xstrfmt("sessions:%s", s->projects[i].repo);
         Json *list = cache_value(g_store.cache, key);
@@ -314,7 +313,7 @@ static void projects_done(void *owner, Request *req) {
         // Every project's conversations, for the counts and the dots.
         if (store_supports("sessions")) { store_call("sessions", json_object(), 0, s, count_done, 0, &s->req_sessions); return; }
     } else {
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         s->loaded = true;
     }
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
@@ -363,7 +362,7 @@ static int projects_footer_height(Screen *base, int width) { (void)base; return 
 static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(cv, rc, &s->footer, false); }
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
-    if (in_rect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
+    if (PtInRect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
 static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
@@ -450,7 +449,7 @@ static void sessions_done(void *owner, Request *req) {
         json_free(list); free(key);
         projects_recount_findings();
     } else {
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         s->loaded = true;
     }
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
@@ -515,7 +514,7 @@ static bool session_open(const Session *ses) { const char *st = session_status(s
 static void bulk_next(SessionsScreen *s);
 static void bulk_done(void *owner, Request *req) {
     SessionsScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->bulk_error, t); free(t); }
+    if (!req->ok) { request_error_into(&s->bulk_error, req); }
     else if (s->queue_delete) sessions_forget(s->project.repo, json_str(json_get(req->args, "sessionId")));
     s->queue_done++;
     bulk_next(s);
@@ -534,7 +533,7 @@ static void bulk_next(SessionsScreen *s) {
 static void bulk_start(SessionsScreen *s, bool del, bool all) {
     if (s->req_bulk) return;
     size_t n = 0;
-    char **ids = xcalloc(s->count ? s->count : 1, sizeof *ids);
+    char **ids = xcalloc(s->count, sizeof *ids);
     for (size_t i = 0; i < s->count; i++) {
         const Session *ses = &s->sessions[i];
         if (!all && !is_picked(s, session_id(ses))) continue;
@@ -621,13 +620,13 @@ static void sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
 }
 static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;
-    if (in_rect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
-    if (in_rect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
+    if (PtInRect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
+    if (PtInRect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;
-    if (in_rect(&g_bulk.all, pt)) { clear_picks(s); for (size_t i = 0; i < s->count; i++) toggle_pick(s, session_id(&s->sessions[i])); pane_footer_changed(base->pane); }
-    else if (in_rect(&g_bulk.close_, pt)) bulk_start(s, false, false);
-    else if (in_rect(&g_bulk.delete_, pt)) bulk_start(s, true, false);
-    else if (in_rect(&g_bulk.delete_all, pt)) bulk_start(s, true, true);
+    if (PtInRect(&g_bulk.all, pt)) { clear_picks(s); for (size_t i = 0; i < s->count; i++) toggle_pick(s, session_id(&s->sessions[i])); pane_footer_changed(base->pane); }
+    else if (PtInRect(&g_bulk.close_, pt)) bulk_start(s, false, false);
+    else if (PtInRect(&g_bulk.delete_, pt)) bulk_start(s, true, false);
+    else if (PtInRect(&g_bulk.delete_all, pt)) bulk_start(s, true, true);
 }
 static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;

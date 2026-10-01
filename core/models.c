@@ -4,14 +4,6 @@
 #include <string.h>
 #include <stdio.h>
 
-static char *dup_str(const Json *v) { const char *s = json_str(v); return s ? xstrdup(s) : NULL; }
-static char **dup_string_array(const Json *v, size_t *count) {
-    size_t n = json_count(v), m = 0;
-    char **out = xmalloc((n ? n : 1) * sizeof *out);
-    for (size_t i = 0; i < n; i++) { const char *s = json_str(json_at(v, i)); if (s) out[m++] = xstrdup(s); }
-    *count = m;
-    return out;
-}
 static Json *string_array_json(char **items, size_t count) {
     Json *a = json_array();
     for (size_t i = 0; i < count; i++) json_array_push(a, json_string(items[i]));
@@ -26,7 +18,7 @@ bool device_parse(const Json *value, Device *out) {
     double expires;
     if (!id || !label || !permission || !json_is_array(json_get(value, "repos")) || !json_num(json_get(value, "expiresAt"), &expires)) return false;
     out->id = xstrdup(id); out->label = xstrdup(label); out->permission = xstrdup(permission);
-    out->repos = dup_string_array(json_get(value, "repos"), &out->repo_count);
+    out->repos = json_dup_strings(json_get(value, "repos"), &out->repo_count);
     out->expires_at = expires;
     return true;
 }
@@ -121,7 +113,7 @@ void routes_free(Route *routes, size_t count) {
     free(routes);
 }
 Route *routes_copy(const Route *routes, size_t count) {
-    Route *c = xcalloc(count ? count : 1, sizeof *c);
+    Route *c = xcalloc(count, sizeof *c);
     for (size_t i = 0; i < count; i++) { c[i].method = xstrdup(routes[i].method); c[i].path = xstrdup(routes[i].path); c[i].access = xstrdup(routes[i].access); }
     return c;
 }
@@ -178,24 +170,22 @@ bool project_parse(const Json *value, Project *out) {
     memset(out, 0, sizeof *out);
     const char *repo = json_str(json_get(value, "repo"));
     if (!repo) return false;
-    out->repo = xstrdup(repo); out->label = dup_str(json_get(value, "label"));
+    out->repo = xstrdup(repo); out->label = json_dup_str(json_get(value, "label"));
     return true;
 }
 Json *project_json(const Project *p) {
     Json *o = json_object(); json_set_str(o, "repo", p->repo);
-    json_object_set(o, "label", p->label ? json_string(p->label) : json_null());
+    json_object_set(o, "label", json_string_or_null(p->label));
     return o;
 }
 void project_free(Project *p) { if (!p) return; free(p->repo); free(p->label); memset(p, 0, sizeof *p); }
-void project_copy(Project *into, const Project *from) { into->repo = xstrdup(from->repo); into->label = from->label ? xstrdup(from->label) : NULL; }
+void project_copy(Project *into, const Project *from) { into->repo = xstrdup(from->repo); into->label = xstrdup(from->label); }
 const char *project_title(const Project *p) { return str_empty(p->label) ? p->repo : p->label; }
+static DEFINE_LIST_PARSE(Project, project_list_parse, project_parse)
 bool projects_parse(const Json *value, Project **out, size_t *count) {
     const Json *list = json_is_array(value) ? value : json_get(value, "projects");
     if (!json_is_array(list)) return false;
-    size_t n = json_count(list), m = 0;
-    Project *items = xcalloc(n ? n : 1, sizeof *items);
-    for (size_t i = 0; i < n; i++) if (project_parse(json_at(list, i), &items[m])) m++;
-    *out = items; *count = m;
+    *out = project_list_parse(list, count);
     return true;
 }
 Json *projects_json(const Project *projects, size_t count) {
@@ -203,11 +193,7 @@ Json *projects_json(const Project *projects, size_t count) {
     for (size_t i = 0; i < count; i++) json_array_push(a, project_json(&projects[i]));
     return a;
 }
-void projects_free(Project *projects, size_t count) {
-    if (!projects) return;
-    for (size_t i = 0; i < count; i++) project_free(&projects[i]);
-    free(projects);
-}
+DEFINE_LIST_FREE(Project, projects_free, project_free)
 
 // MARK: - Sessions
 
@@ -219,9 +205,9 @@ bool session_parse(const Json *value, Session *out) {
 }
 void session_free(Session *s) { if (!s) return; json_free(s->raw); s->raw = NULL; }
 void session_copy(Session *into, const Session *from) { into->raw = json_clone(from->raw); }
-const char *session_id(const Session *s) { const char *v = json_str(json_get(s->raw, "id")); return v ? v : ""; }
+const char *session_id(const Session *s) { return json_str_or(json_get(s->raw, "id"), ""); }
 const char *session_repo(const Session *s) { return json_str(json_get(s->raw, "repo")); }
-const char *session_status(const Session *s) { const char *v = json_str(json_get(s->raw, "status")); return v ? v : ""; }
+const char *session_status(const Session *s) { return json_str_or(json_get(s->raw, "status"), ""); }
 const char *session_model(const Session *s) { return json_str_nonempty(json_get(s->raw, "model")); }
 const char *session_provider(const Session *s) { return json_str_nonempty(json_get(s->raw, "provider")); }
 const char *session_display_title(const Session *s) {
@@ -255,13 +241,11 @@ int session_pull_number(const Session *s) {
     if (!json_num(json_get(json_get(s->raw, "prStatus"), "number"), &n) && !json_num(json_get(s->raw, "startedOnPr"), &n)) return 0;
     return n >= 1 ? (int)n : 0;
 }
+static DEFINE_LIST_PARSE(Session, session_list_parse, session_parse)
 bool sessions_parse(const Json *value, Session **out, size_t *count) {
     const Json *list = json_is_array(value) ? value : json_get(value, "sessions");
     if (!json_is_array(list)) return false;
-    size_t n = json_count(list), m = 0;
-    Session *items = xcalloc(n ? n : 1, sizeof *items);
-    for (size_t i = 0; i < n; i++) if (session_parse(json_at(list, i), &items[m])) m++;
-    *out = items; *count = m;
+    *out = session_list_parse(list, count);
     return true;
 }
 Json *sessions_json(const Session *sessions, size_t count) {
@@ -269,11 +253,7 @@ Json *sessions_json(const Session *sessions, size_t count) {
     for (size_t i = 0; i < count; i++) json_array_push(a, json_clone(sessions[i].raw));
     return a;
 }
-void sessions_free(Session *sessions, size_t count) {
-    if (!sessions) return;
-    for (size_t i = 0; i < count; i++) session_free(&sessions[i]);
-    free(sessions);
-}
+DEFINE_LIST_FREE(Session, sessions_free, session_free)
 
 // MARK: - Findings
 
@@ -285,7 +265,7 @@ const Json *session_held_round(const Session *s) {
 }
 static const char *held_at(const Json *held) { const char *at = json_str(json_get(held, "heldAt")); return at ? at : ""; }
 HeldRound *sessions_held_rounds(const Session *sessions, size_t count, size_t *out_count) {
-    HeldRound *rounds = xcalloc(count ? count : 1, sizeof *rounds);
+    HeldRound *rounds = xcalloc(count, sizeof *rounds);
     size_t n = 0;
     for (size_t i = 0; i < count; i++) {
         const Json *held = session_held_round(&sessions[i]);
@@ -406,7 +386,7 @@ static void runtime_provider_free(RuntimeProvider *p) {
 }
 void runtime_choice_free(RuntimeChoice *c) { if (!c) return; free(c->model); free(c->effort); memset(c, 0, sizeof *c); }
 void runtime_choice_copy(RuntimeChoice *into, const RuntimeChoice *from) {
-    into->provider_id = from->provider_id; into->model = from->model ? xstrdup(from->model) : NULL; into->effort = from->effort ? xstrdup(from->effort) : NULL;
+    into->provider_id = from->provider_id; into->model = xstrdup(from->model); into->effort = xstrdup(from->effort);
 }
 bool runtime_choice_equal(const RuntimeChoice *a, const RuntimeChoice *b) {
     return a->provider_id == b->provider_id && str_eq(a->model, b->model) && str_eq(a->effort, b->effort);
@@ -415,13 +395,13 @@ static bool runtime_choice_parse(const Json *value, RuntimeChoice *out) {
     memset(out, 0, sizeof *out);
     double id;
     if (!json_num(json_get(value, "providerId"), &id)) return false;
-    out->provider_id = (int)id; out->model = dup_str(json_get(value, "model")); out->effort = dup_str(json_get(value, "effort"));
+    out->provider_id = (int)id; out->model = json_dup_str(json_get(value, "model")); out->effort = json_dup_str(json_get(value, "effort"));
     return true;
 }
 static Json *runtime_choice_json(const RuntimeChoice *c) {
     Json *o = json_object(); json_set_num(o, "providerId", c->provider_id);
-    json_object_set(o, "model", c->model ? json_string(c->model) : json_null());
-    json_object_set(o, "effort", c->effort ? json_string(c->effort) : json_null());
+    json_object_set(o, "model", json_string_or_null(c->model));
+    json_object_set(o, "effort", json_string_or_null(c->effort));
     return o;
 }
 Json *runtime_choice_arguments(const RuntimeChoice *c) {
@@ -436,7 +416,7 @@ bool runtime_catalog_parse(const Json *value, RuntimeCatalog *out) {
     if (!json_is_array(providers)) return false;
     out->has_default = runtime_choice_parse(json_get(value, "default"), &out->def);
     size_t n = json_count(providers);
-    out->providers = xcalloc(n ? n : 1, sizeof *out->providers);
+    out->providers = xcalloc(n, sizeof *out->providers);
     for (size_t i = 0; i < n; i++) {
         const Json *pv = json_at(providers, i);
         double id;
@@ -445,17 +425,17 @@ bool runtime_catalog_parse(const Json *value, RuntimeCatalog *out) {
         if (!json_num(json_get(pv, "id"), &id) || !label || !json_is_array(models)) { runtime_catalog_free(out); return false; }
         RuntimeProvider *p = &out->providers[out->provider_count++];
         p->id = (int)id; p->label = xstrdup(label); p->available = json_bool_tristate(json_get(pv, "available"));
-        p->default_model = dup_str(json_get(pv, "defaultModel"));
+        p->default_model = json_dup_str(json_get(pv, "defaultModel"));
         size_t mn = json_count(models);
-        p->models = xcalloc(mn ? mn : 1, sizeof *p->models);
+        p->models = xcalloc(mn, sizeof *p->models);
         for (size_t j = 0; j < mn; j++) {
             const Json *mv = json_at(models, j);
             const char *mid = json_str(json_get(mv, "id"));
             if (!mid) { runtime_catalog_free(out); return false; }
             RuntimeModel *m = &p->models[p->model_count++];
-            m->id = xstrdup(mid); m->label = dup_str(json_get(mv, "label"));
-            m->efforts = json_is_array(json_get(mv, "efforts")) ? dup_string_array(json_get(mv, "efforts"), &m->effort_count) : NULL;
-            m->default_effort = dup_str(json_get(mv, "defaultEffort"));
+            m->id = xstrdup(mid); m->label = json_dup_str(json_get(mv, "label"));
+            m->efforts = json_is_array(json_get(mv, "efforts")) ? json_dup_strings(json_get(mv, "efforts"), &m->effort_count) : NULL;
+            m->default_effort = json_dup_str(json_get(mv, "defaultEffort"));
         }
     }
     return true;
@@ -469,15 +449,15 @@ Json *runtime_catalog_json(const RuntimeCatalog *c) {
         Json *pj = json_object();
         json_set_num(pj, "id", p->id); json_set_str(pj, "label", p->label);
         if (p->available >= 0) json_set_bool(pj, "available", p->available == 1);
-        json_object_set(pj, "defaultModel", p->default_model ? json_string(p->default_model) : json_null());
+        json_object_set(pj, "defaultModel", json_string_or_null(p->default_model));
         Json *models = json_array();
         for (size_t j = 0; j < p->model_count; j++) {
             const RuntimeModel *m = &p->models[j];
             Json *mj = json_object();
             json_set_str(mj, "id", m->id);
-            json_object_set(mj, "label", m->label ? json_string(m->label) : json_null());
+            json_object_set(mj, "label", json_string_or_null(m->label));
             json_object_set(mj, "efforts", m->efforts ? string_array_json(m->efforts, m->effort_count) : json_null());
-            json_object_set(mj, "defaultEffort", m->default_effort ? json_string(m->default_effort) : json_null());
+            json_object_set(mj, "defaultEffort", json_string_or_null(m->default_effort));
             json_array_push(models, mj);
         }
         json_object_set(pj, "models", models);
@@ -523,7 +503,7 @@ bool runtime_catalog_choice(const RuntimeCatalog *c, int provider_id, const char
     if (picked) {
         out->model = xstrdup(picked->id);
         const char *effort = picked->default_effort ? picked->default_effort : (picked->effort_count ? picked->efforts[0] : NULL);
-        out->effort = effort ? xstrdup(effort) : NULL;
+        out->effort = xstrdup(effort);
     }
     return true;
 }
@@ -549,10 +529,10 @@ bool pull_file_parse(const Json *value, PullFile *out) {
     const char *filename = json_str(json_get(value, "filename"));
     if (!filename) return false;
     out->filename = xstrdup(filename);
-    out->previous_filename = dup_str(json_get(value, "previousFilename"));
-    out->status = dup_str(json_get(value, "status"));
-    out->patch = dup_str(json_get(value, "patch"));
-    out->url = dup_str(json_get(value, "url"));
+    out->previous_filename = json_dup_str(json_get(value, "previousFilename"));
+    out->status = json_dup_str(json_get(value, "status"));
+    out->patch = json_dup_str(json_get(value, "patch"));
+    out->url = json_dup_str(json_get(value, "url"));
     out->additions = json_int_or(json_get(value, "additions"), -1);
     out->deletions = json_int_or(json_get(value, "deletions"), -1);
     return true;
@@ -560,12 +540,12 @@ bool pull_file_parse(const Json *value, PullFile *out) {
 Json *pull_file_json(const PullFile *f) {
     Json *o = json_object();
     json_set_str(o, "filename", f->filename);
-    json_object_set(o, "previousFilename", f->previous_filename ? json_string(f->previous_filename) : json_null());
-    json_object_set(o, "status", f->status ? json_string(f->status) : json_null());
+    json_object_set(o, "previousFilename", json_string_or_null(f->previous_filename));
+    json_object_set(o, "status", json_string_or_null(f->status));
     json_object_set(o, "additions", f->additions >= 0 ? json_number(f->additions) : json_null());
     json_object_set(o, "deletions", f->deletions >= 0 ? json_number(f->deletions) : json_null());
-    json_object_set(o, "patch", f->patch ? json_string(f->patch) : json_null());
-    json_object_set(o, "url", f->url ? json_string(f->url) : json_null());
+    json_object_set(o, "patch", json_string_or_null(f->patch));
+    json_object_set(o, "url", json_string_or_null(f->url));
     return o;
 }
 void pull_file_free(PullFile *f) {
@@ -583,15 +563,13 @@ char *pull_file_directory(const PullFile *f) {
     return slash ? xstrndup(f->filename, (size_t)(slash - f->filename)) : xstrdup("");
 }
 
+static DEFINE_LIST_PARSE(PullFile, file_list_parse, pull_file_parse)
 static bool parse_files(const Json *list, PullFile **out, size_t *count) {
     if (!json_is_array(list)) return false;
-    size_t n = json_count(list), m = 0;
-    PullFile *files = xcalloc(n ? n : 1, sizeof *files);
-    for (size_t i = 0; i < n; i++) if (pull_file_parse(json_at(list, i), &files[m])) m++;
-    *out = files; *count = m;
+    *out = file_list_parse(list, count);
     return true;
 }
-static void free_files(PullFile *files, size_t count) { for (size_t i = 0; i < count; i++) pull_file_free(&files[i]); free(files); }
+static DEFINE_LIST_FREE(PullFile, free_files, pull_file_free)
 
 bool pull_files_page_parse(const Json *value, PullFilesPage *out) {
     memset(out, 0, sizeof *out);

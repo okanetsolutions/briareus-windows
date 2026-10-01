@@ -280,7 +280,7 @@ static void field_pair(FormScreen *s, Doc *doc, int x, int w, int a, const char 
 
 static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
@@ -294,7 +294,7 @@ typedef struct { char *text; } SelectData;
 static void select_free(void *p) { SelectData *d = p; free(d->text); free(d); }
 static void paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SelectData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     fill_round_rect(cv, rc, px(6), theme.raise, hovered ? theme.accent_dim : theme.line);
     RECT t = { rc->left + px(12), rc->top, rc->right - px(28), rc->bottom };
     draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -644,7 +644,7 @@ static void pick_mode(FormScreen *s, POINT pt) {
 
 static void status_done(void *owner, Request *req) {
     FormScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->status_error, t); free(t); }
+    if (!req->ok) { request_error_into(&s->status_error, req); }
     else {
         json_free(s->status); s->status = json_clone(json_get(req->result, "status"));
         set_string(&s->status_error, NULL);
@@ -665,7 +665,7 @@ static void load_status(FormScreen *s, bool fresh) {
 
 static void login_done(void *owner, Request *req) {
     FormScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->error, req); pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }
     set_string(&s->error, NULL);
     const char *url = json_str_nonempty(json_get(req->result, "url"));
     if (str_eq(s->binary, "claude")) {
@@ -698,7 +698,7 @@ static void finish_done(void *owner, Request *req) {
     FormScreen *s = owner;
     const Json *row = req->ok ? json_get(req->result, "provider") : NULL;
     if (!json_is_object(row)) {
-        char *t = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *t = request_error_or_unexpected(req);
         set_string(&s->error, t); free(t);
         pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
@@ -730,7 +730,7 @@ static void login_finish(FormScreen *s) {
 static void test_done(void *owner, Request *req) {
     FormScreen *s = owner;
     s->test_failed = !req->ok;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->test_result, t); free(t); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->test_result, req); pane_relayout(s->base.pane); return; }
     const char *probed = json_str_nonempty(json_get(req->result, "probedModel"));
     if (probed) {
         char *t = xstrfmt("OK: no model list route, but a chat call as %s answered", probed);
@@ -778,7 +778,7 @@ static void save_done(void *owner, Request *req) {
     FormScreen *s = owner;
     const Json *row = req->ok ? json_get(req->result, "provider") : NULL;
     if (!json_is_object(row)) {
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         set_string(&s->error, text); free(text);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
@@ -805,7 +805,7 @@ static void form_save(FormScreen *s) {
 static void delete_done(void *owner, Request *req) {
     FormScreen *s = owner;
     if (!req->ok) {
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
     }

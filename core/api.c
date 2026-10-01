@@ -34,7 +34,7 @@ void api_error_clear(ApiError *e) { if (!e) return; free(e->message); api_error_
 void api_error_set(ApiError *e, ApiErrorKind kind, int status, const char *message, double retry_after) {
     if (!e) return;
     api_error_clear(e);
-    e->kind = kind; e->status = status; e->message = message ? xstrdup(message) : NULL; e->retry_after = retry_after;
+    e->kind = kind; e->status = status; e->message = xstrdup(message); e->retry_after = retry_after;
 }
 void api_error_copy(ApiError *into, const ApiError *from) { api_error_set(into, from->kind, from->status, from->message, from->retry_after); }
 bool api_error_unauthorized(const ApiError *e) { return e && e->kind == API_HTTP && e->status == 401; }
@@ -425,7 +425,7 @@ char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *co
     free(url);
     if (!j) return NULL;
     const char *text = json_str(json_get(j, "text"));
-    char *result = text ? xstrdup(text) : NULL;
+    char *result = xstrdup(text);
     json_free(j);
     if (!result) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return result;
@@ -441,7 +441,7 @@ char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, 
     free(url);
     if (!j) return NULL;
     const char *id = json_str_nonempty(json_get(json_get(j, "file"), "id"));
-    char *result = id ? xstrdup(id) : NULL;
+    char *result = xstrdup(id);
     json_free(j);
     if (!result) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return result;

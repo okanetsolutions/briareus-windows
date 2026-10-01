@@ -175,7 +175,7 @@ static void field_pair(DbForm *s, Doc *doc, int x, int w, int left, int right, i
 
 static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     DbForm *s = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
     RECT b = { rc->left, top, rc->left + size, top + size };
     fill_round_rect(cv, &b, px(3), s->enabled ? theme.accent : theme.field, s->enabled ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
@@ -376,7 +376,7 @@ static void save_done(void *owner, Request *req) {
     DbForm *s = owner;
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
     if (!json_is_object(row)) {
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         show_error(s, text); free(text);
         return;
     }

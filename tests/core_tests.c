@@ -52,8 +52,8 @@ static bool stub_transport(void *ctx, const char *method, const char *url, const
     }
     if (s->fail) { *error_message = xstrdup(s->fail_message ? s->fail_message : "timed out"); return false; }
     *status = s->status;
-    *content_type = s->content_type ? xstrdup(s->content_type) : NULL;
-    *retry_after = s->retry_after ? xstrdup(s->retry_after) : NULL;
+    *content_type = xstrdup(s->content_type);
+    *retry_after = xstrdup(s->retry_after);
     *response = xstrdup(s->body ? s->body : ""); *response_len = strlen(*response);
     return true;
 }

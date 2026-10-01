@@ -115,6 +115,14 @@ bool poller_fired(Poller *p, UINT id);
 void poller_set_base(Poller *p, int base_ms);
 
 void set_string(char **slot, const char *value);
+/// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.
+const char *finding_severity_label(const char *severity, COLORREF *color);
+/// The decisions a finding can be given, as the API spells them and as the segmented control titles them.
+#define FINDING_DECISION_COUNT 3
+extern const char *const finding_decision_ids[FINDING_DECISION_COUNT];
+extern const char *const finding_decision_titles[FINDING_DECISION_COUNT];
+/// The decision's index in `finding_decision_ids`, or -1.
+int finding_decision_index(const char *decision);
 /// "Status · model", as the rows word it.
 char *session_subtitle(const Session *session);
 /// A session row: status dot, title and subtitle, clickable. `trailing` keeps that much room at the right for an item laid

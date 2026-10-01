@@ -247,7 +247,7 @@ static void emit(Spans *s, unsigned flags, const char *text, size_t len, const c
     }
     if (s->count == s->cap) { s->cap = s->cap ? s->cap * 2 : 8; s->items = xrealloc(s->items, s->cap * sizeof *s->items); }
     MdSpan *span = &s->items[s->count++];
-    span->flags = flags; span->text = xstrndup(text, len); span->url = url ? xstrdup(url) : NULL;
+    span->flags = flags; span->text = xstrndup(text, len); span->url = xstrdup(url);
 }
 
 static bool is_url_start(const char *p) { return str_has_prefix(p, "https://") || str_has_prefix(p, "http://"); }

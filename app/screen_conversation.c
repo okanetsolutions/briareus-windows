@@ -175,7 +175,7 @@ static void refresh_done(void *owner, Request *req) {
     s->loading = false;
     bool full = req->arg != 0;
     if (!req->ok) {
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         s->loaded = true;
         poller_finished(&s->poller, true, req->error.retry_after);
     } else {
@@ -235,7 +235,7 @@ static void mutate_done(void *owner, Request *req) {
     s->busy = false;
     const char *name = req->operation;
     if (!req->ok) {
-        char *text = request_error_text(req); set_string(&s->write_error, text); free(text);
+        request_error_into(&s->write_error, req);
         s->uncertain = true;
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
@@ -335,8 +335,6 @@ static void set_decision(ConversationScreen *s, const char *key, const char *dec
     s->decisions = xrealloc(s->decisions, (s->decision_count + 1) * sizeof *s->decisions);
     s->decisions[s->decision_count++] = entry;
 }
-static const char *const triage_options[] = { "fix", "optional", "dismissed" };
-static const char *const triage_titles[] = { "Fix", "Optional", "Dismiss" };
 
 // The dashboard's `#messages`: `mx-auto max-w-[860px] px-6 pt-[18px] pb-[30px]`.
 static int column_x(int width) { int col = width < px(860) ? width : px(860); return (width - col) / 2 + px(24); }
@@ -353,7 +351,7 @@ typedef struct { char *text; bool open; } SummaryData;
 static void summary_free(void *p) { SummaryData *d = p; free(d->text); free(d); }
 static void paint_summary(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SummaryData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     RECT r = *rc;
     draw_text(cv, d->text, &r, FONT_FOOTNOTE, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -494,7 +492,7 @@ static void layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Ev
         if (can_message(s)) {
             size_t on = json_count(e->options);
             if (on) doc_space(doc, px(8));
-            ButtonSpec *buttons = xcalloc(on ? on : 1, sizeof *buttons); size_t bn = 0;
+            ButtonSpec *buttons = xcalloc(on, sizeof *buttons); size_t bn = 0;
             for (size_t i = 0; i < on; i++) {
                 const char *label = json_str(json_get(json_at(e->options, i), "label"));
                 if (!label) continue;
@@ -542,11 +540,10 @@ static void layout_triage(ConversationScreen *s, Doc *doc, int x, int w, const J
         if (why) { doc_space(doc, px(3)); doc_text(doc, ix, iw, why, FONT_CAPTION, theme.muted, DT_WORDBREAK); }
         if (takes_verdicts && json_str(json_get(f, "key"))) {
             const char *decision = decision_for(s, triage, f);
-            int selected = -1;
-            for (int k = 0; k < 3; k++) if (str_eq(decision, triage_options[k])) selected = k;
+            int selected = finding_decision_index(decision);
             if (selected == 0) fixes++;
             doc_space(doc, px(6));
-            doc_segments(doc, ix, iw, triage_titles, 3, selected, ACT_TRIAGE_DECISION, (intptr_t)(i * 4), !s->busy && !s->uncertain);
+            doc_segments(doc, ix, iw, finding_decision_titles, FINDING_DECISION_COUNT, selected, ACT_TRIAGE_DECISION, (intptr_t)(i * 4), !s->busy && !s->uncertain);
         }
     }
     doc_space(doc, px(8)); doc_rule(doc, ix, iw); doc_space(doc, px(8));
@@ -812,7 +809,7 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
         const Json *triage = session_held_triage(session(s));
         size_t index = (size_t)(arg / 4); int decision = (int)(arg % 4);
         const char *key = json_str(json_get(json_at(json_get(triage, "findings"), index), "key"));
-        if (key && decision >= 0 && decision < 3) { set_decision(s, key, triage_options[decision]); pane_relayout(base->pane); }
+        if (key && decision >= 0 && decision < FINDING_DECISION_COUNT) { set_decision(s, key, finding_decision_ids[decision]); pane_relayout(base->pane); }
         break;
     }
     case ACT_TRIAGE_NOTE: {
@@ -965,7 +962,7 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
         return;
     }
     int ch = composer_height(s, cv);
-    RECT *frects = xcalloc(s->attachment_count ? s->attachment_count : 1, sizeof *frects);
+    RECT *frects = xcalloc(s->attachment_count, sizeof *frects);
     int files = attachments_layout(s, cv, width - px(24), frects);
     RECT box = { col.left, top, col.right, top + px(10) + files + ch + px(6) + px(30) + px(8) + 2 };
     fill_round_rect(cv, &box, px(16), theme.raise, GetFocus() == s->composer ? theme.line_strong : theme.line);
@@ -1022,26 +1019,25 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
                       : uploading ? "Uploading\xE2\x80\xA6" : s->attachment_count && trimmed_empty ? "Add a few words to send the files" : "";
     draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
-static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && in_rect(&g_chip_rc[CHIP_LOOP], pt)) { menu_choice(s, session_review_loop_on(session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
-    if (!can_message(s)) { if (in_rect(&s->send_rc, pt) && !s->busy && !s->uncertain) confirm_and_mutate(s, "reopen"); return; }
+    if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && PtInRect(&g_chip_rc[CHIP_LOOP], pt)) { menu_choice(s, session_review_loop_on(session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
+    if (!can_message(s)) { if (PtInRect(&s->send_rc, pt) && !s->busy && !s->uncertain) confirm_and_mutate(s, "reopen"); return; }
     for (size_t i = 0; i < s->attachment_count; i++)
-        if (in_rect(&s->attachments[i]->remove_rc, pt)) { attachment_drop(s, i); pane_footer_changed(base->pane); return; }
-    if (in_rect(&s->send_rc, pt)) {
+        if (PtInRect(&s->attachments[i]->remove_rc, pt)) { attachment_drop(s, i); pane_footer_changed(base->pane); return; }
+    if (PtInRect(&s->send_rc, pt)) {
         bool active = session_is_active(session(s));
         if (active && store_supports("cancel") && composer_empty(s)) { if (!s->busy && !s->uncertain) confirm_and_mutate(s, "cancel"); }
         else send_message(s);
         return;
     }
-    if (in_rect(&s->mic_rc, pt) && s->voice) {
+    if (PtInRect(&s->mic_rc, pt) && s->voice) {
         VoiceState vs = voice_state(s->voice);
         if (vs == VOICE_RECORDING) voice_stop(s->voice); else if (vs == VOICE_IDLE) voice_record(s->voice);
         pane_footer_changed(base->pane);
         return;
     }
-    if (in_rect(&s->discard_rc, pt) && s->voice) { voice_drop(s->voice); pane_footer_changed(base->pane); return; }
+    if (PtInRect(&s->discard_rc, pt) && s->voice) { voice_drop(s->voice); pane_footer_changed(base->pane); return; }
     SetFocus(s->composer);
 }
 static void conversation_command(Screen *base, int id, int code, HWND control) {

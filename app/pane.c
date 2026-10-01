@@ -161,7 +161,7 @@ void pane_show_bottom_button(Pane *p, bool show) { if (p->show_bottom_button != 
 void pane_set_root_back(Pane *p, bool show, void (*callback)(void *), void *ctx) { p->root_back = show; p->root_back_cb = callback; p->root_back_ctx = ctx; pane_relayout(p); }
 void pane_set_selected_id(Pane *p, const char *id) {
     if (str_eq(p->selected_id, id)) return;
-    free(p->selected_id); p->selected_id = id ? xstrdup(id) : NULL;
+    free(p->selected_id); p->selected_id = xstrdup(id);
     pane_relayout(p);
 }
 const char *pane_selected_id(Pane *p) { return p->selected_id; }

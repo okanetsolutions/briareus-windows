@@ -128,7 +128,7 @@ static void files_done(void *owner, Request *req) {
             pull_files_load(f);
             return;
         }
-        char *text = request_error_text(req); set_string(&f->error, text); free(text);
+        request_error_into(&f->error, req);
         pane_relayout(files_pane(f));
         return;
     }
@@ -193,7 +193,7 @@ typedef struct { char *name; int depth; bool dir, open, selected; MarkData mark;
 static void row_free(void *p) { RowData *d = p; free(d->name); free(d); }
 static void paint_tree_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RowData *d = it->data;
-    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (d->selected || hovered) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(cv, &h, px(6), d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise, d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise); }
     int x = rc->left + px(6) + d->depth * px(16);
     if (d->dir) {

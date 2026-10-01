@@ -321,7 +321,7 @@ static void start_done(void *owner, Request *req) {
     NewConversation *d = owner;
     d->busy = false;
     if (req->ok && session_parse(json_get(req->result, "session"), d->started)) { EndDialog(d->dialog, IDOK); return; }
-    char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+    char *text = request_error_or_unexpected(req);
     set_control_text(d->dialog, IDC_ERROR, text); free(text);
     d->uncertain = true;
     ShowWindow(GetDlgItem(d->dialog, IDC_NOTE), SW_HIDE); ShowWindow(GetDlgItem(d->dialog, IDC_ERROR), SW_SHOW);
@@ -360,7 +360,7 @@ static void effort_changed(NewConversation *d) {
     size_t n; const char *const *efforts = runtime_catalog_efforts(&d->catalog, &eff, &n);
     int sel = (int)SendMessageW(GetDlgItem(d->dialog, IDC_EFFORT), CB_GETCURSEL, 0, 0);
     if (sel >= 0 && (size_t)sel < n) {
-        RuntimeChoice c = { eff.provider_id, eff.model ? xstrdup(eff.model) : NULL, xstrdup(efforts[sel]) };
+        RuntimeChoice c = { eff.provider_id, xstrdup(eff.model), xstrdup(efforts[sel]) };
         if (d->has_runtime) runtime_choice_free(&d->runtime);
         d->runtime = c; d->has_runtime = true;
     }

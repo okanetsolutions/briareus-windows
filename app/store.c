@@ -10,7 +10,7 @@ Store g_store;
 
 static void notify(void) { if (g_store.hwnd) PostMessageW(g_store.hwnd, WM_APP_STORE_CHANGED, 0, 0); }
 
-static void set_error(const char *text) { free(g_store.connection_error); g_store.connection_error = text ? xstrdup(text) : NULL; }
+static void set_error(const char *text) { free(g_store.connection_error); g_store.connection_error = xstrdup(text); }
 static void set_error_from(const ApiError *e) { char *t = api_error_description(e); set_error(t); free(t); }
 
 static void drop_client(void) {
@@ -295,7 +295,7 @@ Request *store_call(const char *operation, Json *args, int timeout_ms, void *own
 }
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);
-    r->audio = xmalloc(len ? len : 1); memcpy(r->audio, audio, len); r->audio_len = len;
+    r->audio = xmalloc(len); memcpy(r->audio, audio, len); r->audio_len = len;
     r->audio_type = xstrdup(content_type ? content_type : "audio/mp4");
     if (!g_store.client || !store_can_transcribe()) { request_refuse(r, "This token cannot transcribe voice notes."); return r; }
     request_start(r);
@@ -314,6 +314,10 @@ void request_cancel(Request **slot) {
     *slot = NULL;
 }
 char *request_error_text(const Request *req) { return api_error_description(&req->error); }
+void request_error_into(char **slot, const Request *req) { free(*slot); *slot = request_error_text(req); }
+char *request_error_or_unexpected(const Request *req) {
+    return req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+}
 
 void store_handle_message(UINT msg, WPARAM wp, LPARAM lp) {
     (void)wp;

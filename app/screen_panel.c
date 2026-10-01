@@ -52,7 +52,7 @@ static void findings_done(void *owner, Request *req) {
 }
 static void pull_done(void *owner, Request *req) {
     PanelScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); panel_finish(s); return; }
+    if (!req->ok) { request_error_into(&s->error, req); panel_finish(s); return; }
     json_free(s->pr); s->pr = json_clone(json_get(req->result, "pr"));
     set_string(&s->error, NULL);
     if (store_supports("findings")) {
@@ -77,7 +77,7 @@ static void decide_done(void *owner, Request *req) {
     PanelScreen *s = owner;
     set_string(&s->deciding, NULL);
     if (req->ok) { json_free(s->findings); s->findings = json_clone(json_get(req->result, "findings")); panel_save(s); }
-    else { char *t = request_error_text(req); set_string(&s->error, t); free(t); }
+    else { request_error_into(&s->error, req); }
     pane_relayout(s->base.pane);
 }
 static void decide(PanelScreen *s, const char *key, const char *decision) {
@@ -85,7 +85,7 @@ static void decide(PanelScreen *s, const char *key, const char *decision) {
     set_string(&s->deciding, key);
     Json *args = json_object();
     json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number); json_set_str(args, "key", key);
-    json_object_set(args, "decision", decision ? json_string(decision) : json_null());
+    json_object_set(args, "decision", json_string_or_null(decision));
     store_call("finding_decision", args, 0, s, decide_done, TAG_DECIDE, &s->req_decide);
     pane_relayout(s->base.pane);
 }
@@ -108,16 +108,6 @@ static void section_label(Doc *doc, int w, const char *text, int fold_action, bo
     free(label);
     doc_space(doc, px(4));
 }
-static const char *severity_label(const char *severity, COLORREF *color) {
-    char *f = str_fold(severity);
-    const char *label;
-    if (str_eq(f, "critical")) { label = "CRIT"; *color = theme.danger; }
-    else if (str_eq(f, "high")) { label = "HIGH"; *color = theme.danger; }
-    else if (str_eq(f, "low")) { label = "LOW"; *color = theme.muted; }
-    else { label = "MED"; *color = theme.warn; }
-    free(f);
-    return label;
-}
 typedef struct { char *label; COLORREF color; } SevData;
 static void sev_free(void *p) { SevData *d = p; free(d->label); free(d); }
 static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -129,15 +119,13 @@ static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 /// `rounded-[4px] border px-1 text-[10px] font-semibold`; returns its width.
 static int doc_severity(Doc *doc, int x, int y, const char *severity) {
     SevData *d = xcalloc(1, sizeof *d);
-    d->label = xstrdup(severity_label(severity, &d->color));
+    d->label = xstrdup(finding_severity_label(severity, &d->color));
     int w = px(4) * 2 + text_width(doc->cv, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
     RECT rc = { x, y, x + w, y + h };
     int i = doc_add(doc, &rc, paint_sev);
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = sev_free;
     return w;
 }
-static const char *const decision_ids[] = { "fix", "optional", "dismissed" };
-static const char *const decision_titles[] = { "Fix", "Optional", "Dismiss" };
 
 static void pr_layout(PanelScreen *s, Doc *doc, int w) {
     doc_text(doc, 0, w, "Pull request", FONT_CAPTION, theme.muted, DT_SINGLELINE);
@@ -246,9 +234,8 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
                 if (rw) { RECT rr = { w - rw, y, w, y + px(20) }; doc_text_at(doc, &rr, right, FONT_CAPTION2, theme.ok, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); }
                 doc->y = y + px(20) + px(4);
                 if (store_supports("finding_decision") && json_str(json_get(f, "key")) && store_can_manage()) {
-                    int selected = -1;
-                    for (int k = 0; k < 3; k++) if (str_eq(decision, decision_ids[k])) selected = k;
-                    doc_segments(doc, 0, w, decision_titles, 3, selected, ACT_DECIDE, (intptr_t)(i * 4), s->deciding == NULL);
+                    int selected = finding_decision_index(decision);
+                    doc_segments(doc, 0, w, finding_decision_titles, FINDING_DECISION_COUNT, selected, ACT_DECIDE, (intptr_t)(i * 4), s->deciding == NULL);
                 }
             }
         }
@@ -488,7 +475,7 @@ static void panel_action(Screen *base, int action, intptr_t arg, POINT pt) {
         const Json *f = json_at(s->findings, index);
         const char *key = json_str(json_get(f, "key")), *current = json_str(json_get(f, "decision"));
         // The same pick twice clears it, as the dashboard does.
-        if (key && d >= 0 && d < 3) decide(s, key, str_eq(current, decision_ids[d]) ? NULL : decision_ids[d]);
+        if (key && d >= 0 && d < FINDING_DECISION_COUNT) decide(s, key, str_eq(current, finding_decision_ids[d]) ? NULL : finding_decision_ids[d]);
         break;
     }
     case ACT_AUTO_COMPACT: {
