@@ -1,7 +1,7 @@
-// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the projects, the providers and the
-// database pool, each with ＋ New) and a project's form, its sections and fields laid out as the dashboard's, saved through
-// /settings/projects. The provider form is screen_provider_settings.c and a database server's screen_db_servers.c. Those
-// routes need an Admin token; any other token gets a sentence saying so.
+// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the projects, the providers, the
+// database pool and the SSH servers, each with ＋ New) and a project's form, its sections as tabs, or an SSH server's on one
+// tab, saved through /settings/projects and /settings/ssh/servers. The provider form is screen_provider_settings.c and a
+// database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -17,25 +17,32 @@ static void sign_out(void) {
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static int row_id(const Json *row) { return json_int_or(json_get(row, "id"), 0); }
 static char *form_id(int id) { return id > 0 ? xstrfmt("settings-project:%d", id) : xstrdup("settings-project:new"); }
-/// A settings form in the detail pane: a project's, a provider's or a database server's.
+/// An SSH server's id is the time it was registered in milliseconds, past what an int holds.
+static char *ssh_form_id(double id) { return id > 0 ? xstrfmt("settings-ssh:%.0f", id) : xstrdup("settings-ssh:new"); }
+static double ssh_row_id(const Json *row) { double id; return json_num(json_get(row, "id"), &id) && isfinite(id) ? id : 0; }
+/// A settings form in the detail pane: a project's, a provider's, a database server's or an SSH server's.
 static bool is_form_id(const char *id) {
-    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:"));
+    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
+                  || str_has_prefix(id, "settings-ssh:"));
 }
 
-/// Why the settings cannot be shown here, as a new string; NULL when they can.
-static char *settings_unavailable(void) {
-    if (store_supports("settings_projects")) return NULL;
+/// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
+static char *unavailable(const char *call, const char *path, const char *what, const char *manage) {
+    if (store_supports(call)) return NULL;
     bool listed = false;
-    for (size_t i = 0; i < g_store.route_count; i++) if (str_has_suffix(g_store.routes[i].path, "settings/projects")) listed = true;
+    for (size_t i = 0; i < g_store.route_count; i++) if (str_has_suffix(g_store.routes[i].path, path)) listed = true;
     const char *permission = g_store.has_device && g_store.device.permission ? g_store.device.permission : "unknown";
     return listed
-        ? xstrfmt("Project settings need an Admin token, and this device's token is %s. Create an Admin token on the web dashboard under Settings \xE2\x86\x92 Devices and clients and connect with it.", permission)
-        : xstrdup("This server does not offer project settings (GET /settings/projects) on its client API. Update the server to manage projects here.");
+        ? xstrfmt("%s need an Admin token, and this device's token is %s. Create an Admin token on the web dashboard under Settings \xE2\x86\x92 Devices and clients and connect with it.", what, permission)
+        : xstrfmt("This server does not offer %s (GET /%s) on its client API. Update the server to manage %s here.", what, path, manage);
 }
+static char *settings_unavailable(void) { return unavailable("settings_projects", "settings/projects", "Project settings", "projects"); }
+static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", "settings/ssh/servers", "SSH servers", "them"); }
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER };
+enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
+       ACT_OPEN_SSH };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -53,6 +60,10 @@ typedef struct {
     bool servers_loaded, open_first_server;   // the second: open the first row once the list is read (after a delete)
     char *servers_error;
     Request *req_servers;
+    Json *ssh;          // the server's SshServer rows as `list`, and `defaults`
+    bool ssh_loaded;
+    char *ssh_error;
+    Request *req_ssh;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -141,7 +152,22 @@ static void settings_done(void *owner, Request *req) {
     if (json_count(settings_rows(s))) settings_open_row(s, 0);
     else app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
 }
-static void settings_load(SettingsScreen *s) {
+static void ssh_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->ssh_loaded = true;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->ssh_error, t); free(t); pane_relayout(s->base.pane); return; }
+    set_string(&s->ssh_error, NULL);
+    json_free(s->ssh);
+    s->ssh = json_object();
+    json_object_set(s->ssh, "list", json_clone(json_get(req->result, "servers")));
+    json_object_set(s->ssh, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+}
+static void ssh_load(SettingsScreen *s) {
+    if (s->req_ssh || !store_supports("settings_ssh_servers")) { s->ssh_loaded = true; return; }
+    store_call("settings_ssh_servers", json_object(), 0, s, ssh_done, 0, &s->req_ssh);
+}
+static void projects_load(SettingsScreen *s) {
     if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
     store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
 }
@@ -214,11 +240,23 @@ size_t settings_pool_capacity(void) {
     for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
     return n;
 }
+static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); }
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
     request_cancel(&g_settings->req);
-    settings_load(g_settings);
+    projects_load(g_settings);
+}
+static void settings_ssh_changed(void) {
+    if (!g_settings) return;
+    request_cancel(&g_settings->req_ssh);
+    ssh_load(g_settings);
+}
+static const Json *ssh_rows(SettingsScreen *s) { return json_get(s->ssh, "list"); }
+static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults);
+static void ssh_open_row(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(ssh_rows(s), index);
+    if (json_is_object(row)) app_show_detail(ssh_settings_screen_new(row, json_get(s->ssh, "defaults")));
 }
 
 static void order_done(void *owner, Request *req) {
@@ -249,9 +287,11 @@ static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
     request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_servers);
+    request_cancel(&s->req_ssh);
     json_free(s->projects); free(s->error);
     json_free(s->providers); free(s->providers_error);
     json_free(s->servers); free(s->servers_error);
+    json_free(s->ssh); free(s->ssh_error);
     screen_release(base);
 }
 /// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
@@ -273,6 +313,36 @@ static void section_title(Doc *doc, int w, const char *title, const char *note, 
     doc->y = y + h;
     doc_space(doc, px(4));
 }
+/// The SSH servers under the projects, as the web's settings sidebar lists them: each with its dot, label and project.
+static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    doc_space(doc, px(8));
+    char *why = ssh_unavailable();
+    section_title(doc, w, "SSH servers", NULL, why ? 0 : ACT_NEW_SSH);
+    if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); return; }
+    if (s->ssh_error) { doc_notice(doc, px(8), w - px(16), s->ssh_error); doc_space(doc, px(8)); }
+    const Json *rows = ssh_rows(s);
+    int row_h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        const char *label = json_str_nonempty(json_get(row, "label")), *repo = json_str(json_get(row, "repo"));
+        d->label = xstrdup(label ? label : json_str_nonempty(json_get(row, "host")) ? json_str(json_get(row, "host")) : "SSH server");
+        d->repo = xstrdup(repo ? repo : "");
+        d->enabled = !json_bool_is(json_get(row, "enabled"), false);
+        char *id = ssh_form_id(ssh_row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, ACT_OPEN_SSH, (intptr_t)i);
+    }
+    // A server being registered shows as its own row until it is saved.
+    if (str_eq(selected, "settings-ssh:new")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New SSH server"); d->repo = xstrdup("not saved yet"); d->selected = true;
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, 0, 0);
+    }
+    if (s->ssh_loaded && !json_count(rows) && !s->ssh_error) doc_text(doc, px(8), w - px(16), "No SSH servers registered. \xEF\xBC\x8B New lets a project's sessions run commands on one, with approval.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->ssh_loaded) doc_loading(doc, 0, w, "Loading SSH servers\xE2\x80\xA6");
+}
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
@@ -285,7 +355,7 @@ static void settings_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(16));
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
-    if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(8)); return; }
+    if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); doc_space(doc, px(8)); return; }
     layout_projects(s, doc, w, selected);
     // The providers sessions start on, then the database pool, below the projects as on the dashboard; a server without
     // the routes shows neither.
@@ -304,6 +374,8 @@ static void settings_layout(Screen *base, Doc *doc) {
         free(note);
         layout_servers(s, doc, w, selected);
     }
+    // The SSH servers agents may run commands on, last, as on the dashboard.
+    layout_ssh(s, doc, w, selected);
 }
 /// The database pool: each server with its dot and host:port.
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
@@ -424,6 +496,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
     case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
     case ACT_OPEN_SERVER: servers_open_row(s, (size_t)arg); break;
+    case ACT_NEW_SSH: app_show_detail(ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
+    case ACT_OPEN_SSH: ssh_open_row(s, (size_t)arg); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -440,13 +514,15 @@ static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
 }
 static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
-    if (shown && !s->loaded && !s->req) settings_load(s);
-    if (shown && !s->providers_loaded && !s->req_providers) providers_load(s);
-    if (shown && !s->servers_loaded && !s->req_servers) servers_load(s);
+    if (!shown) return;
+    if (!s->loaded && !s->req) projects_load(s);
+    if (!s->providers_loaded && !s->req_providers) providers_load(s);
+    if (!s->servers_loaded && !s->req_servers) servers_load(s);
+    if (!s->ssh_loaded && !s->req_ssh) ssh_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
-    request_cancel(&s->req); settings_load(s);
+    request_cancel(&s->req); request_cancel(&s->req_ssh); settings_load(s);
     request_cancel(&s->req_providers); providers_load(s);
     request_cancel(&s->req_servers); servers_load(s);
 }
@@ -465,7 +541,7 @@ static const ScreenVTable settings_vt = {
 Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
-    s->projects = json_object();
+    s->projects = json_object(); s->ssh = json_object();
     s->providers = json_object();
     s->servers = json_object();
     g_settings = s;
@@ -1295,5 +1371,495 @@ Screen *project_settings_screen_new(const Json *row, const Json *defaults) {
     // A new project starts where its repository is typed.
     if (!s->id) { s->focus_first = F_REPO; g_tab = T_PROJECT; }
     form_fill(s);
+    return &s->base;
+}
+
+// MARK: - The SSH server form
+
+/// An SSH server's boxes, as the web's form has them, each on one of the tabs below.
+enum { S_LABEL, S_HOST, S_PORT, S_USER, S_KEY, S_COUNT };
+static const FieldDef SSH_FIELDS[S_COUNT] = {
+    [S_LABEL] = { "label", K_TEXT, "Label", "Production web server", "Leave empty to name it user@host:port.", 0, false },
+    [S_HOST] = { "host", K_TEXT, "Host", "server.example.com", NULL, 0, true },
+    [S_PORT] = { "port", K_NUMBER, "Port", "22", NULL, 0, true },
+    [S_USER] = { "username", K_TEXT, "Username", "deploy", NULL, 0, true },
+    [S_KEY] = { "identityFile", K_TEXT, "Private key path", "/home/you/.ssh/id_ed25519",
+        "Absolute path on the machine running Briareus; leave empty for its default SSH keys or agent. Password prompts are not supported.", 0, true },
+};
+/// The two pickers: the project whose sessions may use the server, and whether its commands wait for approval.
+enum { SP_REPO, SP_MODE, SP_COUNT };
+static const char *const SSH_PICK_KEYS[SP_COUNT] = { "repo", "permissionMode" };
+
+/// The form's cells, two to a row: what the server is, how it is reached, and what it may run unasked.
+enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_ENABLED };
+static const char *mode_title(const char *mode) { return str_eq(mode, "allow") ? "Don\xE2\x80\x99t ask anything" : "Ask for all commands"; }
+
+enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS };
+enum { ID_SSH_FIELD = 2100 };
+
+typedef struct {
+    Screen base;
+    Json *row;             // what the form was filled from: the saved row, the defaults, or a clone's values
+    double id;             // 0 until the server is saved
+    HWND edits[S_COUNT];
+    RECT rects[S_COUNT];
+    bool laid[S_COUNT], clipped[S_COUNT];
+    bool enabled;          // Available to sessions on this project
+    char *picks[SP_COUNT];
+    Request *req_save, *req_delete;
+    bool dirty, filling, shown, tab_dot;
+    int focused, focus_first;
+    char *error;
+} SshForm;
+
+static char *ssh_field_text(const Json *row, int f) {
+    const Json *v = json_get(row, SSH_FIELDS[f].key);
+    double n;
+    if (SSH_FIELDS[f].kind == K_NUMBER) return json_num(v, &n) && isfinite(n) ? xstrfmt("%.10g", n) : xstrdup("");
+    return xstrdup(json_str(v) ? json_str(v) : "");
+}
+/// A picker's value as the row has it saved; a server without a mode asks, as the server's own default does.
+static const char *ssh_saved_pick(const Json *row, int p) {
+    const char *v = json_str_nonempty(json_get(row, SSH_PICK_KEYS[p]));
+    return v ? v : p == SP_MODE ? "ask" : "";
+}
+static bool ssh_saved_enabled(const Json *row) { return !json_bool_is(json_get(row, "enabled"), false); }
+
+static void ssh_fill(SshForm *s) {
+    s->enabled = ssh_saved_enabled(s->row);
+    for (int p = 0; p < SP_COUNT; p++) set_string(&s->picks[p], ssh_saved_pick(s->row, p));
+    s->filling = true;
+    for (int f = 0; f < S_COUNT; f++) {
+        if (!s->edits[f]) continue;
+        char *text = ssh_field_text(s->row, f);
+        set_edit_text(s->edits[f], text);
+        free(text);
+    }
+    s->filling = false;
+    s->dirty = false;
+}
+
+/// The body a save sends; NULL with `*why` when a field cannot be sent as it is.
+static Json *ssh_body(SshForm *s, char **why) {
+    Json *body = json_is_object(s->row) ? json_clone(s->row) : json_object();
+    json_object_remove(body, "id");
+    for (int f = 0; f < S_COUNT; f++) {
+        if (!s->edits[f]) continue;
+        char *text = edit_text(s->edits[f]), *t = str_trim(text);
+        free(text);
+        if (SSH_FIELDS[f].kind == K_NUMBER) {
+            char *end; long port = strtol(t, &end, 10);
+            if (!*t || *end || port < 1 || port > 65535) {
+                *why = xstrdup("Enter a port from 1 to 65535.");
+                free(t); json_free(body);
+                return NULL;
+            }
+            json_set_num(body, SSH_FIELDS[f].key, (double)port);
+        } else json_set_str(body, SSH_FIELDS[f].key, t);
+        free(t);
+    }
+    for (int p = 0; p < SP_COUNT; p++) json_set_str(body, SSH_PICK_KEYS[p], s->picks[p] ? s->picks[p] : "");
+    json_set_bool(body, "enabled", s->enabled);
+    const char *missing = NULL;
+    if (str_empty(json_str(json_get(body, "repo")))) missing = "Choose the project whose sessions may use this server.";
+    else if (str_empty(json_str(json_get(body, "host")))) missing = "Enter the host: a hostname or an IP address.";
+    else if (str_empty(json_str(json_get(body, "username")))) missing = "Enter the username to connect as.";
+    if (missing) { *why = xstrdup(missing); json_free(body); return NULL; }
+    return body;
+}
+
+/// Whether the form holds a change not saved yet, for the dot after the tab's title.
+static bool ssh_form_changed(SshForm *s) {
+    if (s->enabled != ssh_saved_enabled(s->row)) return true;
+    for (int p = 0; p < SP_COUNT; p++)
+        if (!str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
+    for (int f = 0; f < S_COUNT; f++) {
+        if (!s->edits[f]) continue;
+        char *now = edit_text(s->edits[f]), *saved = ssh_field_text(s->row, f);
+        bool differs = !str_eq(now, saved);
+        free(now); free(saved);
+        if (differs) return true;
+    }
+    return false;
+}
+static void ssh_changed(SshForm *s) {
+    if (s->filling) return;
+    if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
+    bool changed = ssh_form_changed(s);
+    if (changed != s->tab_dot) { s->tab_dot = changed; pane_relayout(s->base.pane); }
+}
+
+// MARK: Layout
+
+static void paint_ssh_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc;
+    SshForm *s = it->data;
+    fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
+}
+/// A labelled box with its edit, and the hint under it; advances.
+static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
+    const FieldDef *d = &SSH_FIELDS[f];
+    doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_space(doc, px(6));
+    FontId fid = d->mono ? FONT_MONO : FONT_BODY;
+    int fh = font_height(doc->cv, fid), h = px(36);
+    RECT box = { x, doc->y, x + w, doc->y + h };
+    Item *it = doc_item(doc, doc_add(doc, &box, paint_ssh_box));
+    it->data = s; it->arg = f; it->action = ACT_SSH_FOCUS;
+    s->rects[f] = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
+    s->laid[f] = true;
+    doc->y = box.bottom;
+    if (d->hint) { doc_space(doc, px(6)); doc_text(doc, x, w, d->hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
+    doc_space(doc, px(14));
+}
+static void paint_ssh_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    SshForm *s = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
+    RECT b = { rc->left, top, rc->left + size, top + size };
+    fill_round_rect(cv, &b, px(3), s->enabled ? theme.accent : theme.field, s->enabled ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
+    if (s->enabled) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
+    draw_text(cv, "Available to sessions on this project", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+/// A labelled picker, as the web's `<select>`; advances.
+static void ssh_select(SshForm *s, Doc *doc, int x, int w, int p, const char *label, const char *hint) {
+    doc_text(doc, x, w, label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_space(doc, px(6));
+    RECT box = { x, doc->y, x + w, doc->y + px(36) };
+    Item *it = doc_item(doc, doc_add(doc, &box, paint_select));
+    SelectData *d = xcalloc(1, sizeof *d);
+    const char *v = s->picks[p];
+    d->text = xstrdup(p == SP_MODE ? mode_title(v) : !str_empty(v) ? v : "Choose a project");
+    d->enabled = true;
+    it->data = d; it->free_data = select_free; it->action = ACT_SSH_PICK; it->arg = p; it->hand = true;
+    doc->y = box.bottom;
+    if (hint) { doc_space(doc, px(6)); doc_text(doc, x, w, hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
+    doc_space(doc, px(14));
+}
+static void ssh_cell(SshForm *s, Doc *doc, int x, int w, int cell) {
+    switch (cell) {
+    case C_LABEL: ssh_field(s, doc, x, w, S_LABEL); break;
+    case C_REPO: ssh_select(s, doc, x, w, SP_REPO, "Project", "Only this project's sessions see the server, through their SSH tool."); break;
+    case C_HOST: ssh_field(s, doc, x, w, S_HOST); break;
+    case C_PORT: ssh_field(s, doc, x, w, S_PORT); break;
+    case C_USER: ssh_field(s, doc, x, w, S_USER); break;
+    case C_KEY: ssh_field(s, doc, x, w, S_KEY); break;
+    case C_ENABLED: {
+        // Level with the boxes beside it: below where their label sits, centred on their height.
+        doc_space(doc, font_height(doc->cv, FONT_FOOTNOTE) + px(6));
+        int i = doc_custom(doc, x, w, px(36), paint_ssh_check, s, NULL, ACT_SSH_TOGGLE, 0);
+        doc_item(doc, i)->hand = true;
+        doc_space(doc, px(14));
+        break;
+    }
+    case C_MODE: ssh_select(s, doc, x, w, SP_MODE, "Permission mode", "Ask shows the exact command in the dashboard for approval. Don't ask anything sends every command immediately."); break;
+    }
+}
+/// Two cells side by side, each half the width, as the web's `.field-row`; the row is as tall as its taller cell.
+static void ssh_row(SshForm *s, Doc *doc, int x, int col, int left, int right) {
+    int gap = px(14), half = (col - gap) / 2, top = doc->y;
+    ssh_cell(s, doc, x, half, left);
+    int bottom = doc->y;
+    doc->y = top;
+    ssh_cell(s, doc, x + half + gap, col - half - gap, right);
+    if (doc->y < bottom) doc->y = bottom;
+}
+
+static void ssh_layout(Screen *base, Doc *doc) {
+    SshForm *s = (SshForm *)base;
+    memset(s->laid, 0, sizeof s->laid);
+    int col = doc->width, x = 0;
+    doc_space(doc, px(8));
+    char *why = ssh_unavailable();
+    if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
+    // One tab, drawn as the other settings forms draw theirs, with the dot when something is not saved yet.
+    int h = px(42), tx = x, ty = doc->y;
+    s->tab_dot = s->dirty && ssh_form_changed(s);
+    doc_tab(doc, &tx, &ty, x, x + col, h, 0xE968, s->tab_dot ? "SSH server \xE2\x80\xA2" : "SSH server", NULL, true, 0, 0);
+    doc->y = ty + h;
+    doc_rule(doc, x, col);
+    doc_space(doc, px(18));
+    if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
+    ssh_row(s, doc, x, col, C_LABEL, C_REPO);
+    ssh_row(s, doc, x, col, C_HOST, C_PORT);
+    ssh_row(s, doc, x, col, C_USER, C_KEY);
+    ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
+    note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
+    doc_space(doc, px(40));
+}
+
+static void ssh_header(Screen *base, HeaderInfo *info) {
+    SshForm *s = (SshForm *)base;
+    const char *label = json_str_nonempty(json_get(s->row, "label")), *host = json_str_nonempty(json_get(s->row, "host"));
+    const char *user = json_str_nonempty(json_get(s->row, "username")), *repo = json_str_nonempty(json_get(s->row, "repo"));
+    if (s->id) {
+        snprintf(info->title, sizeof info->title, "%s", label ? label : host ? host : "SSH server");
+        char *port = ssh_field_text(s->row, S_PORT);
+        snprintf(info->subtitle, sizeof info->subtitle, "%s%s%s:%s \xC2\xB7 %s", user ? user : "", user ? "@" : "", host ? host : "", port, repo ? repo : "");
+        free(port);
+    } else {
+        snprintf(info->title, sizeof info->title, "New SSH server");
+        snprintf(info->subtitle, sizeof info->subtitle, "A server a project's agents may run commands on, with approval.");
+    }
+    if (!store_supports("settings_ssh_servers")) return;
+    bool busy = s->req_save || s->req_delete;
+    HeaderButton *b = &info->buttons[info->button_count++];
+    snprintf(b->label, sizeof b->label, "%s", s->req_save ? "Saving\xE2\x80\xA6" : "Save");
+    b->glyph = 0xE74E; b->action = ACT_SSH_SAVE; b->prominent = true; b->tip = "Save this SSH server (Ctrl+S)";
+    b->enabled = !busy && (s->dirty || !s->id) && store_supports(s->id ? "update_ssh_server" : "create_ssh_server");
+    if (!s->id) return;
+    HeaderButton *c = &info->buttons[info->button_count++];
+    c->glyph = 0xE8C8; c->action = ACT_SSH_CLONE; c->enabled = !busy && store_supports("create_ssh_server"); c->tip = "Clone into a new SSH server";
+    HeaderButton *d = &info->buttons[info->button_count++];
+    d->glyph = 0xE74D; d->action = ACT_SSH_DELETE; d->destructive = true; d->enabled = !busy && store_supports("delete_ssh_server"); d->tip = "Delete this SSH server";
+}
+
+// MARK: The edits
+
+static void ssh_place(Screen *base, const RECT *content, int scroll_y) {
+    SshForm *s = (SshForm *)base;
+    int m = margin_of(base->pane);
+    for (int f = 0; f < S_COUNT; f++) {
+        HWND e = s->edits[f];
+        if (!e) continue;
+        if (!s->shown || !s->laid[f]) { ShowWindow(e, SW_HIDE); continue; }
+        RECT r = { content->left + m + s->rects[f].left, content->top + s->rects[f].top - scroll_y, content->left + m + s->rects[f].right, content->top + s->rects[f].bottom - scroll_y };
+        RECT visible;
+        if (!IntersectRect(&visible, &r, content)) { ShowWindow(e, SW_HIDE); continue; }
+        MoveWindow(e, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
+        bool clipped = !EqualRect(&visible, &r);
+        if (clipped) SetWindowRgn(e, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
+        else if (s->clipped[f]) SetWindowRgn(e, NULL, TRUE);
+        s->clipped[f] = clipped;
+        ShowWindow(e, SW_SHOWNA);
+    }
+}
+
+static void ssh_save(SshForm *s);
+static int ssh_next_field(SshForm *s, int from, int step) {
+    for (int k = 1; k <= S_COUNT; k++) {
+        int f = ((from + step * k) % S_COUNT + S_COUNT) % S_COUNT;
+        if (s->edits[f] && s->laid[f]) return f;
+    }
+    return from;
+}
+static LRESULT CALLBACK ssh_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    SshForm *s = (SshForm *)ref;
+    int f = (int)id;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    switch (msg) {
+    case WM_KEYDOWN:
+        if (wp == VK_TAB) { SetFocus(s->edits[ssh_next_field(s, f, (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1)]); return 0; }
+        if (ctrl && wp == 'S') { ssh_save(s); return 0; }
+        if (ctrl && wp == 'A') { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+        if (wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+        if (wp == VK_RETURN) { SetFocus(s->edits[ssh_next_field(s, f, 1)]); return 0; }
+        break;
+    case WM_CHAR:
+        if (wp == '\t' || wp == 0x13 || wp == 0x01 || wp == 0x1B || wp == '\r') return 0;
+        break;
+    case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
+    case WM_NCDESTROY: RemoveWindowSubclass(hwnd, ssh_field_proc, id); break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+static void ssh_ensure_controls(SshForm *s) {
+    if (s->edits[0]) return;
+    HWND owner = pane_hwnd(s->base.pane);
+    for (int f = 0; f < S_COUNT; f++) {
+        DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (SSH_FIELDS[f].kind == K_NUMBER ? ES_NUMBER : 0);
+        HWND e = CreateWindowExW(0, L"EDIT", L"", style, 0, 0, 10, 10, owner, (HMENU)(INT_PTR)(ID_SSH_FIELD + f), GetModuleHandleW(NULL), NULL);
+        SendMessageW(e, WM_SETFONT, (WPARAM)font(SSH_FIELDS[f].mono ? FONT_MONO : FONT_BODY), TRUE);
+        SendMessageW(e, EM_SETLIMITTEXT, SSH_FIELDS[f].kind == K_NUMBER ? 5 : 1024, 0);
+        wchar_t *w = utf8_to_wide(SSH_FIELDS[f].cue); SendMessageW(e, EM_SETCUEBANNER, TRUE, (LPARAM)w); free(w);
+        SetWindowSubclass(e, ssh_field_proc, (UINT_PTR)f, (DWORD_PTR)s);
+        theme_apply_control(e);
+        s->edits[f] = e;
+    }
+    // The edits take the row's text; what was picked or ticked before they existed stays as it is.
+    s->filling = true;
+    for (int f = 0; f < S_COUNT; f++) { char *text = ssh_field_text(s->row, f); set_edit_text(s->edits[f], text); free(text); }
+    s->filling = false;
+}
+
+/// The project or permission mode picker, as a menu under the pointer.
+static void ssh_pick(SshForm *s, int p, POINT pt) {
+    HMENU m = CreatePopupMenu();
+    const char *now = s->picks[p] ? s->picks[p] : "";
+    const Json *rows = g_settings ? settings_rows(g_settings) : NULL;
+    size_t n = 0;
+    if (p == SP_MODE) {
+        append_item(m, 1, mode_title("ask"), str_eq(now, "ask"), true);
+        append_item(m, 2, mode_title("allow"), str_eq(now, "allow"), true);
+    } else {
+        n = json_count(rows);
+        bool listed = false;
+        for (size_t i = 0; i < n; i++) {
+            const char *repo = json_str(json_get(json_at(rows, i), "repo"));
+            if (!repo) continue;
+            listed |= str_eq(repo, now);
+            append_item(m, (UINT)i + 1, repo, str_eq(repo, now), true);
+        }
+        // A project that is gone stays picked rather than being swapped for another; the server refuses it on save.
+        if (*now && !listed) { char *label = xstrfmt("%s (not a project)", now); append_item(m, 9999, label, true, false); free(label); }
+        if (!n && !*now) append_item(m, 9999, "No projects yet", false, false);
+    }
+    int chosen = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(m);
+    const char *value = NULL;
+    if (p == SP_MODE && (chosen == 1 || chosen == 2)) value = chosen == 1 ? "ask" : "allow";
+    else if (p == SP_REPO && chosen >= 1 && (size_t)chosen - 1 < n) value = json_str(json_get(json_at(rows, (size_t)chosen - 1), "repo"));
+    if (value && !str_eq(value, now)) { set_string(&s->picks[p], value); ssh_changed(s); pane_relayout(s->base.pane); }
+}
+
+// MARK: Saving, cloning, deleting
+
+static void ssh_show_error(SshForm *s, char *text) {
+    set_string(&s->error, text); free(text);
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
+}
+static void ssh_save_done(void *owner, Request *req) {
+    SshForm *s = owner;
+    const Json *row = req->ok ? json_get(req->result, "server") : NULL;
+    if (!json_is_object(row)) {
+        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        ssh_show_error(s, text);
+        return;
+    }
+    // The server's word on what was saved: an empty label is now user@host:port, and a new server has an id.
+    json_free(s->row); s->row = json_clone(row);
+    set_string(&s->error, NULL);
+    s->id = ssh_row_id(row);
+    free(s->base.id); s->base.id = ssh_form_id(s->id);
+    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    ssh_fill(s);
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+    settings_ssh_changed();
+}
+static void ssh_save(SshForm *s) {
+    if (s->req_save || s->req_delete || !store_supports(s->id ? "update_ssh_server" : "create_ssh_server")) return;
+    char *why = NULL;
+    Json *body = ssh_body(s, &why);
+    if (!body) { ssh_show_error(s, why); return; }
+    if (s->id) json_set_num(body, "id", s->id);
+    store_call(s->id ? "update_ssh_server" : "create_ssh_server", body, 0, s, ssh_save_done, 0, &s->req_save);
+    pane_header_changed(s->base.pane);
+}
+static void ssh_delete_done(void *owner, Request *req) {
+    SshForm *s = owner;
+    if (!req->ok) { ssh_show_error(s, request_error_text(req)); return; }
+    s->dirty = false;
+    app_clear_detail();
+    settings_ssh_changed();
+}
+static void ssh_delete(SshForm *s) {
+    if (!s->id || s->req_save || s->req_delete) return;
+    const char *name = json_str_nonempty(json_get(s->row, "label"));
+    char *title = xstrfmt("Delete %s?", name ? name : "this SSH server");
+    bool ok = app_confirm(title, "Sessions lose access through the SSH tool and pending approvals are cancelled.", "Delete", true);
+    free(title);
+    if (!ok) return;
+    Json *args = json_object(); json_set_num(args, "id", s->id);
+    store_call("delete_ssh_server", args, 0, s, ssh_delete_done, 0, &s->req_delete);
+    pane_header_changed(s->base.pane);
+}
+static void ssh_clone(SshForm *s) {
+    char *why = NULL;
+    Json *copy = ssh_body(s, &why);
+    if (!copy) { ssh_show_error(s, why); return; }
+    // The copy carries what the form holds now, saved or not, without the label that named this one.
+    json_set_str(copy, "label", "");
+    s->dirty = false;
+    Screen *clone = ssh_settings_screen_new(copy, NULL);
+    ((SshForm *)clone)->focus_first = S_LABEL;
+    json_free(copy);
+    app_show_detail(clone);
+}
+
+// MARK: The screen
+
+static void ssh_destroy(Screen *base) {
+    SshForm *s = (SshForm *)base;
+    request_cancel(&s->req_save); request_cancel(&s->req_delete);
+    for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    for (int p = 0; p < SP_COUNT; p++) free(s->picks[p]);
+    json_free(s->row); free(s->error);
+    screen_release(base);
+}
+static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    SshForm *s = (SshForm *)base;
+    switch (action) {
+    case ACT_SSH_SAVE: ssh_save(s); break;
+    case ACT_SSH_CLONE: ssh_clone(s); break;
+    case ACT_SSH_DELETE: ssh_delete(s); break;
+    case ACT_SSH_TOGGLE: s->enabled = !s->enabled; ssh_changed(s); pane_relayout(base->pane); break;
+    case ACT_SSH_PICK: if (arg >= 0 && arg < SP_COUNT) ssh_pick(s, (int)arg, pt); break;
+    case ACT_SSH_FOCUS: if (arg >= 0 && arg < S_COUNT && s->edits[arg]) SetFocus(s->edits[arg]); break;
+    }
+}
+static void ssh_command(Screen *base, int id, int code, HWND control) {
+    (void)control;
+    SshForm *s = (SshForm *)base;
+    int f = id - ID_SSH_FIELD;
+    if (f < 0 || f >= S_COUNT || !s->edits[f]) return;
+    switch (code) {
+    case EN_CHANGE: ssh_changed(s); break;
+    case EN_SETFOCUS: {
+        s->focused = f;
+        RECT content = pane_content_rect(base->pane);
+        int top = s->rects[f].top - px(40), bottom = s->rects[f].bottom + px(16), y = pane_scroll_y(base->pane);
+        if (top < y || bottom > y + (content.bottom - content.top)) pane_scroll_to(base->pane, top);
+        pane_repaint(base->pane);
+        break;
+    }
+    case EN_KILLFOCUS: if (s->focused == f) s->focused = -1; pane_repaint(base->pane); break;
+    }
+}
+static bool ssh_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    (void)shift;
+    if (ctrl && vk == 'S') { ssh_save((SshForm *)base); return true; }
+    return false;
+}
+static void ssh_visible(Screen *base, bool shown) {
+    SshForm *s = (SshForm *)base;
+    s->shown = shown;
+    if (shown) {
+        ssh_ensure_controls(s);
+        if (s->focus_first >= 0) { int f = s->focus_first; s->focus_first = -1; SetFocus(s->edits[f]); }
+    } else for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) ShowWindow(s->edits[f], SW_HIDE);
+}
+static bool ssh_can_leave(Screen *base) {
+    SshForm *s = (SshForm *)base;
+    if (!s->dirty) return true;
+    const char *name = json_str_nonempty(json_get(s->row, "label"));
+    char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this SSH server") : xstrdup("The new SSH server has not been saved.");
+    bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
+    free(message);
+    if (leave) s->dirty = false;
+    return leave;
+}
+
+static const ScreenVTable ssh_vt = {
+    .destroy = ssh_destroy, .layout = ssh_layout, .header = ssh_header, .action = ssh_action, .place = ssh_place,
+    .visible = ssh_visible, .command = ssh_command, .key = ssh_key, .can_leave = ssh_can_leave,
+};
+static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults) {
+    SshForm *s = xcalloc(1, sizeof *s);
+    s->base.vt = &ssh_vt;
+    s->focused = -1; s->focus_first = -1;
+    s->row = json_is_object(row) ? json_clone(row) : json_is_object(defaults) ? json_clone(defaults) : json_object();
+    s->id = ssh_row_id(s->row);
+    s->base.id = ssh_form_id(s->id);
+    if (!s->id) {
+        // A new server starts on the first project, as the web's form does, and where its label is typed.
+        if (!json_str_nonempty(json_get(s->row, "repo")) && g_settings) {
+            const char *first = json_str_nonempty(json_get(json_at(settings_rows(g_settings), 0), "repo"));
+            if (first) json_set_str(s->row, "repo", first);
+        }
+        if (!json_get(s->row, "port")) json_set_num(s->row, "port", 22);
+        if (!row) s->focus_first = S_LABEL;
+    }
+    ssh_fill(s);
     return &s->base;
 }

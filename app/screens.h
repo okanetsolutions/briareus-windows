@@ -54,7 +54,8 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
-/// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects and the providers, each with ＋ New.
+/// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool and the SSH
+/// servers, each with ＋ New.
 Screen *settings_screen_new(void);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.

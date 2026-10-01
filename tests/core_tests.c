@@ -187,6 +187,17 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_num(args, "id", 3);
     result = api_call(c, "delete_db_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/db-servers/3"); CHECK_STR(stub.last_method, "DELETE");
+    // An SSH server, the same way.
+    args = json_object(); json_set_num(args, "id", 1727000000000.0); json_set_str(args, "host", "web.example.com"); json_set_num(args, "port", 2222);
+    result = api_call(c, "update_ssh_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/ssh/servers/1727000000000"); CHECK_STR(stub.last_method, "PUT"); sent = json_parsez(stub.last_body);
+    CHECK(json_is_null(json_get(sent, "id"))); CHECK(json_int_or(json_get(sent, "port"), 0) == 2222); json_free(sent);
+    args = json_object(); json_set_str(args, "host", "db.example.com");
+    result = api_call(c, "create_ssh_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/ssh/servers"); CHECK_STR(stub.last_method, "POST");
+    args = json_object(); json_set_num(args, "id", 3);
+    result = api_call(c, "delete_ssh_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/ssh/servers/3"); CHECK_STR(stub.last_method, "DELETE");
     // A filter picked more than once repeats its parameter.
     args = json_object(); json_set_str(args, "period", "all");
     { Json *picks = json_array(); json_array_push(picks, json_string("p:1")); json_array_push(picks, json_string("r:o/r")); json_object_set(args, "project", picks); }
@@ -218,7 +229,9 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
                             "settings_projects", "create_project", "update_project", "delete_project", "order_projects",
                             "settings_providers", "create_provider", "update_provider", "delete_provider", "test_provider", "provider_status",
                             "provider_login", "provider_login_start", "provider_login_finish",
-                            "settings_db_servers", "create_db_server", "update_db_server", "delete_db_server", "test_db_server" };
+                            "settings_db_servers", "create_db_server", "update_db_server", "delete_db_server", "test_db_server",
+
+                            "settings_ssh_servers", "create_ssh_server", "update_ssh_server", "delete_ssh_server" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
     CHECK(api_route("operations") == NULL);
     free(bearer); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
