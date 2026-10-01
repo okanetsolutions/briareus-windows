@@ -1,4 +1,4 @@
-// The mobile API over HTTPS: one device token, no cookies, no cache, no redirects, no automatic retries.
+// The client API (/api/v1) over HTTPS: one token, no cookies, no cache, no redirects, no automatic retries.
 #ifndef BRIAREUS_API_H
 #define BRIAREUS_API_H
 #include "json.h"
@@ -32,7 +32,7 @@ bool api_error_unauthorized(const ApiError *e);
 /// A 4xx is a definite refusal; anything else may have gone through.
 bool api_error_is_refusal(const ApiError *e);
 
-/// An HTTPS origin and the mobile API base beneath it.
+/// An HTTPS origin and the client API base beneath it.
 typedef struct { char *base_url; char *origin; char *host; int port; } ServerAddress;
 bool server_address_parse(const char *input, ServerAddress *out);
 void server_address_free(ServerAddress *address);
@@ -46,7 +46,7 @@ typedef bool (*ApiTransport)(void *ctx, const char *method, const char *url, con
                              char **error_message);
 
 typedef struct ApiClient ApiClient;
-/// Fails with API_INVALID_TOKEN unless the token has the device token shape.
+/// Fails with API_INVALID_TOKEN unless the token has the token shape.
 ApiClient *api_client_new(const ServerAddress *address, const char *token, ApiError *error);
 /// The client is shared by the screens and the threads finishing their requests; the last release frees it.
 ApiClient *api_client_retain(ApiClient *client);
@@ -56,15 +56,26 @@ void api_client_set_transport(ApiClient *client, ApiTransport transport, void *c
 const ServerAddress *api_client_address(const ApiClient *client);
 bool api_token_valid(const char *token);
 
+/// One of the calls this app makes, and the route that answers it. A `{name}` in `path` is filled with the argument of
+/// that name, URL-encoded; the other arguments go in the query of a GET or DELETE and in the JSON body otherwise. `set`
+/// names a body flag the call always sends as true. `filter` names an argument the route has no parameter for: it is
+/// kept back, and the answer's `list` is cut to the rows whose field of that name equals it.
+typedef struct { const char *name, *method, *path, *set, *filter, *list; } ApiRoute;
+/// The table entry for a call name, or NULL for a name this app does not make.
+const ApiRoute *api_route(const char *name);
+
+/// `GET /`: the token's own record and what the server can do.
 bool api_discovery(ApiClient *client, Discovery *out, ApiError *error);
-bool api_operations(ApiClient *client, Operation **ops, size_t *count, ApiError *error);
+/// `GET /openapi.json`, read into the routes the server has and who may call each.
+bool api_catalog(ApiClient *client, Route **routes, size_t *count, ApiError *error);
 bool api_revoke(ApiClient *client, ApiError *error);
-/// `timeout_ms` is for an operation that answers only once its work is done; 0 leaves the 30-second default.
-Json *api_operation(ApiClient *client, const char *name, const Json *arguments, int timeout_ms, ApiError *error);
-/// The text of a recorded voice note. `language` is the spoken one as a BCP 47 tag; NULL or "" lets the server detect it.
-char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, const char *language, ApiError *error);
+/// One call by name, on its route. `timeout_ms` is for a call that answers only once its work is done; 0 leaves the
+/// 30-second default. A name not in the table, or a missing path argument, is refused with a 400 before any network call.
+Json *api_call(ApiClient *client, const char *name, const Json *arguments, int timeout_ms, ApiError *error);
+/// The text of a recorded voice note, sent with the content type it was recorded in.
+char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, ApiError *error);
 /// Stores a file to attach to a message, as the dashboard's composer does: the bytes are the body and the name rides in the
-/// query. The answer is the id the `message` operation takes in `attachments`. Files larger than API_UPLOAD_LIMIT are refused here.
+/// query. The answer is the id a message takes in `attachments`. Files larger than API_UPLOAD_LIMIT are refused here.
 #define API_UPLOAD_LIMIT (25 * 1024 * 1024)
 char *api_upload(ApiClient *client, const char *name, const void *bytes, size_t len, ApiError *error);
 

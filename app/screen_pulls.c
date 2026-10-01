@@ -488,10 +488,10 @@ static void pull_done(void *owner, Request *req) {
     if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pull_finish_poll(s); return; }
     json_free(s->pr); s->pr = json_clone(json_get(req->result, "pr"));
     set_string(&s->error, NULL);
-    // The description comes with the file list; it is read once per visit and on refresh.
-    if (!json_str(json_get(s->pr, "body")) && !s->body_read && !s->req_body && store_supports("pull_files")) {
+    // The description is its own read, once per visit and on refresh.
+    if (!json_str(json_get(s->pr, "body")) && !s->body_read && !s->req_body && store_supports("pull_description")) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
-        store_call("pull_files", args, 0, s, body_done, TAG_BODY, &s->req_body);
+        store_call("pull_description", args, 0, s, body_done, TAG_BODY, &s->req_body);
     }
     if (store_supports("findings")) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
@@ -978,7 +978,7 @@ static char *visible_markdown(const char *body) {
 static void layout_description(PullScreen *s, Doc *doc, Col c) {
     const char *body = json_str(json_get(s->pr, "body"));
     if (!body) body = s->body;
-    bool loading = !body && !s->body_read && store_supports("pull_files");
+    bool loading = !body && !s->body_read && store_supports("pull_description");
     if (!body && !loading) return;
     const char *author = pull_author(s);
     const PullSummary *row = board_row(s);
@@ -1062,10 +1062,16 @@ static size_t findings_to_fix(PullScreen *s) {
     }
     return n;
 }
+/// Whether the server's errand list has one; before the list is read, every errand this app knows is taken as offered.
+static bool catalog_lists(const Json *catalog, const char *id) {
+    if (!json_count(catalog)) return true;
+    for (size_t i = 0; i < json_count(catalog); i++) if (str_eq(json_str(json_get(json_at(catalog, i), "id")), id)) return true;
+    return false;
+}
 /// Solve findings is the board's implement-feedback errand started from the findings themselves: offered on an open pull
-/// request with findings still to fix, to a device that may start sessions on a server that has the errand.
+/// request with findings still to fix, to a token that may start errands on a server that lists this one.
 static bool solve_findings_offered(PullScreen *s) {
-    if (!store_can_manage() || !store_supports("implement_feedback")) return false;
+    if (!store_can_manage() || !store_supports("action") || !catalog_lists(s->catalog, "implement-feedback")) return false;
     if (!str_eq(json_str(json_get(s->pr, "state")), "open") || !json_str(json_get(s->pr, "headRef"))) return false;
     return findings_unfixed(s) > 0;
 }
@@ -1402,9 +1408,9 @@ static void prepare_merge(PullScreen *s) {
     if (s->merging) return;
     s->merging = true; set_string(&s->merge_error, NULL);
     pane_relayout(s->base.pane);
-    if (store_supports("pull_files")) {
+    if (store_supports("pull_description")) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
-        store_call("pull_files", args, 0, s, prepare_done, TAG_MERGE_PREPARE, &s->req_prepare);
+        store_call("pull_description", args, 0, s, prepare_done, TAG_MERGE_PREPARE, &s->req_prepare);
     } else offer_merge(s, NULL);
 }
 static void decide_done(void *owner, Request *req) {

@@ -352,12 +352,17 @@ void board_action_copy(BoardAction *into, const BoardAction *from) {
     into->input.placeholder = from->has_input && from->input.placeholder ? xstrdup(from->input.placeholder) : NULL;
     into->input.required = from->has_input && from->input.required;
 }
-char *board_action_operation(const BoardAction *a) { return str_eq(a->id, "run") ? xstrdup("serve_pull") : str_replace(a->id, "-", "_"); }
+char *board_action_operation(const BoardAction *a) {
+    if (str_eq(a->id, "run")) return xstrdup("serve_pull");
+    if (str_eq(a->id, "review")) return xstrdup("review");
+    return xstrdup("action");
+}
 int board_action_timeout_ms(const BoardAction *a) { return str_eq(a->id, "run") ? 170000 : 0; }
 Json *board_action_arguments(const BoardAction *a, const char *repo, int number, const char *branch, const char *input) {
     Json *args = json_object();
     json_set_str(args, "repo", repo); json_set_num(args, "prNumber", number);
     if (str_eq(a->id, "review") && branch) json_set_str(args, "branch", branch);
+    else if (!str_eq(a->id, "run") && !str_eq(a->id, "review")) json_set_str(args, "action", a->id);
     if (a->has_input && input) {
         char *trimmed = str_trim(input);
         if (*trimmed) json_set_str(args, "input", trimmed);
@@ -395,7 +400,9 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
         const BoardAction *s = NULL;
         for (size_t j = 0; j < sn; j++) if (str_eq(served[j].id, k->id)) { s = &served[j]; break; }
         bool offered;
-        if (str_eq(k->id, "solve-conflicts")) offered = pull ? pull_has_conflicts(pull) : true;
+        // Run and Review have routes of their own; the rest are errands the server has to list.
+        if (sn && !s && !str_eq(k->id, "run") && !str_eq(k->id, "review")) offered = false;
+        else if (str_eq(k->id, "solve-conflicts")) offered = pull ? pull_has_conflicts(pull) : true;
         else if (str_eq(k->id, "fix-checks")) offered = failed_checks > 0 || (pull ? pull_checks_failed(pull) : false);
         else if (str_eq(k->id, "implement-feedback")) offered = pull ? pull_awaits_feedback(pull) : true;
         else offered = true;
