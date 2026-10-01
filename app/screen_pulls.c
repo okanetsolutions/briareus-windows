@@ -76,6 +76,35 @@ static BoardRow *rows_of(PullsScreen *s, size_t *count) {
     return rows;
 }
 
+// The pickers are kept on disk per repository, so coming back to the board shows what was picked last.
+static Json *filter_json(const BoardFilter *f) {
+    Json *j = json_object();
+    for (int k = 0; k < FILTER_KIND_COUNT; k++) { const char *v = board_filter_get(f, (FilterKind)k); if (!str_empty(v)) json_set_str(j, filter_kind_name((FilterKind)k), v); }
+    return j;
+}
+static void filter_read(BoardFilter *f, const Json *j) {
+    for (int k = 0; k < FILTER_KIND_COUNT; k++) { const char *v = json_str(json_get(j, filter_kind_name((FilterKind)k))); if (v) board_filter_set(f, (FilterKind)k, v); }
+}
+static void filters_save(PullsScreen *s) {
+    Json *saved = json_object();
+    json_object_set(saved, "pulls", filter_json(&s->pull_filter));
+    json_object_set(saved, "issues", filter_json(&s->issue_filter));
+    char *key = xstrfmt("pulls-filters:%s", s->project.repo);
+    cache_store(g_store.cache, saved, key);
+    free(key); json_free(saved);
+}
+/// A board never filtered opens on the project's author; one with saved picks opens on them.
+static bool filters_restore(PullsScreen *s) {
+    char *key = xstrfmt("pulls-filters:%s", s->project.repo);
+    Json *saved = cache_value(g_store.cache, key);
+    free(key);
+    if (!saved) return false;
+    filter_read(&s->pull_filter, json_get(saved, "pulls"));
+    filter_read(&s->issue_filter, json_get(saved, "issues"));
+    json_free(saved);
+    return true;
+}
+
 static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     json_free(s->board); s->board = json_clone(result);
     pull_summaries_free(s->pulls, s->pull_count); s->pulls = pull_summaries_parse(json_get(result, "pulls"), &s->pull_count);
@@ -325,7 +354,7 @@ static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
     DestroyMenu(menu);
     if (chosen == 1) board_filter_set(filter, kind, "");
     else if (chosen >= 2 && (size_t)(chosen - 2) < count) board_filter_set(filter, kind, options[chosen - 2].value);
-    if (chosen > 0) s->has_opening = false;
+    if (chosen > 0) { s->has_opening = false; filters_save(s); }
     filter_options_free(options, count);
     free(rows);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
@@ -340,7 +369,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB: s->tab = arg == 1 ? 1 : 0; pane_relayout(base->pane); pane_header_changed(base->pane); break;
-    case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; pane_relayout(base->pane); pane_header_changed(base->pane); break; }
+    case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
         StackPosition stack; bool has_stack = stack_position_parse(json_get(s->pulls[arg].raw, "stack"), json_get(s->board, "stacks"), &stack);
@@ -393,7 +422,8 @@ Screen *pulls_screen_new(const Project *project) {
     s->base.vt = &pulls_vt; s->base.id = xstrfmt("pulls:%s", project->repo);
     project_copy(&s->project, project);
     s->board = json_null(); s->catalog = json_array();
-    board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening); s->has_opening = true;
+    board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening);
+    s->has_opening = !filters_restore(s);
     return &s->base;
 }
 
