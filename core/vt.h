@@ -31,6 +31,8 @@ int vt_cols(const Vt *vt);
 int vt_rows(const Vt *vt);
 /// Lines held above the screen.
 int vt_scrollback(const Vt *vt);
+/// How many lines ever left the top of the main screen, so a view or a selection can follow its text as it scrolls.
+unsigned long long vt_lines_pushed(const Vt *vt);
 /// A line: 0...rows-1 on screen, -1...-scrollback above it. `*width` is how many cells it holds (a scrollback line keeps
 /// the width it was written at). NULL past either end.
 const VtCell *vt_line(const Vt *vt, int y, int *width);

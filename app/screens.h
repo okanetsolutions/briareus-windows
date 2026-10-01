@@ -57,6 +57,15 @@ Screen *dashboard_screen_new(void);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool and the SSH
 /// servers, each with ＋ New.
 Screen *settings_screen_new(void);
+/// The sidebar's 🖥 Servers: the SSH servers registered in Settings, in a folder per project, each opening an SSH (or
+/// SFTP) session from this PC in the detail pane.
+Screen *servers_sidebar_new(void);
+/// The open SSH and SFTP sessions as tabs over a terminal.
+Screen *servers_screen_new(void);
+/// The Servers sidebar reads the servers again, after one was saved or deleted.
+void servers_ssh_changed(void);
+/// One SSH server's settings form. `row` is the server's SshServer (NULL with `defaults` for a new one).
+Screen *ssh_server_settings_screen_new(const Json *row, const Json *defaults);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);

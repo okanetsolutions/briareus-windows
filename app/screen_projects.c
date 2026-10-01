@@ -1,10 +1,11 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with the 📊 and ⚑ switches and ⚙ Settings, the projects
-// with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
+// The sidebar, as the dashboard draws it: the ＋ New session strip with the 📊 and ⚑ switches, 🖥 Servers and ⚙ Settings,
+// the projects with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
 #include "media.h"
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
+#include "terminal.h"
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +13,7 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_SERVERS };
 enum { STRIP_H = 32, ICON_W = 32, STRIP_GAP = 6 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
@@ -51,7 +52,7 @@ static void strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, 
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
-    int icons_w = iw * 3 + gap * 2;
+    int icons_w = iw * 4 + gap * 3;
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
@@ -139,6 +140,8 @@ static bool sidebar_common_action(Pane *pane, int action) {
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;
+    // Servers take the sidebar's place too, with their sessions in the main column.
+    case ACT_SERVERS: pane_push(pane, servers_sidebar_new()); app_show_detail(servers_screen_new()); return true;
     case ACT_SIGN_OUT: sign_out(); return true;
     }
     return false;

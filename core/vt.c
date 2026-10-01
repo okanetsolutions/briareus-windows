@@ -15,6 +15,7 @@ struct Vt {
     int cols, rows;
     VtCell *main, *alt, *grid;      // `grid` is the screen in use: `main` or `alt`
     Line *sb; size_t sb_cap, sb_start, sb_count;
+    unsigned long long pushed;       // lines that ever left the top of the main screen
     int x, y; bool wrap_pending;
     VtCell pen;                      // the attributes new characters and erases take
     int top, bottom;                 // the scroll region, inclusive
@@ -85,6 +86,7 @@ void vt_free(Vt *vt) {
 int vt_cols(const Vt *vt) { return vt->cols; }
 int vt_rows(const Vt *vt) { return vt->rows; }
 int vt_scrollback(const Vt *vt) { return (int)vt->sb_count; }
+unsigned long long vt_lines_pushed(const Vt *vt) { return vt->pushed; }
 bool vt_app_cursor(const Vt *vt) { return vt->app_cursor; }
 bool vt_app_keypad(const Vt *vt) { return vt->app_keypad; }
 bool vt_bracketed_paste(const Vt *vt) { return vt->bracketed; }
@@ -146,6 +148,7 @@ uint32_t vt_index_rgb(int i) {
 // MARK: - Scrolling
 
 static void push_scrollback(Vt *vt, const VtCell *row) {
+    vt->pushed++;
     if (!vt->sb_cap) return;
     int width = vt->cols;
     while (width > 0 && row[width - 1].ch == ' ' && !row[width - 1].attr && VT_COLOR_KIND(row[width - 1].bg) == VT_COLOR_DEFAULT) width--;
