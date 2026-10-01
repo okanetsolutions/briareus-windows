@@ -1,4 +1,4 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with the ⚑ switch, the projects with their
+// The sidebar, as the dashboard draws it: the ＋ New session strip with the 📊 and ⚑ switches, the projects with their
 // session counts, and inside a project its conversations; ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
 #include "resource.h"
@@ -11,7 +11,7 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD };
 enum { STRIP_H = 32, ICON_W = 32, STRIP_GAP = 6 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
@@ -46,14 +46,16 @@ static void strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, 
     Item *it = doc_item(doc, i);
     it->data = d; it->free_data = free; it->action = action; it->hand = true;
 }
-/// The strip; `selected` is the detail pane's root id, for the ⚑ switch's accent.
+/// The strip; `selected` is the detail pane's root id, for the 📊 and ⚑ switches' accent.
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
-    int icons_w = iw;
+    int icons_w = iw * 2 + gap;
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
+    RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
+    x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
     doc_space(doc, px(14));
@@ -86,6 +88,7 @@ static void sign_out(void) {
 /// The strip's own actions, the same on both screens. True when handled.
 static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
+    case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     case ACT_SIGN_OUT: sign_out(); return true;
     }
