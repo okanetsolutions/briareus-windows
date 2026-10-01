@@ -12,7 +12,7 @@ cl /c %CXXFLAGS% app\canvas.cpp || exit /b 1
 cl %CFLAGS% core\*.c app\*.c %OUT%\canvas.obj %OUT%\briareus.res /Fe%OUT%\Briareus.exe /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup %LIBS% || exit /b 1
 cl %CFLAGS% core\*.c tests\harness.c tests\core_*.c /Fe%OUT%\core_tests.exe /link winhttp.lib advapi32.lib ole32.lib || exit /b 1
 rem The app tests link the app itself, WinMain included, under the tests' console main.
-cl %CFLAGS% core\*.c app\*.c %OUT%\canvas.obj tests\harness.c testspp_*.c /Fe%OUT%pp_tests.exe /link /SUBSYSTEM:CONSOLE %LIBS% || exit /b 1
+cl %CFLAGS% core\*.c app\*.c %OUT%\canvas.obj tests\harness.c tests\app_*.c /Fe%OUT%\app_tests.exe /link /SUBSYSTEM:CONSOLE %LIBS% || exit /b 1
 %OUT%\core_tests.exe || exit /b 1
-%OUT%pp_tests.exe || exit /b 1
+%OUT%\app_tests.exe || exit /b 1
 endlocal
