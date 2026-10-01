@@ -143,7 +143,10 @@ static int meta_layout(HDC hdc, SessionRowData *d, int width, RECT *rects) {
     if (widths[1] > width * 45 / 100) widths[1] = width * 45 / 100;
     for (int i = 0; i < 4; i++) {
         if (!widths[i]) { SetRectEmpty(&rects[i]); continue; }
-        if (x > 0 && x + widths[i] > width) { x = 0; y += lh; }
+        // The state and its age wrap as one, so "waiting" never sits a line above "11h ago".
+        int need = widths[i] + (i == 2 && widths[3] ? gap + widths[3] : 0);
+        bool joined = i == 3 && !IsRectEmpty(&rects[2]);
+        if (x > 0 && !joined && x + need > width) { x = 0; y += lh; }
         RECT r = { x, y, x + widths[i], y + lh }; rects[i] = r;
         x += widths[i] + gap;
     }
