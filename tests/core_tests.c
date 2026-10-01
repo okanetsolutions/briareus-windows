@@ -177,6 +177,16 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_num(args, "id", 3); json_set_str(args, "code", "abc#def");
     result = api_call(c, "provider_login_finish", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/providers/3/login/finish"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_body, "{\"code\":\"abc#def\"}");
+    // A database server: the same shape; its probe sends the form's values, the saved row's id among them, in the body.
+    args = json_object(); json_set_num(args, "id", 3); json_set_str(args, "host", "db1"); json_set_num(args, "port", 3306);
+    result = api_call(c, "update_db_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/db-servers/3"); CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_body, "{\"host\":\"db1\",\"port\":3306}");
+    args = json_object(); json_set_num(args, "id", 3); json_set_str(args, "host", "db1");
+    result = api_call(c, "test_db_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/db-servers/test"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_body, "{\"id\":3,\"host\":\"db1\"}");
+    args = json_object(); json_set_num(args, "id", 3);
+    result = api_call(c, "delete_db_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/db-servers/3"); CHECK_STR(stub.last_method, "DELETE");
     // A filter picked more than once repeats its parameter.
     args = json_object(); json_set_str(args, "period", "all");
     { Json *picks = json_array(); json_array_push(picks, json_string("p:1")); json_array_push(picks, json_string("r:o/r")); json_object_set(args, "project", picks); }
@@ -207,7 +217,8 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
                             "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe",
                             "settings_projects", "create_project", "update_project", "delete_project", "order_projects",
                             "settings_providers", "create_provider", "update_provider", "delete_provider", "test_provider", "provider_status",
-                            "provider_login", "provider_login_start", "provider_login_finish" };
+                            "provider_login", "provider_login_start", "provider_login_finish",
+                            "settings_db_servers", "create_db_server", "update_db_server", "delete_db_server", "test_db_server" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
     CHECK(api_route("operations") == NULL);
     free(bearer); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
