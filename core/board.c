@@ -375,7 +375,7 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
         BoardAction *a = &out[n++];
         a->id = xstrdup(k->id); a->label = xstrdup(k->label); a->hint = xstrdup(k->hint);
         // The server words the question and adds errands this app predates.
-        const BoardAction *input_source = s ? s : k;
+        const BoardAction *input_source = s && s->has_input ? s : k;
         a->has_input = input_source->has_input;
         if (a->has_input) {
             a->input.label = xstrdup(input_source->input.label ? input_source->input.label : "");

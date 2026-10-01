@@ -625,6 +625,17 @@ static void test_the_server_words_the_question_an_errand_asks(void) {
     }
     board_actions_free(a, n);
 }
+static void test_an_errand_the_server_lists_without_a_question_keeps_the_apps_own(void) {
+    Json *c = json_parsez("[{\"id\":\"custom-feedback\",\"label\":\"Give feedback\"}]");
+    size_t n; BoardAction *a = board_actions_offered(c, NULL, 0, &n);
+    bool found = false;
+    for (size_t i = 0; i < n; i++) if (str_eq(a[i].id, "custom-feedback")) {
+        found = true;
+        CHECK(a[i].has_input && a[i].input.required); CHECK_STR(a[i].input.label, "Your feedback");
+    }
+    CHECK(found);
+    board_actions_free(a, n); json_free(c);
+}
 static void test_board_action_copies_are_independent(void) {
     BoardAction from = { xstrdup("x"), xstrdup("X"), NULL, true, { xstrdup("Q"), NULL, true } }, into;
     board_action_copy(&into, &from);
@@ -942,6 +953,7 @@ void board_tests(void) {
     test_run("a known catalog restricts errands to those it lists", test_a_known_catalog_restricts_errands_to_those_it_lists);
     test_run("errands the app does not know follow in the server's order", test_errands_the_app_does_not_know_follow_in_the_servers_order);
     test_run("the server words the question an errand asks", test_the_server_words_the_question_an_errand_asks);
+    test_run("an errand the server lists without a question keeps the app's own", test_an_errand_the_server_lists_without_a_question_keeps_the_apps_own);
     test_run("board action copies are independent", test_board_action_copies_are_independent);
     test_run("merge warnings cover every mergeable state", test_merge_warnings_cover_every_mergeable_state);
     test_run("review status weighs the decision before the reviewers", test_review_status_weighs_the_decision_before_the_reviewers);
