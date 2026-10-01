@@ -54,9 +54,34 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
+/// WhatsApp Web, from the sidebar strip's WhatsApp button.
+Screen *whatsapp_screen_new(void);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool and the SSH
 /// servers, each with ＋ New.
 Screen *settings_screen_new(void);
+/// A project's SSH sessions tab, laid out inside its board: the project's SSH servers down the left, its open sessions as
+/// tabs over a terminal on the right. Its items use `PROJECT_SSH_ACTIONS` actions from `action_base` up.
+typedef struct ProjectSsh ProjectSsh;
+enum { PROJECT_SSH_ACTIONS = 8 };
+ProjectSsh *project_ssh_new(const char *repo, Screen *host, int action_base);
+void project_ssh_free(ProjectSsh *p);
+/// Whether this token may read the SSH servers (an Admin token, on a server that lists them).
+bool project_ssh_offered(void);
+/// How many sessions are open on a project's servers.
+size_t project_ssh_session_count(const char *repo);
+/// Reads the servers once; the refresh reads them again.
+void project_ssh_load(ProjectSsh *p);
+void project_ssh_refresh(ProjectSsh *p);
+/// Lays the tab out from `doc->y` down to the bottom of the pane.
+void project_ssh_layout(ProjectSsh *p, Doc *doc, int w);
+/// The open session's line under the title, and its Reconnect and Close.
+void project_ssh_header(ProjectSsh *p, HeaderInfo *info);
+/// Shows the open session's terminal over its area, or hides the project's terminals when `shown` is false.
+void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool shown);
+/// True when the action was the tab's.
+bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt);
+/// The SSH sessions tabs read the servers again, after one was saved or deleted.
+void servers_ssh_changed(void);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);
@@ -140,6 +165,8 @@ void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *r
 void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running);
 /// The row of an issue on the board.
 void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg);
+/// An epic's bar of closed sub-issues against all of them, with "N/M done" after it.
+void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue);
 /// A GitHub label's colour for the chips, or the secondary colour.
 COLORREF label_color(const PullLabel *label);
 /// The glyph for a check conclusion.

@@ -42,6 +42,8 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 // MARK: - Board
 
 enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
+enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH };
 enum { TIMER_POLL = 1 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -51,7 +53,9 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // 0 pulls, 1 issues
+    int tab;   // TAB_PULLS, TAB_ISSUES or TAB_SSH
+    ProjectSsh *ssh;   // the SSH sessions tab
+    bool shown;
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
     BoardFilter pull_filter, issue_filter;
@@ -122,7 +126,7 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
         if (saved) { board_filter_copy(&s->opening, &filter); } else { s->has_opening = false; board_filter_init(&s->opening); }
         board_filter_free(&filter);
     }
-    if (!s->issue_count && !json_is_set(json_get(result, "issuesError"))) s->tab = 0;
+    if (s->tab == TAB_ISSUES && !s->issue_count && !json_is_set(json_get(result, "issuesError"))) s->tab = TAB_PULLS;
     s->loaded = true;
 }
 static void pulls_load(PullsScreen *s, bool fresh);
@@ -206,6 +210,7 @@ static void pulls_destroy(Screen *base) {
     request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); poller_stop(&s->poller);
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
+    project_ssh_free(s->ssh);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
@@ -237,9 +242,14 @@ static void doc_tabs(Doc *doc, int w, const char *const *labels, size_t count, i
 static void pulls_layout(Screen *base, Doc *doc) {
     PullsScreen *s = (PullsScreen *)base;
     int w = doc->width;
-    const char *tabs[2] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    doc_tabs(doc, w, tabs, 2, s->tab);
+    // SSH sessions only for a token that may read the servers; its count is the sessions open on them.
+    size_t open = project_ssh_session_count(s->project.repo);
+    char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
+    const char *tabs[3] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues", ssh_label };
+    doc_tabs(doc, w, tabs, project_ssh_offered() ? 3 : 2, s->tab);
+    free(ssh_label);
     doc_space(doc, px(14));
+    if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->error) { doc_notice(doc, 0, w, s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, 0, w, s->write_error);
@@ -326,6 +336,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     str_free(&sub);
+    if (s->tab == TAB_SSH) {
+        project_ssh_header(s->ssh, info);
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
+        return;
+    }
     // The pickers, as the dashboard's selects, and ⟳.
     {
         BoardFilter *f = current_filter(s);
@@ -364,13 +379,14 @@ static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
 static void pulls_refresh(Screen *base);
 static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
+    if (project_ssh_action(s->ssh, action, arg, pt)) return;
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
-    case ACT_TAB: s->tab = arg == 1 ? 1 : 0; pane_relayout(base->pane); pane_header_changed(base->pane); break;
+    case ACT_TAB: s->tab = arg == TAB_ISSUES || (arg == TAB_SSH && project_ssh_offered()) ? (int)arg : TAB_PULLS; pane_relayout(base->pane); pane_header_changed(base->pane); break;
     case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
@@ -404,13 +420,20 @@ static void pulls_timer(Screen *base, UINT id) {
     PullsScreen *s = (PullsScreen *)base;
     if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
 }
+static void pulls_place(Screen *base, const RECT *content, int scroll_y) {
+    PullsScreen *s = (PullsScreen *)base;
+    project_ssh_place(s->ssh, content, scroll_y, s->shown && s->tab == TAB_SSH);
+}
 static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
+    s->shown = shown;
+    if (!shown) project_ssh_place(s->ssh, NULL, 0, false);
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); }
 }
 static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
+    if (s->tab == TAB_SSH) { project_ssh_refresh(s->ssh); pane_relayout(base->pane); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     pulls_load(s, true);
@@ -418,7 +441,7 @@ static void pulls_refresh(Screen *base) {
 static void pulls_activated(Screen *base, bool active) { if (active) pulls_visible(base, true); }
 static const ScreenVTable pulls_vt = {
     .destroy = pulls_destroy, .layout = pulls_layout, .header = pulls_header, .action = pulls_action, .timer = pulls_timer,
-    .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated,
+    .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated, .place = pulls_place,
 };
 Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);
@@ -427,6 +450,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->board = json_null(); s->catalog = json_array();
     board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening);
     s->has_opening = !filters_restore(s);
+    s->ssh = project_ssh_new(project->repo, &s->base, ACT_SSH_BASE);
     return &s->base;
 }
 
@@ -2093,21 +2117,117 @@ static void board_open_run(PullsScreen *s, size_t index) {
 
 // MARK: - Issue
 
-enum { ACT_ISSUE_OPEN = 1200, ACT_ISSUE_PARENT, ACT_ISSUE_PULL, ACT_ISSUE_START, ACT_ISSUE_CHECKED };
+enum { ACT_ISSUE_OPEN = 1200, ACT_ISSUE_PARENT, ACT_ISSUE_PULL, ACT_ISSUE_START, ACT_ISSUE_CHECKED, ACT_ISSUE_SUB, ACT_ISSUE_RUN, ACT_ISSUE_COPY, ACT_ISSUE_REFRESH, ACT_ISSUE_CLOSE };
 
+// The API has no read of one issue, so the screen is the board's row kept fresh: the board is read again on a timer
+// and the row, the epic's open sub-issues and the closing pull requests' own rows are taken from it.
 typedef struct {
     Screen base;
     Project project; IssueSummary issue;
+    IssueSummary *board_issues; size_t board_issue_count;
+    PullSummary *board_pulls; size_t board_pull_count;
+    bool board_read, gone;      // gone: the board was read and this issue is not on it
+    char *load_error;
+    Session *runs; size_t run_count;   // the conversations started on this issue or on a pull request closing it
     bool busy, uncertain;
     char *write_error;
-    Request *req;
+    bool closing, closed;           // closed: this screen closed it; the board no longer lists it
+    char *closed_reason;            // completed or not_planned, as the server answered
+    Request *req, *req_board, *req_runs, *req_close;
+    Poller poller;
 } IssueScreen;
 
 static void issue_destroy(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
-    request_cancel(&s->req);
-    project_free(&s->project); issue_summary_free(&s->issue); free(s->write_error);
+    request_cancel(&s->req); request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_close); poller_stop(&s->poller);
+    free(s->closed_reason);
+    issue_summaries_free(s->board_issues, s->board_issue_count); pull_summaries_free(s->board_pulls, s->board_pull_count);
+    sessions_free(s->runs, s->run_count);
+    project_free(&s->project); issue_summary_free(&s->issue); free(s->write_error); free(s->load_error);
     screen_release(base);
+}
+/// Takes the board's answer: its rows, and this issue's own row when it is still there. A saved board only fills in.
+static void issue_board_show(IssueScreen *s, const Json *board, bool saved) {
+    issue_summaries_free(s->board_issues, s->board_issue_count); s->board_issues = issue_summaries_parse(json_get(board, "issues"), &s->board_issue_count);
+    pull_summaries_free(s->board_pulls, s->board_pull_count); s->board_pulls = pull_summaries_parse(json_get(board, "pulls"), &s->board_pull_count);
+    const Json *rows = json_get(board, "issues");
+    bool found = false;
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        double n;
+        if (!json_num(json_get(row, "number"), &n) || (int)n != s->issue.number) continue;
+        IssueSummary fresh;
+        found = true;
+        if (!saved && issue_summary_parse(row, &fresh)) { issue_summary_free(&s->issue); s->issue = fresh; }
+        break;
+    }
+    // A board GitHub refused the issues of says nothing about this one.
+    if (!saved) s->gone = !found && !json_is_set(json_get(board, "issuesError"));
+    s->board_read = true;
+}
+static bool issue_run_matches(const IssueScreen *s, const Session *run) {
+    if (!str_eq(session_repo(run), s->project.repo)) return false;
+    if (session_on_issue(run, s->issue.number)) return true;
+    int pr = session_pull_number(run);
+    for (size_t i = 0; pr && i < s->issue.pull_count; i++)
+        if (s->issue.pulls[i].number == pr && !board_link_is_foreign(&s->issue.pulls[i], s->project.repo)) return true;
+    return false;
+}
+static void issue_runs_done(void *owner, Request *req) {
+    IssueScreen *s = owner;
+    if (!req->ok) return;
+    Session *all; size_t n;
+    if (!sessions_parse(req->result, &all, &n)) return;
+    sessions_free(s->runs, s->run_count); s->runs = xcalloc(n ? n : 1, sizeof *s->runs); s->run_count = 0;
+    for (size_t i = 0; i < n; i++) if (issue_run_matches(s, &all[i])) session_copy(&s->runs[s->run_count++], &all[i]);
+    sessions_free(all, n);
+    pane_relayout(s->base.pane);
+}
+static void issue_load(IssueScreen *s, bool fresh);
+static void issue_board_done(void *owner, Request *req) {
+    IssueScreen *s = owner;
+    if (!req->ok) {
+        if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { issue_load(s, false); return; }
+        request_error_into(&s->load_error, req);
+    } else {
+        issue_board_show(s, req->result, false);
+        set_string(&s->load_error, NULL);
+        char *key = xstrfmt("pulls:%s", s->project.repo);
+        cache_store(g_store.cache, req->result, key);
+        free(key);
+    }
+    poller_finished(&s->poller, !req->ok, req->error.retry_after);
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+}
+static void issue_load(IssueScreen *s, bool fresh) {
+    if (store_supports("pulls")) {
+        request_cancel(&s->req_board);
+        Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
+        if (fresh) json_set_str(args, "fresh", "1");
+        store_call("pulls", args, 0, s, issue_board_done, 0, &s->req_board);
+    } else poller_finished(&s->poller, false, -1);
+    if (store_supports("sessions") && !s->req_runs) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, issue_runs_done, 0, &s->req_runs); }
+}
+static bool issue_run_active(const IssueScreen *s) { for (size_t i = 0; i < s->run_count; i++) if (session_is_active(&s->runs[i])) return true; return false; }
+/// What the conversations on this issue spent, each counted with the workers it ordered. False when none was priced.
+static bool issue_runs_cost(const IssueScreen *s, double *total) {
+    bool any = false; *total = 0;
+    for (size_t i = 0; i < s->run_count; i++) {
+        double c;
+        if (json_num(json_get(json_get(s->runs[i].raw, "usage"), "costUsd"), &c) || json_num(json_get(s->runs[i].raw, "costUsd"), &c)) { *total += c; any = true; }
+    }
+    return any;
+}
+/// The parent's own board row, when it is an issue of this repository still open on it.
+static const IssueSummary *issue_parent_row(const IssueScreen *s) {
+    if (!s->issue.has_parent || board_link_is_foreign(&s->issue.parent, s->project.repo)) return NULL;
+    return issues_find(s->board_issues, s->board_issue_count, s->issue.parent.number);
+}
+/// The board row of a closing pull request of this repository, which carries its checks and reviews.
+static const PullSummary *issue_pull_row(const IssueScreen *s, size_t i) {
+    const BoardLink *pull = &s->issue.pulls[i];
+    if (board_link_is_foreign(pull, s->project.repo)) return NULL;
+    return pulls_find(s->board_pulls, s->board_pull_count, pull->number);
 }
 static void issue_layout(Screen *base, Doc *doc) {
     IssueScreen *s = (IssueScreen *)base;
@@ -2126,35 +2246,123 @@ static void issue_layout(Screen *base, Doc *doc) {
         doc_box_end(doc, b, px(12));
         doc_space(doc, px(10));
     }
+    if (s->load_error) { doc_notice(doc, 0, w, s->load_error); doc_space(doc, px(10)); }
+    if (s->closed) {
+        int b = section_box(doc, w);
+        doc_label(doc, ix, iw, 0xE73E, str_eq(s->closed_reason, "not_planned") ? "Closed as not planned" : "Closed as completed", FONT_CALLOUT, theme.success);
+        doc_space(doc, px(4));
+        doc_text(doc, ix, iw, "It has left the board. Reopen it on GitHub if it was closed by mistake.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_box_end(doc, b, px(12));
+        doc_space(doc, px(10));
+    } else if (s->gone) {
+        int b = section_box(doc, w);
+        doc_label(doc, ix, iw, 0xE946, "This issue is no longer on the board", FONT_CALLOUT, theme.text);
+        doc_space(doc, px(4));
+        doc_text(doc, ix, iw, "It was closed, or it is past the most recently updated issues the server reads. What is shown is how it was last seen.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_box_end(doc, b, px(12));
+        doc_space(doc, px(10));
+    }
     int box = section_box(doc, w);
     doc_text(doc, ix, iw, issue->title, FONT_TITLE3, theme.text, DT_WORDBREAK);
-    if (issue_is_epic(issue)) { row_gap(doc, w); char *t = xstrfmt("%d/%d done", issue->sub_issues_done, issue->sub_issues); doc_labeled(doc, ix, iw, "Sub-issues", t, theme.secondary); free(t); }
     if (issue->label_count) { row_gap(doc, w); doc_label_chips(doc, ix, iw, issue->labels, issue->label_count, theme.elevated); }
+    if (issue_is_epic(issue)) {
+        row_gap(doc, w);
+        int open = issue->sub_issues - issue->sub_issues_done;
+        char *t = open > 0 ? xstrfmt("%d open", open) : xstrdup("All closed");
+        doc_labeled(doc, ix, iw, "Sub-issues", t, open > 0 ? theme.text : theme.success);
+        free(t);
+        doc_space(doc, px(4));
+        doc_epic_progress(doc, ix, iw, issue);
+    }
     if (issue->author) { row_gap(doc, w); char *a = xstrfmt("@%s", issue->author); doc_labeled(doc, ix, iw, "Reported by", a, theme.text); free(a); }
     row_gap(doc, w);
     { char *a = issue->assignee_count ? people(issue->assignees, issue->assignee_count, 4) : xstrdup("Nobody"); doc_labeled(doc, ix, iw, "Assigned", a, theme.text); free(a); }
     if (issue->milestone) { row_gap(doc, w); doc_labeled(doc, ix, iw, "Milestone", issue->milestone, theme.text); }
     if (issue->comments > 0) { row_gap(doc, w); char *c = xstrfmt("%d", issue->comments); doc_labeled(doc, ix, iw, "Comments", c, theme.text); free(c); }
+    if (issue->has_created) {
+        row_gap(doc, w);
+        char *rel = format_relative(issue->created_at), *day = format_date_abbrev(issue->created_at);
+        char *t = xstrfmt("%s \xC2\xB7 %s", day, rel);
+        doc_labeled(doc, ix, iw, "Opened", t, theme.secondary);
+        free(t); free(day); free(rel);
+    }
     if (issue->has_updated) { row_gap(doc, w); char *rel = format_relative(issue->updated_at); doc_labeled(doc, ix, iw, "Updated", rel, theme.secondary); free(rel); }
     if (safe_web_url(issue->url)) { row_gap(doc, w); int li = doc_label(doc, ix, iw, 0xE8A7, "Open on GitHub", FONT_CALLOUT, theme.accent); doc_item(doc, li)->action = ACT_ISSUE_OPEN; doc_item(doc, li)->hand = true; }
     doc_box_end(doc, box, px(12));
     if (issue->has_parent) {
         doc_section(doc, 0, w, "Part of");
         box = section_box(doc, w);
-        doc_linked_row(doc, ix, iw, &issue->parent, s->project.repo, safe_web_url(issue->parent.url) ? ACT_ISSUE_PARENT : 0, 0);
+        bool linked = issue_parent_row(s) || safe_web_url(issue->parent.url);
+        doc_linked_row(doc, ix, iw, &issue->parent, s->project.repo, linked ? ACT_ISSUE_PARENT : 0, 0);
         doc_box_end(doc, box, px(12));
     }
-    doc_section(doc, 0, w, "Pull requests");
-    box = section_box(doc, w);
-    for (size_t i = 0; i < issue->pull_count; i++) {
-        if (i) row_gap(doc, w);
-        const BoardLink *pull = &issue->pulls[i];
-        bool foreign = board_link_is_foreign(pull, s->project.repo) || !store_supports("pull");
-        doc_linked_row(doc, ix, iw, pull, s->project.repo, foreign ? (safe_web_url(pull->url) ? ACT_ISSUE_PULL : 0) : ACT_ISSUE_PULL, (intptr_t)i);
+    if (issue_is_epic(issue)) {
+        size_t sn; size_t *subs = issue_open_sub_issues(s->board_issues, s->board_issue_count, issue->number, s->project.repo, &sn);
+        int open = issue->sub_issues - issue->sub_issues_done;
+        doc_section(doc, 0, w, "Open sub-issues");
+        for (size_t k = 0; k < sn; k++) {
+            doc_issue_row(doc, 0, w, &s->board_issues[subs[k]], s->project.repo, true, ACT_ISSUE_SUB, (intptr_t)subs[k]);
+            doc_space(doc, px(8));
+        }
+        if (!sn) {
+            box = section_box(doc, w);
+            const char *t = open <= 0 ? "Every sub-issue is closed. The epic itself stays open until it is closed on GitHub."
+                          : !s->board_read ? "Reading the board\xE2\x80\xA6"
+                          : "None of its open sub-issues is on this project\xE2\x80\x99s board.";
+            doc_text(doc, ix, iw, t, FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
+            doc_box_end(doc, box, px(12));
+        }
+        if (open > 0 && (int)sn < open && s->board_read) {
+            int missing = open - (int)sn;
+            char *t = xstrfmt("%d open sub-issue%s %s in another repository or past the issues the board reads; GitHub lists them all.", missing, missing == 1 ? "" : "s", missing == 1 ? "is" : "are");
+            doc_space(doc, px(sn ? 0 : 6));
+            doc_text(doc, 0, w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+            free(t);
+        }
+        free(subs);
     }
-    if (!issue->pull_count) doc_text(doc, ix, iw, "No open pull request closes this issue yet", FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
-    doc_box_end(doc, box, px(12));
-    if (store_supports("start_session")) {
+    doc_section(doc, 0, w, "Pull requests");
+    // A pull request on the board is drawn as the board draws it, checks and reviews included; the rest as links.
+    bool thin = false;
+    for (size_t i = 0; i < issue->pull_count; i++) {
+        const PullSummary *row = issue_pull_row(s, i);
+        if (!row) { thin = true; continue; }
+        bool running = false;
+        for (size_t r = 0; r < s->run_count; r++) if (session_pull_number(&s->runs[r]) == row->number && session_is_active(&s->runs[r])) running = true;
+        // The issues it closes would only name this one again.
+        PullSummary shown = *row; shown.issue_count = 0;
+        doc_pull_row(doc, 0, w, &shown, NULL, s->project.repo, store_supports("pull") || safe_web_url(row->url) ? ACT_ISSUE_PULL : 0, (intptr_t)i, NULL, 0, running);
+        doc_space(doc, px(8));
+    }
+    if (thin || !issue->pull_count) {
+        box = section_box(doc, w);
+        bool first = true;
+        for (size_t i = 0; i < issue->pull_count; i++) {
+            if (issue_pull_row(s, i)) continue;
+            if (!first) row_gap(doc, w);
+            first = false;
+            const BoardLink *pull = &issue->pulls[i];
+            bool foreign = board_link_is_foreign(pull, s->project.repo) || !store_supports("pull");
+            doc_linked_row(doc, ix, iw, pull, s->project.repo, foreign ? (safe_web_url(pull->url) ? ACT_ISSUE_PULL : 0) : ACT_ISSUE_PULL, (intptr_t)i);
+        }
+        if (!issue->pull_count) doc_text(doc, ix, iw, "No open pull request closes this issue yet", FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
+        doc_box_end(doc, box, px(12));
+    }
+    if (s->run_count) {
+        doc_section(doc, 0, w, "Sessions");
+        for (size_t i = 0; i < s->run_count; i++) {
+            doc_session_row(doc, 0, w, &s->runs[i], ACT_ISSUE_RUN, (intptr_t)i, false, theme.raise, 0);
+            doc_space(doc, px(6));
+        }
+        double cost;
+        if (issue_runs_cost(s, &cost)) {
+            char *c = format_cost(cost);
+            char *t = xstrfmt("%s spent across %zu session%s, their workers included", c, s->run_count, s->run_count == 1 ? "" : "s");
+            doc_text(doc, 0, w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+            free(t); free(c);
+        }
+    }
+    if (store_supports("start_session") && !s->closed) {
         doc_space(doc, px(14));
         box = section_box(doc, w);
         if (issue_is_epic(issue)) {
@@ -2162,19 +2370,38 @@ static void issue_layout(Screen *base, Doc *doc) {
         } else {
             doc_button(doc, ix, iw, s->busy ? "Starting\xE2\x80\xA6" : "Start a session on this issue", BUTTON_PROMINENT, ACT_ISSUE_START, 0, !s->busy && !s->uncertain);
             doc_space(doc, px(8));
-            doc_text(doc, ix, iw, issue->pull_count ? "A pull request is already answering this issue. A second session is a paid agent working on the same thing."
+            doc_text(doc, ix, iw, issue_run_active(s) ? "A session is already working on this issue; it is listed above. A second one is a paid agent doing the same work."
+                                : issue->pull_count ? "A pull request is already answering this issue. A second session is a paid agent working on the same thing."
                                                     : "The session reads the issue, implements it on a branch of its own and opens a pull request closing it. It runs a paid agent on this project\xE2\x80\x99s configured model.",
                      FONT_CAPTION, theme.secondary, DT_WORDBREAK);
         }
         doc_box_end(doc, box, px(12));
     }
+    if (store_supports("close_issue") && !s->closed) {
+        doc_space(doc, px(14));
+        box = section_box(doc, w);
+        doc_button(doc, ix, 0, s->closing ? "Closing\xE2\x80\xA6" : "Close issue \xE2\x96\xBE", BUTTON_BORDERED, ACT_ISSUE_CLOSE, 0, !s->closing);
+        doc_space(doc, px(8));
+        doc_text(doc, ix, iw, issue->pull_count ? "Closes it on GitHub now. The pull requests answering it stay open; merging one later will not close it again."
+                                                : "Closes it on GitHub, as completed or as not planned, with a comment first if you write one.",
+                 FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_box_end(doc, box, px(12));
+    }
     doc_space(doc, px(16));
 }
-static void issue_header(Screen *base, HeaderInfo *info) { IssueScreen *s = (IssueScreen *)base; snprintf(info->title, sizeof info->title, "#%d", s->issue.number); snprintf(info->subtitle, sizeof info->subtitle, "%s", s->project.repo); }
+static void issue_header(Screen *base, HeaderInfo *info) {
+    IssueScreen *s = (IssueScreen *)base;
+    snprintf(info->title, sizeof info->title, "#%d", s->issue.number);
+    snprintf(info->subtitle, sizeof info->subtitle, "%s", s->project.repo);
+    HeaderButton *b = &info->buttons[info->button_count++]; b->glyph = 0xE8C8; b->action = ACT_ISSUE_COPY; b->enabled = safe_web_url(s->issue.url); b->tip = "Copy the issue\xE2\x80\x99s link";
+    b = &info->buttons[info->button_count++]; b->glyph = 0xE72C; b->action = ACT_ISSUE_REFRESH; b->enabled = !s->req_board; b->tip = "Read the issue from GitHub again";
+}
 static void issue_start_done(void *owner, Request *req) {
     IssueScreen *s = owner;
     s->busy = false;
     if (req->ok) {
+        // The new conversation joins the Sessions list on the way back.
+        if (store_supports("sessions")) { request_cancel(&s->req_runs); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, issue_runs_done, 0, &s->req_runs); }
         Session started;
         if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
     } else {
@@ -2183,24 +2410,91 @@ static void issue_start_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
 }
+static void issue_close_done(void *owner, Request *req) {
+    IssueScreen *s = owner;
+    s->closing = false;
+    if (req->ok) {
+        s->closed = true; s->gone = false;
+        const char *reason = json_str(json_get(json_get(req->result, "issue"), "stateReason"));
+        set_string(&s->closed_reason, reason ? reason : json_str(json_get(req->args, "reason")));
+        set_string(&s->write_error, NULL);
+        // The board drops it; reading it again keeps the epic's counts and its siblings true.
+        issue_load(s, true);
+    } else request_error_into(&s->write_error, req);   // closing twice only restates the reason, so trying again is safe
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+}
+/// The ▾ menu: why it is closed, and whether a comment goes first. Then a confirmation naming what stays open.
+static void issue_close(IssueScreen *s, POINT pt) {
+    if (s->closing || s->closed) return;
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, L"Close as completed");
+    AppendMenuW(menu, MF_STRING, 2, L"Close as not planned");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 3, L"Close as completed with a comment\x2026");
+    AppendMenuW(menu, MF_STRING, 4, L"Close as not planned with a comment\x2026");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(menu);
+    if (chosen < 1) return;
+    bool not_planned = chosen == 2 || chosen == 4;
+    char *comment = NULL;
+    if (chosen >= 3) {
+        char *caption = xstrfmt("Comment on #%d before closing it", s->issue.number);
+        comment = dialog_text(app_window(), caption, "Comment", "Next", "");
+        free(caption);
+        if (!comment) return;
+        if (str_empty(comment)) { free(comment); comment = NULL; }
+    }
+    int open = s->issue.sub_issues - s->issue.sub_issues_done;
+    Str why; str_init(&why);
+    if (open > 0) str_appendf(&why, "%d of its sub-issues %s still open and stay%s open. ", open, open == 1 ? "is" : "are", open == 1 ? "s" : "");
+    if (issue_run_active(s)) str_appendz(&why, "A session is still working on it; closing does not stop it. ");
+    if (comment) str_appendz(&why, "Your comment is posted first.");
+    char *title = xstrfmt("Close issue #%d as %s?", s->issue.number, not_planned ? "not planned" : "completed");
+    bool ok = app_confirm(title, why.len ? why.data : NULL, "Close issue", false);
+    free(title); str_free(&why);
+    if (!ok || s->closed) { free(comment); return; }
+    s->closing = true; set_string(&s->write_error, NULL);
+    Json *args = json_object();
+    json_set_num(args, "issue", s->issue.number); json_set_str(args, "repo", s->project.repo);
+    json_set_str(args, "reason", not_planned ? "not_planned" : "completed");
+    if (comment) json_set_str(args, "comment", comment);
+    free(comment);
+    store_call("close_issue", args, 0, s, issue_close_done, 0, &s->req_close);
+    pane_relayout(s->base.pane);
+}
+static void issue_refresh(Screen *base) {
+    IssueScreen *s = (IssueScreen *)base;
+    request_cancel(&s->req_runs);
+    issue_load(s, true);
+    pane_relayout(base->pane); pane_header_changed(base->pane);
+}
 static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
-    (void)pt;
     IssueScreen *s = (IssueScreen *)base;
     switch (action) {
     case ACT_ISSUE_OPEN: open_web_url(s->issue.url); break;
-    case ACT_ISSUE_PARENT: open_web_url(s->issue.parent.url); break;
+    case ACT_ISSUE_COPY: if (safe_web_url(s->issue.url)) copy_to_clipboard(pane_hwnd(base->pane), s->issue.url); break;
+    case ACT_ISSUE_REFRESH: issue_refresh(base); break;
+    case ACT_ISSUE_CLOSE: issue_close(s, pt); break;
+    case ACT_ISSUE_PARENT: {
+        const IssueSummary *parent = issue_parent_row(s);
+        if (parent) app_push_detail(issue_detail_screen_new(&s->project, parent));
+        else open_web_url(s->issue.parent.url);
+        break;
+    }
+    case ACT_ISSUE_SUB: if ((size_t)arg < s->board_issue_count) app_push_detail(issue_detail_screen_new(&s->project, &s->board_issues[arg])); break;
+    case ACT_ISSUE_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
     case ACT_ISSUE_PULL: {
         if ((size_t)arg >= s->issue.pull_count) break;
         const BoardLink *pull = &s->issue.pulls[arg];
         if (board_link_is_foreign(pull, s->project.repo) || !store_supports("pull")) open_web_url(pull->url);
-        else app_push_detail(pull_detail_screen_new(&s->project, pull->number, NULL, NULL));
+        else app_push_detail(pull_detail_screen_new(&s->project, pull->number, NULL, issue_pull_row(s, (size_t)arg)));
         break;
     }
     case ACT_ISSUE_CHECKED: s->uncertain = false; set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_ISSUE_START: {
         if (s->busy || s->uncertain) break;
         char *title = xstrfmt("Start a paid session on issue #%d?", s->issue.number);
-        bool ok = app_confirm(title, NULL, "Start session", false);
+        bool ok = app_confirm(title, issue_run_active(s) ? "A session is already working on this issue." : NULL, "Start session", false);
         free(title);
         if (!ok) break;
         s->busy = true;
@@ -2221,7 +2515,20 @@ static Json *link_json(const BoardLink *l) {
     Json *labels = json_array(); for (size_t i = 0; i < l->label_count; i++) { Json *x = json_object(); json_set_str(x, "name", l->labels[i].name); json_set_str(x, "color", l->labels[i].color); json_array_push(labels, x); } json_object_set(o, "labels", labels);
     return o;
 }
-static const ScreenVTable issue_vt = { .destroy = issue_destroy, .layout = issue_layout, .header = issue_header, .action = issue_action };
+static void issue_timer(Screen *base, UINT id) {
+    IssueScreen *s = (IssueScreen *)base;
+    if (poller_fired(&s->poller, id)) { request_cancel(&s->req_runs); issue_load(s, false); }
+}
+static void issue_visible(Screen *base, bool shown) {
+    IssueScreen *s = (IssueScreen *)base;
+    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
+    else { poller_stop(&s->poller); request_cancel(&s->req_board); request_cancel(&s->req_runs); }
+}
+static void issue_activated(Screen *base, bool active) { if (active) issue_visible(base, true); }
+static const ScreenVTable issue_vt = {
+    .destroy = issue_destroy, .layout = issue_layout, .header = issue_header, .action = issue_action, .timer = issue_timer,
+    .visible = issue_visible, .refresh = issue_refresh, .activated = issue_activated,
+};
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue) {
     IssueScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &issue_vt; s->base.id = xstrfmt("issue:%s#%d", project->repo, issue->number);
@@ -2232,11 +2539,21 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
     json_set_str(j, "milestone", issue->milestone); json_set_num(j, "comments", issue->comments);
     Json *assignees = json_array(); for (size_t i = 0; i < issue->assignee_count; i++) json_array_push(assignees, json_string(issue->assignees[i])); json_object_set(j, "assignees", assignees);
     Json *labels = json_array(); for (size_t i = 0; i < issue->label_count; i++) { Json *l = json_object(); json_set_str(l, "name", issue->labels[i].name); json_set_str(l, "color", issue->labels[i].color); json_array_push(labels, l); } json_object_set(j, "labels", labels);
-    if (issue->has_updated) { char iso[40]; struct tm *tm = gmtime(&issue->updated_at); if (tm) { strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%SZ", tm); json_set_str(j, "updatedAt", iso); } }
+    struct { bool has; time_t when; const char *key; } dates[] = { { issue->has_created, issue->created_at, "createdAt" }, { issue->has_updated, issue->updated_at, "updatedAt" } };
+    for (size_t k = 0; k < 2; k++) {
+        if (!dates[k].has) continue;
+        char iso[40]; struct tm *tm = gmtime(&dates[k].when);
+        if (tm) { strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%SZ", tm); json_set_str(j, dates[k].key, iso); }
+    }
     Json *sub = json_object(); json_set_num(sub, "total", issue->sub_issues); json_set_num(sub, "completed", issue->sub_issues_done); json_object_set(j, "subIssues", sub);
     if (issue->has_parent) json_object_set(j, "parent", link_json(&issue->parent));
     Json *pulls = json_array(); for (size_t i = 0; i < issue->pull_count; i++) json_array_push(pulls, link_json(&issue->pulls[i])); json_object_set(j, "pulls", pulls);
     issue_summary_parse(j, &s->issue);
     json_free(j);
+    // The board as last saved fills the sub-issues and pull requests in before the first read answers.
+    char *key = xstrfmt("pulls:%s", project->repo);
+    Json *saved = cache_value(g_store.cache, key);
+    free(key);
+    if (saved) { issue_board_show(s, saved, true); json_free(saved); }
     return &s->base;
 }

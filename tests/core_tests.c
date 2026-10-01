@@ -894,5 +894,6 @@ int main(void) {
     board_tests();
     api_tests();
     cache_tests();
+    vt_tests();
     return test_summary();
 }
