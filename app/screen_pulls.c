@@ -150,9 +150,9 @@ static void board_start_done(void *owner, Request *req) {
     PullsScreen *s = owner;
     s->busy = false;
     if (req->ok) {
-        Session started;
         set_string(&s->write_error, NULL);
-        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+        // The list stays shown; the new session joins the runs counted on its pull request.
+        if (store_supports("sessions")) { request_cancel(&s->req_runs); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
     } else {
         char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
         // A refusal is definite; anything else may have started the session.
@@ -1577,9 +1577,9 @@ static void start_done(void *owner, Request *req) {
     PullScreen *s = owner;
     s->busy = false;
     if (req->ok) {
-        Session started;
         set_string(&s->write_error, NULL);
-        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+        // The pull request stays shown; the new session joins its runs.
+        if (store_supports("sessions")) { request_cancel(&s->req_sessions); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
     } else {
         char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
         // A refusal is definite; anything else may have started the session.
