@@ -294,6 +294,22 @@ char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *co
     return result;
 }
 
+char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, ApiError *error) {
+    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the serverâs 25 MB limit for an attachment.", -1); return NULL; }
+    char *encoded = url_encode(str_empty(name) ? "file" : name);
+    char *url = xstrfmt("%suploads?name=%s", c->address.base_url, encoded);
+    free(encoded);
+    // Always octet-stream, whatever the file is: the server reads the raw body.
+    Json *j = send_request(c, "POST", url, "application/octet-stream", bytes, len, 120000, error);
+    free(url);
+    if (!j) return NULL;
+    const char *id = json_str_nonempty(json_get(json_get(j, "file"), "id"));
+    char *result = id ? xstrdup(id) : NULL;
+    json_free(j);
+    if (!result) api_error_set(error, API_NON_JSON, 0, NULL, -1);
+    return result;
+}
+
 // MARK: - Retry-After
 
 static int month_index(const char *m) {

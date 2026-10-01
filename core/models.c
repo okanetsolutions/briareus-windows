@@ -72,7 +72,11 @@ bool operations_parse(const Json *value, Operation **out, size_t *count) {
         const Json *entry = json_at(list, i);
         const char *name = json_str(json_get(entry, "name"));
         if (!name || json_bool_tristate(json_get(entry, "readOnly")) < 0) { operations_free(ops, m); return false; }
-        ops[m].name = xstrdup(name); ops[m].read_only = json_bool_is(json_get(entry, "readOnly"), true); m++;
+        ops[m].name = xstrdup(name); ops[m].read_only = json_bool_is(json_get(entry, "readOnly"), true);
+        // The catalog carries each operation's JSON schema; a saved copy carries only the flag read from it.
+        const Json *props = json_get(json_get(entry, "inputSchema"), "properties");
+        ops[m].attachments = json_is_object(json_get(props, "attachments")) || json_bool_is(json_get(entry, "attachments"), true);
+        m++;
     }
     *out = ops; *count = m;
     return true;
@@ -81,6 +85,7 @@ Json *operations_json(const Operation *ops, size_t count) {
     Json *a = json_array();
     for (size_t i = 0; i < count; i++) {
         Json *o = json_object(); json_set_str(o, "name", ops[i].name); json_set_bool(o, "readOnly", ops[i].read_only);
+        if (ops[i].attachments) json_set_bool(o, "attachments", true);
         json_array_push(a, o);
     }
     return a;
@@ -92,7 +97,7 @@ void operations_free(Operation *ops, size_t count) {
 }
 Operation *operations_copy(const Operation *ops, size_t count) {
     Operation *c = xcalloc(count ? count : 1, sizeof *c);
-    for (size_t i = 0; i < count; i++) { c[i].name = xstrdup(ops[i].name); c[i].read_only = ops[i].read_only; }
+    for (size_t i = 0; i < count; i++) { c[i].name = xstrdup(ops[i].name); c[i].read_only = ops[i].read_only; c[i].attachments = ops[i].attachments; }
     return c;
 }
 

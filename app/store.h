@@ -33,6 +33,8 @@ bool store_can_manage(void);
 /// The microphone shows for any device allowed to write the message a note becomes.
 bool store_can_transcribe(void);
 bool store_supports(const char *operation);
+/// Files can go with a message: the server's `message` operation lists `attachments`, and this device may write.
+bool store_supports_attachments(void);
 /// A device that paired before opens on what it saved; the server confirms the token meanwhile.
 void store_restore(void);
 void store_connect(const char *server, const char *token);
@@ -52,7 +54,8 @@ struct Request {
     Json *args;
     int timeout_ms;
     void *audio; size_t audio_len; char *audio_type;   // for a transcription
-    Json *result; char *text;                          // the answer
+    void *file; size_t file_len; char *file_name;      // for an upload
+    Json *result; char *text;                          // the answer: a transcription's text, or an upload's id
     ApiError error;
     bool ok;
     void *owner; RequestDone done; int tag; intptr_t arg;
@@ -65,6 +68,8 @@ struct Request {
 /// A device that cannot perform the operation gets a 403 without a network call. Takes ownership of `args`.
 Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot);
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot);
+/// Stores a file on the server for the next message; the answer's `text` is the id to send. Takes ownership of `bytes`.
+Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot);
 /// Drops the request in the slot: its answer is discarded, and the slot is cleared.
 void request_cancel(Request **slot);
 /// The user-facing text of a failed request.
