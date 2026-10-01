@@ -439,7 +439,7 @@ enum {
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS };
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
@@ -476,6 +476,9 @@ typedef struct {
     // Sessions list while `serve_pull` prepares it).
     char *log_session; RunLog log; Request *req_log;
     WebView *web; RECT web_rc; bool shown;
+    // The Cloudflare Access service token the browser sends to preview hosts, read once before it first opens; without
+    // one (an older server, or none configured) the page asks for a sign-in instead.
+    char *access_id, *access_secret, *access_suffix; bool access_read; Request *req_access;
     int tab;
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
     bool body_read;
@@ -683,6 +686,7 @@ static void pull_destroy(Screen *base) {
     request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);
     run_log_clear(&s->log); free(s->log_session);
     webview_free(s->web);
+    request_cancel(&s->req_access); free(s->access_id); free(s->access_secret); free(s->access_suffix);
     free(s->run_url); free(s->run_session); free(s->run_profile); free(s->run_want); free(s->run_asked); free(s->serve_error);
     str_array_free(s->profiles, s->profile_count);
     for (int k = 0; k < CONV_FEEDS; k++) { request_cancel(&s->conv[k].req); json_free(s->conv[k].items); json_free(s->conv[k].incoming); free(s->conv[k].error); }
@@ -1771,11 +1775,29 @@ static void run_pick_profile(PullScreen *s, POINT pt) {
     if (!s->run_busy) run_start(s);
     run_changed(s);
 }
+static void access_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    s->access_read = true;
+    if (req->ok) {
+        set_string(&s->access_id, json_str(json_get(req->result, "clientId")));
+        set_string(&s->access_secret, json_str(json_get(req->result, "clientSecret")));
+        set_string(&s->access_suffix, json_str(json_get(req->result, "hostSuffix")));
+    }
+    run_changed(s);
+}
 static void pull_place(Screen *base, const RECT *content, int scroll_y) {
     PullScreen *s = (PullScreen *)base;
     bool on = s->shown && s->tab == PR_TAB_RUN && s->run_url && !s->run_busy;
-    // The browser is a child of the pane, so it starts once the tab is first shown in one.
-    if (on && !s->web) s->web = webview_new(pane_hwnd(base->pane), s->run_url, web_changed, s);
+    // The browser is a child of the pane, so it starts once the tab is first shown in one, and once the service token
+    // that lets it past Cloudflare Access has been read.
+    if (on && !s->web && !s->access_read && store_supports("preview_access")) {
+        if (!s->req_access) store_call("preview_access", json_object(), 0, s, access_done, TAG_ACCESS, &s->req_access);
+        return;
+    }
+    if (on && !s->web) {
+        WebViewAccess access = { s->access_id, s->access_secret, s->access_suffix };
+        s->web = webview_new(pane_hwnd(base->pane), s->run_url, &access, web_changed, s);
+    }
     if (!s->web) return;
     if (on) {
         RECT rc; GetClientRect(pane_hwnd(base->pane), &rc);

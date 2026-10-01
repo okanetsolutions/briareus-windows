@@ -124,6 +124,20 @@ done:
     free(trimmed);
     return ok;
 }
+bool preview_access_applies(const char *url, const char *host_suffix) {
+    if (!url || !host_suffix || !*host_suffix || _strnicmp(url, "https://", 8) != 0) return false;
+    const char *p = url + 8;
+    size_t len = strcspn(p, "/?#");
+    // Credentials in the address would let it name one host and reach another.
+    if (memchr(p, '@', len)) return false;
+    const char *colon = memchr(p, ':', len);
+    if (colon) len = (size_t)(colon - p);
+    while (len && p[len - 1] == '.') len--;
+    size_t n = strlen(host_suffix);
+    if (host_suffix[0] == '.') { host_suffix++; n--; }
+    return n && len > n + 1 && p[len - n - 1] == '.' && _strnicmp(p + len - n, host_suffix, n) == 0;
+}
+
 void server_address_free(ServerAddress *a) { if (!a) return; free(a->base_url); free(a->origin); free(a->host); memset(a, 0, sizeof *a); }
 void server_address_copy(ServerAddress *into, const ServerAddress *from) {
     into->base_url = xstrdup(from->base_url); into->origin = xstrdup(from->origin); into->host = xstrdup(from->host); into->port = from->port;
@@ -301,6 +315,8 @@ static const ApiRoute ROUTES[] = {
     { "save_findings", "POST", "sessions/{sessionId}/findings/save" },
     { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
     { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    // The Cloudflare Access service token the Run tab's browser sends to ▶ Run preview hosts; a manage token.
+    { "preview_access", "GET", "preview/access" },
     // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.
     { "upload", "POST", "uploads" },
     { "transcribe", "POST", "transcribe" },
