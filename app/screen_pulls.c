@@ -403,13 +403,20 @@ Screen *pulls_screen_new(const Project *project) {
 
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
-    ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
+    ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
     ACT_DELETE_RUN,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2 };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_DELETE_RUN };
-enum { PR_TAB_BODY, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN };
+enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
+
+/// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
+enum { CONV_COMMENTS, CONV_REVIEWS, CONV_REVIEW_COMMENTS, CONV_FEEDS };
+static const struct { const char *op, *field; } conv_feeds[CONV_FEEDS] = {
+    { "pull_comments", "comments" }, { "pull_reviews", "reviews" }, { "pull_review_comments", "reviewComments" },
+};
+typedef struct { Json *items, *incoming; bool read; char *error; Request *req; } ConvFeed;
 
 typedef struct {
     Screen base;
@@ -423,6 +430,7 @@ typedef struct {
     char *deleting_run, *run_error;   // the conversation being deleted from the Sessions tab, and why the last one failed
     Json *findings;
     PullFiles *files;   // the Files changed tab
+    ConvFeed conv[CONV_FEEDS];   // the Conversation tab
     char *error, *findings_error, *write_error, *merge_error;
     bool busy, uncertain, merging;
     int tab;
@@ -485,6 +493,42 @@ static void body_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
 }
+static void conv_page(PullScreen *s, int k, int page);
+static void conv_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    int k = 0;
+    while (k < CONV_FEEDS && !str_eq(req->operation, conv_feeds[k].op)) k++;
+    if (k == CONV_FEEDS) return;
+    ConvFeed *f = &s->conv[k];
+    if (!req->ok) {
+        char *t = request_error_text(req); set_string(&f->error, t); free(t);
+        json_free(f->incoming); f->incoming = NULL; f->read = true;
+        pane_relayout(s->base.pane);
+        return;
+    }
+    const Json *rows = json_get(req->result, conv_feeds[k].field);
+    for (size_t i = 0; i < json_count(rows); i++) json_array_push(f->incoming, json_clone(json_at(rows, i)));
+    double next;
+    if (json_num(json_get(req->result, "nextPage"), &next) && next > json_int_or(json_get(req->args, "page"), 1)) { conv_page(s, k, (int)next); return; }
+    json_free(f->items); f->items = f->incoming; f->incoming = NULL;
+    f->read = true; set_string(&f->error, NULL);
+    pane_relayout(s->base.pane);
+}
+static void conv_page(PullScreen *s, int k, int page) {
+    Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number); json_set_num(args, "page", page);
+    store_call(conv_feeds[k].op, args, 0, s, conv_done, TAG_CONV, &s->conv[k].req);
+}
+/// Reads the comments, reviews and line comments afresh; what was read stays shown until the new lists are in.
+static void conv_load(PullScreen *s) {
+    for (int k = 0; k < CONV_FEEDS; k++) {
+        ConvFeed *f = &s->conv[k];
+        if (f->req || !store_supports(conv_feeds[k].op)) continue;
+        json_free(f->incoming); f->incoming = json_array();
+        conv_page(s, k, 1);
+    }
+}
+static void conv_cancel(PullScreen *s) { for (int k = 0; k < CONV_FEEDS; k++) request_cancel(&s->conv[k].req); }
+
 static void pull_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pull_finish_poll(s); return; }
@@ -569,6 +613,7 @@ static void pull_load(PullScreen *s) {
     if (store_supports("pulls")) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("pulls", a, 0, s, rows_done, TAG_ROWS, &s->req_rows); }
     if (store_can_manage() && store_supports("actions")) store_call("actions", json_object(), 0, s, actions_done, TAG_ACTIONS, &s->req_actions);
     if (store_supports("sessions")) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
+    if (s->tab == PR_TAB_CONVERSATION) conv_load(s);
 }
 
 static void pull_destroy(Screen *base) {
@@ -582,6 +627,7 @@ static void pull_destroy(Screen *base) {
     free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
     pull_files_free(s->files);
+    for (int k = 0; k < CONV_FEEDS; k++) { request_cancel(&s->conv[k].req); json_free(s->conv[k].items); json_free(s->conv[k].incoming); free(s->conv[k].error); }
     screen_release(base);
 }
 
@@ -842,7 +888,14 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->merge_error); }
 }
 
-/// `tabnav`: Sessions, PR Body, Files changed, Commits, Checks and Findings with their counts, and the diffstat at the right.
+/// Whether every list the server offers has been read once.
+static bool conv_read(PullScreen *s) {
+    for (int k = 0; k < CONV_FEEDS; k++) if (store_supports(conv_feeds[k].op) && !s->conv[k].read) return false;
+    return true;
+}
+static size_t conv_count(PullScreen *s);
+
+/// `tabnav`: Sessions, PR Body, Conversation, Files changed, Commits, Checks and Findings with their counts, and the diffstat at the right.
 typedef struct { wchar_t glyph; char *title, *count; bool active; } PrTabData;
 static void pr_tab_free(void *p) { PrTabData *d = p; free(d->title); free(d->count); free(d); }
 static int pr_tab_width(HDC hdc, const PrTabData *d) {
@@ -912,10 +965,14 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     char count[24];
     const PullSummary *row = board_row(s);
     if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
-    double comments;
-    bool has_comments = row && json_num(json_get(row->raw, "comments"), &comments);
-    if (has_comments) snprintf(count, sizeof count, "%d", (int)comments);
-    add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "PR Body", has_comments ? count : NULL, s->tab == PR_TAB_BODY, ACT_PR_TAB, PR_TAB_BODY);
+    add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE7C3, "PR Body", NULL, s->tab == PR_TAB_BODY, ACT_PR_TAB, PR_TAB_BODY);
+    if (store_supports(conv_feeds[CONV_COMMENTS].op)) {
+        // The messages once they are read; until then the board's count of conversation comments.
+        double comments = 0;
+        bool has_count = conv_read(s) ? (comments = (double)conv_count(s), true) : row && json_num(json_get(row->raw, "comments"), &comments);
+        if (has_count) snprintf(count, sizeof count, "%d", (int)comments);
+        add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "Conversation", has_count ? count : NULL, s->tab == PR_TAB_CONVERSATION, ACT_PR_TAB, PR_TAB_CONVERSATION);
+    }
     double files;
     bool has_files = json_num(json_get(s->pr, "changedFiles"), &files);
     if (has_files) snprintf(count, sizeof count, "%d", (int)files);
@@ -940,8 +997,8 @@ static void paint_avatar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     fill_circle(hdc, rc->left + r, rc->top + r, r, blend(theme.accent, theme.canvas, 0.35));
     RECT t = *rc; draw_text(hdc, d->initial, &t, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
-/// `.timeline-comment-header`: a tinted strip with `author commented · updated …`.
-typedef struct { char *author, *when; } CommentHeadData;
+/// `.timeline-comment-header`: a tinted strip with `author commented · updated …`, a review's verdict glyph first.
+typedef struct { char *author, *when; wchar_t glyph; COLORREF glyph_color; } CommentHeadData;
 static void comment_head_free(void *p) { CommentHeadData *d = p; free(d->author); free(d->when); free(d); }
 static void paint_comment_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     (void)doc;
@@ -951,6 +1008,7 @@ static void paint_comment_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(hdc, &low, tint);
     draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
     int x = rc->left + px(16);
+    if (d->glyph) { RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->glyph_color); x += px(24); }
     if (d->author) { int aw = text_width(hdc, d->author, FONT_FOOTNOTE_SEMIBOLD); RECT a = { x, rc->top, x + aw + px(2), rc->bottom }; draw_text(hdc, d->author, &a, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); x += aw + px(5); }
     RECT t = { x, rc->top, rc->right - px(16), rc->bottom };
     draw_text(hdc, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -977,6 +1035,25 @@ static char *visible_markdown(const char *body) {
     str_free(&out);
     return result;
 }
+/// A timeline comment: the avatar where there is room, then a box opened with its header (`h`, which is taken). Returns
+/// the box for doc_box_end, with the inner column in `ix`/`iw`. A header with an action opens the comment on GitHub.
+static int comment_begin(Doc *doc, Col c, CommentHeadData *h, int action, intptr_t arg, int *ix, int *iw) {
+    int x = c.x, w = c.w, top = doc->y;
+    if (h->author && *h->author && c.w >= px(520)) {
+        AvatarData *a = xcalloc(1, sizeof *a);
+        // The first character of the login, which is ASCII on GitHub.
+        a->initial[0] = (char)((h->author[0] >= 'a' && h->author[0] <= 'z') ? h->author[0] - 32 : h->author[0]);
+        doc_custom(doc, x, px(36), px(36), paint_avatar, a, free, 0, 0);
+        doc->y = top; x += px(48); w -= px(48);
+    }
+    int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
+    doc_item(doc, box)->hover_fill = false;
+    int hi = doc_custom(doc, x + 1, w - 2, px(38), paint_comment_head, h, comment_head_free, action, arg);
+    doc_item(doc, hi)->hover_fill = false;
+    doc_space(doc, px(14));
+    *ix = x + px(16); *iw = w - px(32);
+    return box;
+}
 /// The opening comment: the pull request's description as GitHub shows it, read from the server's file list when `pull` leaves it out.
 static void layout_description(PullScreen *s, Doc *doc, Col c) {
     const char *body = json_str(json_get(s->pr, "body"));
@@ -985,23 +1062,11 @@ static void layout_description(PullScreen *s, Doc *doc, Col c) {
     if (!body && !loading) return;
     const char *author = pull_author(s);
     const PullSummary *row = board_row(s);
-    int x = c.x, w = c.w, top = doc->y;
-    if (author && c.w >= px(520)) {
-        AvatarData *a = xcalloc(1, sizeof *a);
-        // The first character of the login, which is ASCII on GitHub.
-        a->initial[0] = (char)((author[0] >= 'a' && author[0] <= 'z') ? author[0] - 32 : author[0]);
-        doc_custom(doc, x, px(36), px(36), paint_avatar, a, free, 0, 0);
-        doc->y = top; x += px(48); w -= px(48);
-    }
-    int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
-    doc_item(doc, box)->hover_fill = false;
     CommentHeadData *h = xcalloc(1, sizeof *h);
     h->author = author ? xstrdup(author) : NULL;
     if (row && row->has_updated) { char *rel = format_relative(row->updated_at); h->when = xstrfmt("%s \xC2\xB7 updated %s", author ? "commented" : "Description", rel); free(rel); }
     else h->when = xstrdup(author ? "commented" : "Description");
-    doc_custom(doc, x + 1, w - 2, px(38), paint_comment_head, h, comment_head_free, 0, 0);
-    doc_space(doc, px(14));
-    int ix = x + px(16), iw = w - px(32);
+    int ix, iw, box = comment_begin(doc, c, h, 0, 0, &ix, &iw);
     if (loading) doc_text(doc, ix, iw, "Loading the description\xE2\x80\xA6", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
     else {
         char *trimmed = visible_markdown(body);
@@ -1010,6 +1075,176 @@ static void layout_description(PullScreen *s, Doc *doc, Col c) {
         free(trimmed);
     }
     doc_box_end(doc, box, px(16));
+}
+
+// The Conversation tab: GitHub's timeline of conversation comments, reviews and the line comments they carry.
+
+/// When a comment or review was made, 0 when the server left it out.
+static time_t conv_time(const Json *v, const char *field) { time_t t; return board_date_parse(json_str(json_get(v, field)), &t) ? t : 0; }
+static bool conv_find(const Json *list, const Json *id, size_t *out) {
+    double want, have;
+    if (!json_num(id, &want)) return false;
+    for (size_t i = 0; i < json_count(list); i++) if (json_num(json_get(json_at(list, i), "id"), &have) && have == want) { *out = i; return true; }
+    return false;
+}
+/// The comment a line comment's thread starts with: each reply points at the comment it answers.
+static size_t conv_thread_root(const Json *lines, size_t i) {
+    size_t parent;
+    for (int hop = 0; hop < 64 && conv_find(lines, json_get(json_at(lines, i), "inReplyTo"), &parent) && parent != i; hop++) i = parent;
+    return i;
+}
+/// The submitted review a thread is shown under, when the server listed it.
+static bool conv_thread_review(PullScreen *s, size_t root, size_t *review) {
+    const Json *reviews = s->conv[CONV_REVIEWS].items;
+    return conv_find(reviews, json_get(json_at(s->conv[CONV_REVIEW_COMMENTS].items, root), "reviewId"), review)
+        && !str_ieq(json_str(json_get(json_at(reviews, *review), "state")), "pending");
+}
+/// A review's verdict as its header words it, with its glyph; NULL for a plain comment review.
+static const char *review_verdict(const Json *review, wchar_t *glyph, COLORREF *color) {
+    const char *state = json_str(json_get(review, "state"));
+    if (str_ieq(state, "approved")) { *glyph = 0xE73E; *color = theme.success; return "approved these changes"; }
+    if (str_ieq(state, "changes_requested")) { *glyph = 0xE7BA; *color = theme.danger; return "requested changes"; }
+    if (str_ieq(state, "dismissed")) { *glyph = 0xE711; *color = theme.secondary; return "reviewed (dismissed)"; }
+    *glyph = 0xE8BD; *color = theme.muted;
+    return NULL;
+}
+static bool has_visible_body(const Json *v) {
+    const char *body = json_str(json_get(v, "body"));
+    if (!body) return false;
+    char *t = visible_markdown(body); bool has = *t != 0; free(t);
+    return has;
+}
+/// A review says something of its own with a verdict or a summary; one that only holds line comments is shown for them.
+static bool review_speaks(const Json *review) {
+    wchar_t g; COLORREF cc;
+    if (str_ieq(json_str(json_get(review, "state")), "pending")) return false;
+    return review_verdict(review, &g, &cc) || has_visible_body(review);
+}
+static bool review_has_threads(PullScreen *s, size_t r) {
+    const Json *lines = s->conv[CONV_REVIEW_COMMENTS].items;
+    size_t rv;
+    for (size_t i = 0; i < json_count(lines); i++) if (conv_thread_root(lines, i) == i && conv_thread_review(s, i, &rv) && rv == r) return true;
+    return false;
+}
+/// The messages in the conversation: every comment, every line comment and each review with a verdict or summary.
+static size_t conv_count(PullScreen *s) {
+    const Json *reviews = s->conv[CONV_REVIEWS].items;
+    size_t n = json_count(s->conv[CONV_COMMENTS].items) + json_count(s->conv[CONV_REVIEW_COMMENTS].items);
+    for (size_t i = 0; i < json_count(reviews); i++) if (review_speaks(json_at(reviews, i))) n++;
+    return n;
+}
+/// The timeline, oldest first: comments, reviews, and line comment threads whose review is not listed.
+typedef struct { int feed; size_t i; time_t at; } ConvEntry;
+static int conv_entry_cmp(const void *a, const void *b) {
+    const ConvEntry *x = a, *y = b;
+    if (x->at != y->at) return x->at < y->at ? -1 : 1;
+    if (x->feed != y->feed) return x->feed - y->feed;
+    return x->i < y->i ? -1 : x->i > y->i;
+}
+static ConvEntry *conv_timeline(PullScreen *s, size_t *n) {
+    const Json *comments = s->conv[CONV_COMMENTS].items, *reviews = s->conv[CONV_REVIEWS].items, *lines = s->conv[CONV_REVIEW_COMMENTS].items;
+    ConvEntry *e = xcalloc(json_count(comments) + json_count(reviews) + json_count(lines) + 1, sizeof *e);
+    *n = 0;
+    for (size_t i = 0; i < json_count(comments); i++) e[(*n)++] = (ConvEntry){ CONV_COMMENTS, i, conv_time(json_at(comments, i), "createdAt") };
+    for (size_t i = 0; i < json_count(reviews); i++) {
+        const Json *r = json_at(reviews, i);
+        if (str_ieq(json_str(json_get(r, "state")), "pending")) continue;
+        if (review_speaks(r) || review_has_threads(s, i)) e[(*n)++] = (ConvEntry){ CONV_REVIEWS, i, conv_time(r, "submittedAt") };
+    }
+    size_t rv;
+    for (size_t i = 0; i < json_count(lines); i++)
+        if (conv_thread_root(lines, i) == i && !conv_thread_review(s, i, &rv)) e[(*n)++] = (ConvEntry){ CONV_REVIEW_COMMENTS, i, conv_time(json_at(lines, i), "createdAt") };
+    qsort(e, *n, sizeof *e, conv_entry_cmp);
+    return e;
+}
+static intptr_t conv_arg(int feed, size_t i) { return ((intptr_t)feed << 24) | (intptr_t)i; }
+/// The header of a timeline entry: `author did · 3h ago`.
+static CommentHeadData *conv_head(const Json *v, const char *did, const char *time_field) {
+    CommentHeadData *h = xcalloc(1, sizeof *h);
+    const char *author = json_str(json_get(v, "author"));
+    h->author = xstrdup(author ? author : "Someone");
+    time_t at = conv_time(v, time_field);
+    if (at) { char *rel = format_relative(at); h->when = xstrfmt("%s \xC2\xB7 %s", did, rel); free(rel); }
+    else h->when = xstrdup(did);
+    return h;
+}
+/// A comment's markdown as GitHub shows it; whether there was any.
+static bool layout_comment_body(Doc *doc, int x, int w, const Json *v) {
+    const char *body = json_str(json_get(v, "body"));
+    char *t = visible_markdown(body ? body : "");
+    bool any = *t != 0;
+    if (any) doc_markdown(doc, x, w, t, FONT_CALLOUT);
+    free(t);
+    return any;
+}
+/// A line comment thread: the file and line, then each comment in it with its author and time.
+static void layout_thread(PullScreen *s, Doc *doc, int x, int w, size_t root) {
+    const Json *lines = s->conv[CONV_REVIEW_COMMENTS].items, *first = json_at(lines, root);
+    int box = doc_box_begin(doc, x, w, 0, theme.canvas, theme.line, px(6));
+    doc_item(doc, box)->hover_fill = false;
+    doc_space(doc, px(8));
+    const char *path = json_str(json_get(first, "path"));
+    double line;
+    bool has_line = json_num(json_get(first, "line"), &line) || json_num(json_get(first, "originalLine"), &line);
+    char *where = has_line ? xstrfmt("%s:%d", path ? path : "", (int)line) : xstrdup(path ? path : "");
+    int pi = doc_text(doc, x + px(12), w - px(24), where, FONT_MONO_SMALL, theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (safe_web_url(json_str(json_get(first, "url")))) { doc_item(doc, pi)->action = ACT_CONV_URL; doc_item(doc, pi)->arg = conv_arg(CONV_REVIEW_COMMENTS, root); doc_item(doc, pi)->hand = true; }
+    free(where);
+    doc_space(doc, px(8));
+    doc_rule(doc, x, w);
+    for (size_t i = 0; i < json_count(lines); i++) {
+        if (conv_thread_root(lines, i) != root) continue;
+        const Json *cm = json_at(lines, i);
+        doc_space(doc, px(10));
+        int y = doc->y, h = px(20), ix = x + px(12), iw = w - px(24);
+        const char *author = json_str(json_get(cm, "author")); if (!author) author = "Someone";
+        int aw = text_width(doc->hdc, author, FONT_FOOTNOTE_SEMIBOLD); if (aw > iw) aw = iw;
+        RECT a = { ix, y, ix + aw + px(2), y + h }; doc_text_at(doc, &a, author, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        time_t at = conv_time(cm, "createdAt");
+        if (at) { char *rel = format_relative(at); RECT t = { ix + aw + px(8), y, ix + iw, y + h }; doc_text_at(doc, &t, rel, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(rel); }
+        doc->y = y + h + px(4);
+        layout_comment_body(doc, ix, iw, cm);
+    }
+    doc_space(doc, px(10));
+    doc_box_end(doc, box, 0);
+}
+static void layout_conversation(PullScreen *s, Doc *doc, Col c) {
+    for (int k = 0; k < CONV_FEEDS; k++) if (s->conv[k].error) { doc_notice(doc, c.x, c.w, s->conv[k].error); doc_space(doc, px(12)); break; }
+    if (!conv_read(s)) { doc_loading(doc, c.x, c.w, "Loading the conversation\xE2\x80\xA6"); return; }
+    size_t n;
+    ConvEntry *entries = conv_timeline(s, &n);
+    const Json *lines = s->conv[CONV_REVIEW_COMMENTS].items;
+    for (size_t e = 0; e < n; e++) {
+        const ConvEntry *en = &entries[e];
+        const Json *v = json_at(s->conv[en->feed].items, en->i);
+        int ix, iw, box, action = safe_web_url(json_str(json_get(v, "url"))) ? ACT_CONV_URL : 0;
+        if (e) doc_space(doc, px(16));
+        if (en->feed == CONV_COMMENTS) {
+            box = comment_begin(doc, c, conv_head(v, "commented", "createdAt"), action, conv_arg(en->feed, en->i), &ix, &iw);
+            if (!layout_comment_body(doc, ix, iw, v)) doc_text(doc, ix, iw, "No description provided.", FONT_CALLOUT_ITALIC, theme.secondary, DT_WORDBREAK);
+        } else if (en->feed == CONV_REVIEWS) {
+            wchar_t glyph; COLORREF color;
+            const char *verdict = review_verdict(v, &glyph, &color);
+            CommentHeadData *h = conv_head(v, verdict ? verdict : "reviewed", "submittedAt");
+            h->glyph = glyph; h->glyph_color = color;
+            box = comment_begin(doc, c, h, action, conv_arg(en->feed, en->i), &ix, &iw);
+            bool any = layout_comment_body(doc, ix, iw, v);
+            size_t rv;
+            for (size_t i = 0; i < json_count(lines); i++) {
+                if (conv_thread_root(lines, i) != i || !conv_thread_review(s, i, &rv) || rv != en->i) continue;
+                if (any) doc_space(doc, px(10));
+                layout_thread(s, doc, ix, iw, i);
+                any = true;
+            }
+            if (!any) doc_space(doc, -px(14));
+        } else {
+            box = comment_begin(doc, c, conv_head(v, "commented on a line", "createdAt"), action, conv_arg(en->feed, en->i), &ix, &iw);
+            layout_thread(s, doc, ix, iw, en->i);
+        }
+        doc_box_end(doc, box, px(14));
+    }
+    if (!n) doc_text(doc, c.x, c.w, "No comments yet", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
+    free(entries);
 }
 
 static void layout_checks(PullScreen *s, Doc *doc, Col c) {
@@ -1197,6 +1432,7 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     }
     switch (s->tab) {
     case PR_TAB_FILES: pull_files_layout(s->files, doc, c.x, c.w); break;
+    case PR_TAB_CONVERSATION: layout_conversation(s, doc, c); break;
     case PR_TAB_COMMITS: layout_commit_list(s, doc, c); break;
     case PR_TAB_CHECKS: layout_checks(s, doc, c); break;
     case PR_TAB_FINDINGS: layout_findings(s, doc, c); break;
@@ -1497,7 +1733,17 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
-    case ACT_PR_TAB: s->tab = (int)arg; if (s->tab == PR_TAB_FILES) pull_files_load(s->files); pane_relayout(base->pane); break;
+    case ACT_PR_TAB:
+        s->tab = (int)arg;
+        if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
+        if (s->tab == PR_TAB_CONVERSATION) conv_load(s);
+        pane_relayout(base->pane);
+        break;
+    case ACT_CONV_URL: {
+        const Json *feed = s->conv[arg >> 24].items;
+        open_web_url(json_str(json_get(json_at(feed, (size_t)(arg & 0xFFFFFF)), "url")));
+        break;
+    }
     case ACT_FINDING_TOGGLE: {
         bool open = finding_open(s, (int)arg);
         if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
@@ -1586,8 +1832,8 @@ static void pull_timer(Screen *base, UINT id) {
 }
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
-    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); }
-    else { poller_stop(&s->poller); pull_files_cancel(s->files); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) conv_load(s); }
+    else { poller_stop(&s->poller); pull_files_cancel(s->files); conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;

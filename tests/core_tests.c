@@ -129,6 +129,9 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "pr", 12); json_set_num(args, "page", 2); json_set_str(args, "headSha", "h1"); json_set_str(args, "baseSha", "b1");
     result = api_call(c, "pull_files", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/files?repo=o%2Fr&page=2&headSha=h1&baseSha=b1");
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "pr", 12); json_set_num(args, "page", 2);
+    result = api_call(c, "pull_review_comments", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/review-comments?repo=o%2Fr&page=2"); CHECK_STR(stub.last_method, "GET");
     // Run takes its number from the errand's `prNumber`; the project stays in the body.
     args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "prNumber", 12);
     result = api_call(c, "serve_pull", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
@@ -171,7 +174,8 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     json_free(args);
     CHECK(stub.calls == calls);
     // Every call the board and the screens make is in the table.
-    const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "findings",
+    const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "pull_comments",
+                            "pull_reviews", "pull_review_comments", "findings",
                             "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
                             "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
@@ -410,10 +414,10 @@ static void test_findings_queue_lists_held_rounds_oldest_first_by_pull_request(v
     free(s0); free(s1); free(s2);
     sessions_free(s, n); json_free(list);
 }
-static void test_setup_events_are_hidden(void) {
-    Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"Installing dependencies\"},{\"seq\":2,\"kind\":\"text\",\"text\":\"Done\"}]");
+static void test_setup_events_are_shown_and_status_hidden(void) {
+    Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"SQLSTATE[HY000] Connection refused\"},{\"seq\":2,\"kind\":\"status\",\"status\":\"failed\"},{\"seq\":3,\"kind\":\"text\",\"text\":\"Done\"}]");
     Transcript t; transcript_init(&t); transcript_append(&t, events);
-    CHECK(!event_visible(&t.events[0]) && event_visible(&t.events[1]));
+    CHECK(event_visible(&t.events[0]) && !event_visible(&t.events[1]) && event_visible(&t.events[2]));
     transcript_free(&t); json_free(events);
 }
 static void test_optional_fields_and_unknown_statuses_do_not_break_decoding(void) {
@@ -820,7 +824,7 @@ int main(void) {
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },
         { "session reads review loop and held triage", test_session_reads_review_loop_and_held_triage },
         { "findings queue lists held rounds oldest first by pull request", test_findings_queue_lists_held_rounds_oldest_first_by_pull_request },
-        { "setup events are hidden", test_setup_events_are_hidden },
+        { "setup events are shown, status events hidden", test_setup_events_are_shown_and_status_hidden },
         { "optional fields and unknown statuses do not break decoding", test_optional_fields_and_unknown_statuses_do_not_break_decoding },
         { "session finds its pull request", test_session_finds_its_pull_request },
         { "markdown blocks and inline spans", test_markdown_blocks },
