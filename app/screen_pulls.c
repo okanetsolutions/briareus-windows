@@ -405,10 +405,11 @@ Screen *pulls_screen_new(const Project *project) {
 // MARK: - Pull request
 
 enum {
-    ACT_FILES = 1100, ACT_OPEN_URL, ACT_STACK_ITEM, ACT_COMMITS_TOGGLE, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
+    ACT_FILES = 1100, ACT_OPEN_URL, ACT_STACK_ITEM, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD,
 };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
+enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS };
 
 typedef struct {
     Screen base;
@@ -421,11 +422,14 @@ typedef struct {
     Session *runs; size_t run_count;
     Json *findings;
     char *error, *findings_error, *write_error, *merge_error;
-    bool busy, uncertain, merging, commits_open;
+    bool busy, uncertain, merging;
+    int tab;
+    char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
+    bool body_read;
     char *deciding;
     int *open_findings; size_t open_finding_count;
     BoardAction *actions; size_t action_count;
-    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_prepare;
+    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_prepare, *req_body;
     Poller poller;
     bool dialog_open;
     int prepared_head_differs;
@@ -442,6 +446,8 @@ static void save_pull(PullScreen *s) {
     json_object_set(saved, "findings", json_clone(s->findings));
     const PullSummary *row = board_row(s);
     json_object_set(saved, "row", row ? json_clone(row->raw) : json_null());
+    if (s->body) json_set_str(saved, "body", s->body);
+    if (s->body_author) json_set_str(saved, "bodyAuthor", s->body_author);
     char *key = xstrfmt("pull:%s#%d", s->project.repo, s->number);
     cache_store(g_store.cache, saved, key);
     json_free(saved); free(key);
@@ -464,11 +470,28 @@ static void findings_done(void *owner, Request *req) {
     else { char *t = request_error_text(req); set_string(&s->findings_error, t); free(t); }
     pull_finish_poll(s);
 }
+static void body_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    s->body_read = true;
+    if (req->ok) {
+        const Json *pr = json_get(req->result, "pr");
+        const char *body = json_str(json_get(pr, "body"));
+        set_string(&s->body, body ? body : "");
+        if (json_str(json_get(pr, "author"))) set_string(&s->body_author, json_str(json_get(pr, "author")));
+        save_pull(s);
+    }
+    pane_relayout(s->base.pane);
+}
 static void pull_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pull_finish_poll(s); return; }
     json_free(s->pr); s->pr = json_clone(json_get(req->result, "pr"));
     set_string(&s->error, NULL);
+    // The description comes with the file list; it is read once per visit and on refresh.
+    if (!json_str(json_get(s->pr, "body")) && !s->body_read && !s->req_body && store_supports("pull_files")) {
+        Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
+        store_call("pull_files", args, 0, s, body_done, TAG_BODY, &s->req_body);
+    }
     if (store_supports("findings")) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
         store_call("findings", args, 0, s, findings_done, TAG_FINDINGS, &s->req_findings);
@@ -518,6 +541,8 @@ static void pull_load(PullScreen *s) {
         if (saved) {
             json_free(s->pr); s->pr = json_clone(json_get(saved, "pr"));
             json_free(s->findings); s->findings = json_clone(json_get(saved, "findings"));
+            if (!s->body && json_str(json_get(saved, "body"))) set_string(&s->body, json_str(json_get(saved, "body")));
+            if (!s->body_author && json_str(json_get(saved, "bodyAuthor"))) set_string(&s->body_author, json_str(json_get(saved, "bodyAuthor")));
             if (!s->has_row) { PullSummary row; if (pull_summary_parse(json_get(saved, "row"), &row)) { s->row = row; s->has_row = true; } }
             json_free(saved);
         }
@@ -538,11 +563,11 @@ static void pull_load(PullScreen *s) {
 static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
-    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare);
+    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare); request_cancel(&s->req_body);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
-    free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings);
+    free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
     screen_release(base);
 }
@@ -600,107 +625,277 @@ static int doc_pill(Doc *doc, int x, int y, const char *text, COLORREF color) {
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = pill_free;
     return w;
 }
-/// `.prv-header`: on `raise`, the toolbar of buttons, the 23px title, and the line of facts with the state pill.
-static void layout_summary(PullScreen *s, Doc *doc, Col c) {
+/// Text that wraps a word at a time and mixes fonts, colours and branch chips: the title with its muted number, and the line under it.
+typedef struct { char *text; FontId font; COLORREF color; bool chip; int x, y, w; } FlowRun;
+typedef struct { FlowRun *runs; size_t count; int line_h; } FlowData;
+static void flow_free(void *p) { FlowData *d = p; for (size_t i = 0; i < d->count; i++) free(d->runs[i].text); free(d->runs); free(d); }
+static FlowData *flow_new(int line_h) { FlowData *d = xcalloc(1, sizeof *d); d->line_h = line_h; return d; }
+static void flow_push(FlowData *d, const char *text, size_t n, FontId font, COLORREF color, bool chip) {
+    d->runs = xrealloc(d->runs, (d->count + 1) * sizeof *d->runs);
+    FlowRun r = { xstrndup(text, n), font, color, chip, 0, 0, 0 };
+    d->runs[d->count++] = r;
+}
+/// Plain text goes in word by word, each word keeping its trailing space; a chip goes in whole.
+static void flow_add(FlowData *d, const char *text, FontId font, COLORREF color, bool chip) {
+    if (chip) { flow_push(d, text, strlen(text), font, color, true); return; }
+    for (const char *p = text; *p;) {
+        const char *e = p;
+        while (*e && *e != ' ') e++;
+        while (*e == ' ') e++;
+        flow_push(d, p, (size_t)(e - p), font, color, false);
+        p = e;
+    }
+}
+static void paint_flow(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    FlowData *d = it->data;
+    for (size_t i = 0; i < d->count; i++) {
+        const FlowRun *r = &d->runs[i];
+        RECT t = { rc->left + r->x, rc->top + r->y, rc->left + r->x + r->w, rc->top + r->y + d->line_h };
+        if (r->chip) {
+            // `.commit-ref`: the branch in small mono type on a tint of the accent.
+            int ch = font_height(hdc, r->font) + px(6);
+            RECT c = { t.left, t.top + (d->line_h - ch) / 2, t.right, t.top + (d->line_h - ch) / 2 + ch };
+            COLORREF tint = blend(theme.accent, theme.canvas, 0.16);
+            fill_round_rect(hdc, &c, px(6), tint, tint);
+            draw_text(hdc, r->text, &c, r->font, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        } else draw_text(hdc, r->text, &t, r->font, r->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+}
+/// Lays the runs out in `w`, the first line starting `indent` in, as one item.
+static int doc_flow(Doc *doc, int x, int w, int indent, FlowData *d) {
+    int cx = indent, cy = 0;
+    for (size_t i = 0; i < d->count; i++) {
+        FlowRun *r = &d->runs[i];
+        r->w = text_width(doc->hdc, r->text, r->font) + (r->chip ? px(12) : 0);
+        if (cx > 0 && cx + r->w > w) { cx = 0; cy += d->line_h; }
+        if (r->w > w) r->w = w;
+        r->x = cx; r->y = cy;
+        cx += r->w + (r->chip ? px(5) : 0);
+    }
+    RECT rc = { x, doc->y, x + w, doc->y + cy + d->line_h };
+    int i = doc_add(doc, &rc, paint_flow);
+    doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = flow_free;
+    doc->y = rc.bottom;
+    return i;
+}
+
+static int toolbar_width(HDC hdc, const ButtonSpec *buttons, size_t count) {
+    int w = 0;
+    for (size_t i = 0; i < count; i++) w += px(10) * 2 + text_width(hdc, buttons[i].text, FONT_FOOTNOTE) + 2 + (i ? px(6) : 0);
+    return w;
+}
+static const char *pull_author(PullScreen *s) {
     const PullSummary *row = board_row(s);
-    int box = doc_box_begin(doc, c.x, c.w, px(18), theme.raise, theme.raise, px(12));
-    doc_item(doc, box)->hover_fill = false;
-    int ix = c.x + px(24), iw = c.w - px(48);
-    // The toolbar.
+    const char *author = json_str(json_get(s->pr, "author"));
+    if (!author && row) author = row->author;
+    return author ? author : s->body_author;
+}
+static int pull_commit_count(PullScreen *s) { return json_int_or(json_get(s->pr, "commits"), (int)json_count(json_get(s->pr, "commitList"))); }
+
+/// `gh-header`: the title with its muted number and the buttons beside it, then the state and `author wants to merge N commits into base from head`.
+static void layout_header(PullScreen *s, Doc *doc, Col c) {
+    const PullSummary *row = board_row(s);
     bool can_merge = store_supports("merge_pull") && str_eq(json_str(json_get(s->pr, "state")), "open") && json_bool_tristate(json_get(s->pr, "draft")) != 1
         && json_str(json_get(s->pr, "headSha")) && json_str(json_get(s->pr, "baseRef"));
     ButtonSpec buttons[3]; size_t bn = 0;
     { ButtonSpec b = { 0, "\xE2\x9F\xB3 Refresh", BUTTON_BORDERED, ACT_RELOAD, 0, !s->req_pull }; buttons[bn++] = b; }
     if (can_merge) { ButtonSpec b = { 0, s->merging ? "Merging\xE2\x80\xA6" : "Merge", BUTTON_PROMINENT, ACT_MERGE, 0, !s->merging && !s->busy }; buttons[bn++] = b; }
     if (safe_web_url(json_str(json_get(s->pr, "url")))) { ButtonSpec b = { 0, "Open in GitHub \xE2\x86\x97", BUTTON_BORDERED, ACT_OPEN_URL, 0, true }; buttons[bn++] = b; }
-    doc_button_row(doc, ix, iw, buttons, bn);
-    if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, s->merge_error); }
-    doc_space(doc, px(14));
+    int tw = toolbar_width(doc->hdc, buttons, bn) + px(2);
+    int title_line = font_height(doc->hdc, FONT_TITLE) + px(6);
+    // Beside the title when there is room, above it when there is not.
+    bool beside = c.iw - tw - px(16) >= px(320);
+    int top = doc->y, buttons_bottom = top;
+    if (beside) { doc->y = top + px(3); doc_button_row(doc, c.ix + c.iw - tw, tw, buttons, bn); buttons_bottom = doc->y; doc->y = top; }
+    else { doc_button_row(doc, c.ix, c.iw, buttons, bn); doc_space(doc, px(12)); }
     const char *title = json_str(json_get(s->pr, "title"));
-    char *fallback = xstrfmt("Pull request #%d", s->number);
-    doc_text(doc, ix, iw, title ? title : row ? row->title : fallback, FONT_TITLE, theme.ink, DT_WORDBREAK);
-    free(fallback);
+    if (!title && row) title = row->title;
+    FlowData *t = flow_new(title_line);
+    char *spaced = xstrfmt("%s ", title ? title : "Pull request"); flow_add(t, spaced, FONT_TITLE, theme.ink, false); free(spaced);
+    char *number = xstrfmt("#%d", s->number); flow_add(t, number, FONT_TITLE, theme.muted, false); free(number);
+    doc_flow(doc, c.ix, beside ? c.iw - tw - px(16) : c.iw, 0, t);
+    if (doc->y < buttons_bottom) doc->y = buttons_bottom;
     doc_space(doc, px(10));
-    // The facts: the state pill, then `author · head → base · +A −D · N files · N commits`.
+    // The state pill, then the sentence GitHub writes under the title.
     bool draft = json_bool_tristate(json_get(s->pr, "draft")) == 1 || (json_is_null(s->pr) && row && row->draft);
     const char *state = json_str(json_get(s->pr, "state"));
     const char *state_text = draft && is_open(s) ? "draft" : state ? state : row ? "open" : "loading";
     COLORREF state_color = str_eq(state, "merged") ? theme.accent : str_eq(state, "closed") ? theme.danger : draft ? theme.muted : theme.ok;
     int y = doc->y;
-    int pw = doc_pill(doc, ix, y, state_text, state_color);
-    Str facts; str_init(&facts);
-    if (row && row->author) str_appendf(&facts, "@%s", row->author);
+    int pw = doc_pill(doc, c.ix, y, state_text, state_color);
     const char *head = json_str(json_get(s->pr, "headRef")), *base_ref = json_str(json_get(s->pr, "baseRef"));
     if (!head && row && *row->branch) head = row->branch;
     if (!base_ref && row && *row->base_branch) base_ref = row->base_branch;
-    if (head) str_appendf(&facts, "%s%s \xE2\x86\x92 %s", facts.len ? " \xC2\xB7 " : "", head, base_ref ? base_ref : "main");
-    double additions, deletions, files, commits;
-    if (json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions)) str_appendf(&facts, "%s+%d \xE2\x88\x92%d", facts.len ? " \xC2\xB7 " : "", (int)additions, (int)deletions);
-    if (json_num(json_get(s->pr, "changedFiles"), &files)) str_appendf(&facts, " \xC2\xB7 %d files", (int)files);
-    if (json_num(json_get(s->pr, "commits"), &commits)) str_appendf(&facts, " \xC2\xB7 %d commits", (int)commits);
-    if (row && str_eq(row->mergeable, "conflicting")) str_appendf(&facts, " \xC2\xB7 \xE2\x9A\xA0 conflicts with %s", base_ref ? base_ref : "its base");
-    if (row && row->has_updated) { char *rel = format_relative(row->updated_at); str_appendf(&facts, " \xC2\xB7 updated %s", rel); free(rel); }
-    RECT fr = { ix + pw + px(10), y, ix + iw, y + px(26) };
-    doc_text_at(doc, &fr, facts.data, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    str_free(&facts);
-    doc->y = y + px(26);
-    if (row && row->label_count) { doc_space(doc, px(8)); doc_label_chips(doc, ix, iw, row->labels, row->label_count, theme.raise); }
-    c.ix = ix; c.iw = iw;
-    double changed_files;
-    bool has_files = json_num(json_get(s->pr, "changedFiles"), &changed_files);
-    if (store_supports("pull_files")) {
-        col_gap(doc, c);
-        int y = doc->y;
-        char *count = has_files ? xstrfmt("%d files", (int)changed_files) : xstrdup("");
-        int cw = text_width(doc->hdc, count, FONT_CALLOUT) + px(20);
-        int li = doc_label(doc, c.ix, c.iw - cw, 0xE8A5, "Description and changes", FONT_CALLOUT, theme.accent);
-        doc_item(doc, li)->action = ACT_FILES; doc_item(doc, li)->hand = true;
-        RECT cr = { c.ix + c.iw - cw, y, c.ix + c.iw - px(14), doc->y }; doc_text_at(doc, &cr, count, FONT_CALLOUT, theme.secondary, DT_RIGHT | DT_TOP | DT_SINGLELINE);
-        RECT chevron = { c.ix + c.iw - px(12), y, c.ix + c.iw, doc->y }; { int gi = doc_text_at(doc, &chevron, "", FONT_ICON_SMALL, theme.tertiary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); wchar_t g[2] = { 0xE76C, 0 }; char *u = wide_to_utf8(g); free(doc_item(doc, gi)->text); doc_item(doc, gi)->text = u; }
-        free(count);
+    const char *author = pull_author(s);
+    int commits = pull_commit_count(s);
+    FlowData *f = flow_new(px(26));
+    if (author) { char *a = xstrfmt("%s ", author); flow_add(f, a, FONT_FOOTNOTE_SEMIBOLD, theme.ink, false); free(a); }
+    if (head || base_ref || commits > 0) {
+        bool done = str_eq(state, "merged");
+        Str verb; str_init(&verb);
+        str_appendz(&verb, done ? "merged " : author ? "wants to merge " : "Wants to merge ");
+        if (done && !author) verb.data[0] = 'M';
+        if (commits > 0) str_appendf(&verb, "%d commit%s ", commits, commits == 1 ? "" : "s");
+        if (base_ref || head) str_appendz(&verb, "into ");
+        flow_add(f, verb.data, FONT_FOOTNOTE, theme.muted, false);
+        str_free(&verb);
+        if (base_ref || head) flow_add(f, base_ref ? base_ref : "main", FONT_MONO_CAPTION2, theme.accent, true);
+        if (head) { flow_add(f, "from ", FONT_FOOTNOTE, theme.muted, false); flow_add(f, head, FONT_MONO_CAPTION2, theme.accent, true); }
     }
-    const char *url = json_str(json_get(s->pr, "url"));
-    if (safe_web_url(url)) {
-        if (!store_supports("pull_files")) {
-            col_gap(doc, c);
-            char *t = has_files ? xstrfmt("%d files changed", (int)changed_files) : xstrdup("Files changed");
-            int li = doc_label(doc, c.ix, c.iw, 0xE8A7, t, FONT_CALLOUT, theme.accent);
-            doc_item(doc, li)->action = ACT_OPEN_URL; doc_item(doc, li)->arg = 1; doc_item(doc, li)->hand = true;
-            free(t);
-        }
-    }
-    doc_box_end(doc, box, px(18));
+    if (row && str_eq(row->mergeable, "conflicting")) { char *w = xstrfmt("\xC2\xB7 \xE2\x9A\xA0 conflicts with %s ", base_ref ? base_ref : "its base"); flow_add(f, w, FONT_FOOTNOTE, theme.warning, false); free(w); }
+    if (row && row->has_updated) { char *rel = format_relative(row->updated_at); char *u = xstrfmt("\xC2\xB7 updated %s", rel); flow_add(f, u, FONT_FOOTNOTE, theme.muted, false); free(u); free(rel); }
+    if (f->count) doc_flow(doc, c.ix + pw + px(10), c.iw - pw - px(10), 0, f); else flow_free(f);
+    if (doc->y < y + px(26)) doc->y = y + px(26);
+    if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->merge_error); }
 }
 
-static void layout_stack(PullScreen *s, Doc *doc, Col c) {
-    if (!s->has_stack) return;
-    char *label = stack_position_label(&s->stack, s->number);
-    char *title2 = xstrfmt("Stack \xC2\xB7 %s", label);
-    doc_section(doc, c.x, c.w, title2); free(title2); free(label);
-    int box = col_box(doc, c);
-    for (size_t i = 0; i < s->stack.chain_count; i++) {
-        const StackItem *item = &s->stack.chain[i];
-        if (i) col_gap(doc, c);
-        int indent = (item->depth > 1 ? item->depth - 1 : 0) * px(10);
-        int y = doc->y;
-        char depth[8]; snprintf(depth, sizeof depth, "%d", item->depth);
-        RECT dr = { c.ix + indent, y, c.ix + indent + px(18), y + px(20) };
-        doc_text_at(doc, &dr, depth, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        bool this_pr = item->number == s->number;
-        int tw = this_pr ? text_width(doc->hdc, "This PR", FONT_CAPTION) + px(8) : 0;
-        int ti = doc_text(doc, c.ix + indent + px(22), c.iw - indent - px(22) - tw, item->title, this_pr ? FONT_BODY_SEMIBOLD : FONT_BODY, theme.text, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
-        if (!this_pr) { doc_item(doc, ti)->action = ACT_STACK_ITEM; doc_item(doc, ti)->arg = item->number; doc_item(doc, ti)->hand = true; }
-        char *sub = xstrfmt("#%d%s", item->number, item->draft ? " \xC2\xB7 draft" : "");
-        doc_space(doc, px(2)); doc_text(doc, c.ix + indent + px(22), c.iw - indent - px(22), sub, FONT_MONO_SMALL, theme.secondary, DT_SINGLELINE); free(sub);
-        if (this_pr) { RECT tr = { c.ix + c.iw - tw, y, c.ix + c.iw, y + px(20) }; doc_text_at(doc, &tr, "This PR", FONT_CAPTION, theme.accent, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); }
+/// `tabnav`: Conversation, Commits, Checks and Files changed with their counts, and the diffstat at the right.
+typedef struct { wchar_t glyph; char *title, *count; bool active; } PrTabData;
+static void pr_tab_free(void *p) { PrTabData *d = p; free(d->title); free(d->count); free(d); }
+static int pr_tab_width(HDC hdc, const PrTabData *d) {
+    int w = px(12) + px(16) + px(8) + text_width(hdc, d->title, FONT_FOOTNOTE_SEMIBOLD) + px(12);
+    if (d->count) w += px(6) + text_width(hdc, d->count, FONT_CAPTION) + px(12);
+    return w;
+}
+static void paint_pr_tab(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    PrTabData *d = it->data;
+    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    COLORREF ink = d->active || hovered ? theme.ink : theme.muted;
+    if (hovered && !d->active) { RECT h = { rc->left + px(2), rc->top + px(5), rc->right - px(2), rc->bottom - px(7) }; fill_round_rect(hdc, &h, px(6), theme.raise, theme.raise); }
+    int x = rc->left + px(12);
+    RECT g = { x, rc->top, x + px(16), rc->bottom - px(2) }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->active ? theme.ink : theme.muted); x += px(16) + px(8);
+    FontId f = d->active ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE;
+    int lw = text_width(hdc, d->title, f);
+    RECT t = { x, rc->top, x + lw + px(2), rc->bottom - px(2) }; draw_text(hdc, d->title, &t, f, ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += lw + px(6);
+    if (d->count) {
+        // `.Counter`: the number in a small rounded bubble.
+        int cw = text_width(hdc, d->count, FONT_CAPTION) + px(12), ch = font_height(hdc, FONT_CAPTION) + px(4);
+        int cy = rc->top + (rc->bottom - px(2) - rc->top - ch) / 2;
+        RECT b = { x, cy, x + cw, cy + ch }; fill_round_rect(hdc, &b, ch / 2, theme.line, theme.line);
+        draw_text(hdc, d->count, &b, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    doc_space(doc, px(6));
-    doc_text(doc, c.ix, c.iw, s->stack.partial ? "Bottom first. Only part of this stack is visible; it may be longer." : "Bottom first. Merge from the bottom up.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-    doc_box_end(doc, box, px(12));
+    if (d->active) { RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right - px(4), rc->bottom }; fill_round_rect(hdc, &u, px(1), theme.accent, theme.accent); }
+}
+typedef struct { int additions, deletions; } DiffStatData;
+static int diffstat_width(HDC hdc, const DiffStatData *d) {
+    char add[16], del[24]; snprintf(add, sizeof add, "+%d", d->additions); snprintf(del, sizeof del, "\xE2\x88\x92%d", d->deletions);
+    return text_width(hdc, add, FONT_CAPTION_SEMIBOLD) + px(4) + text_width(hdc, del, FONT_CAPTION_SEMIBOLD) + px(6) + 5 * px(10);
+}
+static void paint_diffstat(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    DiffStatData *d = it->data;
+    char add[16], del[24]; snprintf(add, sizeof add, "+%d", d->additions); snprintf(del, sizeof del, "\xE2\x88\x92%d", d->deletions);
+    int x = rc->left, mid = rc->bottom - px(2);
+    int aw = text_width(hdc, add, FONT_CAPTION_SEMIBOLD), dw = text_width(hdc, del, FONT_CAPTION_SEMIBOLD);
+    RECT a = { x, rc->top, x + aw, mid }; draw_text(hdc, add, &a, FONT_CAPTION_SEMIBOLD, theme.success, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += aw + px(4);
+    RECT r = { x, rc->top, x + dw, mid }; draw_text(hdc, del, &r, FONT_CAPTION_SEMIBOLD, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += dw + px(6);
+    // `.diffstat-block-*`: five squares split by the share of lines added and deleted.
+    long total = (long)d->additions + d->deletions;
+    int green = total ? (int)(5L * d->additions / total) : 0, red = total ? (int)(5L * d->deletions / total) : 0;
+    int sq = px(8), top = rc->top + (mid - rc->top - sq) / 2;
+    for (int i = 0; i < 5; i++) {
+        RECT b = { x, top, x + sq, top + sq };
+        COLORREF color = i < green ? theme.success : i < green + red ? theme.danger : theme.line;
+        fill_round_rect(hdc, &b, px(2), color, color);
+        x += sq + px(2);
+    }
+}
+static void add_pr_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg) {
+    PrTabData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->title = xstrdup(title); d->count = count ? xstrdup(count) : NULL; d->active = active;
+    int w = pr_tab_width(doc->hdc, d);
+    if (*x > left && *x + w > right) { *x = left; *y += h; }
+    doc->y = *y;
+    int i = doc_custom(doc, *x, w, h, paint_pr_tab, d, pr_tab_free, active ? 0 : action, arg);
+    doc_item(doc, i)->hover_fill = false;
+    *x += w;
+}
+static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
+    int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
+    bool loaded = !json_is_null(s->pr);
+    double additions, deletions, files;
+    bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
+    DiffStatData *ds = NULL; int dsw = 0;
+    if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->hdc, ds); right -= dsw + px(16); }
+    char count[16];
+    const PullSummary *row = board_row(s);
+    double comments;
+    bool has_comments = row && json_num(json_get(row->raw, "comments"), &comments);
+    if (has_comments) snprintf(count, sizeof count, "%d", (int)comments);
+    add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "Conversation", has_comments ? count : NULL, s->tab == PR_TAB_CONVERSATION, ACT_PR_TAB, PR_TAB_CONVERSATION);
+    int commits = pull_commit_count(s);
+    if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
+    if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
+    bool has_files = json_num(json_get(s->pr, "changedFiles"), &files);
+    if (has_files) snprintf(count, sizeof count, "%d", (int)files);
+    // Files open their own screen, or GitHub's page when the server cannot list them.
+    if (store_supports("pull_files")) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_FILES, 0);
+    else if (safe_web_url(json_str(json_get(s->pr, "url")))) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_OPEN_URL, 1);
+    if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
+    doc->y = y + h;
+    doc_rule(doc, c.x, c.w);
+}
+
+/// The author's initial in a circle, where GitHub shows the avatar.
+typedef struct { char initial[8]; } AvatarData;
+static void paint_avatar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    AvatarData *d = it->data;
+    int r = (rc->right - rc->left) / 2;
+    fill_circle(hdc, rc->left + r, rc->top + r, r, blend(theme.accent, theme.canvas, 0.35));
+    RECT t = *rc; draw_text(hdc, d->initial, &t, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+/// `.timeline-comment-header`: a tinted strip with `author commented · updated …`.
+typedef struct { char *author, *when; } CommentHeadData;
+static void comment_head_free(void *p) { CommentHeadData *d = p; free(d->author); free(d->when); free(d); }
+static void paint_comment_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    CommentHeadData *d = it->data;
+    COLORREF tint = blend(theme.accent, theme.raise, 0.10);
+    RECT top = *rc; fill_round_rect(hdc, &top, px(7), tint, tint);
+    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(hdc, &low, tint);
+    draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
+    int x = rc->left + px(16);
+    if (d->author) { int aw = text_width(hdc, d->author, FONT_FOOTNOTE_SEMIBOLD); RECT a = { x, rc->top, x + aw + px(2), rc->bottom }; draw_text(hdc, d->author, &a, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); x += aw + px(5); }
+    RECT t = { x, rc->top, rc->right - px(16), rc->bottom };
+    draw_text(hdc, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+/// The opening comment: the pull request's description as GitHub shows it, read from the server's file list when `pull` leaves it out.
+static void layout_description(PullScreen *s, Doc *doc, Col c) {
+    const char *body = json_str(json_get(s->pr, "body"));
+    if (!body) body = s->body;
+    bool loading = !body && !s->body_read && store_supports("pull_files");
+    if (!body && !loading) return;
+    const char *author = pull_author(s);
+    const PullSummary *row = board_row(s);
+    int x = c.x, w = c.w, top = doc->y;
+    if (author && c.w >= px(520)) {
+        AvatarData *a = xcalloc(1, sizeof *a);
+        // The first character of the login, which is ASCII on GitHub.
+        a->initial[0] = (char)((author[0] >= 'a' && author[0] <= 'z') ? author[0] - 32 : author[0]);
+        doc_custom(doc, x, px(36), px(36), paint_avatar, a, free, 0, 0);
+        doc->y = top; x += px(48); w -= px(48);
+    }
+    int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
+    doc_item(doc, box)->hover_fill = false;
+    CommentHeadData *h = xcalloc(1, sizeof *h);
+    h->author = author ? xstrdup(author) : NULL;
+    if (row && row->has_updated) { char *rel = format_relative(row->updated_at); h->when = xstrfmt("%s \xC2\xB7 updated %s", author ? "commented" : "Description", rel); free(rel); }
+    else h->when = xstrdup(author ? "commented" : "Description");
+    doc_custom(doc, x + 1, w - 2, px(38), paint_comment_head, h, comment_head_free, 0, 0);
+    doc_space(doc, px(14));
+    int ix = x + px(16), iw = w - px(32);
+    if (loading) doc_text(doc, ix, iw, "Loading the description\xE2\x80\xA6", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
+    else {
+        char *trimmed = str_trim(body);
+        if (*trimmed) doc_markdown(doc, ix, iw, trimmed, FONT_CALLOUT);
+        else doc_text(doc, ix, iw, "No description provided.", FONT_CALLOUT_ITALIC, theme.secondary, DT_WORDBREAK);
+        free(trimmed);
+    }
+    doc_box_end(doc, box, px(16));
 }
 
 static void layout_checks(PullScreen *s, Doc *doc, Col c) {
-    doc_section(doc, c.x, c.w, "Checks");
     int box = col_box(doc, c);
     CountsData *cd = xcalloc(1, sizeof *cd);
     cd->passed = json_int_or(json_get(json_get(s->pr, "checks"), "passed"), 0); cd->failed = json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0); cd->pending = json_int_or(json_get(json_get(s->pr, "checks"), "pending"), 0);
@@ -717,91 +912,61 @@ static void layout_checks(PullScreen *s, Doc *doc, Col c) {
         const char *curl = json_str(json_get(check, "url"));
         doc_custom(doc, c.ix, c.iw, px(22), paint_check, d, check_free, safe_web_url(curl) ? ACT_CHECK_URL : 0, (intptr_t)i);
     }
+    if (!json_count(runs)) { col_gap(doc, c); doc_text(doc, c.ix, c.iw, "No checks reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); }
     doc_box_end(doc, box, px(12));
 }
 
-static void layout_reviews(PullScreen *s, Doc *doc, Col c) {
-    const PullSummary *row = board_row(s);
-    doc_section(doc, c.x, c.w, "Reviews");
+/// `.merge-status`: what the checks add up to, opening the Checks tab.
+typedef struct { wchar_t glyph; COLORREF color; char *title, *detail; } StatusData;
+static void status_free(void *p) { StatusData *d = p; free(d->title); free(d->detail); free(d); }
+static void paint_status(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    StatusData *d = it->data;
+    int r = px(16);
+    fill_circle(hdc, rc->left + r, rc->top + (rc->bottom - rc->top) / 2, r, blend(d->color, theme.raise, 0.2));
+    RECT g = { rc->left, rc->top, rc->left + 2 * r, rc->bottom }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->color);
+    int x = rc->left + 2 * r + px(12), mid = (rc->top + rc->bottom) / 2;
+    RECT t = { x, rc->top, rc->right - px(24), mid }; draw_text(hdc, d->title, &t, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT dt = { x, mid + px(2), rc->right - px(24), rc->bottom }; draw_text(hdc, d->detail, &dt, FONT_CAPTION, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT ch = { rc->right - px(16), rc->top, rc->right, rc->bottom }; draw_glyph(hdc, 0xE76C, &ch, FONT_ICON_SMALL, theme.tertiary);
+}
+static void layout_check_summary(PullScreen *s, Doc *doc, Col c) {
+    const Json *checks = json_get(s->pr, "checks");
+    int passed = json_int_or(json_get(checks, "passed"), 0), failed = json_int_or(json_get(checks, "failed"), 0), pending = json_int_or(json_get(checks, "pending"), 0);
+    if (!passed && !failed && !pending) return;
+    doc_space(doc, px(16));
+    StatusData *d = xcalloc(1, sizeof *d);
+    if (failed) { d->glyph = 0xEA39; d->color = theme.danger; d->title = xstrdup("Some checks were not successful"); }
+    else if (pending) { d->glyph = 0xE823; d->color = theme.warning; d->title = xstrdup("Some checks haven\xE2\x80\x99t completed yet"); }
+    else { d->glyph = 0xE930; d->color = theme.success; d->title = xstrdup("All checks have passed"); }
+    Str detail; str_init(&detail);
+    if (passed) str_appendf(&detail, "%d successful", passed);
+    if (failed) str_appendf(&detail, "%s%d failing", detail.len ? ", " : "", failed);
+    if (pending) str_appendf(&detail, "%s%d in progress", detail.len ? ", " : "", pending);
+    str_appendf(&detail, " check%s", passed + failed + pending == 1 ? "" : "s");
+    d->detail = str_detach(&detail);
     int box = col_box(doc, c);
-    const Json *reviews = json_get(s->pr, "reviews");
-    size_t listed = 0;
-    for (size_t i = 0; i < json_count(reviews); i++) {
-        const Json *review = json_at(reviews, i);
-        if (i) col_gap(doc, c);
-        const char *user = json_str(json_get(review, "user"));
-        Json *one = json_array(); json_array_push(one, json_clone(review));
-        ReviewStatus st = review_status(NULL, one); json_free(one);
-        int y = doc->y;
-        RECT ur = { c.ix, y, c.ix + c.iw / 2, y + px(22) }; doc_text_at(doc, &ur, user ? user : "Reviewer", FONT_CALLOUT, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        if (st != REVIEW_NONE) { COLORREF cc; wchar_t g = review_glyph(st, &cc); BadgeSpec b = { g, review_status_text(st), cc, false }; int bw = draw_badge(NULL, 0, 0, g, b.text, cc, theme.elevated, NULL); doc->y = y; doc_badges(doc, c.ix + c.iw - bw, bw, &b, 1, theme.elevated); }
-        else { const char *state = json_str(json_get(review, "state")); RECT sr = { c.ix + c.iw / 2, y, c.ix + c.iw, y + px(22) }; doc_text_at(doc, &sr, state ? state : "", FONT_CALLOUT, theme.secondary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); }
-        if (doc->y < y + px(22)) doc->y = y + px(22);
-        listed++;
-    }
-    if (row) {
-        for (size_t i = 0; i < row->reviewer_count; i++) {
-            const Reviewer *r = &row->reviewers[i];
-            if (!str_eq(r->state, "requested")) continue;
-            bool reviewed = false;
-            for (size_t k = 0; k < json_count(reviews) && !reviewed; k++) reviewed = str_ieq(json_str(json_get(json_at(reviews, k), "user")), r->user);
-            if (reviewed) continue;
-            if (listed) col_gap(doc, c);
-            int y = doc->y;
-            RECT ur = { c.ix, y, c.ix + c.iw / 2, y + px(22) }; doc_text_at(doc, &ur, r->user, FONT_CALLOUT, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            BadgeSpec b = { 0xE823, "Review requested", theme.secondary, false }; int bw = draw_badge(NULL, 0, 0, b.glyph, b.text, b.color, theme.elevated, NULL);
-            doc->y = y; doc_badges(doc, c.ix + c.iw - bw, bw, &b, 1, theme.elevated);
-            if (doc->y < y + px(22)) doc->y = y + px(22);
-            listed++;
-        }
-    }
-    if (!listed) doc_text(doc, c.ix, c.iw, "No reviews reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
+    doc_box_action(doc, box, ACT_PR_TAB, PR_TAB_CHECKS);
+    doc_item(doc, box)->hover_fill = true;
+    doc_custom(doc, c.ix, c.iw, px(40), paint_status, d, status_free, 0, 0);
     doc_box_end(doc, box, px(12));
 }
 
-static void layout_closes(PullScreen *s, Doc *doc, Col c) {
-    const PullSummary *row = board_row(s);
-    const BoardLink *issues = row && row->issue_count ? row->issues : NULL; size_t issue_count = row ? row->issue_count : 0;
-    BoardLink *parsed = NULL; size_t parsed_count = 0;
-    if (!issues) {
-        const Json *arr = json_get(s->pr, "issues");
-        parsed = xcalloc(json_count(arr) ? json_count(arr) : 1, sizeof *parsed);
-        for (size_t i = 0; i < json_count(arr); i++) if (board_link_parse(json_at(arr, i), &parsed[parsed_count])) parsed_count++;
-        issues = parsed; issue_count = parsed_count;
-    }
-    if (issue_count) {
-        doc_section(doc, c.x, c.w, "Closes");
-        int box = col_box(doc, c);
-        for (size_t i = 0; i < issue_count; i++) { if (i) col_gap(doc, c); doc_linked_row(doc, c.ix, c.iw, &issues[i], s->project.repo, safe_web_url(issues[i].url) ? ACT_ISSUE_URL : 0, (intptr_t)i); }
-        doc_box_end(doc, box, px(12));
-    }
-    for (size_t i = 0; i < parsed_count; i++) board_link_free(&parsed[i]);
-    free(parsed);
-}
-
-static void layout_commits(PullScreen *s, Doc *doc, Col c) {
+static void layout_commit_list(PullScreen *s, Doc *doc, Col c) {
     const Json *commits = json_get(s->pr, "commitList");
-    if (!json_count(commits)) return;
-    int n = json_int_or(json_get(s->pr, "commits"), (int)json_count(commits));
-    doc_space(doc, px(14));
     int box = col_box(doc, c);
-    char *t = xstrfmt("%d commit%s", n, n == 1 ? "" : "s");
-    int li = doc_label(doc, c.ix, c.iw, s->commits_open ? 0xE70D : 0xE76C, t, FONT_CALLOUT, theme.text);
-    doc_item(doc, li)->action = ACT_COMMITS_TOGGLE; doc_item(doc, li)->hand = true;
-    free(t);
-    if (s->commits_open) {
-        for (size_t i = 0; i < json_count(commits); i++) {
-            const Json *cm = json_at(commits, i);
-            col_gap(doc, c);
-            const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
-            int y = doc->y; int sw = text_width(doc->hdc, short_sha, FONT_MONO_SMALL);
-            RECT sr = { c.ix, y, c.ix + sw, y + px(18) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_SMALL, theme.secondary, DT_LEFT | DT_SINGLELINE);
-            const char *message = json_str(json_get(cm, "message"));
-            int mi = doc_text(doc, c.ix + sw + px(8), c.iw - sw - px(8), message ? message : "", FONT_CALLOUT, theme.text, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
-            if (safe_web_url(json_str(json_get(cm, "url")))) { doc_item(doc, mi)->action = ACT_COMMIT_URL; doc_item(doc, mi)->arg = (intptr_t)i; doc_item(doc, mi)->hand = true; }
-            free(short_sha);
-        }
+    for (size_t i = 0; i < json_count(commits); i++) {
+        const Json *cm = json_at(commits, i);
+        if (i) col_gap(doc, c);
+        const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
+        int y = doc->y; int sw = text_width(doc->hdc, short_sha, FONT_MONO_SMALL);
+        RECT sr = { c.ix + c.iw - sw, y, c.ix + c.iw, y + px(18) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_SMALL, theme.secondary, DT_RIGHT | DT_SINGLELINE);
+        const char *message = json_str(json_get(cm, "message"));
+        int mi = doc_label(doc, c.ix, c.iw - sw - px(12), 0xE8EE, message ? message : "", FONT_CALLOUT, theme.text);
+        if (safe_web_url(json_str(json_get(cm, "url")))) { doc_item(doc, mi)->action = ACT_COMMIT_URL; doc_item(doc, mi)->arg = (intptr_t)i; doc_item(doc, mi)->hand = true; }
+        free(short_sha);
     }
+    if (!json_count(commits)) doc_text(doc, c.ix, c.iw, "No commits reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
     doc_box_end(doc, box, px(12));
 }
 
@@ -847,28 +1012,10 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
-static void layout_merge(PullScreen *s, Doc *doc, Col c) {
-    (void)s; (void)doc; (void)c;
-    return;
-    bool can_merge = false;
-    if (!can_merge && !s->merge_error) return;
-    const char *head = json_str(json_get(s->pr, "headRef")), *base_ref = json_str(json_get(s->pr, "baseRef"));
-    doc_space(doc, px(14));
-    int box = col_box(doc, c);
-    if (s->merge_error) { doc_notice(doc, c.ix, c.iw, s->merge_error); doc_space(doc, px(8)); }
-    if (can_merge) {
-        doc_button(doc, c.ix, c.iw, s->merging ? "Merging\xE2\x80\xA6" : "Merge pull request", BUTTON_BORDERED, ACT_MERGE, 0, !s->merging && !s->busy);
-        doc_space(doc, px(8));
-        char *t = xstrfmt("Merges %s into %s on GitHub. This cannot be undone from the app.", head ? head : "this branch", base_ref ? base_ref : "its base");
-        doc_text(doc, c.ix, c.iw, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK); free(t);
-    }
-    doc_box_end(doc, box, px(12));
-}
-
 static void layout_actions(PullScreen *s, Doc *doc, Col c) {
     if (!s->action_count) return;
     const PullSummary *row = board_row(s);
-    doc_section(doc, c.x, c.w, s->busy ? "Actions Â· startingâ¦" : "Actions");
+    doc_section(doc, c.x, c.w, s->busy ? "Actions \xC2\xB7 starting\xE2\x80\xA6" : "Actions");
     int box = col_box(doc, c);
     // The errands as the board's buttons: the one the pull request's state asks for is filled.
     ButtonSpec *buttons = xcalloc(s->action_count, sizeof *buttons);
@@ -894,41 +1041,169 @@ static void layout_runs(PullScreen *s, Doc *doc, Col c) {
     for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
 }
 
+/// The main column: what the selected tab holds.
+static void layout_main(PullScreen *s, Doc *doc, Col c) {
+    if (json_is_null(s->pr)) {
+        if (!s->error) doc_loading(doc, c.x, c.w, NULL);
+        layout_runs(s, doc, c);
+        return;
+    }
+    switch (s->tab) {
+    case PR_TAB_COMMITS: layout_commit_list(s, doc, c); break;
+    case PR_TAB_CHECKS: layout_checks(s, doc, c); break;
+    default:
+        layout_description(s, doc, c);
+        layout_findings(s, doc, c);
+        layout_check_summary(s, doc, c);
+        layout_actions(s, doc, c);
+        layout_runs(s, doc, c);
+        break;
+    }
+}
+
+/// `.discussion-sidebar-item`: a small heading over its contents, a rule between items.
+static void side_heading(Doc *doc, Col c, int *count, const char *title) {
+    if ((*count)++) { doc_space(doc, px(14)); doc_rule(doc, c.x, c.w); }
+    doc_space(doc, px(14));
+    doc_text(doc, c.x, c.w, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_space(doc, px(8));
+}
+static void side_reviewer(Doc *doc, Col c, const char *user, const BadgeSpec *badge, const char *state) {
+    int y = doc->y;
+    RECT ur = { c.x, y, c.x + c.w / 2, y + px(22) }; doc_text_at(doc, &ur, user, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (badge) { int bw = draw_badge(NULL, 0, 0, badge->glyph, badge->text, badge->color, theme.canvas, NULL); doc->y = y; doc_badges(doc, c.x + c.w - bw, bw, badge, 1, theme.canvas); }
+    else if (state) { RECT sr = { c.x + c.w / 2, y, c.x + c.w, y + px(22) }; doc_text_at(doc, &sr, state, FONT_CAPTION, theme.secondary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); }
+    if (doc->y < y + px(22)) doc->y = y + px(22);
+    doc_space(doc, px(4));
+}
+static void side_reviewers(PullScreen *s, Doc *doc, Col c, int *count) {
+    if (json_is_null(s->pr)) return;
+    const PullSummary *row = board_row(s);
+    side_heading(doc, c, count, "Reviewers");
+    const Json *reviews = json_get(s->pr, "reviews");
+    size_t listed = 0;
+    for (size_t i = 0; i < json_count(reviews); i++) {
+        const Json *review = json_at(reviews, i);
+        const char *user = json_str(json_get(review, "user"));
+        Json *one = json_array(); json_array_push(one, json_clone(review));
+        ReviewStatus st = review_status(NULL, one); json_free(one);
+        if (st != REVIEW_NONE) { COLORREF cc; wchar_t g = review_glyph(st, &cc); BadgeSpec b = { g, review_status_text(st), cc, false }; side_reviewer(doc, c, user ? user : "Reviewer", &b, NULL); }
+        else side_reviewer(doc, c, user ? user : "Reviewer", NULL, json_str(json_get(review, "state")));
+        listed++;
+    }
+    for (size_t i = 0; row && i < row->reviewer_count; i++) {
+        const Reviewer *r = &row->reviewers[i];
+        if (!str_eq(r->state, "requested")) continue;
+        bool reviewed = false;
+        for (size_t k = 0; k < json_count(reviews) && !reviewed; k++) reviewed = str_ieq(json_str(json_get(json_at(reviews, k), "user")), r->user);
+        if (reviewed) continue;
+        BadgeSpec b = { 0xE823, "Review requested", theme.secondary, false };
+        side_reviewer(doc, c, r->user, &b, NULL);
+        listed++;
+    }
+    if (!listed) doc_text(doc, c.x, c.w, "No reviews", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+}
+static void side_assignees(PullScreen *s, Doc *doc, Col c, int *count) {
+    const PullSummary *row = board_row(s);
+    if (!row) return;
+    side_heading(doc, c, count, "Assignees");
+    for (size_t i = 0; i < row->assignee_count; i++) { if (i) doc_space(doc, px(4)); doc_text(doc, c.x, c.w, row->assignees[i], FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS); }
+    if (!row->assignee_count) doc_text(doc, c.x, c.w, "No one", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+}
+static void side_milestone(PullScreen *s, Doc *doc, Col c, int *count) {
+    const PullSummary *row = board_row(s);
+    const char *milestone = row ? json_str(json_get(row->raw, "milestone")) : NULL;
+    if (!milestone) return;
+    side_heading(doc, c, count, "Milestone");
+    doc_text(doc, c.x, c.w, milestone, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK);
+}
+static void side_labels(PullScreen *s, Doc *doc, Col c, int *count) {
+    const PullSummary *row = board_row(s);
+    if (!row) return;
+    side_heading(doc, c, count, "Labels");
+    if (row->label_count) doc_label_chips(doc, c.x, c.w, row->labels, row->label_count, theme.canvas);
+    else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+}
+static void side_stack(PullScreen *s, Doc *doc, Col c, int *count) {
+    if (!s->has_stack) return;
+    char *label = stack_position_label(&s->stack, s->number);
+    char *title = xstrfmt("Stack \xC2\xB7 %s", label);
+    side_heading(doc, c, count, title); free(title); free(label);
+    for (size_t i = 0; i < s->stack.chain_count; i++) {
+        const StackItem *item = &s->stack.chain[i];
+        if (i) doc_space(doc, px(8));
+        int indent = (item->depth > 1 ? item->depth - 1 : 0) * px(10);
+        bool this_pr = item->number == s->number;
+        int ti = doc_text(doc, c.x + indent, c.w - indent, item->title, this_pr ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, this_pr ? theme.ink : theme.accent, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
+        if (!this_pr) { doc_item(doc, ti)->action = ACT_STACK_ITEM; doc_item(doc, ti)->arg = item->number; doc_item(doc, ti)->hand = true; }
+        char *sub = xstrfmt("#%d%s%s", item->number, item->draft ? " \xC2\xB7 draft" : "", this_pr ? " \xC2\xB7 this pull request" : "");
+        doc_space(doc, px(2)); doc_text(doc, c.x + indent, c.w - indent, sub, FONT_MONO_CAPTION2, theme.secondary, DT_SINGLELINE); free(sub);
+    }
+    doc_space(doc, px(8));
+    doc_text(doc, c.x, c.w, s->stack.partial ? "Bottom first. Only part of this stack is visible; it may be longer." : "Bottom first. Merge from the bottom up.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+}
+static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
+    const PullSummary *row = board_row(s);
+    const BoardLink *issues = row && row->issue_count ? row->issues : NULL; size_t issue_count = row ? row->issue_count : 0;
+    BoardLink *parsed = NULL; size_t parsed_count = 0;
+    if (!issues) {
+        const Json *arr = json_get(s->pr, "issues");
+        parsed = xcalloc(json_count(arr) ? json_count(arr) : 1, sizeof *parsed);
+        for (size_t i = 0; i < json_count(arr); i++) if (board_link_parse(json_at(arr, i), &parsed[parsed_count])) parsed_count++;
+        issues = parsed; issue_count = parsed_count;
+    }
+    if (issue_count) {
+        side_heading(doc, c, count, "Development");
+        doc_text(doc, c.x, c.w, "Successfully merging this pull request may close these issues.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_space(doc, px(6));
+        for (size_t i = 0; i < issue_count; i++) { if (i) doc_space(doc, px(2)); doc_linked_row(doc, c.x, c.w, &issues[i], s->project.repo, safe_web_url(issues[i].url) ? ACT_ISSUE_URL : 0, (intptr_t)i); }
+    }
+    for (size_t i = 0; i < parsed_count; i++) board_link_free(&parsed[i]);
+    free(parsed);
+}
+/// The sidebar: only what the server reports; GitHub's projects and notifications are not part of it.
+static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
+    int count = 0;
+    side_reviewers(s, doc, c, &count);
+    side_assignees(s, doc, c, &count);
+    side_labels(s, doc, c, &count);
+    side_milestone(s, doc, c, &count);
+    side_stack(s, doc, c, &count);
+    side_development(s, doc, c, &count);
+}
+
 static void pull_layout(Screen *base, Doc *doc) {
     PullScreen *s = (PullScreen *)base;
     int w = doc->width;
-    doc_space(doc, px(10));
+    doc_space(doc, px(14));
     if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, px(4), w - px(8), s->write_error);
         if (s->uncertain) { doc_space(doc, px(4)); doc_text(doc, px(4), w - px(8), "The request may have completed. Refresh (F5) and look for its conversation below before starting another agent.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
         doc_space(doc, px(10));
     }
-    Col full = col_make(0, w);
-    layout_summary(s, doc, full);
-    bool loaded = !json_is_null(s->pr);
+    Col head = { 0, w, px(4), w - px(8) };
+    layout_header(s, doc, head);
+    doc_space(doc, px(12));
+    layout_tabs(s, doc, head);
+    doc_space(doc, px(18));
     if (w >= px(880)) {
-        // Wide: what is read most on the left, the stack, reviews and controls beside it.
-        int gap = px(14), lw = (w - gap) * 58 / 100;
-        Col left = col_make(0, lw), right = col_make(lw + gap, w - lw - gap);
+        // Wide: the conversation on the left, GitHub's sidebar on the right.
+        int side_w = w * 26 / 100, gap = px(28);
+        if (side_w < px(240)) side_w = px(240);
+        if (side_w > px(320)) side_w = px(320);
+        Col main = col_make(0, w - side_w - gap), side = { w - side_w, side_w, w - side_w, side_w };
         int top = doc->y;
-        if (loaded) { layout_checks(s, doc, left); layout_findings(s, doc, left); }
-        else if (!s->error) doc_loading(doc, left.x, left.w, NULL);
-        layout_runs(s, doc, left);
-        int left_bottom = doc->y;
-        doc->y = top;
-        layout_stack(s, doc, right);
-        if (loaded) { layout_reviews(s, doc, right); layout_closes(s, doc, right); layout_commits(s, doc, right); }
-        layout_merge(s, doc, right);
-        layout_actions(s, doc, right);
-        if (doc->y < left_bottom) doc->y = left_bottom;
+        layout_main(s, doc, main);
+        int main_bottom = doc->y;
+        doc->y = top - px(14);
+        layout_sidebar(s, doc, side);
+        if (doc->y < main_bottom) doc->y = main_bottom;
     } else {
-        layout_stack(s, doc, full);
-        if (loaded) { layout_checks(s, doc, full); layout_reviews(s, doc, full); layout_closes(s, doc, full); layout_commits(s, doc, full); layout_findings(s, doc, full); }
-        else if (!s->error) doc_loading(doc, 0, w, NULL);
-        layout_merge(s, doc, full);
-        layout_actions(s, doc, full);
-        layout_runs(s, doc, full);
+        layout_main(s, doc, col_make(0, w));
+        doc_space(doc, px(6));
+        Col side = { px(4), w - px(8), px(4), w - px(8) };
+        layout_sidebar(s, doc, side);
     }
     doc_space(doc, px(16));
 }
@@ -1062,7 +1337,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
-    case ACT_COMMITS_TOGGLE: s->commits_open = !s->commits_open; pane_relayout(base->pane); break;
+    case ACT_PR_TAB: s->tab = (int)arg; pane_relayout(base->pane); break;
     case ACT_FINDING_TOGGLE: {
         bool open = finding_open(s, (int)arg);
         if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
@@ -1112,12 +1387,13 @@ static void pull_timer(Screen *base, UINT id) {
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 30000);
-    else { poller_stop(&s->poller); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); }
+    else { poller_stop(&s->poller); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     // Refreshing is how an uncertain start is checked: its conversation is listed below if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
+    request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_pull); pull_load(s);
     pane_relayout(base->pane);
 }
