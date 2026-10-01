@@ -124,6 +124,26 @@ static void test_server_address_copy_is_independent(void) {
     server_address_free(&b);
     server_address_free(NULL);
 }
+static void test_preview_access_goes_only_to_preview_hosts(void) {
+    const char *suffix = "preview.example.com";
+    CHECK(preview_access_applies("https://8123.preview.example.com", suffix));
+    CHECK(preview_access_applies("https://8123.preview.example.com/app?x=1#y", suffix));
+    CHECK(preview_access_applies("https://a.b.PREVIEW.example.com:8443/", suffix));
+    CHECK(preview_access_applies("https://8123.preview.example.com./", suffix));
+    CHECK(preview_access_applies("HTTPS://8123.preview.example.com", ".preview.example.com"));
+    // Not over plain HTTP, not the suffix itself, not a host that merely ends in the same letters, not another site.
+    CHECK(!preview_access_applies("http://8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://evilpreview.example.com", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com.evil.net", suffix));
+    CHECK(!preview_access_applies("https://evil.net/8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://evil.net?h=8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com@evil.net", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com", ""));
+    CHECK(!preview_access_applies(NULL, suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com", NULL));
+}
 
 // MARK: - Tokens
 
@@ -277,6 +297,7 @@ static const Expected ROUTE_TABLE[] = {
     { "link_pr", "POST", "sessions/{sessionId}/link-pr" }, { "complete_findings", "POST", "sessions/{sessionId}/findings/triage" },
     { "save_findings", "POST", "sessions/{sessionId}/findings/save" }, { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
     { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    { "preview_access", "GET", "preview/access" },
     { "upload", "POST", "uploads" }, { "transcribe", "POST", "transcribe" },
     { "settings_projects", "GET", "settings/projects" }, { "create_project", "POST", "settings/projects" },
     { "update_project", "PUT", "settings/projects/{id}" }, { "delete_project", "DELETE", "settings/projects/{id}" },
@@ -504,6 +525,21 @@ static void test_a_run_profile_switch_names_the_session_in_the_path(void) {
     // Without a profile the server serves the one it served last.
     r = call(c, "serve", "{\"sessionId\":\"run-1\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "sessions/run-1/serve"); CHECK_STR(stub.last_body, "{}");
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+static void test_the_preview_access_token_is_a_plain_read(void) {
+    Stub stub = { 0 }; stub_json(&stub, 200, "{\"clientId\":\"id.access\",\"clientSecret\":\"s3cret\",\"hostSuffix\":\"preview.example.com\"}");
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    // The Run tab reads it with no arguments: nothing in the path or the query.
+    Json *r = call(c, "preview_access", "{}", &e);
+    CHECK_STR(stub.last_url, BASE "preview/access"); CHECK_STR(stub.last_method, "GET");
+    CHECK_STR(json_str(json_get(r, "clientId")), "id.access"); CHECK_STR(json_str(json_get(r, "clientSecret")), "s3cret");
+    CHECK_STR(json_str(json_get(r, "hostSuffix")), "preview.example.com"); json_free(r);
+    api_error_clear(&e);
+    // No tunnel or no service token on the server: a 404, after which the browser opens without one.
+    stub_reset(&stub); stub_json(&stub, 404, "{\"error\":\"No preview service token is configured.\"}");
+    CHECK(call(c, "preview_access", "{}", &e) == NULL); CHECK_INT(e.status, 404); CHECK(api_error_is_refusal(&e));
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_the_set_flag_is_always_sent_true(void) {
@@ -908,10 +944,12 @@ static void test_retry_after_http_dates(void) {
 }
 
 void api_tests(void) {
+    test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);
     test_run("server address refuses everything else", test_server_address_refuses_everything_else);
     test_run("server address copy is independent", test_server_address_copy_is_independent);
+    test_run("preview access goes only to preview hosts", test_preview_access_goes_only_to_preview_hosts);
     test_run("token shape", test_token_shape);
     test_run("client refuses a bad token without an error to fill", test_client_refuses_a_bad_token_without_an_error_to_fill);
     test_run("client keeps its own copy of the address and counts references", test_client_keeps_its_own_copy_of_the_address_and_counts_references);
