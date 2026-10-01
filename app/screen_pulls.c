@@ -406,7 +406,7 @@ enum {
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD,
 };
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
-enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS };
+enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS };
 
 typedef struct {
     Screen base;
@@ -814,7 +814,7 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
     DiffStatData *ds = NULL; int dsw = 0;
     if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->hdc, ds); right -= dsw + px(16); }
-    char count[16];
+    char count[24];
     const PullSummary *row = board_row(s);
     double comments;
     bool has_comments = row && json_num(json_get(row->raw, "comments"), &comments);
@@ -823,6 +823,8 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int commits = pull_commit_count(s);
     if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
     if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
+    if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
+    if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
     bool has_files = json_num(json_get(s->pr, "changedFiles"), &files);
     if (has_files) snprintf(count, sizeof count, "%d", (int)files);
     // Files open their own screen, or GitHub's page when the server cannot list them.
@@ -990,8 +992,6 @@ static void layout_commit_list(PullScreen *s, Doc *doc, Col c) {
 }
 
 static void layout_findings(PullScreen *s, Doc *doc, Col c) {
-    if (!store_supports("findings")) return;
-    doc_section(doc, c.x, c.w, "Findings");
     int box = col_box(doc, c);
     if (s->findings_error) { doc_notice(doc, c.ix, c.iw, s->findings_error); doc_space(doc, px(6)); }
     size_t fn = json_count(s->findings);
@@ -1055,27 +1055,26 @@ static void layout_actions(PullScreen *s, Doc *doc, Col c) {
 }
 
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
-    if (!s->run_count) return;
-    doc_section(doc, c.x, c.w, "Conversations on this pull request");
+    if (!s->run_count) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
     for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
 }
 
 /// The main column: what the selected tab holds.
 static void layout_main(PullScreen *s, Doc *doc, Col c) {
     if (json_is_null(s->pr)) {
-        if (!s->error) doc_loading(doc, c.x, c.w, NULL);
-        layout_runs(s, doc, c);
+        if (s->tab == PR_TAB_SESSIONS) layout_runs(s, doc, c);
+        else if (!s->error) doc_loading(doc, c.x, c.w, NULL);
         return;
     }
     switch (s->tab) {
     case PR_TAB_COMMITS: layout_commit_list(s, doc, c); break;
     case PR_TAB_CHECKS: layout_checks(s, doc, c); break;
+    case PR_TAB_FINDINGS: layout_findings(s, doc, c); break;
+    case PR_TAB_SESSIONS: layout_runs(s, doc, c); break;
     default:
         layout_description(s, doc, c);
-        layout_findings(s, doc, c);
         layout_check_summary(s, doc, c);
         layout_actions(s, doc, c);
-        layout_runs(s, doc, c);
         break;
     }
 }
@@ -1198,7 +1197,7 @@ static void pull_layout(Screen *base, Doc *doc) {
     if (s->error) { doc_notice(doc, px(4), w - px(8), s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, px(4), w - px(8), s->write_error);
-        if (s->uncertain) { doc_space(doc, px(4)); doc_text(doc, px(4), w - px(8), "The request may have completed. Refresh (F5) and look for its conversation below before starting another agent.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
+        if (s->uncertain) { doc_space(doc, px(4)); doc_text(doc, px(4), w - px(8), "The request may have completed. Refresh (F5) and look for its conversation in the Sessions tab before starting another agent.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
         doc_space(doc, px(10));
     }
     Col head = { 0, w, px(4), w - px(8) };
@@ -1410,7 +1409,7 @@ static void pull_visible(Screen *base, bool shown) {
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
-    // Refreshing is how an uncertain start is checked: its conversation is listed below if it began.
+    // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_pull); pull_load(s);
