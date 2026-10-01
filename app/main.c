@@ -1,6 +1,7 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
 #include "canvas.h"
 #include "dialogs.h"
+#include "media.h"
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
@@ -183,6 +184,7 @@ void app_alert(const char *title, const char *message) {
 static void set_active(bool active) {
     if (g_store.active == active) return;
     g_store.active = active;
+    media_set_active(active);
     pane_activate_all(active);
 }
 
@@ -199,6 +201,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
         store_restore();
+        media_start(hwnd);
         return 0;
     case WM_SIZE:
         if (wp == SIZE_MINIMIZED) set_active(false);
@@ -216,6 +219,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND: return 1;
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(360); return 0; }
     case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;
+    case WM_APP_MEDIA_CHANGED: if (g_sidebar) pane_footer_changed(g_sidebar); return 0;
     case WM_APP_REQUEST_DONE: case WM_APP_ASYNC_DONE: store_handle_message(msg, wp, lp); return 0;
     case WM_SETTINGCHANGE: case WM_THEMECHANGED:
         theme_refresh(); theme_apply_window(hwnd);
@@ -238,6 +242,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
     case WM_DESTROY:
+        media_stop();
         pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel);
         g_pairing = g_sidebar = g_detail = g_panel = NULL;
         store_shutdown();
