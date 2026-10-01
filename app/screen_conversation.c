@@ -399,7 +399,8 @@ static void layout_step(Doc *doc, int x, int w, const Event *e) {
     doc_space(doc, px(3));
 }
 static bool is_tool(const Event *e) { return str_eq(e->kind, "tool") || str_eq(e->kind, "tool_error"); }
-static bool is_prep_line(const Event *e) { return (str_eq(e->kind, "info") || str_eq(e->kind, "cmd") || str_eq(e->kind, "git") || str_eq(e->kind, "stdout")) && e->text; }
+/// `setup` is a setup command's own output; a failed step's last lines are there.
+static bool is_prep_line(const Event *e) { return (str_eq(e->kind, "info") || str_eq(e->kind, "cmd") || str_eq(e->kind, "git") || str_eq(e->kind, "setup") || str_eq(e->kind, "stdout")) && e->text; }
 /// Info lines that belong to the conversation rather than to workspace preparation.
 static bool prep_closed(const Event *e) {
     const char *t = e->text ? e->text : "";
@@ -674,6 +675,9 @@ static void conversation_layout(Screen *base, Doc *doc) {
         if (event_visible(e)) layout_event(s, doc, x, w, e);
         i++;
     }
+    // Why the session failed: the dashboard's `⚠ error` in the head, said where the transcript stops.
+    const char *failure = json_str_nonempty(json_get(session(s)->raw, "error"));
+    if (failure) { char *why = xstrfmt("\xE2\x9A\xA0 %s", failure); doc_space(doc, px(10)); doc_notice_box(doc, x, w, why); free(why); }
     const Json *queued = session_queued(session(s));
     for (size_t q = 0; q < json_count(queued); q++) {
         const char *text = json_str(json_get(json_at(queued, q), "text"));

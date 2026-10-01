@@ -410,10 +410,10 @@ static void test_findings_queue_lists_held_rounds_oldest_first_by_pull_request(v
     free(s0); free(s1); free(s2);
     sessions_free(s, n); json_free(list);
 }
-static void test_setup_events_are_hidden(void) {
-    Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"Installing dependencies\"},{\"seq\":2,\"kind\":\"text\",\"text\":\"Done\"}]");
+static void test_setup_events_are_shown_and_status_hidden(void) {
+    Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"SQLSTATE[HY000] Connection refused\"},{\"seq\":2,\"kind\":\"status\",\"status\":\"failed\"},{\"seq\":3,\"kind\":\"text\",\"text\":\"Done\"}]");
     Transcript t; transcript_init(&t); transcript_append(&t, events);
-    CHECK(!event_visible(&t.events[0]) && event_visible(&t.events[1]));
+    CHECK(event_visible(&t.events[0]) && !event_visible(&t.events[1]) && event_visible(&t.events[2]));
     transcript_free(&t); json_free(events);
 }
 static void test_optional_fields_and_unknown_statuses_do_not_break_decoding(void) {
@@ -820,7 +820,7 @@ int main(void) {
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },
         { "session reads review loop and held triage", test_session_reads_review_loop_and_held_triage },
         { "findings queue lists held rounds oldest first by pull request", test_findings_queue_lists_held_rounds_oldest_first_by_pull_request },
-        { "setup events are hidden", test_setup_events_are_hidden },
+        { "setup events are shown, status events hidden", test_setup_events_are_shown_and_status_hidden },
         { "optional fields and unknown statuses do not break decoding", test_optional_fields_and_unknown_statuses_do_not_break_decoding },
         { "session finds its pull request", test_session_finds_its_pull_request },
         { "markdown blocks and inline spans", test_markdown_blocks },

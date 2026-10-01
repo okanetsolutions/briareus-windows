@@ -359,7 +359,7 @@ bool event_parse(const Json *value, Event *out) {
 void event_free(Event *e) { if (!e) return; json_free(e->raw); memset(e, 0, sizeof *e); }
 const char *event_detail(const Event *e) { return e->text ? e->text : e->summary; }
 bool event_visible(const Event *e) {
-    if (str_eq(e->kind, "status") || str_eq(e->kind, "setup")) return false;
+    if (str_eq(e->kind, "status")) return false;
     return e->text || e->question || str_eq(e->kind, "tool") || str_eq(e->kind, "tool_error") || str_eq(e->kind, "result");
 }
 bool event_time(const Event *e, time_t *out) { return board_date_parse(e->t, out); }
