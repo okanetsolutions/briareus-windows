@@ -114,6 +114,10 @@ wchar_t check_glyph(const char *result, COLORREF *color);
 wchar_t review_glyph(ReviewStatus status, COLORREF *color);
 /// The glyph a tool event shows, from its name.
 wchar_t tool_glyph(const char *kind, const char *name, bool is_error);
+/// One tab of a `tabnav` row: a glyph, a title and an optional count, the open one underlined in the accent. Tabs run
+/// left to right from `*x`, wrapping to a new line of height `h` past `right`; `*x` and `*y` follow. The open tab is not
+/// clickable.
+void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg);
 /// "Never" for 0.
 int content_left(Pane *pane);
 

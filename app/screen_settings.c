@@ -342,12 +342,27 @@ static const RuntimeDef RUNTIMES[R_COUNT] = {
 };
 typedef struct { int provider_id; char *model, *effort; } RuntimePick;   // provider 0: the row's `none`
 
-enum { S_PROJECT, S_SETUP, S_DATABASE, S_REVIEW, S_ORCHESTRATOR, S_ENV, S_RUN, S_COUNT };
-static const char *const SECTIONS[S_COUNT] = { "Project", "Setup", "Database", "Code review", "Orchestrator", "Checkout .env", "Run" };
-/// Folded sections stay folded from one project to the next, as the dashboard's `<details>` do within the page.
-static bool g_folded[S_COUNT];
+/// The dashboard's sections, as tabs along the top of the form, the way the pull request page lays out its own.
+enum { T_PROJECT, T_SETUP, T_DATABASE, T_REVIEW, T_ORCHESTRATOR, T_ENV, T_RUN, T_COUNT };
+static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
+    [T_PROJECT] = { "Project", 0xE8B7 }, [T_SETUP] = { "Setup", 0xE90F }, [T_DATABASE] = { "Database", 0xE1D3 },
+    [T_REVIEW] = { "Code review", 0xE721 }, [T_ORCHESTRATOR] = { "Orchestrator", 0xE716 }, [T_ENV] = { "Checkout .env", 0xE8D7 },
+    [T_RUN] = { "Run", 0xE768 },
+};
+/// The open tab stays open from one project to the next, so comparing a setting across projects is one click each.
+static int g_tab;
+static int field_tab(int f) {
+    if (f <= F_LOCAL_DIR) return T_PROJECT;
+    if (f <= F_PHP) return T_SETUP;
+    if (f <= F_DB_RESTORE) return T_DATABASE;
+    if (f <= F_FEEDBACK_STEPS) return T_REVIEW;
+    if (f <= F_IS_SELF) return T_ORCHESTRATOR;
+    if (f == F_ENV) return T_ENV;
+    return T_RUN;
+}
+static int runtime_tab(int r) { return r == R_WORKER ? T_ORCHESTRATOR : T_REVIEW; }
 
-enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_SECTION, ACT_TOGGLE, ACT_PICK, ACT_FOCUS };
+enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_PICK, ACT_FOCUS };
 enum { ID_FIELD = 2000 };
 
 typedef struct {
@@ -356,7 +371,7 @@ typedef struct {
     int id;                // 0 until the project is saved
     HWND edits[F_COUNT];
     RECT rects[F_COUNT];   // each edit's place in content coordinates, from the last layout
-    bool laid[F_COUNT];    // laid out in the last layout: its section is open
+    bool laid[F_COUNT];    // laid out in the last layout: its tab is open
     bool clipped[F_COUNT];
     int lines[F_COUNT];    // a long box's lines, which it grows to show, as the dashboard's textareas do
     bool bools[F_COUNT];
@@ -364,6 +379,7 @@ typedef struct {
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
     bool dirty, filling, shown;
+    bool tab_dot;          // the open tab showed its unsaved-changes dot at the last layout
     int focused, focus_first;   // the field with the focus, and one to focus once the controls exist; -1 for none
     char *error;
 } FormScreen;
@@ -419,14 +435,14 @@ static char *field_text(const Json *row, int f) {
     if (FIELDS[f].kind == K_NUMBER) return json_num(v, &n) && isfinite(n) ? xstrfmt("%.10g", n) : xstrdup("");
     return xstrdup(json_str(v) ? json_str(v) : "");
 }
-static void read_picks(FormScreen *s) {
-    for (int r = 0; r < R_COUNT; r++) {
-        const RuntimeDef *d = &RUNTIMES[r];
-        const Json *src = d->step ? json_get(json_get(s->row, "stepRuntimes"), d->step) : s->row;
-        const char *pk = d->step ? "providerId" : d->provider_key, *mk = d->step ? "model" : d->model_key, *ek = d->step ? "effort" : d->effort_key;
-        pick_set(&s->picks[r], json_int_or(json_get(src, pk), 0), json_str(json_get(src, mk)), json_str(json_get(src, ek)));
-    }
+/// A picker's runtime as the row has it saved.
+static void row_pick(FormScreen *s, int r, RuntimePick *out) {
+    const RuntimeDef *d = &RUNTIMES[r];
+    const Json *src = d->step ? json_get(json_get(s->row, "stepRuntimes"), d->step) : s->row;
+    const char *pk = d->step ? "providerId" : d->provider_key, *mk = d->step ? "model" : d->model_key, *ek = d->step ? "effort" : d->effort_key;
+    pick_set(out, json_int_or(json_get(src, pk), 0), json_str(json_get(src, mk)), json_str(json_get(src, ek)));
 }
+static void read_picks(FormScreen *s) { for (int r = 0; r < R_COUNT; r++) row_pick(s, r, &s->picks[r]); }
 /// Fills every field from `s->row`. The edits only once they exist; the flags and pickers at once.
 static void form_fill(FormScreen *s) {
     for (int f = 0; f < F_COUNT; f++) if (!is_edit(f)) s->bools[f] = json_bool_is(json_get(s->row, FIELDS[f].key), true);
@@ -445,7 +461,7 @@ static void form_fill(FormScreen *s) {
 
 /// The body a save sends: the row the form came from with every field as it stands now. NULL with `*why` when a field
 /// cannot be sent as it is.
-static Json *form_body(FormScreen *s, char **why) {
+static Json *form_body(FormScreen *s, char **why, int *tab) {
     Json *body = json_is_object(s->row) ? json_clone(s->row) : json_object();
     // What the server sets itself, and the order, which belongs to the list's Move up and Move down rather than to one project.
     static const char *const server_keys[] = { "id", "createdAt", "updatedAt", "sortOrder" };
@@ -474,6 +490,7 @@ static Json *form_body(FormScreen *s, char **why) {
             else {
                 char *end; double n = strtod(t, &end);
                 if (*end || !isfinite(n) || n < 0) {
+                    *tab = field_tab(f);
                     *why = xstrfmt("%s must be a number of dollars, such as 25 or 12.5, or empty for no cap.", FIELDS[f].label);
                     free(t); free(text); json_free(body);
                     return NULL;
@@ -490,7 +507,7 @@ static Json *form_body(FormScreen *s, char **why) {
     char *repo = str_trim(json_str(json_get(body, "repo")) ? json_str(json_get(body, "repo")) : "");
     bool repo_ok = *repo && strchr(repo, '/') && repo[0] != '/' && repo[strlen(repo) - 1] != '/';
     free(repo);
-    if (!repo_ok) { *why = xstrdup("Enter the repository as owner/name."); json_free(body); return NULL; }
+    if (!repo_ok) { *why = xstrdup("Enter the repository as owner/name."); *tab = T_PROJECT; json_free(body); return NULL; }
     // The runtimes. A step left on "Same as the code review" is no entry at all rather than empty strings.
     bool has_steps = row_has(s, "stepRuntimes");
     Json *steps = json_is_object(json_get(body, "stepRuntimes")) ? json_clone(json_get(body, "stepRuntimes")) : json_object();
@@ -515,30 +532,53 @@ static Json *form_body(FormScreen *s, char **why) {
     return body;
 }
 
+static bool tab_changed(FormScreen *s, int t);
 static void form_changed(FormScreen *s) {
     if (s->filling) return;
     if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
+    // The open tab's dot comes and goes as its fields leave and return to what was saved.
+    bool changed = tab_changed(s, g_tab);
+    if (changed != s->tab_dot) { s->tab_dot = changed; pane_relayout(s->base.pane); }
 }
 
 // MARK: Layout
 
-static void paint_section(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    char *title = str_fold(it->text);
-    for (char *c = title; *c; c++) if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 'a' + 'A');
-    char *line = xstrfmt("%s %s", g_folded[it->arg] ? "\xE2\x96\xB8" : "\xE2\x96\xBE", title);
-    RECT t = *rc;
-    draw_text(hdc, line, &t, FONT_CAPTION_SEMIBOLD, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    free(line); free(title);
+/// Whether a tab holds a change not saved yet, for the dot after its title.
+static bool tab_changed(FormScreen *s, int t) {
+    for (int f = 0; f < F_COUNT; f++) {
+        if (field_tab(f) != t || !field_offered(s, f)) continue;
+        if (!is_edit(f)) { if (s->bools[f] != json_bool_is(json_get(s->row, FIELDS[f].key), true)) return true; continue; }
+        if (!s->edits[f]) continue;
+        char *now = edit_text(s->edits[f]), *saved = field_text(s->row, f);
+        bool differs = !str_eq(now, saved);
+        free(now); free(saved);
+        if (differs) return true;
+    }
+    for (int r = 0; r < R_COUNT; r++) {
+        if (runtime_tab(r) != t) continue;
+        RuntimePick saved = { 0 };
+        row_pick(s, r, &saved);
+        const RuntimePick *p = &s->picks[r];
+        bool differs = p->provider_id != saved.provider_id
+            || (p->provider_id && (!str_eq(p->model ? p->model : "", saved.model ? saved.model : "") || !str_eq(p->effort ? p->effort : "", saved.effort ? saved.effort : "")));
+        pick_clear(&saved);
+        if (differs) return true;
+    }
+    return false;
 }
-/// A section's summary, `▾ ORCHESTRATOR`, that folds it; true when it is open.
-static bool section(Doc *doc, int x, int w, int sec) {
-    if (sec) { doc_space(doc, px(6)); doc_rule(doc, x, w); }
-    doc_space(doc, px(14));
-    int i = doc_custom(doc, x, w, px(20), paint_section, NULL, NULL, ACT_SECTION, sec);
-    doc_item(doc, i)->text = xstrdup(SECTIONS[sec]);
-    doc_space(doc, px(10));
-    return !g_folded[sec];
+/// GitHub's `tabnav` over the form: one tab per section of the dashboard's form, a dot after any with unsaved changes.
+static void layout_tabs(FormScreen *s, Doc *doc, int x, int w) {
+    int h = px(42), tx = x, ty = doc->y;
+    for (int t = 0; t < T_COUNT; t++) {
+        bool changed = s->dirty && tab_changed(s, t);
+        if (t == g_tab) s->tab_dot = changed;
+        char *title = changed ? xstrfmt("%s \xE2\x80\xA2", TABS[t].title) : xstrdup(TABS[t].title);
+        doc_tab(doc, &tx, &ty, x, x + w, h, TABS[t].glyph, title, NULL, t == g_tab, ACT_TAB, t);
+        free(title);
+    }
+    doc->y = ty + h;
+    doc_rule(doc, x, w);
+    doc_space(doc, px(18));
 }
 
 static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
@@ -646,13 +686,15 @@ static void note(Doc *doc, int x, int w, const char *text) {
 static void form_layout(Screen *base, Doc *doc) {
     FormScreen *s = (FormScreen *)base;
     memset(s->laid, 0, sizeof s->laid);
-    // `mx-auto max-w-[720px]`
-    int col = doc->width < px(720) ? doc->width : px(720), x = (doc->width - col) / 2;
+    // The whole pane, as the pull request page uses it, rather than the dashboard's 720px column.
+    int col = doc->width, x = 0;
     doc_space(doc, px(8));
     char *why = settings_unavailable();
     if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
-    if (s->error) { doc_space(doc, px(10)); doc_notice_box(doc, x, col, s->error); doc_space(doc, px(4)); }
-    if (section(doc, x, col, S_PROJECT)) {
+    layout_tabs(s, doc, x, col);
+    if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
+    switch (g_tab) {
+    case T_PROJECT: {
         int gap = px(14), half = (col - gap) / 2, top = doc->y;
         field(s, doc, x, half, F_REPO);
         int left_bottom = doc->y;
@@ -660,13 +702,15 @@ static void form_layout(Screen *base, Doc *doc) {
         field(s, doc, x + half + gap, col - half - gap, F_LABEL);
         if (doc->y < left_bottom) doc->y = left_bottom;
         field(s, doc, x, col, F_LOCAL_DIR);
+        note(doc, x, col, "This project's own prompt wording is edited under Prompts on the web dashboard; saving here keeps it as it is.");
+        break;
     }
-    if (section(doc, x, col, S_SETUP)) { field(s, doc, x, col, F_SETUP); field(s, doc, x, col, F_PHP); }
-    if (section(doc, x, col, S_DATABASE)) {
+    case T_SETUP: field(s, doc, x, col, F_SETUP); field(s, doc, x, col, F_PHP); break;
+    case T_DATABASE:
         field(s, doc, x, col, F_DB_NAME); field(s, doc, x, col, F_DB_EXT);
         check(s, doc, x, col, F_DB_POOL); field(s, doc, x, col, F_DB_RESTORE);
-    }
-    if (section(doc, x, col, S_REVIEW)) {
+        break;
+    case T_REVIEW:
         field(s, doc, x, (col - px(28)) / 3, F_REVIEW_AUTHOR);
         runtime_row(s, doc, x, col, R_REVIEW);
         field(s, doc, x, col, F_PUBLISH);
@@ -677,18 +721,17 @@ static void form_layout(Screen *base, Doc *doc) {
         if (s->bools[F_TEST_RUN]) runtime_row(s, doc, x + px(23), col - px(23), R_TEST_RUN);
         doc_space(doc, px(4));
         field(s, doc, x, col, F_QA_NOTES); field(s, doc, x, col, F_SHEET_STEPS); field(s, doc, x, col, F_FEEDBACK_STEPS);
-    }
-    if (section(doc, x, col, S_ORCHESTRATOR)) {
+        break;
+    case T_ORCHESTRATOR:
         runtime_row(s, doc, x, col, R_WORKER);
         field(s, doc, x, col, F_BUDGET);
         note(doc, x, col, "The orchestrator's standing instructions for this project live under Prompts on the web dashboard, in the \xE2\x80\x9C" "Orchestrator instructions\xE2\x80\x9D template.");
         check(s, doc, x, col, F_IS_SELF);
         note(doc, x, col, "Tick it on the repository whose code is running right now, and on no other. An orchestrator on any project that finds a flaw in the tooling running it (a briefing, a worker tool, a loop) can then send a fix worker here, review loop armed, and merge its pull request once the loop approves and the checks are green. The running dashboard keeps its code until you redeploy.");
+        break;
+    case T_ENV: field(s, doc, x, col, F_ENV); break;
+    case T_RUN: field(s, doc, x, col, F_RUN); field(s, doc, x, col, F_PROFILES); break;
     }
-    if (section(doc, x, col, S_ENV)) field(s, doc, x, col, F_ENV);
-    if (section(doc, x, col, S_RUN)) { field(s, doc, x, col, F_RUN); field(s, doc, x, col, F_PROFILES); }
-    doc_space(doc, px(6)); doc_rule(doc, x, col); doc_space(doc, px(14));
-    note(doc, x, col, "This project's own prompt wording is edited under Prompts on the web dashboard; saving here keeps it as it is.");
     doc_space(doc, px(40));
 }
 
@@ -907,10 +950,12 @@ static void save_done(void *owner, Request *req) {
 }
 static void form_save(FormScreen *s) {
     if (s->req_save || s->req_delete || !store_supports(s->id ? "update_project" : "create_project")) return;
-    char *why = NULL;
-    Json *body = form_body(s, &why);
+    char *why = NULL; int tab = g_tab;
+    Json *body = form_body(s, &why, &tab);
     if (!body) {
+        // The tab holding the field at fault comes up with the reason above it.
         set_string(&s->error, why); free(why);
+        g_tab = tab;
         pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
     }
@@ -942,14 +987,15 @@ static void form_delete(FormScreen *s) {
     pane_header_changed(s->base.pane);
 }
 static void form_clone(FormScreen *s) {
-    char *why = NULL;
-    Json *copy = form_body(s, &why);
-    if (!copy) { set_string(&s->error, why); free(why); pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }
+    char *why = NULL; int tab = g_tab;
+    Json *copy = form_body(s, &why, &tab);
+    if (!copy) { set_string(&s->error, why); free(why); g_tab = tab; pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }
     // The copy carries what the form holds now, saved or not; the repository is unique, so it starts without one.
     json_set_str(copy, "repo", "");
     s->dirty = false;
     Screen *clone = project_settings_screen_new(copy, NULL);
     ((FormScreen *)clone)->focus_first = F_REPO;
+    g_tab = T_PROJECT;
     json_free(copy);
     app_show_detail(clone);
 }
@@ -971,7 +1017,13 @@ static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_SAVE: form_save(s); break;
     case ACT_CLONE: form_clone(s); break;
     case ACT_DELETE: form_delete(s); break;
-    case ACT_SECTION: if (arg >= 0 && arg < S_COUNT) { g_folded[arg] = !g_folded[arg]; pane_relayout(base->pane); } break;
+    case ACT_TAB:
+        if (arg < 0 || arg >= T_COUNT) break;
+        // The focus leaves with the boxes of the tab that closes.
+        if (s->focused >= 0) SetFocus(pane_hwnd(base->pane));
+        g_tab = (int)arg;
+        pane_relayout(base->pane); pane_scroll_to_top(base->pane);
+        break;
     case ACT_TOGGLE: if (arg >= 0 && arg < F_COUNT) { s->bools[arg] = !s->bools[arg]; form_changed(s); pane_relayout(base->pane); } break;
     case ACT_PICK: if (arg >= 0 && arg < R_COUNT * 3) pick(s, (int)arg / 3, (int)arg % 3, pt); break;
     case ACT_FOCUS: if (arg >= 0 && arg < F_COUNT && s->edits[arg] && field_enabled(s, (int)arg)) SetFocus(s->edits[arg]); break;
@@ -1042,7 +1094,8 @@ Screen *project_settings_screen_new(const Json *row, const Json *defaults) {
     s->row = json_is_object(row) ? json_clone(row) : json_is_object(defaults) ? json_clone(defaults) : json_object();
     s->id = row_id(s->row);
     s->base.id = form_id(s->id);
-    if (!s->id) s->focus_first = F_REPO;
+    // A new project starts where its repository is typed.
+    if (!s->id) { s->focus_first = F_REPO; g_tab = T_PROJECT; }
     form_fill(s);
     return &s->base;
 }
