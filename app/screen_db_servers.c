@@ -1,6 +1,6 @@
 // One server of the database pool, as the dashboard's database server form, its fields on tabs along the top as the
-// project form lays out its own: Server, Credentials (with Test connection) and Pool. Saved through /settings/db-servers,
-// which needs an Admin token as the project routes do.
+// project form lays out its own: Server (where it is, how sessions sign in to it, and Test connection) and Pool. Saved
+// through /settings/db-servers, which needs an Admin token as the project routes do.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -25,13 +25,13 @@ static const FieldDef FIELDS[F_COUNT] = {
 };
 static const char *const ENABLED_KEY = "enabled";
 
-enum { T_SERVER, T_CREDENTIALS, T_POOL, T_COUNT };
+/// Every field is on Server; Pool only reads.
+enum { T_SERVER, T_POOL, T_COUNT };
 static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
-    [T_SERVER] = { "Server", 0xE1D3 }, [T_CREDENTIALS] = { "Credentials", 0xE72E }, [T_POOL] = { "Pool", 0xE716 },
+    [T_SERVER] = { "Server", 0xE1D3 }, [T_POOL] = { "Pool", 0xE716 },
 };
 /// The open tab stays open from one server to the next, as the project form's does.
 static int g_tab;
-static int field_tab(int f) { return f <= F_PORT ? T_SERVER : T_CREDENTIALS; }
 
 enum { ACT_SAVE = 1200, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_FOCUS, ACT_TEST };
 enum { ID_FIELD = 2100 };
@@ -110,9 +110,10 @@ static Json *form_body(DbForm *s, char **why) {
 }
 
 static bool tab_changed(DbForm *s, int t) {
-    if (t == T_SERVER && row_has(s, ENABLED_KEY) && s->enabled != json_bool_is(json_get(s->row, ENABLED_KEY), true)) return true;
+    if (t != T_SERVER) return false;
+    if (row_has(s, ENABLED_KEY) && s->enabled != json_bool_is(json_get(s->row, ENABLED_KEY), true)) return true;
     for (int f = 0; f < F_COUNT; f++) {
-        if (field_tab(f) != t || !s->edits[f] || !row_has(s, FIELDS[f].key)) continue;
+        if (!s->edits[f] || !row_has(s, FIELDS[f].key)) continue;
         char *now = edit_text(s->edits[f]), *saved = field_text(s->row, f);
         bool differs = !str_eq(now, saved);
         free(now); free(saved);
@@ -258,8 +259,7 @@ static void form_layout(Screen *base, Doc *doc) {
         field(s, doc, x, col, F_LABEL);
         field_pair(s, doc, x, col, F_HOST, F_PORT, px(140));
         note(doc, x, col, "Host and port are unique in the pool. A label left empty is host:port.");
-        break;
-    case T_CREDENTIALS:
+        doc_space(doc, px(8));
         field_pair(s, doc, x, col, F_USERNAME, F_PASSWORD, 0);
         note(doc, x, col, "The user sessions connect as. It needs the rights to create the databases its projects name.");
         layout_test(s, doc, x, col);
