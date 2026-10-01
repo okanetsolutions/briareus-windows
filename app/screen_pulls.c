@@ -1021,15 +1021,6 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     doc_rule(doc, c.x, c.w);
 }
 
-/// The author's initial in a circle, where GitHub shows the avatar.
-typedef struct { char initial[8]; } AvatarData;
-static void paint_avatar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    (void)doc;
-    AvatarData *d = it->data;
-    int r = (rc->right - rc->left) / 2;
-    fill_circle(cv, rc->left + r, rc->top + r, r, blend(theme.accent, theme.canvas, 0.35));
-    RECT t = *rc; draw_text(cv, d->initial, &t, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
 /// `.timeline-comment-header`: a tinted strip with `author commented · updated …`, a review's verdict glyph first.
 typedef struct { char *author, *when; wchar_t glyph; COLORREF glyph_color; } CommentHeadData;
 static void comment_head_free(void *p) { CommentHeadData *d = p; free(d->author); free(d->when); free(d); }
@@ -1068,17 +1059,10 @@ static char *visible_markdown(const char *body) {
     str_free(&out);
     return result;
 }
-/// A timeline comment: the avatar where there is room, then a box opened with its header (`h`, which is taken). Returns
-/// the box for doc_box_end, with the inner column in `ix`/`iw`. A header with an action opens the comment on GitHub.
+/// A timeline comment: a box opened with its header (`h`, which is taken). Returns the box for doc_box_end, with the
+/// inner column in `ix`/`iw`. A header with an action opens the comment on GitHub.
 static int comment_begin(Doc *doc, Col c, CommentHeadData *h, int action, intptr_t arg, int *ix, int *iw) {
-    int x = c.x, w = c.w, top = doc->y;
-    if (h->author && *h->author && c.w >= px(520)) {
-        AvatarData *a = xcalloc(1, sizeof *a);
-        // The first character of the login, which is ASCII on GitHub.
-        a->initial[0] = (char)((h->author[0] >= 'a' && h->author[0] <= 'z') ? h->author[0] - 32 : h->author[0]);
-        doc_custom(doc, x, px(36), px(36), paint_avatar, a, free, 0, 0);
-        doc->y = top; x += px(48); w -= px(48);
-    }
+    int x = c.x, w = c.w;
     int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
     doc_item(doc, box)->hover_fill = false;
     int hi = doc_custom(doc, x + 1, w - 2, px(38), paint_comment_head, h, comment_head_free, action, arg);
