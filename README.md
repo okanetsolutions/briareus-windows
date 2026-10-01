@@ -81,4 +81,4 @@ A revoked or expired token returns the app to pairing. Forgetting the connection
 
 ## Contributing and license
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Every pull request is built and tested with GCC and MSVC by the CI workflow, and pushing a `v*` tag publishes a release. Licensed under the [MIT License](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Every pull request is built and tested with GCC and MSVC by the CI workflow, and every pull request merged into `main` is published as a release with the next minor version. Licensed under the [MIT License](LICENSE).

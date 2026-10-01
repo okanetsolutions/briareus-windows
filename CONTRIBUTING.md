@@ -41,7 +41,7 @@ The same build and tests run in CI for every pull request, with both GCC and MSV
 2. Make the change with its tests.
 3. Open a pull request describing what changed and why, and how you checked it. CI must pass before it is merged.
 
-Releases are cut by pushing a `v*` tag; the release workflow builds, strips and publishes the executable.
+Every pull request merged into `main` is released: the release workflow bumps the minor version in `app/resource.h`, commits it as "Version resource x.y.z", tags `vx.y.z`, then builds, strips and publishes the executable. Pushing a `v*` tag by hand still publishes that tag as it is.
 
 ## License
 
