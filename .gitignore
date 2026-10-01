@@ -1,7 +1,44 @@
+# Build output (Makefile and build.bat both write here)
 build/
 *.o
 *.obj
 *.exe
+*.dll
+*.lib
+*.a
+*.exp
 *.pdb
 *.ilk
 *.res
+*.aps
+*.zip
+
+# Visual Studio and MSVC
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.*
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code: local settings and worktrees stay on each machine
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp

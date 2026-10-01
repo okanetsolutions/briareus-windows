@@ -42,3 +42,7 @@ The same build and tests run in CI for every pull request, with both GCC and MSV
 3. Open a pull request describing what changed and why, and how you checked it. CI must pass before it is merged.
 
 Releases are cut by pushing a `v*` tag; the release workflow builds, strips and publishes the executable.
+
+## License
+
+Briareus for Windows is released under the [MIT License](LICENSE). By sending a pull request you agree that your contribution is licensed under the same terms.

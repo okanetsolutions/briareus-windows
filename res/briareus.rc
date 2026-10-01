@@ -77,6 +77,7 @@ BEGIN
             VALUE "FileDescription", "Briareus for Windows"
             VALUE "FileVersion", APP_VERSION_STRING
             VALUE "InternalName", "Briareus"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Okanet Solutions. MIT License."
             VALUE "OriginalFilename", "Briareus.exe"
             VALUE "ProductName", "Briareus"
             VALUE "ProductVersion", APP_VERSION_STRING
