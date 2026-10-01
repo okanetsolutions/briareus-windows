@@ -1,5 +1,6 @@
 // The dashboard's opening view: "Welcome back", and the composer that starts a session, with its row of chips for the
 // project, branch, provider, model, effort and the loops.
+#include "attach_list.h"
 #include "screens.h"
 #include "str.h"
 #include "voice.h"
@@ -24,9 +25,10 @@ typedef struct {
     char *error;
     HWND composer; int composer_lines; RECT composer_rc; bool focused;
     VoiceNote *voice;
+    AttachList *files;
     // footer hit rects, from the last paint
     RECT chip_rc[CHIP_COUNT]; bool chip_on[CHIP_COUNT];
-    RECT mic_rc, send_rc, box_rc;
+    RECT mic_rc, send_rc, box_rc, attach_rc;
     int chips_h;
 } NewSessionScreen;
 
@@ -50,6 +52,10 @@ static void set_composer_text(NewSessionScreen *s, const char *text) {
     pane_footer_changed(s->base.pane);
 }
 static bool composer_empty(NewSessionScreen *s) { char *t = composer_text(s); char *trimmed = str_trim(t); bool e = !*trimmed; free(t); free(trimmed); return e; }
+/// A session starts on a prompt, on files, or on both; never while a file is still uploading.
+static bool can_start(NewSessionScreen *s) {
+    return !s->busy && !s->uncertain && project(s) && (!composer_empty(s) || attach_list_count(s->files)) && !attach_list_uploading(s->files);
+}
 
 // MARK: - What the chips offer
 
@@ -122,6 +128,7 @@ static void start_done(void *owner, Request *req) {
     Session started;
     if (req->ok && session_parse(json_get(req->result, "session"), &started)) {
         set_composer_text(s, "");
+        attach_list_sent(s->files, json_get(req->args, "attachments"));
         // The loop the chip asked for that the server does not arm by default.
         if (!s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
             Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
@@ -138,10 +145,13 @@ static void start_done(void *owner, Request *req) {
 }
 static void start(NewSessionScreen *s) {
     const Project *p = project(s);
-    if (s->busy || s->uncertain || !p || composer_empty(s) || !store_supports("start_session")) return;
+    if (!can_start(s) || !store_supports("start_session")) return;
     char *prompt = composer_text(s);
     Json *args = json_object();
-    json_set_str(args, "repo", p->repo); json_set_str(args, "prompt", prompt);
+    json_set_str(args, "repo", p->repo);
+    if (!composer_empty(s)) json_set_str(args, "prompt", prompt);
+    Json *ids = attach_list_ids(s->files);
+    if (ids) json_object_set(args, "attachments", ids);
     if (s->branch) json_set_str(args, "branch", s->branch);
     free(prompt);
     if (s->has_runtime) { Json *rt = runtime_choice_arguments(&s->runtime); json_object_merge(args, rt); json_free(rt); }
@@ -155,6 +165,9 @@ static LRESULT CALLBACK composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     if (msg == WM_KEYDOWN && wp == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000) && !(GetKeyState(VK_CONTROL) & 0x8000)) { start(s); return 0; }
     if (msg == WM_CHAR && wp == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000) && !(GetKeyState(VK_CONTROL) & 0x8000)) return 0;
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+    // Ctrl+V and Shift+Insert both reach the control as WM_PASTE; a file or image becomes an attachment, text pastes as ever.
+    if (msg == WM_PASTE && attach_list_paste(s->files)) return 0;
+    if (msg == WM_DROPFILES) { attach_list_drop(s->files, (HDROP)wp); return 0; }
     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) { s->focused = msg == WM_SETFOCUS; pane_footer_changed(s->base.pane); }
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, composer_proc, id);
     return DefSubclassProc(hwnd, msg, wp, lp);
@@ -284,13 +297,15 @@ static int composer_height(NewSessionScreen *s, Canvas *cv) {
     (void)cv;
     return lines * line_h;
 }
-/// `#composer-wrap`: 8px above, the chips, 8px, the box (10px, the text, 6px, the 30px buttons, 8px), 6px, a 16px note, 14px below.
+/// `#composer-wrap`: 8px above, the chips, 8px, the box (10px, the files, the text, 6px, the 30px buttons, 8px), 6px, a
+/// 16px note, 14px below.
 static int new_session_footer_height(Screen *base, int width) {
     NewSessionScreen *s = (NewSessionScreen *)base;
     Canvas *cv = NULL;   // measuring only
     int inner = width - px(24) * 2; if (inner > px(860)) inner = px(860);
     int chips = chips_layout(s, cv, inner, NULL);
-    int h = px(8) + chips + px(8) + (px(10) + composer_height(s, cv) + px(6) + px(30) + px(8) + 2) + px(6) + px(16) + px(14);
+    int files = attach_list_height(s->files, cv, inner - px(24));
+    int h = px(8) + chips + px(8) + (px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2) + px(6) + px(16) + px(14);
     return h;
 }
 static RECT footer_column(const RECT *rc) {
@@ -304,9 +319,10 @@ static void new_session_footer_layout(Screen *base, const RECT *rc) {
     Canvas *cv = NULL;   // measuring only
     RECT col = footer_column(rc);
     int chips = chips_layout(s, cv, col.right - col.left, NULL);
+    int files = attach_list_height(s->files, cv, col.right - col.left - px(24));
     int ch = composer_height(s, cv);
     int top = col.top + px(8) + chips + px(8);
-    RECT er = { col.left + px(12) + 1, top + px(10) + 1, col.right - px(12) - 1, top + px(10) + 1 + ch };
+    RECT er = { col.left + px(12) + 1, top + px(10) + 1 + files, col.right - px(12) - 1, top + px(10) + 1 + files + ch };
     s->composer_rc = er;
     MoveWindow(s->composer, er.left, er.top, er.right - er.left, er.bottom - er.top, TRUE);
     ShowWindow(s->composer, SW_SHOW);
@@ -339,12 +355,21 @@ static void new_session_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     // The box: `rounded-2xl border border-line bg-raise px-3 pt-2.5 pb-2 focus-within:border-line-strong`.
     int top = y0 + chips + px(8);
     int ch = composer_height(s, cv);
-    RECT box = { col.left, top, col.right, top + px(10) + ch + px(6) + px(30) + px(8) + 2 };
+    int files = attach_list_height(s->files, cv, width - px(24));
+    RECT box = { col.left, top, col.right, top + px(10) + files + ch + px(6) + px(30) + px(8) + 2 };
     s->box_rc = box;
     fill_round_rect(cv, &box, px(16), theme.raise, s->focused ? theme.line_strong : theme.line);
-    int row_y = box.top + px(10) + 1 + ch + px(6), bh = px(30), bw = px(32);
-    memset(&s->mic_rc, 0, sizeof s->mic_rc);
+    attach_list_paint(s->files, cv, box.left + px(12), box.top + px(10) + 1, width - px(24));
+    int row_y = box.top + px(10) + 1 + files + ch + px(6), bh = px(30), bw = px(32);
+    memset(&s->mic_rc, 0, sizeof s->mic_rc); memset(&s->attach_rc, 0, sizeof s->attach_rc);
     int x = box.left + px(12);
+    // `#btn-attach`: the 📎 left of the microphone, for files the clipboard or a drop cannot bring.
+    if (attach_list_supported(s->files)) {
+        RECT attach = { x, row_y, x + bw, row_y + bh };
+        s->attach_rc = attach;
+        attach_button_paint(cv, &attach, !s->busy && attach_list_count(s->files) < ATTACHMENTS_MAX);
+        x += bw + px(6);
+    }
     VoiceState vs = s->voice ? voice_state(s->voice) : VOICE_IDLE;
     if (store_can_transcribe()) {
         RECT mic = { x, row_y, x + bw, row_y + bh };
@@ -355,12 +380,12 @@ static void new_session_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     }
     RECT send = { box.right - px(12) - bw, row_y, box.right - px(12), row_y + bh };
     s->send_rc = send;
-    bool enabled = !s->busy && !s->uncertain && !composer_empty(s) && project(s) != NULL;
+    bool enabled = can_start(s);
     fill_round_rect(cv, &send, px(8), enabled ? theme.accent : theme.field, enabled ? theme.accent : theme.field);
     draw_text(cv, "\xE2\x86\xB5", &send, FONT_BODY, enabled ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     // The note under the box.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
-    const char *text = s->busy ? "Starting the session\xE2\x80\xA6" : s->error ? s->error : "";
+    const char *text = s->busy ? "Starting the session\xE2\x80\xA6" : s->error ? s->error : attach_list_uploading(s->files) ? "Uploading\xE2\x80\xA6" : "";
     draw_text(cv, text, &note, FONT_FOOTNOTE, s->error && !s->busy ? theme.danger : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
@@ -451,6 +476,8 @@ static void new_session_footer_click(Screen *base, POINT pt) {
     NewSessionScreen *s = (NewSessionScreen *)base;
     for (int c = 0; c < CHIP_COUNT; c++) if (!IsRectEmpty(&s->chip_rc[c]) && PtInRect(&s->chip_rc[c], pt)) { pick_chip(s, c); return; }
     if (PtInRect(&s->send_rc, pt)) { start(s); return; }
+    if (!s->busy && attach_list_click(s->files, pt)) return;
+    if (PtInRect(&s->attach_rc, pt)) { if (!s->busy) attach_list_pick(s->files); return; }
     if (PtInRect(&s->mic_rc, pt) && s->voice) {
         VoiceState vs = voice_state(s->voice);
         if (vs == VOICE_RECORDING) voice_stop(s->voice); else if (vs == VOICE_IDLE) voice_record(s->voice);
@@ -501,6 +528,7 @@ static void new_session_destroy(Screen *base) {
     request_cancel(&s->req_runtimes); request_cancel(&s->req_branches); request_cancel(&s->req_start); request_cancel(&s->req_projects);
     if (base->pane) KillTimer(pane_hwnd(base->pane), TIMER_VOICE);
     if (s->voice) voice_free(s->voice);
+    attach_list_free(s->files);
     if (s->composer) DestroyWindow(s->composer);
     projects_free(s->projects, s->count);
     if (s->has_catalog) runtime_catalog_free(&s->catalog);
@@ -536,6 +564,8 @@ Screen *new_session_screen_new(const Project *project_, const Project *projects,
     SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Describe what to build\x2026");
     SetWindowSubclass(s->composer, composer_proc, ID_COMPOSER, (DWORD_PTR)s);
     theme_apply_control(s->composer);
+    DragAcceptFiles(s->composer, TRUE);
+    s->files = attach_list_new(&s->base, "start_session");
     if (store_can_transcribe()) s->voice = voice_new(voice_changed, s);
     return &s->base;
 }

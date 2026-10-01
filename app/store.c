@@ -61,7 +61,8 @@ bool store_supports(const char *call) {
     if (!route || !g_store.has_device) return false;
     return routes_allow(g_store.routes, g_store.route_count, route->method, route->path, g_store.device.permission);
 }
-bool store_supports_attachments(void) { return store_can_manage() && store_supports("upload") && store_supports("message"); }
+bool store_supports_attachments_on(const char *call) { return store_can_manage() && store_supports("upload") && store_supports(call); }
+bool store_supports_attachments(void) { return store_supports_attachments_on("message"); }
 
 // MARK: - Async
 
@@ -304,7 +305,7 @@ Request *store_transcribe(const void *audio, size_t len, const char *content_typ
 Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);
     r->file = bytes ? bytes : xmalloc(1); r->file_len = len; r->file_name = xstrdup(name ? name : "file");
-    if (!g_store.client || !store_supports_attachments()) { request_refuse(r, "This server does not take files with a message."); return r; }
+    if (!g_store.client || !store_can_manage() || !store_supports("upload")) { request_refuse(r, "This server does not take files with a message."); return r; }
     request_start(r);
     return r;
 }

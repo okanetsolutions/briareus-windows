@@ -224,3 +224,10 @@ void attacher_from_drop(Attacher *a, HDROP drop) {
     if (!job->path_count) { job_free(job); return; }
     async_run(attach_work, attach_done, job);
 }
+void attacher_from_paths(Attacher *a, const wchar_t *const *paths, size_t count) {
+    if (!count) return;
+    AttachJob *job = job_new(a);
+    job->paths = xmalloc(count * sizeof *job->paths);
+    for (size_t i = 0; i < count; i++) job->paths[job->path_count++] = _wcsdup(paths[i]);
+    async_run(attach_work, attach_done, job);
+}
