@@ -18,10 +18,12 @@ APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -
 CORE_SRC = $(wildcard core/*.c)
 APP_SRC  = $(wildcard app/*.c)
 APP_CXX  = $(wildcard app/*.cpp)
-TEST_SRC = $(wildcard tests/*.c)
+CORE_TEST_SRC = tests/harness.c $(wildcard tests/core_*.c)
+APP_TEST_SRC  = tests/harness.c $(wildcard tests/app_*.c)
 CORE_OBJ = $(patsubst core/%.c,$(BUILD)/core/%.o,$(CORE_SRC))
 APP_OBJ  = $(patsubst app/%.c,$(BUILD)/app/%.o,$(APP_SRC)) $(patsubst app/%.cpp,$(BUILD)/app/%.o,$(APP_CXX))
-TEST_OBJ = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(TEST_SRC))
+CORE_TEST_OBJ = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(CORE_TEST_SRC))
+APP_TEST_OBJ  = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(APP_TEST_SRC))
 RES      = $(BUILD)/briareus.res.o
 
 .PHONY: all app test clean run
@@ -33,11 +35,16 @@ app: $(BUILD)/Briareus.exe
 $(BUILD)/Briareus.exe: $(CORE_OBJ) $(APP_OBJ) $(RES)
 	$(CC) $(CFLAGS) -municode -mwindows -o $@ $^ $(LDFLAGS) $(APP_LIBS)
 
-$(BUILD)/core_tests.exe: $(CORE_OBJ) $(TEST_OBJ)
+$(BUILD)/core_tests.exe: $(CORE_OBJ) $(CORE_TEST_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(CORE_LIBS)
 
-test: $(BUILD)/core_tests.exe
+# The app's objects, its WinMain included, under a console main of the tests' own: the shared helpers run without a window.
+$(BUILD)/app_tests.exe: $(CORE_OBJ) $(APP_OBJ) $(APP_TEST_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(APP_LIBS)
+
+test: $(BUILD)/core_tests.exe $(BUILD)/app_tests.exe
 	$(BUILD)/core_tests.exe
+	$(BUILD)/app_tests.exe
 
 run: app
 	$(BUILD)/Briareus.exe
@@ -51,7 +58,7 @@ $(BUILD)/app/%.o: app/%.c app/*.h core/*.h | $(BUILD)/app
 $(BUILD)/app/%.o: app/%.cpp app/*.h core/*.h | $(BUILD)/app
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BUILD)/tests/%.o: tests/%.c core/*.h | $(BUILD)/tests
+$(BUILD)/tests/%.o: tests/%.c tests/*.h app/*.h core/*.h | $(BUILD)/tests
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(RES): res/briareus.rc res/briareus.manifest res/briareus.ico app/resource.h | $(BUILD)

@@ -7,14 +7,12 @@
 #include "markdown.h"
 #include "models.h"
 #include "str.h"
+#include "suites.h"
+#include "test.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
-
-static int failures = 0, checks = 0;
-#define CHECK(cond) do { checks++; if (!(cond)) { failures++; printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); } } while (0)
-#define CHECK_STR(a, b) do { checks++; const char *_a = (a), *_b = (b); if (!str_eq(_a, _b)) { failures++; printf("  FAIL %s:%d: \"%s\" != \"%s\"\n", __FILE__, __LINE__, _a ? _a : "(null)", _b ? _b : "(null)"); } } while (0)
 
 static const char *TOKEN = "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -887,12 +885,14 @@ int main(void) {
         { "review status and stacks", test_review_status_and_stacks },
         { "JSON round trips", test_json_round_trips },
     };
-    size_t count = sizeof tests / sizeof *tests;
-    for (size_t i = 0; i < count; i++) {
-        int before = failures;
-        tests[i].fn();
-        printf("%s %s\n", failures == before ? "ok  " : "FAIL", tests[i].name);
-    }
-    printf("\n%zu tests, %d checks, %d failures\n", count, checks, failures);
-    return failures ? 1 : 0;
+    for (size_t i = 0; i < sizeof tests / sizeof *tests; i++) test_run(tests[i].name, tests[i].fn);
+    str_tests();
+    json_tests();
+    markdown_tests();
+    diff_tests();
+    models_tests();
+    board_tests();
+    api_tests();
+    cache_tests();
+    return test_summary();
 }
