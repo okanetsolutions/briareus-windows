@@ -459,7 +459,7 @@ Screen *pulls_screen_new(const Project *project) {
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
-    ACT_DELETE_RUN, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY,
+    ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
@@ -1008,6 +1008,9 @@ static void paint_diffstat(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     }
 }
 static const char *run_shown_profile(PullScreen *s);
+static void paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
+/// The session the Run tab shows: the one serving it, else the one being prepared for it.
+static const char *run_target(PullScreen *s) { return s->run_session ? s->run_session : s->log_session; }
 static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
     bool loaded = !json_is_null(s->pr);
@@ -1043,6 +1046,16 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
         doc_tab(doc, &x, &y, c.ix, right, h, 0xE768, title, NULL, on, ACT_PR_TAB, PR_TAB_RUN);
         free(title);
         if (on && s->profile_count) { Item *it = doc_item(doc, (int)doc->count - 1); it->action = ACT_RUN_PROFILE; it->hand = true; }
+        // Beside the open tab, a trash button deletes the run's session, and the workspace serving it with it.
+        if (on && run_target(s) && store_supports("delete")) {
+            int bw = px(28);
+            RECT br = { x + px(4), y + (h - bw) / 2, x + px(4) + bw, y + (h + bw) / 2 };
+            Item *it = doc_item(doc, doc_add(doc, &br, paint_delete_run));
+            // cppcheck-suppress intToPointerCast
+            it->data = str_eq(s->deleting_run, run_target(s)) ? (void *)1 : NULL;   // a marker only, never freed
+            if (!s->deleting_run) { it->action = ACT_DELETE_SERVED; it->hand = true; }
+            x += bw + px(8);
+        }
     }
     if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
     doc->y = y + h;
@@ -1444,11 +1457,24 @@ static void layout_runs(PullScreen *s, Doc *doc, Col c) {
     }
 }
 
+/// The Run tab's session was deleted, and the workspace serving it with it: the tab forgets it and gives way to the PR
+/// body; opening it again prepares a new one.
+static void run_forget(PullScreen *s) {
+    request_cancel(&s->req_run); request_cancel(&s->req_log);
+    s->run_busy = false; s->run_pending = false;
+    set_string(&s->run_session, NULL); set_string(&s->run_url, NULL); set_string(&s->run_profile, NULL);
+    set_string(&s->run_asked, NULL); set_string(&s->serve_error, NULL);
+    set_string(&s->log_session, NULL); run_log_clear(&s->log);
+    webview_free(s->web); s->web = NULL;
+    if (s->tab == PR_TAB_RUN) s->tab = PR_TAB_BODY;
+    if (s->base.pane) { KillTimer(pane_hwnd(s->base.pane), TIMER_RUN_LOG); pane_header_changed(s->base.pane); }
+}
 static void delete_run_done(void *owner, Request *req) {
     PullScreen *s = owner;
     const char *id = json_str(json_get(req->args, "sessionId"));
     if (req->ok) {
         set_string(&s->run_error, NULL);
+        if (str_eq(id, s->run_session) || str_eq(id, s->log_session)) run_forget(s);
         // The sidebar drops the row now instead of at its next poll, and so does this list.
         sessions_forget(s->project.repo, id);
         for (size_t i = 0; i < s->run_count; i++) {
@@ -1621,6 +1647,7 @@ static const char *run_shown_profile(PullScreen *s) {
 /// what is happening written in it until the page is up. The tab itself is the run profile dropdown.
 static void layout_run(PullScreen *s, Doc *doc, int w) {
     RECT view = pane_content_rect(s->base.pane);
+    if (s->run_error) { doc_notice(doc, px(4), w - px(8), s->run_error); doc_space(doc, px(10)); }
     bool page = s->run_url && !s->run_busy && s->web && webview_ready(s->web);
     if (page && s->serve_error) { doc_text(doc, px(4), w - px(8), s->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
     int area = doc->y, h = (view.bottom - view.top) - area - px(12);
@@ -2037,6 +2064,22 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         free(title); free(message);
         if (ok) start_action(s, &a, NULL);
         board_action_free(&a);
+        break;
+    }
+    case ACT_DELETE_SERVED: {
+        if (!run_target(s) || s->deleting_run || !store_supports("delete")) break;
+        char *id = xstrdup(run_target(s));
+        s->dialog_open = true;
+        bool ok = app_confirm("Delete this run?", "Its workspace stops serving the pull request, and its conversation and transcript are deleted permanently.", "Delete", true);
+        s->dialog_open = false;
+        // The run may have changed while the dialog was open: delete the one asked about only if it is still shown.
+        if (ok && !s->deleting_run && str_eq(id, run_target(s))) {
+            set_string(&s->deleting_run, id); set_string(&s->run_error, NULL);
+            Json *args = json_object(); json_set_str(args, "sessionId", id);
+            store_call("delete", args, 0, s, delete_run_done, TAG_DELETE_RUN, &s->req_delete_run);
+            pane_relayout(s->base.pane);
+        }
+        free(id);
         break;
     }
     case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
