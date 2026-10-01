@@ -251,12 +251,6 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
     if (!ok) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return ok;
 }
-bool api_revoke(ApiClient *c, ApiError *error) {
-    Json *j = request(c, "token", "DELETE", NULL, 0, error);
-    if (!j) return false;
-    json_free(j);
-    return true;
-}
 
 // MARK: - Calls
 

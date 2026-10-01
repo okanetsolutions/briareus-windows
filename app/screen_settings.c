@@ -1,7 +1,7 @@
-// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects,
-// the providers and the database pool, each with ＋ New) and a project's form, its sections and fields laid out as the
-// dashboard's, saved through /settings/projects. The provider form is screen_provider_settings.c and a database server's
-// screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
+// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the projects, the providers and the
+// database pool, each with ＋ New) and a project's form, its sections and fields laid out as the dashboard's, saved through
+// /settings/projects. The provider form is screen_provider_settings.c and a database server's screen_db_servers.c. Those
+// routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -11,7 +11,7 @@
 #include <string.h>
 
 static void sign_out(void) {
-    if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. The token itself is revoked from Connection.", "Sign out", true)) return;
+    if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. Revoke the token itself in web Settings.", "Sign out", true)) return;
     store_forget();
 }
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
@@ -35,7 +35,7 @@ static char *settings_unavailable(void) {
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER };
+enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -59,18 +59,10 @@ typedef struct {
 /// The settings sidebar on screen, for a form to tell when the list changed.
 static SettingsScreen *g_settings;
 
-typedef struct { const char *text; bool selected; } NavData;
 static void paint_back(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     RECT t = { rc->left + px(6), rc->top, rc->right, rc->bottom };
     draw_text(cv, "\xE2\x86\x90 Back to sessions", &t, FONT_CAPTION, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-}
-static void paint_nav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    NavData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
-    RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
-    draw_text(cv, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 typedef struct { char *label, *repo; bool enabled, db, selected; } ProjectRowData;
@@ -143,9 +135,9 @@ static void settings_done(void *owner, Request *req) {
     json_object_set(s->projects, "defaults", json_clone(json_get(req->result, "defaults")));
     pane_relayout(s->base.pane);
     // The dashboard's settings page opens on its first project, or on a new one when there is none; so does this,
-    // unless a settings form or Devices and clients is already up.
+    // unless a settings form is already up.
     Screen *root = pane_root(app_detail_pane());
-    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (root && is_form_id(root->id)) return;
     if (json_count(settings_rows(s))) settings_open_row(s, 0);
     else app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
 }
@@ -167,7 +159,7 @@ static void providers_done(void *owner, Request *req) {
     if (!s->open_first_provider) return;
     s->open_first_provider = false;
     Screen *root = pane_root(app_detail_pane());
-    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (root && is_form_id(root->id)) return;
     if (json_count(provider_rows(s))) settings_open_provider(s, 0);
     else app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults")));
 }
@@ -200,7 +192,7 @@ static void servers_done(void *owner, Request *req) {
     if (!s->open_first_server) return;
     s->open_first_server = false;
     Screen *root = pane_root(app_detail_pane());
-    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (root && is_form_id(root->id)) return;
     if (json_count(server_rows(s))) servers_open_row(s, 0);
     else app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults")));
 }
@@ -290,9 +282,6 @@ static void settings_layout(Screen *base, Doc *doc) {
     const char *selected = pane_selected_id(base->pane);
     doc_space(doc, px(8));
     doc_custom(doc, 0, w, px(24), paint_back, NULL, NULL, ACT_BACK, 0);
-    doc_space(doc, px(8));
-    NavData *nav = xcalloc(1, sizeof *nav); nav->text = "Devices and clients"; nav->selected = str_eq(selected, "connection");
-    doc_custom(doc, 0, w, px(36), paint_nav, nav, free, ACT_DEVICES, 0);
     doc_space(doc, px(16));
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
@@ -418,7 +407,7 @@ static void settings_footer_click(Screen *base, POINT pt) { SettingsScreen *s = 
 static void settings_back(SettingsScreen *s) {
     // The settings forms go with the sidebar that opened them, unless one keeps its unsaved changes.
     Screen *root = pane_root(app_detail_pane());
-    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) {
+    if (root && is_form_id(root->id)) {
         app_clear_detail();
         if (pane_root(app_detail_pane()) == root) return;
     }
@@ -429,7 +418,6 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     SettingsScreen *s = (SettingsScreen *)base;
     switch (action) {
     case ACT_BACK: settings_back(s); break;
-    case ACT_DEVICES: app_show_detail(connection_screen_new()); break;
     case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
     case ACT_OPEN_PROJECT: settings_open_row(s, (size_t)arg); break;
     case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;

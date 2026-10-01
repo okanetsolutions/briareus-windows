@@ -68,7 +68,6 @@ const ApiRoute *api_route(const char *name);
 bool api_discovery(ApiClient *client, Discovery *out, ApiError *error);
 /// `GET /openapi.json`, read into the routes the server has and who may call each.
 bool api_catalog(ApiClient *client, Route **routes, size_t *count, ApiError *error);
-bool api_revoke(ApiClient *client, ApiError *error);
 /// One call by name, on its route. `timeout_ms` is for a call that answers only once its work is done; 0 leaves the
 /// 30-second default. A name not in the table, or a missing path argument, is refused with a 400 before any network call.
 Json *api_call(ApiClient *client, const char *name, const Json *arguments, int timeout_ms, ApiError *error);
