@@ -218,11 +218,13 @@ static void test_keys_with_odd_characters_are_kept_apart(void) {
     cache_remove_all(cache); cache_free(cache);
     remove_tree(dir); free(dir);
 }
-static void test_long_keys_work_up_to_the_file_name_limit_and_fail_quietly_beyond(void) {
+static void test_long_keys_work_up_to_the_path_limit_and_fail_quietly_beyond(void) {
     wchar_t *dir = fresh_directory();
     DiskCache *cache = cache_new(dir);
     char key[300];
-    memset(key, 'k', 200); key[200] = 0;
+    // As long as the path allows where long paths are off (as on CI): the directory, a separator, the key and ".tmp".
+    size_t room = MAX_PATH - 1 - wcslen(dir) - 1 - 4, len = room < 200 ? room : 200;
+    memset(key, 'k', len); key[len] = 0;
     Json *v = json_parsez("{\"ok\":true}");
     CHECK(cache_store(cache, v, key));
     Json *got = cache_value(cache, key); CHECK(got != NULL && json_equal(got, v)); json_free(got);
@@ -472,7 +474,7 @@ void cache_tests(void) {
     test_run("similar keys get different file names", test_similar_keys_get_different_file_names);
     test_run("values round trip through a directory made on first write", test_values_round_trip_through_a_directory_made_on_first_write);
     test_run("keys with odd characters are kept apart", test_keys_with_odd_characters_are_kept_apart);
-    test_run("long keys work up to the file name limit and fail quietly beyond", test_long_keys_work_up_to_the_file_name_limit_and_fail_quietly_beyond);
+    test_run("long keys work up to the path limit and fail quietly beyond", test_long_keys_work_up_to_the_path_limit_and_fail_quietly_beyond);
     test_run("an unchanged value is not rewritten", test_an_unchanged_value_is_not_rewritten);
     test_run("a damaged entry reads as missing and is replaced", test_a_damaged_entry_reads_as_missing_and_is_replaced);
     test_run("lines append and replace", test_lines_append_and_replace);
