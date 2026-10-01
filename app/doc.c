@@ -20,12 +20,12 @@ static void clear_items(Doc *doc) {
     doc->count = 0;
 }
 void doc_free(Doc *doc) { clear_items(doc); free(doc->items); doc_init(doc); }
-void doc_begin(Doc *doc, HDC hdc, int width) {
+void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
-    doc->hdc = hdc; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
+    doc->cv = cv; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
     doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
 }
-void doc_end(Doc *doc) { doc->hdc = NULL; }
+void doc_end(Doc *doc) { doc->cv = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
 int doc_height(const Doc *doc) { return doc->y; }
 
@@ -84,12 +84,10 @@ static void rich_offset(Rich *r, int dx, int dy) {
     for (size_t i = 0; i < r->count; i++) { r->runs[i].x += dx; r->runs[i].y += dy; }
     for (int l = 0; l < r->lines; l++) r->line_y[l] += dy;
 }
-/// Width of a run's text without its trailing spaces, with the font already selected.
-static int trimmed_width(HDC hdc, const wchar_t *text, size_t len) {
+/// Width of a run's text without its trailing spaces.
+static int trimmed_width(FontId f, const wchar_t *text, size_t len) {
     while (len && text[len - 1] == L' ') len--;
-    SIZE sz = { 0, 0 };
-    GetTextExtentPoint32W(hdc, text, (int)len, &sz);
-    return sz.cx;
+    return textw_extent(f, text, len);
 }
 
 static Run *rich_push(Rich *r) {
@@ -99,14 +97,14 @@ static Run *rich_push(Rich *r) {
     return run;
 }
 
-typedef struct { HDC hdc; FontId font; COLORREF color; bool code, link, strike; const char *url; int line_h, pad; } RunStyle;
+typedef struct { FontId font; COLORREF color; bool code, link, strike; const char *url; int line_h, pad; } RunStyle;
 static Run *run_add(Rich *r, const RunStyle *st, const wchar_t *p, size_t len, size_t start, int x, int line, int w) {
     Run *run = rich_push(r);
     run->x = x; run->line = line; run->w = w; run->h = st->line_h; run->pad = st->pad; run->font = st->font; run->color = st->color;
     run->code = st->code; run->link = st->link; run->strike = st->strike; run->url = st->link ? xstrdup(st->url) : NULL;
     run->start = start; run->len = len;
     run->text = xmalloc((len + 1) * sizeof(wchar_t)); memcpy(run->text, p, len * sizeof(wchar_t)); run->text[len] = 0;
-    run->wt = trimmed_width(st->hdc, p, len) + st->pad * 2;
+    run->wt = trimmed_width(st->font, p, len) + st->pad * 2;
     return run;
 }
 static void line_begin(Rich *r, size_t *cap, int line, size_t offset) {
@@ -116,7 +114,7 @@ static void line_begin(Rich *r, size_t *cap, int line, size_t offset) {
 
 /// Breaks the text into word runs that fit `width`, line by line. `literal` text keeps its characters; otherwise it is inline
 /// Markdown. `gap` is the space under each line; `align` places the lines in `align_w` (the wrap width when 0).
-static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, COLORREF color, bool literal, int gap, int align, int align_w) {
+static Rich *rich_layout(Canvas *cv, const char *source, int width, FontId base, COLORREF color, bool literal, int gap, int align, int align_w) {
     Rich *r = xcalloc(1, sizeof *r);
     size_t n = 1; MdSpan literal_span = { 0, (char *)source, NULL };
     MdSpan *spans = literal ? &literal_span : md_inline(source, &n);
@@ -127,7 +125,7 @@ static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, CO
     r->plain = xmalloc(sizeof *r->plain); r->plain[0] = 0;
     for (size_t s = 0; s < n; s++) {
         RunStyle st; memset(&st, 0, sizeof st);
-        st.hdc = hdc; st.font = rich_font(base, spans[s].flags);
+        st.font = rich_font(base, spans[s].flags);
         st.code = (spans[s].flags & SPAN_CODE) != 0; st.link = (spans[s].flags & SPAN_LINK) != 0 && spans[s].url; st.strike = (spans[s].flags & SPAN_STRIKE) != 0;
         st.color = st.link ? theme.accent : st.strike ? theme.muted : color;
         st.url = spans[s].url; st.pad = st.code ? pad : 0;
@@ -135,9 +133,7 @@ static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, CO
         size_t tlen = wcslen(text), base_off = r->plain_len;
         r->plain = xrealloc(r->plain, (r->plain_len + tlen + 1) * sizeof *r->plain);
         memcpy(r->plain + r->plain_len, text, (tlen + 1) * sizeof *text); r->plain_len += tlen;
-        HFONT old = SelectObject(hdc, font(st.font));
-        TEXTMETRICW tm; GetTextMetricsW(hdc, &tm);
-        st.line_h = tm.tmHeight + (st.code ? pad : 0);
+        st.line_h = font_height(cv, st.font) + (st.code ? pad : 0);
         const wchar_t *p = text;
         while (*p) {
             if (*p == L'\n') { x = 0; line++; p++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text)); continue; }
@@ -149,37 +145,32 @@ static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, CO
             while (*end == L' ') end++;
             size_t len = (size_t)(end - p), fit_len = (size_t)(fit_end - p);
             if (fit_len == 0 && len > 0) fit_len = len;
-            SIZE fit = { 0, 0 }, full = { 0, 0 };
-            GetTextExtentPoint32W(hdc, p, (int)fit_len, &fit);
-            GetTextExtentPoint32W(hdc, p, (int)len, &full);
+            int fit = textw_extent(st.font, p, fit_len), full = textw_extent(st.font, p, len);
             int extra = st.pad * 2;
-            if (x > 0 && x + fit.cx + extra > width) { x = 0; line++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text)); }
-            if (fit.cx + extra > width && fit_len > 1) {
+            if (x > 0 && x + fit + extra > width) { x = 0; line++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text)); }
+            if (fit + extra > width && fit_len > 1) {
                 // Break a word longer than the line by characters.
                 size_t k = 1;
                 for (;;) {
-                    int fitting = 0;
-                    GetTextExtentExPointW(hdc, p, (int)fit_len, width - extra, &fitting, NULL, &fit);
-                    k = fitting > 0 ? (size_t)fitting : 1;
+                    k = textw_fit(st.font, p, fit_len, width - extra);
+                    if (k == 0) k = 1;
                     if (k >= fit_len) break;
-                    GetTextExtentPoint32W(hdc, p, (int)k, &fit);
-                    run_add(r, &st, p, k, base_off + (size_t)(p - text), x, line, fit.cx + extra);
+                    run_add(r, &st, p, k, base_off + (size_t)(p - text), x, line, textw_extent(st.font, p, k) + extra);
                     p += k; fit_len -= k; len -= k; x = 0; line++; line_begin(r, &line_cap, line, base_off + (size_t)(p - text));
                 }
-                GetTextExtentPoint32W(hdc, p, (int)len, &full);
+                full = textw_extent(st.font, p, len);
             }
-            Run *run = run_add(r, &st, p, len, base_off + (size_t)(p - text), x, line, full.cx + extra);
+            Run *run = run_add(r, &st, p, len, base_off + (size_t)(p - text), x, line, full + extra);
             x += run->w;
             p = end;
         }
-        SelectObject(hdc, old);
         free(text);
     }
     if (!literal) md_spans_free(spans, n);
     // Line heights, then run positions.
     r->lines = line + 1;
     r->line_y = xcalloc((size_t)r->lines, sizeof *r->line_y); r->line_h = xcalloc((size_t)r->lines, sizeof *r->line_h);
-    int base_h = font_height(hdc, base) + gap;
+    int base_h = font_height(cv, base) + gap;
     for (int l = 0; l < r->lines; l++) r->line_h[l] = base_h;
     for (size_t i = 0; i < r->count; i++) if (r->runs[i].h + gap > r->line_h[r->runs[i].line]) r->line_h[r->runs[i].line] = r->runs[i].h + gap;
     int y = 0;
@@ -203,50 +194,46 @@ static Rich *rich_layout(HDC hdc, const char *source, int width, FontId base, CO
 
 static COLORREF selection_color(void) { return blend(theme.accent, theme.background, theme.dark ? 0.4 : 0.3); }
 /// Tints the characters `from`...`to` of the plain text, line by line.
-static void rich_highlight(HDC hdc, const Rich *r, size_t from, size_t to, const RECT *rc, COLORREF color) {
+static void rich_highlight(Canvas *cv, const Rich *r, size_t from, size_t to, const RECT *rc, COLORREF color) {
     for (size_t i = 0; i < r->count; i++) {
         const Run *run = &r->runs[i];
         size_t s = from > run->start ? from : run->start, e = to < run->start + run->len ? to : run->start + run->len;
         if (s >= e) continue;
-        HFONT old = SelectObject(hdc, font(run->font));
-        SIZE a = { 0, 0 }, b = { 0, 0 };
-        GetTextExtentPoint32W(hdc, run->text, (int)(s - run->start), &a);
-        GetTextExtentPoint32W(hdc, run->text, (int)(e - run->start), &b);
-        SelectObject(hdc, old);
+        int a = textw_extent(run->font, run->text, s - run->start), b = textw_extent(run->font, run->text, e - run->start);
         int x = rc->left + run->x + run->pad;
-        RECT h = { x + a.cx, rc->top + r->line_y[run->line], x + b.cx, rc->top + r->line_y[run->line] + r->line_h[run->line] };
+        RECT h = { x + a, rc->top + r->line_y[run->line], x + b, rc->top + r->line_y[run->line] + r->line_h[run->line] };
         if (r->single && h.right > rc->right) h.right = rc->right;
-        if (h.right > h.left) fill_rect(hdc, &h, color);
+        if (h.right > h.left) fill_rect(cv, &h, color);
     }
 }
 
 /// Paints runs at `rc`, with the selection behind them; `it` may be NULL for text that is not an item (a table cell).
-static void rich_paint(Doc *doc, Item *it, Rich *r, HDC hdc, const RECT *rc) {
+static void rich_paint(Doc *doc, Item *it, Rich *r, Canvas *cv, const RECT *rc) {
     if (!r) return;
     size_t from, to;
-    if (it && item_selection(doc, it, &from, &to)) rich_highlight(hdc, r, from, to, rc, selection_color());
+    if (it && item_selection(doc, it, &from, &to)) rich_highlight(cv, r, from, to, rc, selection_color());
     for (size_t i = 0; i < r->count; i++) {
         Run *run = &r->runs[i];
         RECT rr = { rc->left + run->x, rc->top + run->y, rc->left + run->x + run->w, rc->top + run->y + run->h };
         if (run->code) {
             // Trailing spaces stay outside the tint.
             RECT bg = { rr.left, rr.top, rr.left + run->wt, rr.bottom };
-            fill_round_rect(hdc, &bg, px(4), theme.sunken, theme.sunken);
+            fill_round_rect(cv, &bg, px(4), theme.sunken, theme.sunken);
         }
         rr.left += run->pad;
         if (r->single) {
             if (rr.left >= rc->right) continue;
             if (rr.right > rc->right) rr.right = rc->right;
-            draw_textw(hdc, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
-        } else draw_textw(hdc, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
+            draw_textw(cv, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        } else draw_textw(cv, run->text, &rr, run->font, run->color, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOCLIP);
         int text_w = run->wt - run->pad * 2;
-        if (run->strike) { int mid = rr.bottom - run->h / 2; draw_line(hdc, rr.left, mid, rr.left + text_w, mid, run->color); }
-        if (run->link) draw_line(hdc, rr.left, rr.bottom - 1, rr.left + text_w, rr.bottom - 1, blend(theme.accent, theme.background, 0.6));
+        if (run->strike) { int mid = rr.bottom - run->h / 2; draw_line(cv, rr.left, mid, rr.left + text_w, mid, run->color); }
+        if (run->link) draw_line(cv, rr.left, rr.bottom - 1, rr.left + text_w, rr.bottom - 1, blend(theme.accent, theme.background, 0.6));
     }
 }
-static void paint_rich(Doc *doc, Item *it, HDC hdc, const RECT *rc) { rich_paint(doc, it, it->data, hdc, rc); }
+static void paint_rich(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { rich_paint(doc, it, it->data, cv, rc); }
 int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF color) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, color, false, px(4), ALIGN_LEFT, 0);
+    Rich *r = rich_layout(doc->cv, markdown ? markdown : "", w, base, color, false, px(4), ALIGN_LEFT, 0);
     RECT rc = { x, doc->y, x + w, doc->y + r->height };
     int i = doc_add(doc, &rc, paint_rich);
     Item *it = &doc->items[i];
@@ -258,7 +245,7 @@ int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF
     return i;
 }
 int doc_rich_height(Doc *doc, int w, const char *markdown, FontId base) {
-    Rich *r = rich_layout(doc->hdc, markdown ? markdown : "", w, base, theme.text, false, px(4), ALIGN_LEFT, 0);
+    Rich *r = rich_layout(doc->cv, markdown ? markdown : "", w, base, theme.text, false, px(4), ALIGN_LEFT, 0);
     int h = r->height;
     rich_free(r);
     return h;
@@ -291,19 +278,19 @@ static char *expand_tabs(const char *text) {
     out[n] = 0;
     return out;
 }
-static void paint_text(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_text(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT r = *rc;
-    draw_text(hdc, it->text, &r, it->font, it->color, it->flags);
+    draw_text(cv, it->text, &r, it->font, it->color, it->flags);
 }
 /// Lays an item's text out in runs following its DT_ flags, so it paints and selects as one.
-static void text_runs(Item *it, HDC hdc) {
+static void text_runs(Item *it, Canvas *cv) {
     UINT flags = it->flags;
     bool single = (flags & DT_SINGLELINE) != 0;
     int w = it->rc.right - it->rc.left, h = it->rc.bottom - it->rc.top;
     int align = (flags & DT_CENTER) ? ALIGN_CENTER : (flags & DT_RIGHT) ? ALIGN_RIGHT : ALIGN_LEFT;
     char *text = (flags & DT_EXPANDTABS) ? expand_tabs(it->text) : NULL;
     if (single) { char *one = str_replace(text ? text : it->text, "\n", " "); free(text); text = one; }
-    Rich *r = rich_layout(hdc, text ? text : it->text, single ? 100000 : w, it->font, it->color, true, 0, align, w);
+    Rich *r = rich_layout(cv, text ? text : it->text, single ? 100000 : w, it->font, it->color, true, 0, align, w);
     free(text);
     r->single = single;
     if (single) {
@@ -316,27 +303,27 @@ int doc_text_at(Doc *doc, const RECT *rc, const char *text, FontId f, COLORREF c
     int i = doc_add(doc, rc, paint_text);
     Item *it = &doc->items[i];
     it->text = xstrdup(text ? text : ""); it->font = f; it->color = color; it->flags = flags;
-    if (uses_runs(flags)) text_runs(it, doc->hdc);
+    if (uses_runs(flags)) text_runs(it, doc->cv);
     return i;
 }
 int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color, UINT flags) {
     bool single = (flags & DT_SINGLELINE) != 0;
-    RECT rc = { x, doc->y, x + w, doc->y + (single ? font_height(doc->hdc, f) : 0) };
+    RECT rc = { x, doc->y, x + w, doc->y + (single ? font_height(doc->cv, f) : 0) };
     int i = doc_text_at(doc, &rc, text, f, color, flags | (single ? 0 : DT_WORDBREAK | DT_EDITCONTROL));
     Item *it = &doc->items[i];
-    if (!single) it->rc.bottom = it->rc.top + (it->sel ? it->sel->height : measure_text(doc->hdc, text, w, f, flags & ~DT_VCENTER));
+    if (!single) it->rc.bottom = it->rc.top + (it->sel ? it->sel->height : measure_text(doc->cv, text, w, f, flags & ~DT_VCENTER));
     doc->y = it->rc.bottom;
     return i;
 }
 
 // MARK: - Boxes
 
-static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     COLORREF fill = it->fill, border = it->border;
     bool hovered = it->action && it->hover_fill && doc->hover >= 0 && &doc->items[doc->hover] == it;
     if (hovered) { if (it->border != it->fill) border = theme.accent_dim; else fill = theme.raise; }
     if (it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it) fill = blend(theme.ink, fill, 0.06);
-    fill_round_rect(hdc, rc, it->radius, fill, border);
+    fill_round_rect(cv, rc, it->radius, fill, border);
 }
 int doc_box_begin(Doc *doc, int x, int w, int pad, COLORREF fill, COLORREF border, int radius) {
     RECT rc = { x, doc->y, x + w, doc->y + pad };
@@ -356,7 +343,7 @@ void doc_box_action(Doc *doc, int box, int action, intptr_t arg) {
 }
 void doc_space(Doc *doc, int h) { doc->y += h; }
 
-static void paint_rule(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_line(hdc, rc->left, rc->top, rc->right, rc->top, it->color); }
+static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { draw_line(cv, rc->left, rc->top, rc->right, rc->top, it->color); }
 int doc_rule(Doc *doc, int x, int w) {
     RECT rc = { x, doc->y, x + w, doc->y + 1 };
     int i = doc_add(doc, &rc, paint_rule);
@@ -376,16 +363,16 @@ int doc_custom(Doc *doc, int x, int w, int h, ItemPaint paint, void *data, ItemF
 // MARK: - Labels and notices
 
 typedef struct { wchar_t glyph; FontId glyph_font; int glyph_w; } LabelData;
-static void paint_label(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_label(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     LabelData *d = it->data;
-    RECT g = { rc->left, rc->top, rc->left + d->glyph_w, rc->top + font_height(hdc, it->font) + px(2) };
-    draw_glyph(hdc, d->glyph, &g, d->glyph_font, it->color);
-    rich_paint(doc, it, it->sel, hdc, rc);
+    RECT g = { rc->left, rc->top, rc->left + d->glyph_w, rc->top + font_height(cv, it->font) + px(2) };
+    draw_glyph(cv, d->glyph, &g, d->glyph_font, it->color);
+    rich_paint(doc, it, it->sel, cv, rc);
 }
 int doc_label(Doc *doc, int x, int w, wchar_t glyph, const char *text, FontId f, COLORREF color) {
     LabelData *d = xcalloc(1, sizeof *d);
     d->glyph = glyph; d->glyph_font = FONT_ICON_SMALL; d->glyph_w = px(16);
-    Rich *r = rich_layout(doc->hdc, text ? text : "", w - d->glyph_w - px(6), f, color, true, 0, ALIGN_LEFT, 0);
+    Rich *r = rich_layout(doc->cv, text ? text : "", w - d->glyph_w - px(6), f, color, true, 0, ALIGN_LEFT, 0);
     rich_offset(r, d->glyph_w + px(6), 0);
     int h = r->height;
     RECT rc = { x, doc->y, x + w, doc->y + h };
@@ -409,7 +396,7 @@ int doc_notice_box(Doc *doc, int x, int w, const char *message) {
 // MARK: - Buttons
 
 typedef struct { ButtonStyle style; bool enabled, compact; wchar_t glyph; } ButtonData;
-static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_button(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ButtonData *d = it->data;
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it && d->enabled;
     bool pressed = doc->pressed >= 0 && &doc->items[doc->pressed] == it && d->enabled;
@@ -430,19 +417,19 @@ static void paint_button(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     if (!d->enabled && d->style != BUTTON_PROMINENT) text = theme.muted;
     if (d->style == BUTTON_PLAIN) {
         RECT t = *rc;
-        draw_text(hdc, it->text, &t, FONT_CAPTION, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if (hovered) { int tw = text_width(hdc, it->text, FONT_CAPTION); draw_line(hdc, rc->left, rc->bottom - px(3), rc->left + tw, rc->bottom - px(3), text); }
+        draw_text(cv, it->text, &t, FONT_CAPTION, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (hovered) { int tw = text_width(cv, it->text, FONT_CAPTION); draw_line(cv, rc->left, rc->bottom - px(3), rc->left + tw, rc->bottom - px(3), text); }
         return;
     }
-    fill_round_rect(hdc, rc, px(7), fill, border);
+    fill_round_rect(cv, rc, px(7), fill, border);
     RECT t = { rc->left + px(10), rc->top, rc->right - px(10) + 2, rc->bottom };
-    draw_text(hdc, it->text, &t, FONT_FOOTNOTE, text, (d->compact ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, it->text, &t, FONT_FOOTNOTE, text, (d->compact ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
-static int button_height(HDC hdc) { return font_height(hdc, FONT_FOOTNOTE) + px(12); }   // 18px line + 5px padding + 1px border, each side
-static int button_width(HDC hdc, const char *text) { return px(10) * 2 + text_width(hdc, text, FONT_FOOTNOTE) + 2; }
+static int button_height(Canvas *cv) { return font_height(cv, FONT_FOOTNOTE) + px(12); }   // 18px line + 5px padding + 1px border, each side
+static int button_width(Canvas *cv, const char *text) { return px(10) * 2 + text_width(cv, text, FONT_FOOTNOTE) + 2; }
 int doc_button(Doc *doc, int x, int w, const char *text, ButtonStyle style, int action, intptr_t arg, bool enabled) {
-    int h = style == BUTTON_PLAIN ? font_height(doc->hdc, FONT_CAPTION) + px(6) : button_height(doc->hdc);
-    int tw = style == BUTTON_PLAIN ? text_width(doc->hdc, text, FONT_CAPTION) + px(2) : button_width(doc->hdc, text);
+    int h = style == BUTTON_PLAIN ? font_height(doc->cv, FONT_CAPTION) + px(6) : button_height(doc->cv);
+    int tw = style == BUTTON_PLAIN ? text_width(doc->cv, text, FONT_CAPTION) + px(2) : button_width(doc->cv, text);
     int width = w > 0 ? w : w < 0 ? doc->width - x : tw;
     RECT rc = { x, doc->y, x + width, doc->y + h };
     int i = doc_add(doc, &rc, paint_button);
@@ -459,11 +446,11 @@ int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t cou
     int gap = px(6), cx = 0, cy = 0, first = -1;
     for (size_t k = 0; k < count; k++) {
         const ButtonSpec *b = &buttons[k];
-        int h = b->style == BUTTON_PLAIN ? font_height(doc->hdc, FONT_CAPTION) + px(6) : button_height(doc->hdc);
-        int bw = b->style == BUTTON_PLAIN ? text_width(doc->hdc, b->text, FONT_CAPTION) + px(2) : button_width(doc->hdc, b->text);
+        int h = b->style == BUTTON_PLAIN ? font_height(doc->cv, FONT_CAPTION) + px(6) : button_height(doc->cv);
+        int bw = b->style == BUTTON_PLAIN ? text_width(doc->cv, b->text, FONT_CAPTION) + px(2) : button_width(doc->cv, b->text);
         if (bw > w) bw = w;
-        if (cx > 0 && cx + bw > w) { cx = 0; cy += button_height(doc->hdc) + gap; }
-        int row_h = button_height(doc->hdc);
+        if (cx > 0 && cx + bw > w) { cx = 0; cy += button_height(doc->cv) + gap; }
+        int row_h = button_height(doc->cv);
         RECT rc = { x + cx, doc->y + cy + (row_h - h) / 2, x + cx + bw, doc->y + cy + (row_h - h) / 2 + h };
         int i = doc_add(doc, &rc, paint_button);
         Item *it = &doc->items[i];
@@ -473,31 +460,31 @@ int doc_button_row(Doc *doc, int x, int w, const ButtonSpec *buttons, size_t cou
         if (first < 0) first = i;
         cx += bw + gap;
     }
-    if (count) doc->y += cy + button_height(doc->hdc);
+    if (count) doc->y += cy + button_height(doc->cv);
     return first;
 }
 
 typedef struct { char **titles; size_t count; int selected; bool enabled; int action; intptr_t arg_base; } SegmentData;
 static void segments_free(void *p) { SegmentData *d = p; str_array_free(d->titles, d->count); free(d); }
-static int segment_width(HDC hdc, const char *title) { return px(6) * 2 + text_width(hdc, title, FONT_CAPTION2) + 2; }
-static void paint_segments(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static int segment_width(Canvas *cv, const char *title) { return px(6) * 2 + text_width(cv, title, FONT_CAPTION2) + 2; }
+static void paint_segments(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SegmentData *d = it->data;
     int x = rc->left;
     for (size_t i = 0; i < d->count; i++) {
-        int w = segment_width(hdc, d->titles[i]);
+        int w = segment_width(cv, d->titles[i]);
         RECT seg = { x, rc->top, x + w, rc->bottom };
         bool selected = (int)i == d->selected;
         COLORREF c = selected ? (i == 0 ? theme.danger : theme.accent) : theme.muted;
         if (!d->enabled) c = blend(c, theme.raise, 0.5);
-        fill_round_rect(hdc, &seg, px(4), it->fill ? it->fill : theme.raise, selected ? c : theme.line);
-        draw_text(hdc, d->titles[i], &seg, FONT_CAPTION2, c, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &seg, px(4), it->fill ? it->fill : theme.raise, selected ? c : theme.line);
+        draw_text(cv, d->titles[i], &seg, FONT_CAPTION2, c, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += w + px(4);
     }
 }
 int doc_segments(Doc *doc, int x, int w, const char *const *titles, size_t count, int selected, int action, intptr_t arg_base, bool enabled) {
-    int h = font_height(doc->hdc, FONT_CAPTION2) + px(4);
+    int h = font_height(doc->cv, FONT_CAPTION2) + px(4);
     int total = 0;
-    for (size_t k = 0; k < count; k++) total += segment_width(doc->hdc, titles[k]) + (k ? px(4) : 0);
+    for (size_t k = 0; k < count; k++) total += segment_width(doc->cv, titles[k]) + (k ? px(4) : 0);
     RECT rc = { x, doc->y, x + (total < w ? total : w), doc->y + h };
     int i = doc_add(doc, &rc, paint_segments);
     Item *it = &doc->items[i];
@@ -514,14 +501,13 @@ int doc_segments(Doc *doc, int x, int w, const char *const *titles, size_t count
 static int segment_at(Item *it, int x) {
     SegmentData *d = it->data;
     if (!d->count) return 0;
-    HDC hdc = GetDC(NULL);
+    Canvas *cv = NULL;   // measuring only
     int cx = it->rc.left, idx = (int)d->count - 1;
     for (size_t i = 0; i < d->count; i++) {
-        int w = segment_width(hdc, d->titles[i]);
+        int w = segment_width(cv, d->titles[i]);
         if (x < cx + w + px(2)) { idx = (int)i; break; }
         cx += w + px(4);
     }
-    ReleaseDC(NULL, hdc);
     return idx;
 }
 
@@ -543,18 +529,18 @@ int doc_empty_state(Doc *doc, int x, int w, wchar_t glyph, const char *title, co
 
 typedef struct { char *value; COLORREF value_color; int label_w; } LabeledData;
 static void labeled_free(void *p) { LabeledData *d = p; free(d->value); free(d); }
-static void paint_labeled(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_labeled(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     LabeledData *d = it->data;
     RECT l = { rc->left, rc->top, rc->left + d->label_w, rc->bottom };
-    draw_text(hdc, it->text, &l, FONT_CALLOUT, theme.text, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, it->text, &l, FONT_CALLOUT, theme.text, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT v = { rc->left + d->label_w + px(12), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, d->value, &v, FONT_CALLOUT, d->value_color, DT_RIGHT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL);
+    draw_text(cv, d->value, &v, FONT_CALLOUT, d->value_color, DT_RIGHT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL);
 }
 int doc_labeled(Doc *doc, int x, int w, const char *label, const char *value, COLORREF value_color) {
-    int label_w = text_width(doc->hdc, label, FONT_CALLOUT);
+    int label_w = text_width(doc->cv, label, FONT_CALLOUT);
     if (label_w > w / 2) label_w = w / 2;
-    int h = measure_text(doc->hdc, value, w - label_w - px(12), FONT_CALLOUT, DT_WORDBREAK);
-    int lh = font_height(doc->hdc, FONT_CALLOUT);
+    int h = measure_text(doc->cv, value, w - label_w - px(12), FONT_CALLOUT, DT_WORDBREAK);
+    int lh = font_height(doc->cv, FONT_CALLOUT);
     if (h < lh) h = lh;
     RECT rc = { x, doc->y, x + w, doc->y + h };
     int i = doc_add(doc, &rc, paint_labeled);
@@ -567,21 +553,21 @@ int doc_labeled(Doc *doc, int x, int w, const char *label, const char *value, CO
 
 typedef struct { BadgeSpec *specs; char **texts; RECT *rects; size_t count; COLORREF background; } BadgesData;
 static void badges_free(void *p) { BadgesData *d = p; str_array_free(d->texts, d->count); free(d->specs); free(d->rects); free(d); }
-static int badge_width(HDC hdc, const BadgeSpec *b, const char *text, int *h) {
+static int badge_width(Canvas *cv, const BadgeSpec *b, const char *text, int *h) {
     if (b->chip) {
-        *h = font_height(hdc, FONT_CAPTION2) + px(6);
-        return px(7) * 2 + px(6) + px(4) + text_width(hdc, text, FONT_CAPTION_MEDIUM);
+        *h = font_height(cv, FONT_CAPTION2) + px(6);
+        return px(7) * 2 + px(6) + px(4) + text_width(cv, text, FONT_CAPTION_MEDIUM);
     }
-    *h = font_height(hdc, FONT_CAPTION2) + px(7);
+    *h = font_height(cv, FONT_CAPTION2) + px(7);
     int glyph_w = b->glyph ? px(11) : 0;
-    return px(8) * 2 + glyph_w + (b->glyph && text && *text ? px(3) : 0) + text_width(hdc, text, FONT_CAPTION_SEMIBOLD);
+    return px(8) * 2 + glyph_w + (b->glyph && text && *text ? px(3) : 0) + text_width(cv, text, FONT_CAPTION_SEMIBOLD);
 }
-static void paint_badges(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_badges(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     BadgesData *d = it->data;
     for (size_t i = 0; i < d->count; i++) {
         int x = rc->left + d->rects[i].left, y = rc->top + d->rects[i].top;
-        if (d->specs[i].chip) draw_chip(hdc, x, y, d->texts[i], d->specs[i].color, d->background, NULL);
-        else draw_badge(hdc, x, y, d->specs[i].glyph, d->texts[i], d->specs[i].color, d->background, NULL);
+        if (d->specs[i].chip) draw_chip(cv, x, y, d->texts[i], d->specs[i].color, d->background, NULL);
+        else draw_badge(cv, x, y, d->specs[i].glyph, d->texts[i], d->specs[i].color, d->background, NULL);
     }
 }
 int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, COLORREF background) {
@@ -591,7 +577,7 @@ int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, CO
     int cx = 0, cy = 0, row_h = 0, gap = px(5);
     for (size_t i = 0; i < count; i++) {
         d->specs[i] = badges[i]; d->texts[i] = xstrdup(badges[i].text ? badges[i].text : "");
-        int h, bw = badge_width(doc->hdc, &badges[i], d->texts[i], &h);
+        int h, bw = badge_width(doc->cv, &badges[i], d->texts[i], &h);
         if (bw > w) bw = w;
         if (cx > 0 && cx + bw > w) { cx = 0; cy += row_h + gap; row_h = 0; }
         RECT r = { cx, cy, cx + bw, cy + h }; d->rects[i] = r;
@@ -608,7 +594,7 @@ int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, CO
 
 int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count) {
     int total = 0;
-    for (size_t i = 0; i < count; i++) { int h; total += badge_width(doc->hdc, &badges[i], badges[i].text ? badges[i].text : "", &h) + (i ? px(5) : 0); }
+    for (size_t i = 0; i < count; i++) { int h; total += badge_width(doc->cv, &badges[i], badges[i].text ? badges[i].text : "", &h) + (i ? px(5) : 0); }
     return total;
 }
 
@@ -624,22 +610,22 @@ int doc_section(Doc *doc, int x, int w, const char *title) {
 typedef struct { char *language; char *code; bool copied; } CodeData;
 static void code_free(void *p) { CodeData *d = p; free(d->language); free(d->code); free(d); }
 static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base);
-static void paint_task_box(Doc *doc, Item *it, HDC hdc, const RECT *rc);
-static void paint_code_header(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_task_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
+static void paint_code_header(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     CodeData *d = it->data;
     RECT l = { rc->left + px(12), rc->top, rc->right - px(40), rc->bottom };
-    draw_text(hdc, d->language ? d->language : "code", &l, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->language ? d->language : "code", &l, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT g = { rc->right - px(34), rc->top, rc->right - px(6), rc->bottom };
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
-    if (hovered) fill_round_rect(hdc, &g, px(6), blend(theme.text, theme.code, 0.06), blend(theme.text, theme.code, 0.06));
-    draw_glyph(hdc, d->copied ? 0xE73E : 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
-    draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.border);
+    if (hovered) fill_round_rect(cv, &g, px(6), blend(theme.text, theme.code, 0.06), blend(theme.text, theme.code, 0.06));
+    draw_glyph(cv, d->copied ? 0xE73E : 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
+    draw_line(cv, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.border);
 }
-static void quote_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(2), rc->bottom }; fill_rect(hdc, &r, theme.line); }
-static void paint_task_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void quote_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(2), rc->bottom }; fill_rect(cv, &r, theme.line); }
+static void paint_task_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool checked = it->arg != 0;
-    fill_round_rect(hdc, rc, px(3), checked ? theme.accent : theme.elevated, checked ? theme.accent : blend(theme.text, theme.background, 0.35));
-    if (checked) draw_glyph(hdc, 0xE73E, rc, FONT_ICON_SMALL, theme.white);
+    fill_round_rect(cv, rc, px(3), checked ? theme.accent : theme.elevated, checked ? theme.accent : blend(theme.text, theme.background, 0.35));
+    if (checked) draw_glyph(cv, 0xE73E, rc, FONT_ICON_SMALL, theme.white);
 }
 
 // MARK: - Tables
@@ -650,19 +636,19 @@ static void table_free(void *p) {
     for (size_t i = 0; i < t->rows * t->cols; i++) rich_free(t->cells[i]);
     free(t->cells); free(t->col_x); free(t->col_w); free(t->row_y); free(t->row_h); free(t->aligns); free(t);
 }
-static void paint_table(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_table(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     TableData *t = it->data;
     int pad = px(8);
     // Header tint, zebra rows and a grid.
     for (size_t r = 0; r < t->rows; r++) {
         RECT row = { rc->left, rc->top + t->row_y[r], rc->right, rc->top + t->row_y[r] + t->row_h[r] };
-        if (r == 0) fill_rect(hdc, &row, theme.raise);
-        draw_line(hdc, rc->left, row.bottom, rc->right, row.bottom, theme.line);
+        if (r == 0) fill_rect(cv, &row, theme.raise);
+        draw_line(cv, rc->left, row.bottom, rc->right, row.bottom, theme.line);
     }
-    draw_line(hdc, rc->left, rc->top, rc->right, rc->top, theme.border);
+    draw_line(cv, rc->left, rc->top, rc->right, rc->top, theme.border);
     for (size_t c = 0; c <= t->cols; c++) {
         int x = c < t->cols ? rc->left + t->col_x[c] : rc->right - 1;
-        draw_line(hdc, x, rc->top, x, rc->bottom, theme.border);
+        draw_line(cv, x, rc->top, x, rc->bottom, theme.border);
     }
     for (size_t r = 0; r < t->rows; r++) {
         for (size_t c = 0; c < t->cols; c++) {
@@ -676,7 +662,7 @@ static void paint_table(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
                 if (shift < 0) shift = 0;
             }
             RECT cr = { rc->left + t->col_x[c] + pad + shift, rc->top + t->row_y[r] + px(5), rc->left + t->col_x[c] + t->col_w[c] - pad, rc->top + t->row_y[r] + t->row_h[r] };
-            rich_paint(doc, NULL, cell, hdc, &cr);
+            rich_paint(doc, NULL, cell, cv, &cr);
         }
     }
 }
@@ -693,7 +679,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     int *want = xcalloc(t->cols, sizeof *want);
     for (size_t r = 0; r < t->rows; r++)
         for (size_t c = 0; c < t->cols; c++) {
-            Rich *probe = rich_layout(doc->hdc, b->cells[r * t->cols + c], 100000, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
+            Rich *probe = rich_layout(doc->cv, b->cells[r * t->cols + c], 100000, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
             int widest = 0;
             for (size_t k = 0; k < probe->count; k++) if (probe->runs[k].x + probe->runs[k].w > widest) widest = probe->runs[k].x + probe->runs[k].w;
             rich_free(probe);
@@ -721,7 +707,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
         int h = 0;
         for (size_t c = 0; c < t->cols; c++) {
             int cell_w = t->col_w[c] - 2 * pad; if (cell_w < px(16)) cell_w = px(16);
-            Rich *cell = rich_layout(doc->hdc, b->cells[r * t->cols + c], cell_w, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
+            Rich *cell = rich_layout(doc->cv, b->cells[r * t->cols + c], cell_w, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
             t->cells[r * t->cols + c] = cell;
             if (cell->height > h) h = cell->height;
         }
@@ -759,9 +745,9 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
                 int bi = doc_add(doc, &br, paint_task_box);
                 doc_item(doc, bi)->arg = b->task == 2;
             } else {
-                marker_w = text_width(doc->hdc, b->marker, base) + px(8);
+                marker_w = text_width(doc->cv, b->marker, base) + px(8);
                 if (marker_w < px(18)) marker_w = px(18);
-                RECT mr = { x + indent, top, x + indent + marker_w, top + font_height(doc->hdc, base) + px(3) };
+                RECT mr = { x + indent, top, x + indent + marker_w, top + font_height(doc->cv, base) + px(3) };
                 doc_text_at(doc, &mr, b->marker, base, theme.secondary, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
             }
             doc_rich(doc, x + indent + marker_w, w - indent - marker_w, b->text, base, b->task == 2 ? theme.secondary : theme.text);
@@ -777,7 +763,7 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
         case MD_CODE: {
             int box = doc_box_begin(doc, x, w, 0, theme.sunken, theme.line, px(8));
             doc->items[box].hover_fill = false;
-            int header_h = font_height(doc->hdc, FONT_MONO_CAPTION2) + px(12);
+            int header_h = font_height(doc->cv, FONT_MONO_CAPTION2) + px(12);
             RECT hr = { x, doc->y, x + w, doc->y + header_h };
             int header = doc_add(doc, &hr, paint_code_header);
             CodeData *d = xcalloc(1, sizeof *d); d->language = b->language ? xstrdup(b->language) : NULL; d->code = xstrdup(b->text);
@@ -826,13 +812,13 @@ void doc_set_view(Doc *doc, int scroll_y, int view_height) {
 
 // MARK: - Paint and hit
 
-void doc_paint(Doc *doc, HDC hdc, int scroll_x, int scroll_y, const RECT *clip) {
+void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
     for (size_t i = 0; i < doc->count; i++) {
         Item *it = &doc->items[i];
         RECT rc = { it->rc.left - scroll_x, it->rc.top - scroll_y, it->rc.right - scroll_x, it->rc.bottom - scroll_y };
         if (rc.bottom < clip->top - px(4) || rc.top > clip->bottom + px(4)) continue;
         if (rc.right < clip->left || rc.left > clip->right) continue;
-        if (it->paint) it->paint(doc, it, hdc, &rc);
+        if (it->paint) it->paint(doc, it, cv, &rc);
     }
 }
 int doc_hit(Doc *doc, int x, int y) {
@@ -902,23 +888,17 @@ int doc_text_item_at(Doc *doc, int x, int y) {
 }
 
 /// The character boundary nearest `x` within a run's text; `x` is from the text's left edge.
-static size_t run_char_at(HDC hdc, const Run *run, int x) {
+static size_t run_char_at(Canvas *cv, const Run *run, int x) {
     if (x <= 0 || !run->len) return 0;
-    HFONT old = SelectObject(hdc, font(run->font));
-    int fit = 0; SIZE sz = { 0, 0 };
-    GetTextExtentExPointW(hdc, run->text, (int)run->len, x, &fit, NULL, &sz);
-    size_t k = fit < 0 ? 0 : (size_t)fit;
+    size_t k = textw_fit(run->font, run->text, run->len, x);
     if (k < run->len) {
-        SIZE a = { 0, 0 }, b = { 0, 0 };
-        GetTextExtentPoint32W(hdc, run->text, (int)k, &a);
-        GetTextExtentPoint32W(hdc, run->text, (int)k + 1, &b);
-        if (x > (a.cx + b.cx) / 2) k++;
+        int a = textw_extent(run->font, run->text, k), b = textw_extent(run->font, run->text, k + 1);
+        if (x > (a + b) / 2) k++;
     }
-    SelectObject(hdc, old);
     return k;
 }
 /// The plain-text offset nearest a point relative to the runs' origin.
-static size_t rich_hit(HDC hdc, const Rich *r, int x, int y) {
+static size_t rich_hit(Canvas *cv, const Rich *r, int x, int y) {
     if (!r->lines) return 0;
     if (y < r->line_y[0]) return 0;
     int last = r->lines - 1;
@@ -933,13 +913,13 @@ static size_t rich_hit(HDC hdc, const Rich *r, int x, int y) {
         end = run;
         if (x < run->x + run->w) {
             if (x < run->x) return run->start;
-            return run->start + run_char_at(hdc, run, x - run->x - run->pad);
+            return run->start + run_char_at(cv, run, x - run->x - run->pad);
         }
     }
     if (!first) return r->line_start[l];   // a blank line
     return end->start + end->len;
 }
-bool doc_position_at(Doc *doc, HDC hdc, int x, int y, DocPos *pos) {
+bool doc_position_at(Doc *doc, Canvas *cv, int x, int y, DocPos *pos) {
     // The item spanning y and nearest x; failing that, the nearest item above (its end) or below (its start).
     int best = -1, best_d = 0;
     for (size_t i = 0; i < doc->count; i++) {
@@ -950,7 +930,7 @@ bool doc_position_at(Doc *doc, HDC hdc, int x, int y, DocPos *pos) {
     }
     if (best >= 0) {
         Item *it = &doc->items[best];
-        pos->item = best; pos->offset = (int)rich_hit(hdc, it->sel, x - it->rc.left, y - it->rc.top);
+        pos->item = best; pos->offset = (int)rich_hit(cv, it->sel, x - it->rc.left, y - it->rc.top);
         return true;
     }
     for (size_t i = 0; i < doc->count; i++) {

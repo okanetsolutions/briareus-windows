@@ -4,7 +4,7 @@ Thanks for helping with Briareus for Windows. This page covers how to build, tes
 
 ## Building
 
-The app is C11 on the Win32 API with no third-party dependencies. Either toolchain works:
+The app is C11 on the Win32 API with no third-party dependencies. It draws with Direct2D and DirectWrite through `app/canvas.cpp`, the one C++ file, kept to C style, since the Windows SDK declares DirectWrite for C++ only. Either toolchain works:
 
 - **MinGW-w64 GCC** (for example [WinLibs](https://winlibs.com) or MSYS2's UCRT64): `mingw32-make` builds `build\Briareus.exe` and runs the core tests; `mingw32-make app` builds only the app.
 - **Visual Studio Build Tools**: from a Developer Command Prompt, `build.bat`.
@@ -24,7 +24,7 @@ The same build and tests run in CI for every pull request, with both GCC and MSV
 | Path | Contents |
 | --- | --- |
 | `core/` | Portable logic, no UI. |
-| `app/` | The Win32 app: theme, layout toolkit (`doc.c`), screen stack (`pane.c`), store, screens, dialogs, voice notes. |
+| `app/` | The Win32 app: drawing (`canvas.cpp`), theme, layout toolkit (`doc.c`), screen stack (`pane.c`), store, screens, dialogs, voice notes. |
 | `tests/` | Core tests. |
 | `res/` | Icon, manifest, dialogs, version resources. |
 

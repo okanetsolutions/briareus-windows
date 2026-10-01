@@ -144,17 +144,17 @@ static void layout_tabs(DbForm *s, Doc *doc, int x, int w) {
     doc_space(doc, px(18));
 }
 
-static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     DbForm *s = it->data;
     (void)doc;
-    fill_round_rect(hdc, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
+    fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
 }
 /// A labelled box with its edit at (x, cursor); advances.
 static void field(DbForm *s, Doc *doc, int x, int w, int f) {
     if (!row_has(s, FIELDS[f].key)) return;
     doc_text(doc, x, w, FIELDS[f].label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
-    int fh = font_height(doc->hdc, FIELDS[f].mono ? FONT_MONO : FONT_BODY), h = px(36);
+    int fh = font_height(doc->cv, FIELDS[f].mono ? FONT_MONO : FONT_BODY), h = px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     Item *it = doc_item(doc, doc_add(doc, &box, paint_box));
     it->data = s; it->arg = f; it->action = ACT_FOCUS;
@@ -173,15 +173,15 @@ static void field_pair(DbForm *s, Doc *doc, int x, int w, int left, int right, i
     if (doc->y < bottom) doc->y = bottom;
 }
 
-static void paint_check(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     DbForm *s = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
     RECT b = { rc->left, top, rc->left + size, top + size };
-    fill_round_rect(hdc, &b, px(3), s->enabled ? theme.accent : theme.field, s->enabled ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (s->enabled) draw_glyph(hdc, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    fill_round_rect(cv, &b, px(3), s->enabled ? theme.accent : theme.field, s->enabled ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
+    if (s->enabled) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, "In the pool: sessions may claim this server", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, "In the pool: sessions may claim this server", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void note(Doc *doc, int x, int w, const char *text) {
     doc_text(doc, x, w, text, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK);
@@ -201,7 +201,7 @@ static void layout_test(DbForm *s, Doc *doc, int x, int w) {
         int tx = b.right + px(10);
         RECT r = { tx, b.top, x + w, b.bottom };
         // One line beside the button when it fits, wrapped under it when it does not.
-        if (text_width(doc->hdc, s->test_text, FONT_CAPTION) <= r.right - r.left) doc_text_at(doc, &r, s->test_text, FONT_CAPTION, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        if (text_width(doc->cv, s->test_text, FONT_CAPTION) <= r.right - r.left) doc_text_at(doc, &r, s->test_text, FONT_CAPTION, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         else { doc->y = bottom + px(8); doc_text(doc, x, w, s->test_text, FONT_CAPTION, color, DT_LEFT | DT_WORDBREAK); bottom = doc->y; }
     }
     doc->y = bottom;
