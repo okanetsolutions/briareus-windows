@@ -403,7 +403,7 @@ Screen *pulls_screen_new(const Project *project) {
 
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
-    ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD,
+    ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2 };
@@ -959,6 +959,28 @@ static void layout_commit_list(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
+/// The findings not yet fixed, and those among them the user marked fix.
+static size_t findings_unfixed(PullScreen *s) {
+    size_t n = 0;
+    for (size_t i = 0; i < json_count(s->findings); i++) if (!json_bool_is(json_get(json_at(s->findings, i), "fixed"), true)) n++;
+    return n;
+}
+static size_t findings_to_fix(PullScreen *s) {
+    size_t n = 0;
+    for (size_t i = 0; i < json_count(s->findings); i++) {
+        const Json *f = json_at(s->findings, i);
+        if (!json_bool_is(json_get(f, "fixed"), true) && str_eq(json_str(json_get(f, "decision")), "fix")) n++;
+    }
+    return n;
+}
+/// Solve findings is the board's implement-feedback errand started from the findings themselves: offered on an open pull
+/// request with findings still to fix, to a device that may start sessions on a server that has the errand.
+static bool solve_findings_offered(PullScreen *s) {
+    if (!store_can_manage() || !store_supports("implement_feedback")) return false;
+    if (!str_eq(json_str(json_get(s->pr, "state")), "open") || !json_str(json_get(s->pr, "headRef"))) return false;
+    return findings_unfixed(s) > 0;
+}
+
 static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     int box = col_box(doc, c);
     if (s->findings_error) { doc_notice(doc, c.ix, c.iw, s->findings_error); doc_space(doc, px(6)); }
@@ -996,6 +1018,18 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     }
     if (!fn && !s->findings_error) doc_text(doc, c.ix, c.iw, "No findings reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
     if (store_supports("finding_decision") && fn) { doc_space(doc, px(8)); doc_text(doc, c.ix, c.iw, "Decisions are saved on the dashboard and mirrored to the pull request\xE2\x80\x99s checklist on GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
+    if (solve_findings_offered(s)) {
+        size_t fixes = findings_to_fix(s);
+        doc_space(doc, px(12));
+        char *label = s->busy ? xstrdup("Starting\xE2\x80\xA6") : fixes ? xstrfmt("Solve findings \xC2\xB7 %zu to fix", fixes) : xstrdup("Solve findings");
+        ButtonSpec b = { 0, label, BUTTON_PROMINENT, ACT_SOLVE_FINDINGS, 0, !s->busy && !s->uncertain && !s->deciding };
+        doc_button_row(doc, c.ix, c.iw, &b, 1);
+        free(label);
+        doc_space(doc, px(6));
+        doc_text(doc, c.ix, c.iw, fixes ? "Starts a paid session that addresses the findings marked Fix, pushes the fixes and has them reviewed again."
+                                        : "Starts a paid session that addresses the open findings, pushes the fixes and has them reviewed again. Mark what to fix first to narrow it down.",
+                 FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    }
     doc_box_end(doc, box, px(12));
 }
 
@@ -1360,6 +1394,26 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         s->dialog_open = false;
         if (ok) start_action(s, &a, input);
         free(input); board_action_free(&a);
+        break;
+    }
+    case ACT_SOLVE_FINDINGS: {
+        if (!solve_findings_offered(s) || s->busy || s->uncertain || s->deciding) break;
+        // The errand as the server words it when it is on offer, else as this app knows it.
+        const BoardAction *src = NULL;
+        for (size_t i = 0; i < s->action_count && !src; i++) if (str_eq(s->actions[i].id, "implement-feedback")) src = &s->actions[i];
+        if (!src) { size_t kn; const BoardAction *known = board_actions_known(&kn); for (size_t i = 0; i < kn && !src; i++) if (str_eq(known[i].id, "implement-feedback")) src = &known[i]; }
+        if (!src) break;
+        BoardAction a; board_action_copy(&a, src);
+        size_t fixes = findings_to_fix(s), open = findings_unfixed(s);
+        char *title = fixes ? xstrfmt("Start a paid fix session for %zu finding%s?", fixes, fixes == 1 ? "" : "s")
+                            : xstrfmt("Start a paid fix session for %zu open finding%s?", open, open == 1 ? "" : "s");
+        char *message = xstrfmt("The agent addresses the findings on PR #%d, pushes the fixes to its branch and has them reviewed again. Uses the provider and model configured for this project.", s->number);
+        s->dialog_open = true;
+        bool ok = app_confirm(title, message, "Solve findings", false);
+        s->dialog_open = false;
+        free(title); free(message);
+        if (ok) start_action(s, &a, NULL);
+        board_action_free(&a);
         break;
     }
     case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
