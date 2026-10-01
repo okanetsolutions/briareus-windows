@@ -33,7 +33,6 @@ static char *locale_date(time_t t, const wchar_t *picture) {
     GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &st, picture, buf, 64, NULL);
     return wide_to_utf8(buf);
 }
-static bool same_dst(time_t a, time_t b) { struct tm ta = *localtime(&a), tb = *localtime(&b); return ta.tm_isdst == tb.tm_isdst; }
 
 // MARK: - Times
 
@@ -52,14 +51,24 @@ static void test_event_time_on_another_day_names_the_day(void) {
         char *got = format_event_time(when[i]);
         char *prefix = xstrfmt("%s, ", day);
         CHECK(str_has_prefix(got, prefix));
-        // The app converts with today's offset; across a daylight saving change only the day is comparable.
-        if (same_dst(now, when[i])) {
-            char *clock = locale_clock(when[i]);
-            char *expected = xstrfmt("%s, %s", day, clock);
-            CHECK_STR(got, expected);
-            free(expected); free(clock);
-        }
-        free(prefix); free(got); free(day);
+        char *clock = locale_clock(when[i]);
+        char *expected = xstrfmt("%s, %s", day, clock);
+        CHECK_STR(got, expected);
+        free(expected); free(clock); free(prefix); free(got); free(day);
+    }
+}
+
+static void test_event_times_take_the_offset_of_their_own_date(void) {
+    // Noon UTC on 1 January and 1 July 2026: one in standard time and one in daylight time wherever the zone has both.
+    time_t when[2] = { 1767268800, 1782907200 };
+    for (int i = 0; i < 2; i++) {
+        char *day = locale_date(when[i], L"MMM d"), *clock = locale_clock(when[i]);
+        char *expected = xstrfmt("%s, %s", day, clock);
+        CHECK_OWNED_STR(format_event_time(when[i]), expected);
+        free(expected); free(clock); free(day);
+        char *date = locale_date(when[i], L"MMM d, yyyy");
+        CHECK_OWNED_STR(format_date_abbrev(when[i]), date);
+        free(date);
     }
 }
 
@@ -140,6 +149,13 @@ static void test_tokens_abbreviate_as_the_dashboard_does(void) {
     CHECK_OWNED_STR(format_tokens(839.1e6), "839.1M");
     CHECK_OWNED_STR(format_tokens(1e9), "1.0B");
     CHECK_OWNED_STR(format_tokens(21.6e9), "21.6B");
+}
+
+static void test_tokens_that_round_up_to_the_next_unit_take_it(void) {
+    CHECK_OWNED_STR(format_tokens(999949), "999.9k");
+    CHECK_OWNED_STR(format_tokens(999999), "1.0M");
+    CHECK_OWNED_STR(format_tokens(999949999), "999.9M");
+    CHECK_OWNED_STR(format_tokens(999999999), "1.0B");
 }
 
 static void test_cost_has_a_dollar_sign_and_two_decimals(void) {
@@ -330,6 +346,7 @@ static void test_working_verb_wraps_negative_ticks(void) {
 void app_format_tests(void) {
     test_run("event time today is the clock alone", test_event_time_today_is_the_clock_alone);
     test_run("event time on another day names the day", test_event_time_on_another_day_names_the_day);
+    test_run("event times take the offset of their own date", test_event_times_take_the_offset_of_their_own_date);
     test_run("date abbrev is month, day and year", test_date_abbrev_is_month_day_and_year);
     test_run("relative time steps from minutes to years", test_relative_time_steps_from_minutes_to_years);
     test_run("relative time in the future has no ago", test_relative_time_in_the_future_has_no_ago);
@@ -337,6 +354,7 @@ void app_format_tests(void) {
     test_run("negative durations and clocks are zero", test_negative_durations_and_clocks_are_zero);
     test_run("clock is minutes and padded seconds", test_clock_is_minutes_and_padded_seconds);
     test_run("tokens abbreviate as the dashboard does", test_tokens_abbreviate_as_the_dashboard_does);
+    test_run("tokens that round up to the next unit take it", test_tokens_that_round_up_to_the_next_unit_take_it);
     test_run("cost has a dollar sign and two decimals", test_cost_has_a_dollar_sign_and_two_decimals);
     test_run("file sizes round up to whole kilobytes", test_file_sizes_round_up_to_whole_kilobytes);
     test_run("file sizes from a megabyte have one decimal", test_file_sizes_from_a_megabyte_have_one_decimal);
