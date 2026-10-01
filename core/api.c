@@ -316,6 +316,11 @@ static const ApiRoute ROUTES[] = {
     { "update_project", "PUT", "settings/projects/{id}" },
     { "delete_project", "DELETE", "settings/projects/{id}" },
     { "order_projects", "PUT", "settings/projects/order" },
+    // The SSH servers agents may run commands on, each held to one project; also for an admin token.
+    { "settings_ssh_servers", "GET", "settings/ssh/servers" },
+    { "create_ssh_server", "POST", "settings/ssh/servers" },
+    { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },
+    { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
