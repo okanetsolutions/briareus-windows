@@ -292,7 +292,8 @@ char *held_round_pr_url(const Session *s, const Json *held) {
     const char *url = json_str_nonempty(json_get(pr, "url"));
     double number;
     int held_number = held_round_pr_number(held);
-    if (url && json_num(json_get(pr, "number"), &number) && (int)number == held_number) return xstrdup(url);
+    if (url && (!held_number || (json_num(json_get(pr, "number"), &number) && (int)number == held_number))) return xstrdup(url);
+    if (!held_number) return NULL;
     const char *repo = session_repo(s);
     return xstrfmt("https://github.com/%s/pull/%d", repo ? repo : "", held_number);
 }

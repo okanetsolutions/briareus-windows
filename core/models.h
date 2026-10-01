@@ -100,7 +100,8 @@ typedef struct { size_t index; const Json *held; } HeldRound;
 /// The conversations holding a round, the oldest hold first, as the dashboard lists them.
 HeldRound *sessions_held_rounds(const Session *sessions, size_t count, size_t *out_count);
 /// The pull request a round is about, as a link: the conversation's own when that is the same pull request, and built
-/// from the number otherwise (a conversation that moved on to another pull request still holds this round). New string.
+/// from the number otherwise (a conversation that moved on to another pull request still holds this round). A round without
+/// a number has the conversation's link, or NULL. New string.
 char *held_round_pr_url(const Session *s, const Json *held);
 /// A hand-started review says whose pull request it is; a loop round is always the user's, and takes verdicts.
 bool held_round_is_mine(const Json *held);

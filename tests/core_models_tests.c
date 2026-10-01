@@ -439,6 +439,11 @@ static void test_held_round_url_reuses_the_conversations_own_link_only_for_its_p
     CHECK_OWNED_STR(held_round_pr_url(&s, held7), "https://github.com/o/r/pull/7"); session_free(&s);
     s = session_of("{\"id\":\"a\",\"status\":\"idle\"}");
     CHECK_OWNED_STR(held_round_pr_url(&s, held9), "https://github.com//pull/9"); session_free(&s);
+    // A round without a number has the conversation's own link, or none.
+    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"number\":7,\"url\":\"https://ghe.example/o/r/pull/7\"}}");
+    CHECK_OWNED_STR(held_round_pr_url(&s, none), "https://ghe.example/o/r/pull/7"); session_free(&s);
+    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\"}");
+    CHECK(held_round_pr_url(&s, none) == NULL); session_free(&s);
     CHECK_INT(held_round_pr_number(held7), 7); CHECK_INT(held_round_pr_number(none), 0); CHECK_INT(held_round_pr_number(NULL), 0);
     Json *odd = json_parsez("{\"prNumber\":0}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
     odd = json_parsez("{\"prNumber\":\"7\"}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
