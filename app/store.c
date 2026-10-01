@@ -61,6 +61,12 @@ bool store_supports(const char *operation) {
         if (str_eq(g_store.operations[i].name, operation) && (g_store.operations[i].read_only || store_can_manage())) return true;
     return false;
 }
+bool store_supports_attachments(void) {
+    if (!store_can_manage()) return false;
+    for (size_t i = 0; i < g_store.operation_count; i++)
+        if (str_eq(g_store.operations[i].name, "message")) return g_store.operations[i].attachments;
+    return false;
+}
 
 // MARK: - Async
 
@@ -271,7 +277,7 @@ void store_voice_notes_off(void (*done)(void *ctx, const char *reason), void *ct
 // MARK: - Requests
 
 static void request_free(Request *r) {
-    free(r->operation); json_free(r->args); free(r->audio); free(r->audio_type);
+    free(r->operation); json_free(r->args); free(r->audio); free(r->audio_type); free(r->file); free(r->file_name);
     json_free(r->result); free(r->text); api_error_clear(&r->error);
     if (r->client) api_client_release(r->client);
     free(r);
@@ -280,6 +286,9 @@ static DWORD WINAPI request_thread(LPVOID p) {
     Request *r = p;
     if (r->audio) {
         r->text = api_transcribe(r->client, r->audio, r->audio_len, r->audio_type, NULL, &r->error);
+        r->ok = r->text != NULL;
+    } else if (r->file) {
+        r->text = api_upload(r->client, r->file_name, r->file, r->file_len, &r->error);
         r->ok = r->text != NULL;
     } else {
         r->result = api_operation(r->client, r->operation, r->args, r->timeout_ms, &r->error);
@@ -315,6 +324,13 @@ Request *store_transcribe(const void *audio, size_t len, const char *content_typ
     r->audio = xmalloc(len ? len : 1); memcpy(r->audio, audio, len); r->audio_len = len;
     r->audio_type = xstrdup(content_type ? content_type : "audio/mp4");
     if (!g_store.client || !store_can_transcribe()) { request_refuse(r, "This device cannot transcribe voice notes."); return r; }
+    request_start(r);
+    return r;
+}
+Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot) {
+    Request *r = request_new(owner, done, tag, slot);
+    r->file = bytes ? bytes : xmalloc(1); r->file_len = len; r->file_name = xstrdup(name ? name : "file");
+    if (!g_store.client || !store_supports_attachments()) { request_refuse(r, "This server does not take files with a message."); return r; }
     request_start(r);
     return r;
 }

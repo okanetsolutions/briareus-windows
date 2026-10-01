@@ -63,6 +63,10 @@ bool api_revoke(ApiClient *client, ApiError *error);
 Json *api_operation(ApiClient *client, const char *name, const Json *arguments, int timeout_ms, ApiError *error);
 /// The text of a recorded voice note. `language` is the spoken one as a BCP 47 tag; NULL or "" lets the server detect it.
 char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, const char *language, ApiError *error);
+/// Stores a file to attach to a message, as the dashboard's composer does: the bytes are the body and the name rides in the
+/// query. The answer is the id the `message` operation takes in `attachments`. Files larger than API_UPLOAD_LIMIT are refused here.
+#define API_UPLOAD_LIMIT (25 * 1024 * 1024)
+char *api_upload(ApiClient *client, const char *name, const void *bytes, size_t len, ApiError *error);
 
 /// Seconds to wait from a Retry-After header, or -1 when it cannot be read.
 double api_retry_after(const char *value, time_t now);

@@ -177,6 +177,47 @@ static void test_voice_note_is_posted_as_recorded_and_answered_with_its_text(voi
     CHECK(api_transcribe(c, audio, 1, NULL, NULL, &e) == NULL); CHECK(e.kind == API_NON_JSON);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
+static void test_attachment_is_posted_raw_and_answered_with_its_id(void) {
+    Stub stub = { 0 }; stub.status = 201; stub.content_type = "application/json"; stub.body = "{\"file\":{\"id\":\"1a2b3c4d\",\"name\":\"pasted.png\",\"size\":4}}";
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    unsigned char png[] = { 0x89, 'P', 'N', 'G' };
+    char *id = api_upload(c, "pasted image #1.png", png, sizeof png, &e);
+    CHECK_STR(id, "1a2b3c4d"); free(id);
+    CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/uploads?name=pasted%20image%20%231.png");
+    CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_content_type, "application/octet-stream");
+    CHECK(stub.last_body_len == 4 && memcmp(stub.last_body, png, 4) == 0);
+    // A file whose own type is JSON must not reach the server's JSON parser either.
+    id = api_upload(c, "", "{}", 2, &e); CHECK_STR(id, "1a2b3c4d"); free(id);
+    CHECK_STR(stub.last_content_type, "application/octet-stream"); CHECK(strstr(stub.last_url, "?name=file") != NULL);
+    // Refusals keep the server's words; an answer without an id is not one.
+    stub.status = 404; stub.body = "{\"error\":\"Not found\"}";
+    CHECK(api_upload(c, "a.txt", "x", 1, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 404); CHECK_STR(e.message, "Not found");
+    stub.status = 201; stub.body = "{\"ok\":true}";
+    CHECK(api_upload(c, "a.txt", "x", 1, &e) == NULL); CHECK(e.kind == API_NON_JSON);
+    // Oversized files never leave the client.
+    int calls = stub.calls;
+    void *big = xcalloc(1, API_UPLOAD_LIMIT + 1);
+    CHECK(api_upload(c, "big.bin", big, API_UPLOAD_LIMIT + 1, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 413); CHECK(stub.calls == calls);
+    free(big);
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+static void test_operations_say_whether_a_message_takes_attachments(void) {
+    Json *j = json_parsez("{\"operations\":["
+        "{\"name\":\"message\",\"readOnly\":false,\"inputSchema\":{\"type\":\"object\",\"properties\":{\"sessionId\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"attachments\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}},"
+        "{\"name\":\"rename\",\"readOnly\":false,\"inputSchema\":{\"type\":\"object\",\"properties\":{\"sessionId\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}}}},"
+        "{\"name\":\"projects\",\"readOnly\":true}]}");
+    Operation *ops = NULL; size_t n = 0;
+    CHECK(operations_parse(j, &ops, &n)); CHECK(n == 3);
+    CHECK(ops[0].attachments); CHECK(!ops[1].attachments); CHECK(!ops[2].attachments);
+    // The flag survives the saved connection, whose copy of the catalog has no schemas.
+    Json *saved = operations_json(ops, n);
+    CHECK(json_bool_is(json_get(json_at(saved, 0), "attachments"), true)); CHECK(json_is_null(json_get(json_at(saved, 1), "attachments")));
+    Operation *again = NULL; size_t m = 0;
+    CHECK(operations_parse(saved, &again, &m)); CHECK(m == 3); CHECK(again[0].attachments); CHECK(!again[1].attachments);
+    Operation *copy = operations_copy(again, m); CHECK(copy[0].attachments); CHECK(!copy[1].attachments);
+    operations_free(copy, m); operations_free(again, m); operations_free(ops, n); json_free(saved); json_free(j);
+}
 static void test_discovery_says_whether_the_server_transcribes(void) {
     const char *device = "\"device\":{\"id\":\"d\",\"label\":\"iPhone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}";
     char *a = xstrfmt("{\"version\":1,%s}", device), *b = xstrfmt("{\"version\":1,%s,\"transcribe\":true}", device), *s = xstrfmt("{%s,\"operations\":[]}", device);
@@ -651,6 +692,8 @@ int main(void) {
         { "errors keep status and Retry-After without retrying a write", test_errors_keep_status_and_retry_after_without_retrying_write },
         { "timeout does not retry a write", test_timeout_does_not_retry_write },
         { "voice note is posted as recorded and answered with its text", test_voice_note_is_posted_as_recorded_and_answered_with_its_text },
+        { "attachment is posted raw and answered with its id", test_attachment_is_posted_raw_and_answered_with_its_id },
+        { "operations say whether a message takes attachments", test_operations_say_whether_a_message_takes_attachments },
         { "discovery says whether the server transcribes", test_discovery_says_whether_the_server_transcribes },
         { "revoke uses DELETE token", test_revoke_uses_delete_token },
         { "oversized write never leaves the client", test_oversized_write_never_leaves_client },

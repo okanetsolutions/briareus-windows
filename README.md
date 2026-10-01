@@ -14,6 +14,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Selects text as a browser does: drag across messages, double-click a word, Ctrl+A for everything; Ctrl+C or the right-click menu copies it. The menu also copies the paragraph under the pointer.
 - Starts conversations on a chosen branch, provider, model and effort, or on the project default.
 - Sends follow-ups (Enter sends, Shift+Enter breaks a line), renames, stops, closes, reopens and deletes sessions.
+- Attaches files to a message as the dashboard's composer does: an image pasted into the message box goes as a PNG, and files copied in Explorer paste or drop into it. Each is stored on the server as it is attached, shows above the text with its size until sent, and the agent gets its path. On a server whose mobile API does not take uploads yet, the paste says so.
 - Turns the review loop on or off and completes the triage of held findings from inside a conversation.
 - Keeps a Findings screen, as the dashboard does: every review round waiting for a decision across the projects, grouped by pull request, with a count beside the projects. A round on your own pull request takes a verdict (fix, optional, dismiss) and a comment on each finding, saves them to the pull request, and completes into the fix session; a review of somebody else's takes replies on its findings' threads, deletes a finding from the review, and is taken off the queue. What a completion led to stays on the screen until dismissed.
 - Records voice notes with the microphone (AAC through Media Foundation, WAV as a fallback) and has the server transcribe them into the message box. On a server that cannot transcribe, the microphone says what the server is missing.
@@ -58,7 +59,7 @@ The core (JSON, models, API client, cache, diff, Markdown and board logic) has n
 | Path | Contents |
 | --- | --- |
 | `core/` | The portable core: JSON, models, API client over WinHTTP, saved-response cache, board, diff and Markdown parsing, Credential Manager and registry access. No UI. |
-| `app/` | The Win32 app: theme and drawing helpers, the item-based layout toolkit (`doc.c`), the screen stack container (`pane.c`), the connection store with UI-thread requests (`store.c`), the screens, the dialogs and voice notes. |
+| `app/` | The Win32 app: theme and drawing helpers, the item-based layout toolkit (`doc.c`), the screen stack container (`pane.c`), the connection store with UI-thread requests (`store.c`), the screens, the dialogs, voice notes and attachments (`attach.c`: the clipboard's image as PNG through Windows Imaging Component, dropped or pasted files read from disk). |
 | `tests/` | Core tests. |
 | `res/` | Icon, manifest, dialogs and version resources. |
 

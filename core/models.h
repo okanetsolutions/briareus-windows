@@ -27,7 +27,8 @@ void discovery_free(Discovery *discovery);
 /// What the server's owner has to do before voice notes work, or NULL when they do.
 const char *discovery_voice_notes_off(int transcribe);
 
-typedef struct { char *name; bool read_only; } Operation;
+/// `attachments` is set when the operation's input schema lists an `attachments` argument: the ids of uploaded files.
+typedef struct { char *name; bool read_only; bool attachments; } Operation;
 bool operations_parse(const Json *value, Operation **out, size_t *count);
 Json *operations_json(const Operation *ops, size_t count);
 void operations_free(Operation *ops, size_t count);

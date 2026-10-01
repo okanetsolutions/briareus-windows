@@ -1,4 +1,5 @@
 // One conversation: its transcript, the composer, and the actions on the session.
+#include "attach.h"
 #include "dialogs.h"
 #include "screens.h"
 #include "str.h"
@@ -18,6 +19,10 @@ enum { ID_COMPOSER = 301 };
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
 enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY };
 
+/// A file for the next message: uploading until `id` is set, as the dashboard's `.attach-item`.
+typedef struct { char *name; size_t size; char *id; Request *req; RECT remove_rc; } Attachment;
+enum { ATTACHMENTS_MAX = 10 };   // the dashboard's "At most 10 files per message"
+
 typedef struct {
     Screen base;
     Session initial, snapshot; bool has_snapshot;
@@ -35,6 +40,8 @@ typedef struct {
     char *triage_note;
     int tick;
     VoiceNote *voice;
+    Attachment **attachments; size_t attachment_count;   // each on the heap: an upload's slot points into it
+    Attacher *attacher;
     char header_title[512], header_subtitle[256];
     // footer hit rects
     RECT mic_rc, send_rc, discard_rc;
@@ -67,10 +74,83 @@ static void set_composer_text(ConversationScreen *s, const char *text) {
 }
 static bool composer_empty(ConversationScreen *s) { char *t = composer_text(s); char *trimmed = str_trim(t); bool e = !*trimmed; free(t); free(trimmed); return e; }
 
+// MARK: - Attachments
+
+static bool attachments_uploading(ConversationScreen *s) { for (size_t i = 0; i < s->attachment_count; i++) if (!s->attachments[i]->id) return true; return false; }
+static void attachment_drop(ConversationScreen *s, size_t i) {
+    Attachment *a = s->attachments[i];
+    request_cancel(&a->req); free(a->name); free(a->id); free(a);
+    memmove(&s->attachments[i], &s->attachments[i + 1], (s->attachment_count - i - 1) * sizeof *s->attachments);
+    s->attachment_count--;
+}
+static void attachments_clear(ConversationScreen *s) {
+    while (s->attachment_count) attachment_drop(s, s->attachment_count - 1);
+    free(s->attachments); s->attachments = NULL;
+}
+static void upload_done(void *owner, Request *req) {
+    ConversationScreen *s = owner;
+    Attachment *a = (Attachment *)req->arg;
+    size_t i = 0;
+    while (i < s->attachment_count && s->attachments[i] != a) i++;
+    if (i == s->attachment_count) return;   // taken off the message meanwhile
+    if (req->ok) a->id = xstrdup(req->text ? req->text : "");
+    else {
+        char *why = request_error_text(req);
+        char *text = xstrfmt("%s could not be attached: %s", a->name, why);
+        attachment_drop(s, i);
+        app_alert("Attachment", text);
+        free(text); free(why);
+    }
+    pane_footer_changed(s->base.pane);
+}
+// The files read from the clipboard or a drop: each goes to the server at once, and the message carries their ids.
+static void attachments_arrived(void *ctx, AttachFile *files, size_t count, char *error) {
+    ConversationScreen *s = ctx;
+    Str refused; str_init(&refused);
+    if (error) str_appendz(&refused, error);
+    for (size_t i = 0; i < count; i++) {
+        if (s->attachment_count >= ATTACHMENTS_MAX) { str_appendf(&refused, "%sAt most %d files go with one message.", refused.len ? "\n" : "", ATTACHMENTS_MAX); break; }
+        Attachment *a = xcalloc(1, sizeof *a);
+        a->name = files[i].name; a->size = files[i].len; files[i].name = NULL;
+        s->attachments = xrealloc(s->attachments, (s->attachment_count + 1) * sizeof *s->attachments);
+        s->attachments[s->attachment_count++] = a;
+        Request *r = store_upload(a->name, files[i].bytes, files[i].len, s, upload_done, 0, &a->req);
+        files[i].bytes = NULL;
+        r->arg = (intptr_t)a;
+    }
+    attach_files_free(files, count);
+    free(error);
+    if (refused.len) app_alert("Attachments", refused.data);
+    str_free(&refused);
+    pane_footer_changed(s->base.pane);
+}
+static const char *attachments_unsupported(void) { return "This server does not take files with a message. Update Briareus to a version whose mobile API accepts uploads."; }
+/// A paste that holds files or an image: true when it was taken as attachments and the text, if any, is not to be pasted.
+static bool composer_take_clipboard(ConversationScreen *s) {
+    if (!attach_clipboard_has_files()) return false;
+    if (!store_supports_attachments()) {
+        if (attach_clipboard_has_text()) return false;
+        app_alert("Attachments", attachments_unsupported());
+        return true;
+    }
+    if (!s->attacher) s->attacher = attacher_new(attachments_arrived, s);
+    return attacher_from_clipboard(s->attacher, pane_hwnd(s->base.pane));
+}
+static void composer_take_drop(ConversationScreen *s, HDROP drop) {
+    if (!store_supports_attachments()) { DragFinish(drop); app_alert("Attachments", attachments_unsupported()); return; }
+    if (!s->attacher) s->attacher = attacher_new(attachments_arrived, s);
+    attacher_from_drop(s->attacher, drop);
+}
+
 static void send_message(ConversationScreen *s) {
-    if (s->busy || s->uncertain || composer_empty(s) || !can_message(s)) return;
+    if (s->busy || s->uncertain || composer_empty(s) || !can_message(s) || attachments_uploading(s)) return;
     char *text = composer_text(s);
     Json *extra = json_object(); json_set_str(extra, "text", text);
+    if (s->attachment_count) {
+        Json *ids = json_array();
+        for (size_t i = 0; i < s->attachment_count; i++) json_array_push(ids, json_string(s->attachments[i]->id));
+        json_object_set(extra, "attachments", ids);
+    }
     free(text);
     mutate(s, "message", extra);
 }
@@ -80,6 +160,9 @@ static LRESULT CALLBACK composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
     if (msg == WM_KEYDOWN && wp == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000) && !(GetKeyState(VK_CONTROL) & 0x8000)) { send_message(s); return 0; }
     if (msg == WM_CHAR && wp == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000) && !(GetKeyState(VK_CONTROL) & 0x8000)) return 0;
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+    // Ctrl+V and Shift+Insert both reach the control as WM_PASTE; a file or image becomes an attachment, text pastes as ever.
+    if (msg == WM_PASTE && composer_take_clipboard(s)) return 0;
+    if (msg == WM_DROPFILES) { composer_take_drop(s, (HDROP)wp); return 0; }
     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) pane_footer_changed(s->base.pane);
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, composer_proc, id);
     return DefSubclassProc(hwnd, msg, wp, lp);
@@ -161,6 +244,12 @@ static void mutate_done(void *owner, Request *req) {
         char *sent = composer_text(s);
         if (str_eq(sent, json_str(json_get(req->args, "text")))) { set_composer_text(s, ""); pane_stick_to_bottom(s->base.pane, true); pane_scroll_to_bottom(s->base.pane); }
         free(sent);
+        // The files that went with it; one attached since stays for the next message.
+        const Json *ids = json_get(req->args, "attachments");
+        for (size_t i = 0; i < json_count(ids); i++)
+            for (size_t j = 0; j < s->attachment_count; j++)
+                if (s->attachments[j]->id && str_eq(s->attachments[j]->id, json_str(json_at(ids, i)))) { attachment_drop(s, j); break; }
+        pane_footer_changed(s->base.pane);
     }
     if (str_eq(name, "delete")) {
         // The sidebar drops the row now instead of at its next poll; the transcript goes with it.
@@ -788,6 +877,22 @@ static int chips_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
     }
     return y + h;
 }
+// `.attach-list`: the files for the next message, as chips above the text, wrapping; returns the height they take with the gap under them.
+static int attachments_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
+    if (!s->attachment_count) return 0;
+    int x = 0, y = 0, h = px(24), gap = px(4);
+    for (size_t i = 0; i < s->attachment_count; i++) {
+        char *size = format_file_size(s->attachments[i]->size);
+        char *label = xstrfmt("\xF0\x9F\x93\x8E %s \xC2\xB7 %s", s->attachments[i]->name, size);
+        int w = px(8) + text_width(hdc, label, FONT_CAPTION) + px(6) + px(16) + px(6);
+        if (w > px(280)) w = px(280);
+        free(label); free(size);
+        if (x > 0 && x + w > width) { x = 0; y += h + gap; }
+        if (out) { RECT r = { x, y, x + w, y + h }; out[i] = r; }
+        x += w + gap;
+    }
+    return y + h + px(6);
+}
 static RECT footer_column(const RECT *rc) {
     int w = rc->right - rc->left - px(24) * 2; if (w > px(860)) w = px(860);
     int x = rc->left + (rc->right - rc->left - w) / 2;
@@ -799,7 +904,8 @@ static int conversation_footer_height(Screen *base, int width) {
     HDC hdc = GetDC(pane_hwnd(base->pane));
     int inner = width - px(24) * 2; if (inner > px(860)) inner = px(860);
     int chips = chips_layout(s, hdc, inner, NULL);
-    int box = can_message(s) ? px(10) + composer_height(s, hdc) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
+    int files = can_message(s) ? attachments_layout(s, hdc, inner - px(24), NULL) : 0;
+    int box = can_message(s) ? px(10) + files + composer_height(s, hdc) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
     int h = px(8) + chips + px(8) + box + px(6) + px(16) + px(14);
     ReleaseDC(pane_hwnd(base->pane), hdc);
     return h;
@@ -810,10 +916,11 @@ static void conversation_footer_layout(Screen *base, const RECT *rc) {
     HDC hdc = GetDC(pane_hwnd(base->pane));
     RECT col = footer_column(rc);
     int chips = chips_layout(s, hdc, col.right - col.left, NULL);
+    int files = attachments_layout(s, hdc, col.right - col.left - px(24), NULL);
     int ch = composer_height(s, hdc);
     ReleaseDC(pane_hwnd(base->pane), hdc);
     int top = col.top + px(8) + chips + px(8);
-    RECT er = { col.left + px(12) + 1, top + px(10) + 1, col.right - px(12) - 1, top + px(10) + 1 + ch };
+    RECT er = { col.left + px(12) + 1, top + px(10) + 1 + files, col.right - px(12) - 1, top + px(10) + 1 + files + ch };
     s->composer_rc = er;
     MoveWindow(s->composer, er.left, er.top, er.right - er.left, er.bottom - er.top, TRUE);
     ShowWindow(s->composer, SW_SHOW);
@@ -858,10 +965,27 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         return;
     }
     int ch = composer_height(s, hdc);
-    RECT box = { col.left, top, col.right, top + px(10) + ch + px(6) + px(30) + px(8) + 2 };
+    RECT *frects = xcalloc(s->attachment_count ? s->attachment_count : 1, sizeof *frects);
+    int files = attachments_layout(s, hdc, width - px(24), frects);
+    RECT box = { col.left, top, col.right, top + px(10) + files + ch + px(6) + px(30) + px(8) + 2 };
     fill_round_rect(hdc, &box, px(16), theme.raise, GetFocus() == s->composer ? theme.line_strong : theme.line);
-    int row_y = box.top + px(10) + 1 + ch + px(6), bh = px(30), bw = px(32);
+    for (size_t i = 0; i < s->attachment_count; i++) {
+        Attachment *a = s->attachments[i];
+        RECT r = { box.left + px(12) + frects[i].left, box.top + px(10) + 1 + frects[i].top, box.left + px(12) + frects[i].right, box.top + px(10) + 1 + frects[i].bottom };
+        fill_round_rect(hdc, &r, px(6), theme.field, theme.line);
+        char *size = format_file_size(a->size);
+        char *label = xstrfmt("%s %s \xC2\xB7 %s", a->id ? "\xF0\x9F\x93\x8E" : "\xE2\x80\xA6", a->name, size);
+        RECT t = { r.left + px(8), r.top, r.right - px(6) - px(16), r.bottom };
+        draw_text(hdc, label, &t, FONT_CAPTION, a->id ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        free(label); free(size);
+        RECT x = { r.right - px(6) - px(16), r.top, r.right - px(6), r.bottom };
+        a->remove_rc = x;
+        draw_text(hdc, "\xE2\x9C\x95", &x, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    free(frects);
+    int row_y = box.top + px(10) + 1 + files + ch + px(6), bh = px(30), bw = px(32);
     bool trimmed_empty = composer_empty(s);
+    bool uploading = attachments_uploading(s);
     bool active = session_is_active(ss);
     VoiceState vs = s->voice ? voice_state(s->voice) : VOICE_IDLE;
     // `#btn-send`: 32×30, the accent when there is something to send; a stop square while the agent works.
@@ -871,7 +995,7 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         fill_round_rect(hdc, &send, px(8), theme.raise, theme.line);
         draw_text(hdc, "\xE2\x96\xA0", &send, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
-        bool enabled = can && !trimmed_empty;
+        bool enabled = can && !trimmed_empty && !uploading;
         fill_round_rect(hdc, &send, px(8), enabled || s->busy ? theme.accent : theme.field, enabled || s->busy ? theme.accent : theme.field);
         draw_text(hdc, "\xE2\x86\xB5", &send, FONT_BODY, enabled || s->busy ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
@@ -894,7 +1018,8 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
     }
     // `#composer-note`: what a message sent now does.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
-    const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn") : "";
+    const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
+                      : uploading ? "Uploading\xE2\x80\xA6" : s->attachment_count && trimmed_empty ? "Add a few words to send the files" : "";
     draw_text(hdc, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
@@ -902,6 +1027,8 @@ static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && in_rect(&g_chip_rc[CHIP_LOOP], pt)) { menu_choice(s, session_review_loop_on(session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
     if (!can_message(s)) { if (in_rect(&s->send_rc, pt) && !s->busy && !s->uncertain) confirm_and_mutate(s, "reopen"); return; }
+    for (size_t i = 0; i < s->attachment_count; i++)
+        if (in_rect(&s->attachments[i]->remove_rc, pt)) { attachment_drop(s, i); pane_footer_changed(base->pane); return; }
     if (in_rect(&s->send_rc, pt)) {
         bool active = session_is_active(session(s));
         if (active && store_supports("cancel") && composer_empty(s)) { if (!s->busy && !s->uncertain) confirm_and_mutate(s, "cancel"); }
@@ -983,6 +1110,8 @@ static void conversation_destroy(Screen *base) {
     poller_stop(&s->poller);
     if (base->pane) { KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE); }
     if (s->voice) voice_free(s->voice);
+    attachments_clear(s);
+    if (s->attacher) attacher_free(s->attacher);
     if (s->composer) DestroyWindow(s->composer);
     session_free(&s->initial); if (s->has_snapshot) session_free(&s->snapshot);
     transcript_free(&s->transcript);
@@ -1011,6 +1140,7 @@ Screen *conversation_screen_new(const Session *initial) {
     SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply\x2026");
     SetWindowSubclass(s->composer, composer_proc, ID_COMPOSER, (DWORD_PTR)s);
     theme_apply_control(s->composer);
+    DragAcceptFiles(s->composer, TRUE);
     if (store_can_transcribe()) s->voice = voice_new(voice_changed, s);
     return &s->base;
 }
