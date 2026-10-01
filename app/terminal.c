@@ -179,11 +179,10 @@ static bool find_git_client(const wchar_t *name, wchar_t *out, DWORD n) {
     out[n - 1] = 0;
     return file_exists(out);
 }
-/// The full path of ssh.exe. Git for Windows' OpenSSH comes first: Windows' own (9.5) stalls in a pseudoconsole
-/// on recent Windows builds, its output and its exit waiting for a key, while Git's streams. Both read ~/.ssh. Then
-/// Windows' OpenSSH Client, then whatever PATH finds.
-static bool find_client(wchar_t *out, DWORD n) {
-    const wchar_t *name = L"ssh.exe";
+/// The full path of one of OpenSSH's programs. Git for Windows' OpenSSH comes first: Windows' own (9.5) stalls in a
+/// pseudoconsole on recent Windows builds, its output and its exit waiting for a key, while Git's streams. Both read
+/// ~/.ssh. Then Windows' OpenSSH Client, then whatever PATH finds.
+bool term_find_program(const wchar_t *name, wchar_t *out, DWORD n) {
     if (find_git_client(name, out, n)) return true;
     wchar_t dir[MAX_PATH];
     UINT len = GetSystemDirectoryW(dir, MAX_PATH);
@@ -320,7 +319,7 @@ static void size_cells(Term *t, int *cols, int *rows) {
 static bool spawn(Term *t, char **error) {
     if (!conpty_available()) { *error = xstrdup("This version of Windows has no pseudoconsole (ConPTY); Windows 10 1809 or later is needed."); return false; }
     wchar_t client[MAX_PATH];
-    if (!find_client(client, MAX_PATH)) {
+    if (!term_find_program(L"ssh.exe", client, MAX_PATH)) {
         *error = xstrfmt("%s was not found. Install Git for Windows, or the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", "ssh.exe");
         return false;
     }

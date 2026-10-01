@@ -4,6 +4,7 @@
 #include "media.h"
 #include "resource.h"
 #include "screens.h"
+#include "sftp_session.h"
 #include "str.h"
 #include "terminal.h"
 #include "theme.h"
@@ -245,12 +246,14 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_CLOSE: {
-        // Open SSH sessions end with the app, so it asks first.
-        size_t live = 0;
-        for (size_t i = 0; i < term_count(); i++) if (term_running(term_at(i))) live++;
+        // Open SSH and SFTP sessions end with the app, so it asks first.
+        size_t ssh = 0, sftp = sftp_live_count();
+        for (size_t i = 0; i < term_count(); i++) if (term_running(term_at(i))) ssh++;
+        size_t live = ssh + sftp;
         if (live) {
             char message[160];
-            snprintf(message, sizeof message, "%zu SSH session%s still open; closing Briareus disconnects %s.", live, live == 1 ? " is" : "s are", live == 1 ? "it" : "them");
+            const char *kind = !sftp ? "SSH" : !ssh ? "SFTP" : "SSH and SFTP";
+            snprintf(message, sizeof message, "%zu %s session%s still open; closing Briareus disconnects %s.", live, kind, live == 1 ? " is" : "s are", live == 1 ? "it" : "them");
             if (!app_confirm("Close Briareus?", message, "Close", true)) return 0;
         }
         DestroyWindow(hwnd);
@@ -258,6 +261,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DESTROY:
         term_shutdown();
+        sftp_shutdown();
         media_stop();
         pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel);
         g_pairing = g_sidebar = g_detail = g_panel = NULL;
@@ -283,6 +287,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     INITCOMMONCONTROLSEX icc = { sizeof icc, ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
     theme_init();
+    // Started by ssh as its SSH_ASKPASS, for an SFTP session's password or host key: the prompt alone, no window.
+    int askpass_exit;
+    if (sftp_askpass_main(&askpass_exit)) { CoUninitialize(); return askpass_exit; }
     WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);
     wc.cbSize = sizeof wc; wc.lpfnWndProc = main_proc; wc.hInstance = instance; wc.lpszClassName = MAIN_CLASS;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);

@@ -895,5 +895,6 @@ int main(void) {
     api_tests();
     cache_tests();
     vt_tests();
+    sftp_tests();
     return test_summary();
 }

@@ -448,7 +448,7 @@ bool dialog_new_conversation(HWND owner, const Project *project, Session *starte
 
 // MARK: - Rename
 
-typedef struct { const char *caption, *label, *ok_label, *current; char *result; } RenameState;
+typedef struct { const char *caption, *label, *ok_label, *current; char *result; bool secret; } RenameState;
 static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
     RenameState *r = (RenameState *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
     switch (msg) {
@@ -461,6 +461,12 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
         set_control_text(dialog, IDC_TITLE_LABEL, r->label);
         set_control_text(dialog, IDOK, r->ok_label);
         set_control_text(dialog, IDC_TITLE, r->current);
+        if (r->secret) {
+            SendMessageW(GetDlgItem(dialog, IDC_TITLE), EM_SETPASSWORDCHAR, 0x25CF, 0);
+            // Asked by another program (ssh), so this window has to come forward by itself.
+            SetWindowPos(dialog, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            SetForegroundWindow(dialog);
+        }
         SendMessageW(GetDlgItem(dialog, IDC_TITLE), EM_SETSEL, 0, -1);
         SetFocus(GetDlgItem(dialog, IDC_TITLE));
         return FALSE;
@@ -478,8 +484,16 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
     return FALSE;
 }
 char *dialog_text(HWND owner, const char *caption, const char *label, const char *ok_label, const char *current) {
-    RenameState r = { caption, label, ok_label, current ? current : "", NULL };
+    RenameState r = { caption, label, ok_label, current ? current : "", NULL, false };
     if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_RENAME), owner, rename_proc, (LPARAM)&r) != IDOK) { free(r.result); return NULL; }
+    return r.result;
+}
+char *dialog_password(HWND owner, const char *caption, const char *label) {
+    RenameState r = { caption, label, "OK", "", NULL, true };
+    if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_RENAME), owner, rename_proc, (LPARAM)&r) != IDOK) {
+        if (r.result) SecureZeroMemory(r.result, strlen(r.result));
+        free(r.result); return NULL;
+    }
     return r.result;
 }
 char *dialog_rename(HWND owner, const char *current) { return dialog_text(owner, "Rename conversation", "Title", "Save", current); }
