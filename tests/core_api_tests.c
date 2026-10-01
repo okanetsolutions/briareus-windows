@@ -662,6 +662,8 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
         CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
         stub_json(&stub, fallback[i].status, "{\"error\":");
         CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        stub_json(&stub, fallback[i].status, "{\"error\":\"\"}");
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
     }
     // The server's `error` is read only from a JSON answer.
     stub_json(&stub, 400, "{\"error\":\"Hidden\"}"); stub.content_type = "text/plain";
