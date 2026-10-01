@@ -17,15 +17,11 @@ static const char *action_icon(const char *id) {
     for (size_t k = 0; k < sizeof icons / sizeof *icons; k++) if (str_eq(icons[k].id, id)) return icons[k].icon;
     return "";
 }
-/// Asks before an errand starts: for its input when it takes one, for a confirmation otherwise. True to go ahead.
+/// Asks for an errand's input when it takes one; the others start straight away. True to go ahead.
 static bool action_prompt(const BoardAction *a, int number, char **input) {
     *input = NULL;
     if (a->has_input) return dialog_action_input(app_window(), a, number, input);
-    char *title = xstrfmt("Start a paid %s session on #%d?", a->label, number);
-    char *message = str_empty(a->hint) ? NULL : xstrfmt("%s.", a->hint);
-    bool ok = app_confirm(title, message, "Start session", str_eq(a->id, "delete-self-comments"));
-    free(title); free(message);
-    return ok;
+    return true;
 }
 /// The errands this app can start on a row: what the server offers for it, less what the token or server lacks.
 static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count) {
