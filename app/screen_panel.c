@@ -250,11 +250,12 @@ static COLORREF context_color(const char *name) {
     static const struct { const char *name; COLORREF color; } colors[] = {
         { "messages", RGB(0x6d, 0x9e, 0xf7) }, { "system prompt", RGB(0xe0, 0x6c, 0x75) }, { "system tools", RGB(0xd9, 0x8a, 0x3f) },
         { "mcp tools", RGB(0x4f, 0xae, 0x72) }, { "skills", RGB(0xc9, 0x6f, 0x9e) }, { "memory files", RGB(0x5f, 0xae, 0x5f) },
-        { "custom agents", RGB(0x8f, 0x7e, 0xe8) }, { "context", RGB(0x6d, 0x9e, 0xf7) }, { "free space", RGB(0x3e, 0x3e, 0x3a) },
+        { "custom agents", RGB(0x8f, 0x7e, 0xe8) }, { "context", RGB(0x6d, 0x9e, 0xf7) },
     };
     char *n = str_fold(name ? name : "");
     COLORREF color = RGB(0x8a, 0x86, 0x7c);
-    if (strstr(n, "deferred") || strstr(n, "autocompact")) color = RGB(0x55, 0x52, 0x4c);
+    if (str_eq(n, "free space")) color = theme.line;
+    else if (strstr(n, "deferred") || strstr(n, "autocompact")) color = RGB(0x55, 0x52, 0x4c);
     else for (size_t i = 0; i < sizeof colors / sizeof *colors; i++) if (str_eq(n, colors[i].name)) { color = colors[i].color; break; }
     free(n);
     return color;

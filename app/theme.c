@@ -16,25 +16,57 @@ static int current_dpi = 96;
 
 static COLORREF rgb_hex(unsigned hex) { return RGB((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF); }
 
-void theme_refresh(void) {
-    // The dashboard's `@theme` block, verbatim. It has no light mode.
-    theme.dark = true;
-    theme.canvas = rgb_hex(0x262624);
-    theme.sidebar = rgb_hex(0x1F1E1D);
-    theme.raise = rgb_hex(0x30302E);
-    theme.field = rgb_hex(0x3D3D3A);
-    theme.sunken = rgb_hex(0x1C1C1A);
-    theme.line = rgb_hex(0x3E3E3A);
-    theme.line_strong = rgb_hex(0x5A5850);
-    theme.ink = rgb_hex(0xE8E6E1);
-    theme.muted = rgb_hex(0xA29E93);
-    theme.accent = rgb_hex(0xD97757);
-    theme.accent_dim = rgb_hex(0xB35C3E);
-    theme.ok = rgb_hex(0x7FBF7F);
-    theme.warn = rgb_hex(0xE0AF68);
-    theme.danger = rgb_hex(0xE06C75);
-    theme.on_accent = rgb_hex(0x1B1B19);
-    theme.dot = rgb_hex(0x6B6862);
+/// Windows' "Choose your app mode": dark unless the user picked light (or the value is missing, as before Windows 10).
+static bool system_prefers_dark(void) {
+    DWORD light = 0, size = sizeof light;
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
+                     RRF_RT_REG_DWORD, NULL, &light, &size) != ERROR_SUCCESS) return true;
+    return light == 0;
+}
+
+bool theme_refresh(void) {
+    bool dark = system_prefers_dark();
+    bool changed = !theme.canvas || dark != theme.dark;
+    theme.dark = dark;
+    if (dark) {
+        // The dashboard's `@theme` block, verbatim.
+        theme.canvas = rgb_hex(0x262624);
+        theme.sidebar = rgb_hex(0x1F1E1D);
+        theme.raise = rgb_hex(0x30302E);
+        theme.field = rgb_hex(0x3D3D3A);
+        theme.sunken = rgb_hex(0x1C1C1A);
+        theme.line = rgb_hex(0x3E3E3A);
+        theme.line_strong = rgb_hex(0x5A5850);
+        theme.ink = rgb_hex(0xE8E6E1);
+        theme.muted = rgb_hex(0xA29E93);
+        theme.accent = rgb_hex(0xD97757);
+        theme.accent_dim = rgb_hex(0xB35C3E);
+        theme.ok = rgb_hex(0x7FBF7F);
+        theme.warn = rgb_hex(0xE0AF68);
+        theme.danger = rgb_hex(0xE06C75);
+        theme.on_accent = rgb_hex(0x1B1B19);
+        theme.dot = rgb_hex(0x6B6862);
+        theme.thumb = rgb_hex(0x3C3B38);
+    } else {
+        // The dashboard has no light mode; this is the same warm palette on paper, with the accents darkened to read on it.
+        theme.canvas = rgb_hex(0xFAF9F5);
+        theme.sidebar = rgb_hex(0xF0EEE6);
+        theme.raise = rgb_hex(0xFFFFFF);
+        theme.field = rgb_hex(0xE9E6DC);
+        theme.sunken = rgb_hex(0xF3F1EA);
+        theme.line = rgb_hex(0xE0DDD3);
+        theme.line_strong = rgb_hex(0xC4C0B4);
+        theme.ink = rgb_hex(0x1F1E1D);
+        theme.muted = rgb_hex(0x6B675E);
+        theme.accent = rgb_hex(0xC96442);
+        theme.accent_dim = rgb_hex(0xE0A58E);
+        theme.ok = rgb_hex(0x3D8B4A);
+        theme.warn = rgb_hex(0xA86E12);
+        theme.danger = rgb_hex(0xC2404B);
+        theme.on_accent = rgb_hex(0xFFFFFF);
+        theme.dot = rgb_hex(0xA29E93);
+        theme.thumb = rgb_hex(0xCFCBC0);
+    }
     theme.background = theme.canvas;
     theme.surface = theme.raise; theme.elevated = theme.raise; theme.bubble = theme.raise;
     theme.border = theme.line; theme.code = theme.sunken;
@@ -42,6 +74,7 @@ void theme_refresh(void) {
     theme.text = theme.ink; theme.secondary = theme.muted;
     theme.tertiary = blend(theme.muted, theme.canvas, 0.7);   // `text-muted/70`
     theme.white = RGB(255, 255, 255);
+    return changed;
 }
 
 static HFONT make_font(const wchar_t *face, int pixels, int weight, bool italic) {
@@ -280,7 +313,7 @@ void copy_to_clipboard(HWND owner, const char *text) {
     free(w);
 }
 void theme_apply_window(HWND hwnd) {
-    BOOL dark = TRUE;
+    BOOL dark = theme.dark;
     DwmSetWindowAttribute(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &dark, sizeof dark);
     COLORREF caption = theme.sidebar;
     DwmSetWindowAttribute(hwnd, 35 /* DWMWA_CAPTION_COLOR */, &caption, sizeof caption);
@@ -288,5 +321,5 @@ void theme_apply_window(HWND hwnd) {
     DwmSetWindowAttribute(hwnd, 36 /* DWMWA_TEXT_COLOR */, &text, sizeof text);
 }
 void theme_apply_control(HWND hwnd) {
-    SetWindowTheme(hwnd, L"DarkMode_Explorer", NULL);
+    SetWindowTheme(hwnd, theme.dark ? L"DarkMode_Explorer" : L"Explorer", NULL);
 }

@@ -1,4 +1,4 @@
-// The dashboard's own look, dark only: its Tailwind palette (canvas, sidebar, raise, field, sunken, line, ink, muted,
+// The dashboard's own look, dark or light as Windows' app mode says: its Tailwind palette (canvas, sidebar, raise, field, sunken, line, ink, muted,
 // accent), its pixel sizes for Segoe UI and Cascadia Code, and the drawing helpers the screens share (see canvas.h).
 #ifndef BRIAREUS_THEME_H
 #define BRIAREUS_THEME_H
@@ -13,6 +13,8 @@ extern "C" {
 typedef struct {
     // The dashboard's colour names.
     COLORREF canvas, sidebar, raise, field, sunken, line, line_strong, ink, muted, accent, accent_dim, ok, warn, danger, on_accent, dot;
+    // The pane scrollbar's thumb (`::-webkit-scrollbar-thumb`).
+    COLORREF thumb;
     // The same colours under the names the screens grew up with.
     COLORREF background, surface, elevated, bubble, border, code, success, warning, text, secondary, tertiary, white;
     bool dark;
@@ -35,8 +37,8 @@ extern Palette theme;
 typedef struct Canvas Canvas;
 
 void theme_init(void);
-/// The dashboard is dark whatever the system prefers; kept for the callers that ask.
-void theme_refresh(void);
+/// Picks the dark or light palette from Windows' "Choose your app mode"; true when that changed the palette.
+bool theme_refresh(void);
 /// Rebuilds the fonts for a DPI; the app has one DPI at a time, the main window's.
 void theme_set_dpi(int dpi);
 int theme_dpi(void);
@@ -105,9 +107,9 @@ char *format_cost(double usd);
 /// Opens an https URL in the default browser; anything else is refused.
 void open_web_url(const char *url);
 void copy_to_clipboard(HWND owner, const char *text);
-/// A dark title bar.
+/// A title bar in the palette's colours.
 void theme_apply_window(HWND hwnd);
-/// Dark scrollbars and controls where Windows offers them.
+/// Scrollbars and controls in the palette's mode, dark where Windows offers it.
 void theme_apply_control(HWND hwnd);
 
 #ifdef __cplusplus

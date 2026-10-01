@@ -297,8 +297,16 @@ static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
     }
 }
 
+/// The screens' Edit controls follow the palette's mode (their scrollbars, their context menus).
+static BOOL CALLBACK retheme_child(HWND child, LPARAM lp) {
+    (void)lp;
+    wchar_t cls[16]; GetClassNameW(child, cls, 16);
+    if (_wcsicmp(cls, L"Edit") == 0) { theme_apply_control(child); InvalidateRect(child, NULL, TRUE); }
+    return TRUE;
+}
+
 static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
-    // `::-webkit-scrollbar { width: 10px }` with a `#3c3b38` thumb and no track.
+    // `::-webkit-scrollbar { width: 10px }` with the palette's thumb and no track.
     int m = max_scroll(p);
     memset(&p->thumb_rect, 0, sizeof p->thumb_rect);
     if (m <= 0) return;
@@ -310,7 +318,7 @@ static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
     int y = content->top + (track - thumb) * p->scroll_y / m;
     RECT r = { content->right - px(10), y, content->right, y + thumb };
     p->thumb_rect = r;
-    COLORREF c = p->dragging_thumb ? blend(theme.ink, RGB(0x3C, 0x3B, 0x38), 0.15) : RGB(0x3C, 0x3B, 0x38);
+    COLORREF c = p->dragging_thumb ? blend(theme.ink, theme.thumb, 0.15) : theme.thumb;
     fill_round_rect(cv, &r, px(6), c, c);
 }
 
@@ -617,7 +625,11 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (!p->edit_brush) p->edit_brush = CreateSolidBrush(theme.raise);
         return (LRESULT)p->edit_brush;
     }
-    case WM_THEMECHANGED: if (p->edit_brush) { DeleteObject(p->edit_brush); p->edit_brush = NULL; } p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
+    case WM_THEMECHANGED:
+        if (p->edit_brush) { DeleteObject(p->edit_brush); p->edit_brush = NULL; }
+        EnumChildWindows(hwnd, retheme_child, 0);
+        p->dirty = true; InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
     case WM_GETDLGCODE: return DLGC_WANTALLKEYS;
     case WM_DESTROY: return 0;
     }
