@@ -185,6 +185,12 @@ static void test_surrogate_pairs_decode_to_one_code_point(void) {
     json_free(j);
 }
 
+static void test_an_escaped_nul_becomes_the_replacement_character(void) {
+    Json *j = json_parsez("\"a\\u0000b\"");
+    CHECK_STR(json_str(j), "a\xef\xbf\xbd" "b");
+    json_free(j);
+}
+
 static void test_lone_surrogates_become_the_replacement_character(void) {
     Json *j = json_parsez("\"a\\ud83db\"");
     CHECK_STR(json_str(j), "a\xef\xbf\xbd" "b");
@@ -369,6 +375,8 @@ static void test_object_remove(void) {
     CHECK_INT(json_count(o), 0);
     json_object_remove(o, "a");
     json_object_set(o, "x", json_bool(true));
+    CHECK_INT(json_count(o), 1);
+    json_object_remove(o, NULL);
     CHECK_INT(json_count(o), 1);
     json_free(o);
     Json *a = json_parsez("[1]");
@@ -669,6 +677,13 @@ static void test_serialize_scalars(void) {
     v = json_object(); CHECK_OWNED_STR(json_serialize(v, true), "{}"); json_free(v);
 }
 
+static void test_numbers_json_cannot_hold_serialize_as_null(void) {
+    Json *v = json_array();
+    json_array_push(v, json_number(NAN)); json_array_push(v, json_number(INFINITY)); json_array_push(v, json_number(-INFINITY));
+    CHECK_OWNED_STR(json_serialize(v, false), "[null,null,null]");
+    json_free(v);
+}
+
 static void test_serialize_numbers_as_integers_or_shortest_fractions(void) {
     struct { double d; const char *text; } cases[] = {
         { 0, "0" }, { -0.0, "0" }, { 1, "1" }, { -1, "-1" }, { 42, "42" }, { 1700000000123.0, "1700000000123" },
@@ -820,6 +835,7 @@ void json_tests(void) {
     test_run("string escapes", test_string_escapes);
     test_run("raw UTF-8 passes through strings", test_raw_utf8_passes_through_strings);
     test_run("surrogate pairs decode to one code point", test_surrogate_pairs_decode_to_one_code_point);
+    test_run("an escaped NUL becomes the replacement character", test_an_escaped_nul_becomes_the_replacement_character);
     test_run("lone surrogates become the replacement character", test_lone_surrogates_become_the_replacement_character);
     test_run("bad escapes and control characters are rejected", test_bad_escapes_and_control_characters_are_rejected);
     test_run("duplicate keys keep the last value", test_duplicate_keys_keep_the_last_value);
@@ -847,6 +863,7 @@ void json_tests(void) {
     test_run("equal compares structure not order", test_equal_compares_structure_not_order);
     test_run("equal on scalars and null", test_equal_on_scalars_and_null);
     test_run("serialize scalars", test_serialize_scalars);
+    test_run("numbers JSON cannot hold serialize as null", test_numbers_json_cannot_hold_serialize_as_null);
     test_run("serialize numbers as integers or shortest fractions", test_serialize_numbers_as_integers_or_shortest_fractions);
     test_run("serialized numbers round trip", test_serialized_numbers_round_trip);
     test_run("serialize escapes strings", test_serialize_escapes_strings);
