@@ -295,7 +295,7 @@ static void sidebar_context(Screen *base, int action, intptr_t arg, POINT pt) {
     AppendMenuW(menu, MF_STRING, MENU_SFTP, L"Connect SFTP tab");
     if (store_supports("update_ssh_server")) {
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-        AppendMenuW(menu, MF_STRING, MENU_EDIT, L"Edit server\xE2\x80\xA6" + 0);
+        AppendMenuW(menu, MF_STRING, MENU_EDIT, L"Edit server\x2026");
     }
     int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(base->pane), NULL);
     DestroyMenu(menu);

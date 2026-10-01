@@ -230,8 +230,13 @@ static void test_modes_the_keyboard_depends_on(void) {
     CHECK(vt_app_cursor(vt)); CHECK(vt_bracketed_paste(vt)); CHECK(vt_app_keypad(vt));
     bool visible; vt_cursor(vt, NULL, NULL, &visible);
     CHECK(!visible);
+    CHECK(!vt_focus_events(vt)); CHECK(!vt_win32_input(vt));
+    put(vt, "\x1b[?9001h\x1b[?1004h");
+    CHECK(vt_focus_events(vt)); CHECK(vt_win32_input(vt));
+    put(vt, "\x1b[?9001l");
+    CHECK(!vt_win32_input(vt)); CHECK(vt_focus_events(vt));
     put(vt, "\x1b" "c");
-    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt));
+    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt)); CHECK(!vt_focus_events(vt));
     vt_free(vt);
 }
 

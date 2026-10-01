@@ -21,6 +21,7 @@ struct Vt {
     int top, bottom;                 // the scroll region, inclusive
     bool *tabs;
     bool cursor_visible, autowrap, origin, insert, app_cursor, app_keypad, bracketed, newline_mode;
+    bool focus_events, win32_input;   // what ConPTY asks its terminal for: focus reports and Win32 input records
     bool g0_lines, g1_lines, shift_out;   // DEC special graphics in G0 / G1, and SO selecting G1
     Saved saved, saved_alt;
     // The parser.
@@ -45,6 +46,7 @@ static void reset_modes(Vt *vt) {
     vt->top = 0; vt->bottom = vt->rows - 1;
     vt->cursor_visible = true; vt->autowrap = true; vt->origin = false; vt->insert = false;
     vt->app_cursor = false; vt->app_keypad = false; vt->bracketed = false; vt->newline_mode = false;
+    vt->focus_events = false; vt->win32_input = false;
     vt->g0_lines = vt->g1_lines = vt->shift_out = false;
     vt->wrap_pending = false;
 }
@@ -91,6 +93,8 @@ bool vt_app_cursor(const Vt *vt) { return vt->app_cursor; }
 bool vt_app_keypad(const Vt *vt) { return vt->app_keypad; }
 bool vt_bracketed_paste(const Vt *vt) { return vt->bracketed; }
 bool vt_alt_screen(const Vt *vt) { return vt->grid == vt->alt; }
+bool vt_focus_events(const Vt *vt) { return vt->focus_events; }
+bool vt_win32_input(const Vt *vt) { return vt->win32_input; }
 const char *vt_title(const Vt *vt) { return vt->title; }
 bool vt_take_title_changed(Vt *vt) { bool c = vt->title_changed; vt->title_changed = false; return c; }
 bool vt_take_bell(Vt *vt) { bool b = vt->bell; vt->bell = false; return b; }
@@ -409,7 +413,9 @@ static void set_mode(Vt *vt, bool on) {
             case 47: case 1047: set_alt(vt, on, false, p == 1047 && !on); break;
             case 1048: if (on) save_cursor(vt); else restore_cursor(vt); break;
             case 1049: set_alt(vt, on, true, true); break;
+            case 1004: vt->focus_events = on; break;
             case 2004: vt->bracketed = on; break;
+            case 9001: vt->win32_input = on; break;
             }
         } else if (!vt->private_mark) {
             if (p == 4) vt->insert = on;

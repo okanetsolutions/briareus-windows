@@ -13,6 +13,7 @@
 
 enum { SCROLLBACK = 5000, READ_CHUNK = 65536, PAD = 6, MAX_LISTENERS = 4, RUN_MAX = 512 };
 enum { WM_TERM_DATA = WM_APP + 41, WM_TERM_EXIT, WM_TERM_EOF };
+enum { TIMER_NUDGE = 1, NUDGE_MS = 250 };
 enum { MENU_COPY = 1, MENU_PASTE, MENU_SELECT_ALL, MENU_CLEAR };
 static const wchar_t TERM_CLASS[] = L"BriareusTerminal", EVENTS_CLASS[] = L"BriareusTerminalEvents";
 
@@ -160,15 +161,39 @@ wchar_t *term_command_line(TermKind kind, const wchar_t *client, const TermTarge
     return w;
 }
 
-/// The full path of ssh.exe or sftp.exe: Windows' OpenSSH Client first, then whatever PATH finds.
+static bool file_exists(const wchar_t *path) {
+    DWORD attrs = GetFileAttributesW(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
+/// Git for Windows' own OpenSSH, under its install folder as the registry (or the default path) has it.
+static bool find_git_client(const wchar_t *name, wchar_t *out, DWORD n) {
+    static const HKEY roots[2] = { HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER };
+    for (int i = 0; i < 2; i++) {
+        wchar_t dir[MAX_PATH]; DWORD size = sizeof dir;
+        if (RegGetValueW(roots[i], L"SOFTWARE\\GitForWindows", L"InstallPath", RRF_RT_REG_SZ, NULL, dir, &size) != ERROR_SUCCESS) continue;
+        _snwprintf(out, n, L"%ls\\usr\\bin\\%ls", dir, name);
+        out[n - 1] = 0;
+        if (file_exists(out)) return true;
+    }
+    wchar_t program_files[MAX_PATH];
+    DWORD len = GetEnvironmentVariableW(L"ProgramFiles", program_files, MAX_PATH);
+    if (!len || len >= MAX_PATH) return false;
+    _snwprintf(out, n, L"%ls\\Git\\usr\\bin\\%ls", program_files, name);
+    out[n - 1] = 0;
+    return file_exists(out);
+}
+/// The full path of ssh.exe or sftp.exe. Git for Windows' OpenSSH comes first: Windows' own (9.5) stalls in a pseudoconsole
+/// on recent Windows builds, its output and its exit waiting for a key, while Git's streams. Both read ~/.ssh. Then
+/// Windows' OpenSSH Client, then whatever PATH finds.
 static bool find_client(TermKind kind, wchar_t *out, DWORD n) {
     const wchar_t *name = kind == TERM_SFTP ? L"sftp.exe" : L"ssh.exe";
+    if (find_git_client(name, out, n)) return true;
     wchar_t dir[MAX_PATH];
     UINT len = GetSystemDirectoryW(dir, MAX_PATH);
     if (len && len < MAX_PATH - 20) {
         _snwprintf(out, n, L"%ls\\OpenSSH\\%ls", dir, name);
         out[n - 1] = 0;
-        if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return true;
+        if (file_exists(out)) return true;
     }
     return SearchPathW(NULL, name, NULL, n, out, NULL) > 0;
 }
@@ -222,9 +247,16 @@ static void term_write(Term *t, const char *data, size_t len) {
 static void selection_clear(Term *t) { if (t->has_sel || t->selecting) { t->has_sel = t->selecting = false; InvalidateRect(t->hwnd, NULL, FALSE); } }
 static void scrollbar_update(Term *t);
 
+/// Focus in or out, for a program that asked to be told (mode 1004); ConPTY asks, to pass it on as a console event.
+static void report_focus(Term *t) {
+    if (t->running && vt_focus_events(t->vt)) term_write(t, GetFocus() == t->hwnd ? "\x1b[I" : "\x1b[O", 3);
+}
+
 static void feed(Term *t, const char *data, size_t len) {
     unsigned long long before = vt_lines_pushed(t->vt);
+    bool focus_events = vt_focus_events(t->vt);
     vt_write(t->vt, data, len);
+    if (!focus_events && vt_focus_events(t->vt)) report_focus(t);
     size_t rlen;
     char *reply = vt_take_response(t->vt, &rlen);
     if (reply) { term_write(t, reply, rlen); free(reply); }
@@ -265,6 +297,7 @@ static LRESULT CALLBACK events_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // The pseudoconsole can also end first (its host failed): the program goes with it.
         if (!t->exited) { if (t->process) TerminateProcess(t->process, 1); process_ended(t); }
         t->running = false;
+        KillTimer(t->hwnd, TIMER_NUDGE);
         char *note = t->exit_code == 0
             ? xstrdup("\r\n\x1b[0;2m[Session closed. Press Enter to reconnect.]\x1b[0m\r\n")
             : xstrfmt("\r\n\x1b[0;2m[Session closed (exit code %lu). Press Enter to reconnect.]\x1b[0m\r\n", (unsigned long)t->exit_code);
@@ -291,7 +324,7 @@ static bool spawn(Term *t, char **error) {
     if (!conpty_available()) { *error = xstrdup("This version of Windows has no pseudoconsole (ConPTY); Windows 10 1809 or later is needed."); return false; }
     wchar_t client[MAX_PATH];
     if (!find_client(t->kind, client, MAX_PATH)) {
-        *error = xstrfmt("%s was not found. Install the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", t->kind == TERM_SFTP ? "sftp.exe" : "ssh.exe");
+        *error = xstrfmt("%s was not found. Install Git for Windows, or the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", t->kind == TERM_SFTP ? "sftp.exe" : "ssh.exe");
         return false;
     }
     TermTarget target = { t->key, t->label, t->user, t->host, t->port };
@@ -352,6 +385,7 @@ static bool spawn(Term *t, char **error) {
     if (th) CloseHandle(th);
     else { CloseHandle(out_read); free(a); }
     if (!RegisterWaitForSingleObject(&t->wait, pi.hProcess, exited, (PVOID)(intptr_t)t->spawn, INFINITE, WT_EXECUTEONLYONCE)) t->wait = NULL;
+    SetTimer(t->hwnd, TIMER_NUDGE, NUDGE_MS, NULL);
     return true;
 }
 
@@ -654,7 +688,8 @@ static LRESULT CALLBACK term_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
-    if (!t) return DefWindowProcW(hwnd, msg, wp, lp);
+    // The window is sized before the session's emulator exists.
+    if (!t || !t->vt) return DefWindowProcW(hwnd, msg, wp, lp);
     switch (msg) {
     case WM_PAINT: {
         if (fonts_update()) resize_to_window(t);
@@ -666,7 +701,12 @@ static LRESULT CALLBACK term_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: resize_to_window(t); return 0;
-    case WM_SETFOCUS: case WM_KILLFOCUS: InvalidateRect(hwnd, NULL, FALSE); return 0;
+    case WM_SETFOCUS: case WM_KILLFOCUS: report_focus(t); InvalidateRect(hwnd, NULL, FALSE); return 0;
+    case WM_TIMER:
+        // Windows' ssh.exe only gets on with its output and its exit once its console input wakes it, and nothing does
+        // while the keyboard is idle: a key-up of no key, as a Win32 input record, wakes it without reaching the server.
+        if (wp == TIMER_NUDGE && t->running && t->in_write && vt_win32_input(t->vt)) { static const char none[] = "\x1b[0;0;0;0;0;1_"; term_write(t, none, strlen(none)); }
+        return 0;
     case WM_GETDLGCODE: return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
     case WM_KEYDOWN: if (key_down(t, wp, false)) return 0; break;
     case WM_SYSKEYDOWN:
@@ -880,7 +920,11 @@ const char *term_key(const Term *t) { return t->key; }
 const char *term_label(const Term *t) { return t->label; }
 const char *term_target(const Term *t) { return t->target; }
 void term_get_target(const Term *t, TermTarget *out) { out->key = t->key; out->label = t->label; out->user = t->user; out->host = t->host; out->port = t->port; }
-const char *term_title(const Term *t) { return vt_title(t->vt); }
+const char *term_title(const Term *t) {
+    // Until the remote shell names the window, ConPTY titles it with the client's path.
+    const char *title = vt_title(t->vt);
+    return title && (str_has_suffix(title, "ssh.exe") || str_has_suffix(title, "sftp.exe")) ? NULL : title;
+}
 bool term_running(const Term *t) { return t->running; }
 HWND term_hwnd(const Term *t) { return t->hwnd; }
 

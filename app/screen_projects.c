@@ -60,6 +60,8 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     x += iw + gap;
+    RECT vr = { x, y, x + iw, y + h }; strip_button(doc, &vr, "\xF0\x9F\x96\xA5", false, (int)term_count(), str_eq(selected, "servers"), ACT_SERVERS);
+    x += iw + gap;
     RECT sr = { x, y, x + iw, y + h }; strip_button(doc, &sr, "\xE2\x9A\x99", false, 0, false, ACT_SETTINGS);
     doc->y = y + h;
     doc_space(doc, px(14));

@@ -50,6 +50,10 @@ bool vt_app_cursor(const Vt *vt);
 bool vt_app_keypad(const Vt *vt);
 bool vt_bracketed_paste(const Vt *vt);
 bool vt_alt_screen(const Vt *vt);
+/// Whether the program asked for focus in/out reports (mode 1004), and for keys as Win32 input records (mode 9001, which
+/// ConPTY asks of the terminal it writes to).
+bool vt_focus_events(const Vt *vt);
+bool vt_win32_input(const Vt *vt);
 /// Empties the scrollback, keeping the screen.
 void vt_clear_scrollback(Vt *vt);
 /// The text of a range, row by row, trailing blanks dropped and rows joined with CRLF; rows as for `vt_line`, the end
