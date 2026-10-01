@@ -186,20 +186,20 @@ static void voice_changed(void *ctx) {
 
 typedef struct { char *before, *name, *after; } WelcomeData;
 static void welcome_free(void *p) { WelcomeData *d = p; free(d->before); free(d->name); free(d->after); free(d); }
-static void paint_welcome_line(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_welcome_line(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     WelcomeData *d = it->data;
-    int bw = text_width(hdc, d->before, FONT_BODY), nw = text_width(hdc, d->name, FONT_BODY), aw = text_width(hdc, d->after, FONT_BODY);
+    int bw = text_width(cv, d->before, FONT_BODY), nw = text_width(cv, d->name, FONT_BODY), aw = text_width(cv, d->after, FONT_BODY);
     int w = rc->right - rc->left, lh = px(24);
     if (bw + nw + aw <= w) {
         int x = rc->left + (w - bw - nw - aw) / 2;
-        RECT b = { x, rc->top, x + bw, rc->top + lh }; draw_text(hdc, d->before, &b, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT n = { x + bw, rc->top, x + bw + nw, rc->top + lh }; draw_text(hdc, d->name, &n, FONT_BODY, theme.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT a = { x + bw + nw, rc->top, x + bw + nw + aw, rc->top + lh }; draw_text(hdc, d->after, &a, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT b = { x, rc->top, x + bw, rc->top + lh }; draw_text(cv, d->before, &b, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT n = { x + bw, rc->top, x + bw + nw, rc->top + lh }; draw_text(cv, d->name, &n, FONT_BODY, theme.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT a = { x + bw + nw, rc->top, x + bw + nw + aw, rc->top + lh }; draw_text(cv, d->after, &a, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     } else {
         int x = rc->left + (w - bw - nw) / 2; if (x < rc->left) x = rc->left;
-        RECT b = { x, rc->top, x + bw, rc->top + lh }; draw_text(hdc, d->before, &b, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT n = { x + bw, rc->top, x + bw + nw, rc->top + lh }; draw_text(hdc, d->name, &n, FONT_BODY, theme.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        RECT a = { rc->left, rc->top + lh, rc->right, rc->top + lh * 2 }; draw_text(hdc, d->after, &a, FONT_BODY, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT b = { x, rc->top, x + bw, rc->top + lh }; draw_text(cv, d->before, &b, FONT_BODY, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT n = { x + bw, rc->top, x + bw + nw, rc->top + lh }; draw_text(cv, d->name, &n, FONT_BODY, theme.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT a = { rc->left, rc->top + lh, rc->right, rc->top + lh * 2 }; draw_text(cv, d->after, &a, FONT_BODY, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 static void new_session_layout(Screen *base, Doc *doc) {
@@ -214,7 +214,7 @@ static void new_session_layout(Screen *base, Doc *doc) {
     const Project *p = project(s);
     WelcomeData *d = xcalloc(1, sizeof *d);
     d->before = xstrdup("Start a session in a fresh "); d->name = xstrdup(p ? project_title(p) : "project"); d->after = xstrdup(" checkout with its own database.");
-    int bw = text_width(doc->hdc, d->before, FONT_BODY) + text_width(doc->hdc, d->name, FONT_BODY) + text_width(doc->hdc, d->after, FONT_BODY);
+    int bw = text_width(doc->cv, d->before, FONT_BODY) + text_width(doc->cv, d->name, FONT_BODY) + text_width(doc->cv, d->after, FONT_BODY);
     doc_custom(doc, x, col, bw <= col ? px(24) : px(48), paint_welcome_line, d, welcome_free, 0, 0);
     doc_text(doc, x, col, "Pick a provider and model below, then describe what to build.", FONT_BODY, theme.muted, DT_CENTER | DT_WORDBREAK);
     if (!s->count) { doc_space(doc, px(16)); doc_text(doc, x, col, "No projects yet, so there is nothing to build. Add one in Settings \xE2\x86\x92 Projects on the web dashboard.", FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
@@ -257,20 +257,20 @@ static bool chip_shown(NewSessionScreen *s, int chip) {
     }
 }
 static bool chip_picker(int chip) { return chip != CHIP_LOOP && chip != CHIP_WORKSPACE; }
-static int chip_width(HDC hdc, const char *label, bool picker) {
-    int w = px(6) * 2 + text_width(hdc, label, FONT_CAPTION) + px(4);   // a glyph from a fallback font measures a touch narrow
-    if (picker) w += px(4) + text_width(hdc, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
+static int chip_width(Canvas *cv, const char *label, bool picker) {
+    int w = px(6) * 2 + text_width(cv, label, FONT_CAPTION) + px(4);   // a glyph from a fallback font measures a touch narrow
+    if (picker) w += px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
     if (w > px(150)) w = px(150);
     return w;
 }
 /// Places the chips in rows 4px apart, wrapping at `width`; returns the rows' height. NULL `out` measures only.
-static int chips_layout(NewSessionScreen *s, HDC hdc, int width, RECT *out) {
+static int chips_layout(NewSessionScreen *s, Canvas *cv, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (int c = 0; c < CHIP_COUNT; c++) {
         if (out) SetRectEmpty(&out[c]);
         if (!chip_shown(s, c)) continue;
         char *label = chip_label(s, c);
-        int w = chip_width(hdc, label, chip_picker(c));
+        int w = chip_width(cv, label, chip_picker(c));
         free(label);
         if (x > 0 && x + w > width) { x = 0; y += h + gap; }
         if (out) { RECT r = { x, y, x + w, y + h }; out[c] = r; }
@@ -278,20 +278,19 @@ static int chips_layout(NewSessionScreen *s, HDC hdc, int width, RECT *out) {
     }
     return y + h;
 }
-static int composer_height(NewSessionScreen *s, HDC hdc) {
+static int composer_height(NewSessionScreen *s, Canvas *cv) {
     int line_h = px(24);
     int lines = s->composer_lines < 1 ? 1 : s->composer_lines > 8 ? 8 : s->composer_lines;
-    (void)hdc;
+    (void)cv;
     return lines * line_h;
 }
 /// `#composer-wrap`: 8px above, the chips, 8px, the box (10px, the text, 6px, the 30px buttons, 8px), 6px, a 16px note, 14px below.
 static int new_session_footer_height(Screen *base, int width) {
     NewSessionScreen *s = (NewSessionScreen *)base;
-    HDC hdc = GetDC(pane_hwnd(base->pane));
+    Canvas *cv = NULL;   // measuring only
     int inner = width - px(24) * 2; if (inner > px(860)) inner = px(860);
-    int chips = chips_layout(s, hdc, inner, NULL);
-    int h = px(8) + chips + px(8) + (px(10) + composer_height(s, hdc) + px(6) + px(30) + px(8) + 2) + px(6) + px(16) + px(14);
-    ReleaseDC(pane_hwnd(base->pane), hdc);
+    int chips = chips_layout(s, cv, inner, NULL);
+    int h = px(8) + chips + px(8) + (px(10) + composer_height(s, cv) + px(6) + px(30) + px(8) + 2) + px(6) + px(16) + px(14);
     return h;
 }
 static RECT footer_column(const RECT *rc) {
@@ -302,25 +301,24 @@ static RECT footer_column(const RECT *rc) {
 }
 static void new_session_footer_layout(Screen *base, const RECT *rc) {
     NewSessionScreen *s = (NewSessionScreen *)base;
-    HDC hdc = GetDC(pane_hwnd(base->pane));
+    Canvas *cv = NULL;   // measuring only
     RECT col = footer_column(rc);
-    int chips = chips_layout(s, hdc, col.right - col.left, NULL);
-    int ch = composer_height(s, hdc);
-    ReleaseDC(pane_hwnd(base->pane), hdc);
+    int chips = chips_layout(s, cv, col.right - col.left, NULL);
+    int ch = composer_height(s, cv);
     int top = col.top + px(8) + chips + px(8);
     RECT er = { col.left + px(12) + 1, top + px(10) + 1, col.right - px(12) - 1, top + px(10) + 1 + ch };
     s->composer_rc = er;
     MoveWindow(s->composer, er.left, er.top, er.right - er.left, er.bottom - er.top, TRUE);
     ShowWindow(s->composer, SW_SHOW);
 }
-static void new_session_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
+static void new_session_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     NewSessionScreen *s = (NewSessionScreen *)base;
-    fill_rect(hdc, rc, theme.canvas);
+    fill_rect(cv, rc, theme.canvas);
     RECT col = footer_column(rc);
     int width = col.right - col.left;
     // The chips.
     RECT rects[CHIP_COUNT];
-    int chips = chips_layout(s, hdc, width, rects);
+    int chips = chips_layout(s, cv, width, rects);
     int y0 = col.top + px(8);
     for (int c = 0; c < CHIP_COUNT; c++) {
         SetRectEmpty(&s->chip_rc[c]);
@@ -329,21 +327,21 @@ static void new_session_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         s->chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && s->review_loop);
         bool dim = c == CHIP_WORKSPACE || s->busy;
-        fill_round_rect(hdc, &r, px(6), theme.raise, on ? theme.accent : theme.line);
+        fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_label(s, c);
         bool picker = chip_picker(c);
-        int cw = picker ? px(4) + text_width(hdc, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD) : 0;
+        int cw = picker ? px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD) : 0;
         RECT t = { r.left + px(6), r.top, r.right - px(6) - cw, r.bottom };
-        draw_text(hdc, label, &t, FONT_CAPTION, on ? theme.accent : dim ? theme.muted : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        if (picker) { RECT a = { r.right - px(6) - cw + px(4), r.top, r.right - px(6), r.bottom }; draw_text(hdc, "\xE2\x96\xBE", &a, FONT_TINY_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); }
+        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : dim ? theme.muted : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (picker) { RECT a = { r.right - px(6) - cw + px(4), r.top, r.right - px(6), r.bottom }; draw_text(cv, "\xE2\x96\xBE", &a, FONT_TINY_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); }
         free(label);
     }
     // The box: `rounded-2xl border border-line bg-raise px-3 pt-2.5 pb-2 focus-within:border-line-strong`.
     int top = y0 + chips + px(8);
-    int ch = composer_height(s, hdc);
+    int ch = composer_height(s, cv);
     RECT box = { col.left, top, col.right, top + px(10) + ch + px(6) + px(30) + px(8) + 2 };
     s->box_rc = box;
-    fill_round_rect(hdc, &box, px(16), theme.raise, s->focused ? theme.line_strong : theme.line);
+    fill_round_rect(cv, &box, px(16), theme.raise, s->focused ? theme.line_strong : theme.line);
     int row_y = box.top + px(10) + 1 + ch + px(6), bh = px(30), bw = px(32);
     memset(&s->mic_rc, 0, sizeof s->mic_rc);
     int x = box.left + px(12);
@@ -351,19 +349,19 @@ static void new_session_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
     if (store_can_transcribe()) {
         RECT mic = { x, row_y, x + bw, row_y + bh };
         s->mic_rc = mic;
-        fill_round_rect(hdc, &mic, px(8), vs == VOICE_RECORDING ? theme.danger : theme.raise, vs == VOICE_RECORDING ? theme.danger : theme.line);
-        draw_text(hdc, vs == VOICE_RECORDING ? "\xE2\x96\xA0" : "\xF0\x9F\x8E\xA4", &mic, FONT_EMOJI_LARGE, vs == VOICE_RECORDING ? theme.white : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        if (vs == VOICE_RECORDING) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { mic.right + px(8), row_y, mic.right + px(80), row_y + bh }; draw_text(hdc, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
+        fill_round_rect(cv, &mic, px(8), vs == VOICE_RECORDING ? theme.danger : theme.raise, vs == VOICE_RECORDING ? theme.danger : theme.line);
+        draw_text(cv, vs == VOICE_RECORDING ? "\xE2\x96\xA0" : "\xF0\x9F\x8E\xA4", &mic, FONT_EMOJI_LARGE, vs == VOICE_RECORDING ? theme.white : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (vs == VOICE_RECORDING) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { mic.right + px(8), row_y, mic.right + px(80), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
     }
     RECT send = { box.right - px(12) - bw, row_y, box.right - px(12), row_y + bh };
     s->send_rc = send;
     bool enabled = !s->busy && !s->uncertain && !composer_empty(s) && project(s) != NULL;
-    fill_round_rect(hdc, &send, px(8), enabled ? theme.accent : theme.field, enabled ? theme.accent : theme.field);
-    draw_text(hdc, "\xE2\x86\xB5", &send, FONT_BODY, enabled ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_round_rect(cv, &send, px(8), enabled ? theme.accent : theme.field, enabled ? theme.accent : theme.field);
+    draw_text(cv, "\xE2\x86\xB5", &send, FONT_BODY, enabled ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     // The note under the box.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = s->busy ? "Starting the session\xE2\x80\xA6" : s->error ? s->error : "";
-    draw_text(hdc, text, &note, FONT_FOOTNOTE, s->error && !s->busy ? theme.danger : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, text, &note, FONT_FOOTNOTE, s->error && !s->busy ? theme.danger : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 // MARK: - Menus

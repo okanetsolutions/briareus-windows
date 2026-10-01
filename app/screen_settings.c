@@ -54,62 +54,62 @@ typedef struct {
 static SettingsScreen *g_settings;
 
 typedef struct { const char *text; bool selected; } NavData;
-static void paint_back(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_back(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     RECT t = { rc->left + px(6), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, "\xE2\x86\x90 Back to sessions", &t, FONT_CAPTION, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, "\xE2\x86\x90 Back to sessions", &t, FONT_CAPTION, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
-static void paint_nav(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_nav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     NavData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered || d->selected) fill_round_rect(hdc, rc, px(6), theme.raise, theme.raise);
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
-    draw_text(hdc, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 typedef struct { char *label, *repo; bool enabled, db, selected; } ProjectRowData;
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->label); free(d->repo); free(d); }
-static void paint_project_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered || d->selected) fill_round_rect(hdc, rc, px(6), theme.raise, theme.raise);
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
     // `.dot.idle` for a project sessions can start on, the plain grey dot for one switched off.
-    draw_status_dot(hdc, x + px(3), top + lh / 2, d->enabled ? "idle" : "");
+    draw_status_dot(cv, x + px(3), top + lh / 2, d->enabled ? "idle" : "");
     RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
-    draw_text(hdc, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     int y2 = top + lh, right = rc->right - px(8);
     if (d->db) {
         // `rounded border border-line px-1 text-[11px]`: the database pool's tag.
-        int h; int bw = text_width(hdc, "db", FONT_CAPTION2) + px(12) + 2;
-        int rw = text_width(hdc, d->repo, FONT_CAPTION);
+        int h; int bw = text_width(cv, "db", FONT_CAPTION2) + px(12) + 2;
+        int rw = text_width(cv, d->repo, FONT_CAPTION);
         int bx = x + (rw < right - x - bw - px(8) ? rw : right - x - bw - px(8)) + px(8);
-        draw_chip(hdc, bx, y2 + (px(18) - h) / 2, "db", theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
+        draw_chip(cv, bx, y2 + (px(18) - h) / 2, "db", theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
         right = bx - px(8);
     }
     RECT r = { x, y2, right, y2 + px(18) };
-    draw_text(hdc, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 typedef struct { char *label, *binary; bool active, login, endpoint, selected, unsaved; } ProviderRowData;
 static void provider_row_free(void *p) { ProviderRowData *d = p; free(d->label); free(d->binary); free(d); }
-static void paint_provider_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProviderRowData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     COLORREF background = hovered || d->selected ? theme.raise : theme.sidebar;
-    if (hovered || d->selected) fill_round_rect(hdc, rc, px(6), theme.raise, theme.raise);
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
-    draw_status_dot(hdc, x + px(3), top + lh / 2, d->active ? "idle" : "");
+    draw_status_dot(cv, x + px(3), top + lh / 2, d->active ? "idle" : "");
     RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
-    draw_text(hdc, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     // The dashboard's badges: the CLI it runs, and what sets it apart.
     const char *tags[] = { d->binary, d->active || d->unsaved ? NULL : "inactive", d->login ? "own login" : NULL, d->endpoint ? "custom endpoint" : NULL };
     int bx = x, y2 = top + lh, right = rc->right - px(8);
     for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) {
         if (str_empty(tags[i])) continue;
-        int bw = text_width(hdc, tags[i], FONT_CAPTION2) + px(12) + 2;
+        int bw = text_width(cv, tags[i], FONT_CAPTION2) + px(12) + 2;
         if (bx + bw > right) break;
-        int h; draw_chip(hdc, bx, y2 + px(1), tags[i], theme.muted, background, &h);
+        int h; draw_chip(cv, bx, y2 + px(1), tags[i], theme.muted, background, &h);
         bx += bw + px(6);
     }
 }
@@ -220,7 +220,7 @@ static void section_title(Doc *doc, int w, const char *title, int new_action) {
     RECT tr = { px(8), y, w - px(60), y + h };
     doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if (new_action) {
-        int nw = text_width(doc->hdc, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
+        int nw = text_width(doc->cv, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
         RECT nr = { w - px(4) - nw, y, w - px(4), y + h };
         Item *it = doc_item(doc, doc_text_at(doc, &nr, "\xEF\xBC\x8B New", FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE));
         it->action = new_action; it->hand = true;
@@ -307,17 +307,17 @@ static void settings_header(Screen *base, HeaderInfo *info) { (void)base; (void)
 
 /// The foot, as the dashboard's settings page has it: `Settings` and `⎋ Sign out`, 12px muted, above a border.
 static int settings_footer_height(Screen *base, int width) { (void)base; (void)width; return px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
-static void settings_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
+static void settings_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     SettingsScreen *s = (SettingsScreen *)base;
-    fill_rect(hdc, rc, theme.sidebar);
+    fill_rect(cv, rc, theme.sidebar);
     int top = rc->top + px(6);
-    draw_line(hdc, rc->left + px(10), top, rc->right - px(10), top, theme.line);
+    draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(10), h = px(18), left = rc->left + px(16), right = rc->right - px(16);
     const char *out = "\xE2\x8E\x8B Sign out";
-    int ow = text_width(hdc, out, FONT_CAPTION);
+    int ow = text_width(cv, out, FONT_CAPTION);
     RECT a = { left, y, right - ow - px(8), y + h }, c = { right - ow, y, right, y + h };
-    draw_text(hdc, "Settings", &a, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, out, &c, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, "Settings", &a, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, out, &c, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     InflateRect(&c, px(4), px(4));
     s->signout_rc = c;
 }
@@ -692,13 +692,13 @@ static void layout_tabs(FormScreen *s, Doc *doc, int x, int w) {
     doc_space(doc, px(18));
 }
 
-static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
     bool on = field_enabled(s, f);
     COLORREF border = s->focused == f ? theme.accent_dim : theme.line;
     // A disabled edit paints the same fill, so only the border says the box is off.
-    fill_round_rect(hdc, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
+    fill_round_rect(cv, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
 }
 /// A labelled box with its edit, and the hint under it; advances.
 static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
@@ -708,7 +708,7 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
     doc_text(doc, x, w, d->label, FONT_FOOTNOTE, on ? theme.ink : theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
-    int fh = font_height(doc->hdc, fid);
+    int fh = font_height(doc->cv, fid);
     int h = is_multiline(f) ? shown_rows(s, f) * fh + px(16) : px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     int i = doc_add(doc, &box, paint_box);
@@ -723,17 +723,17 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
     doc_space(doc, px(14));
 }
 
-static void paint_check(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
     RECT b = { rc->left, top, rc->left + size, top + size };
     bool on = s->bools[f];
-    fill_round_rect(hdc, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (on) draw_glyph(hdc, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    fill_round_rect(cv, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
+    if (on) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void check(FormScreen *s, Doc *doc, int x, int w, int f) {
     if (!field_offered(s, f)) return;
@@ -744,14 +744,14 @@ static void check(FormScreen *s, Doc *doc, int x, int w, int f) {
 
 typedef struct { char *text; bool enabled; } SelectData;
 static void select_free(void *p) { SelectData *d = p; free(d->text); free(d); }
-static void paint_select(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SelectData *d = it->data;
     bool hovered = d->enabled && doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    fill_round_rect(hdc, rc, px(6), d->enabled ? theme.raise : blend(theme.raise, theme.canvas, 0.5), hovered ? theme.accent_dim : theme.line);
+    fill_round_rect(cv, rc, px(6), d->enabled ? theme.raise : blend(theme.raise, theme.canvas, 0.5), hovered ? theme.accent_dim : theme.line);
     RECT t = { rc->left + px(12), rc->top, rc->right - px(28), rc->bottom };
-    draw_text(hdc, d->text, &t, FONT_FOOTNOTE, d->enabled ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->text, &t, FONT_FOOTNOTE, d->enabled ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT c = { rc->right - px(26), rc->top, rc->right - px(10), rc->bottom };
-    draw_glyph(hdc, 0xE70D, &c, FONT_ICON_SMALL, d->enabled ? theme.ink : theme.muted);
+    draw_glyph(cv, 0xE70D, &c, FONT_ICON_SMALL, d->enabled ? theme.ink : theme.muted);
 }
 static char *pick_text(FormScreen *s, int r, int part) {
     const RuntimePick *p = &s->picks[r];
@@ -776,7 +776,7 @@ static void runtime_row(FormScreen *s, Doc *doc, int x, int w, int r) {
     for (int part = 0; part < 3; part++) {
         int cx = x + part * (cw + gap), width = part == 2 ? w - 2 * (cw + gap) : cw;
         bool enabled = part == 0 || s->picks[r].provider_id != 0;
-        RECT lr = { cx, top, cx + width, top + font_height(doc->hdc, FONT_FOOTNOTE) };
+        RECT lr = { cx, top, cx + width, top + font_height(doc->cv, FONT_FOOTNOTE) };
         doc_text_at(doc, &lr, part ? labels[part] : RUNTIMES[r].provider_label, FONT_FOOTNOTE, enabled ? theme.ink : theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
         int by = lr.bottom + px(6);
         RECT box = { cx, by, cx + width, by + h };

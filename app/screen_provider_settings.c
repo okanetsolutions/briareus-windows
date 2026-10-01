@@ -243,9 +243,9 @@ static void layout_tabs(FormScreen *s, Doc *doc, int x, int w) {
     doc_space(doc, px(18));
 }
 
-static void paint_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
-    fill_round_rect(hdc, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
+    fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
 }
 static void hint(Doc *doc, int x, int w, const char *text) {
     doc_rich(doc, x, w, text, FONT_CAPTION, theme.muted);
@@ -257,7 +257,7 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f, const char *note
     doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
-    int fh = font_height(doc->hdc, fid);
+    int fh = font_height(doc->cv, fid);
     int h = is_multiline(f) ? shown_rows(s, f) * fh + px(16) : px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     Item *it = doc_item(doc, doc_add(doc, &box, paint_box));
@@ -279,27 +279,27 @@ static void field_pair(FormScreen *s, Doc *doc, int x, int w, int a, const char 
     if (doc->y < left_bottom) doc->y = left_bottom;
 }
 
-static void paint_check(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
     RECT b = { rc->left, top, rc->left + size, top + size };
-    fill_round_rect(hdc, &b, px(3), s->active ? theme.accent : theme.field, s->active ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (s->active) draw_glyph(hdc, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    fill_round_rect(cv, &b, px(3), s->active ? theme.accent : theme.field, s->active ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
+    if (s->active) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, "Active: new sessions may start on this provider", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, "Active: new sessions may start on this provider", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 typedef struct { char *text; } SelectData;
 static void select_free(void *p) { SelectData *d = p; free(d->text); free(d); }
-static void paint_select(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SelectData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    fill_round_rect(hdc, rc, px(6), theme.raise, hovered ? theme.accent_dim : theme.line);
+    fill_round_rect(cv, rc, px(6), theme.raise, hovered ? theme.accent_dim : theme.line);
     RECT t = { rc->left + px(12), rc->top, rc->right - px(28), rc->bottom };
-    draw_text(hdc, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT c = { rc->right - px(26), rc->top, rc->right - px(10), rc->bottom };
-    draw_glyph(hdc, 0xE70D, &c, FONT_ICON_SMALL, theme.ink);
+    draw_glyph(cv, 0xE70D, &c, FONT_ICON_SMALL, theme.ink);
 }
 /// A labelled select that opens a menu; advances.
 static void select_box(Doc *doc, int x, int w, const char *label, const char *text, int action) {
@@ -343,13 +343,13 @@ static char *status_headline(const Json *status, const char **dot) {
 }
 typedef struct { char *text; const char *dot; } HeadlineData;
 static void headline_free(void *p) { HeadlineData *d = p; free(d->text); free(d); }
-static void paint_headline(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_headline(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     HeadlineData *d = it->data;
     int cy = (rc->top + rc->bottom) / 2;
-    draw_status_dot(hdc, rc->left + px(4), cy, d->dot);
+    draw_status_dot(cv, rc->left + px(4), cy, d->dot);
     RECT t = { rc->left + px(16), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void headline(FormScreen *s, Doc *doc, int x, int w) {
     const char *dot = "";
@@ -363,7 +363,7 @@ static void headline(FormScreen *s, Doc *doc, int x, int w) {
 static void status_row(Doc *doc, int x, int w, const char *label, const char *value, bool mono) {
     if (str_empty(value)) return;
     int lw = px(150), top = doc->y;
-    RECT l = { x, top, x + lw, top + font_height(doc->hdc, FONT_FOOTNOTE) };
+    RECT l = { x, top, x + lw, top + font_height(doc->cv, FONT_FOOTNOTE) };
     doc_text_at(doc, &l, label, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_SINGLELINE);
     doc_text(doc, x + lw + px(14), w - lw - px(14), value, mono ? FONT_MONO : FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_WORDBREAK);
     if (doc->y < l.bottom) doc->y = l.bottom;
@@ -371,19 +371,19 @@ static void status_row(Doc *doc, int x, int w, const char *label, const char *va
 }
 typedef struct { char *label, *right; double pct; } BarData;
 static void bar_free(void *p) { BarData *d = p; free(d->label); free(d->right); free(d); }
-static void paint_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     BarData *d = it->data;
-    int th = font_height(hdc, FONT_CAPTION);
+    int th = font_height(cv, FONT_CAPTION);
     RECT l = { rc->left, rc->top, rc->right, rc->top + th };
-    draw_text(hdc, d->label, &l, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-    draw_text(hdc, d->right, &l, FONT_CAPTION, theme.muted, DT_RIGHT | DT_SINGLELINE);
+    draw_text(cv, d->label, &l, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->right, &l, FONT_CAPTION, theme.muted, DT_RIGHT | DT_SINGLELINE);
     RECT track = { rc->left, l.bottom + px(4), rc->right, l.bottom + px(9) };
-    fill_round_rect(hdc, &track, px(3), theme.sunken, theme.sunken);
+    fill_round_rect(cv, &track, px(3), theme.sunken, theme.sunken);
     double pct = d->pct < 0 ? 0 : d->pct > 100 ? 100 : d->pct;
     RECT fill = track; fill.right = track.left + (int)((track.right - track.left) * pct / 100.0);
     COLORREF c = pct >= 90 ? theme.danger : pct >= 70 ? theme.warn : theme.ok;
-    if (fill.right > fill.left) fill_round_rect(hdc, &fill, px(3), c, c);
+    if (fill.right > fill.left) fill_round_rect(cv, &fill, px(3), c, c);
 }
 /// The Status tab: who the provider is logged in as, its plan, where its CLI lives, and the quota windows its plan meters.
 static void layout_status(FormScreen *s, Doc *doc, int x, int w) {
@@ -418,7 +418,7 @@ static void layout_status(FormScreen *s, Doc *doc, int x, int w) {
             d->pct = pct;
             free(reset);
             doc_space(doc, px(8));
-            doc_custom(doc, x, w, font_height(doc->hdc, FONT_CAPTION) + px(9), paint_bar, d, bar_free, 0, 0);
+            doc_custom(doc, x, w, font_height(doc->cv, FONT_CAPTION) + px(9), paint_bar, d, bar_free, 0, 0);
         }
         if (!json_count(windows)) {
             const char *why = json_str_nonempty(json_get(json_get(s->status, "usage"), "error"));
@@ -451,7 +451,7 @@ static void layout_connection(FormScreen *s, Doc *doc, int x, int w) {
             doc_space(doc, px(6));
             int top = doc->y;
             doc_text(doc, x, w, s->device_code, FONT_MONO, theme.ink, DT_LEFT | DT_SINGLELINE);
-            int cw = text_width(doc->hdc, s->device_code, FONT_MONO);
+            int cw = text_width(doc->cv, s->device_code, FONT_MONO);
             doc->y = top;
             doc_button(doc, x + cw + px(14), 0, "Copy", BUTTON_PLAIN, ACT_COPY_CODE, 0, true);
             doc_space(doc, px(12));

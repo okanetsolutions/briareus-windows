@@ -26,14 +26,14 @@ static void connection_destroy(Screen *base) {
 
 typedef struct { char *repo; } RepoData;
 static void repo_free(void *p) { RepoData *d = p; free(d->repo); free(d); }
-static void paint_repo(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_repo(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RepoData *d = it->data;
     int size = px(26);
-    draw_monogram(hdc, rc->left, rc->top + (rc->bottom - rc->top - size) / 2, size, d->repo);
+    draw_monogram(cv, rc->left, rc->top + (rc->bottom - rc->top - size) / 2, size, d->repo);
     RECT t = { rc->left + size + px(10), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, d->repo, &t, FONT_BODY, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->repo, &t, FONT_BODY, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
-static void paint_seal(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_glyph(hdc, 0xE930, rc, FONT_ICON, theme.success); }
+static void paint_seal(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { draw_glyph(cv, 0xE930, rc, FONT_ICON, theme.success); }
 
 static int card_begin(Doc *doc, int w) { int b = doc_box_begin(doc, 0, w, px(12), theme.elevated, theme.border, px(12)); doc_item(doc, b)->hover_fill = false; return b; }
 static void row_gap(Doc *doc, int w) { doc_space(doc, px(7)); doc_rule(doc, px(12), w - px(24)); doc_space(doc, px(7)); }
