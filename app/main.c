@@ -112,6 +112,7 @@ void app_show_detail(Screen *screen) {
     bool same = root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1;
     if (root && !same && root->vt->can_leave && !root->vt->can_leave(root)) { screen->vt->destroy(screen); return; }
     if (same) {
+        if (root->vt->adopt) root->vt->adopt(root, screen);
         screen->vt->destroy(screen);
     } else {
         pane_set_root(g_panel, NULL);

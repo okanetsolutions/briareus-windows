@@ -454,7 +454,7 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (sidebar_common_action(base->pane, action)) return;
-    if (action == ACT_NEW) { app_show_detail(new_session_screen_new(s->count ? &s->projects[0] : NULL, s->projects, s->count)); return; }
+    if (action == ACT_NEW) { app_show_detail(new_session_screen_new(NULL, s->projects, s->count)); return; }
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 static void projects_timer(Screen *base, UINT id) {

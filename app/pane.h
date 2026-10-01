@@ -46,6 +46,8 @@ typedef struct ScreenVTable {
     void (*activated)(Screen *s, bool active);
     /// Another screen is about to replace this one as the detail pane's root: false keeps it (unsaved changes); optional.
     bool (*can_leave)(Screen *s);
+    /// The detail pane keeps this screen over a fresh one with the same id: take what the fresh one asks for; optional.
+    void (*adopt)(Screen *s, Screen *fresh);
 } ScreenVTable;
 
 struct Screen {

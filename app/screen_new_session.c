@@ -16,6 +16,7 @@ enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHI
 typedef struct {
     Screen base;
     Project *projects; size_t count; size_t chosen;
+    char *asked;   // the repo of the project the screen was opened for; NULL: none in particular
     bool has_catalog; RuntimeCatalog catalog;
     bool has_runtime; RuntimeChoice runtime;   // the pick; none starts on the project default
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
@@ -525,8 +526,14 @@ static void projects_done(void *owner, Request *req) {
     NewSessionScreen *s = owner;
     Project *items; size_t n;
     if (!req->ok || !projects_parse(req->result, &items, &n)) return;
+    // The project already picked stays picked.
+    const Project *p = project(s);
+    char *keep = xstrdup(p ? p->repo : s->asked ? s->asked : "");
+    size_t chosen = 0;
+    for (size_t i = 0; i < n; i++) if (str_eq(items[i].repo, keep)) chosen = i;
+    free(keep);
     projects_free(s->projects, s->count);
-    s->projects = items; s->count = n; s->chosen = 0;
+    s->projects = items; s->count = n; s->chosen = chosen;
     load_choices(s);
     pane_relayout(s->base.pane); pane_footer_changed(s->base.pane);
 }
@@ -553,18 +560,39 @@ static void new_session_destroy(Screen *base) {
     projects_free(s->projects, s->count);
     if (s->has_catalog) runtime_catalog_free(&s->catalog);
     if (s->has_runtime) runtime_choice_free(&s->runtime);
-    str_array_free(s->branches, s->branch_count); free(s->default_branch); free(s->branch); free(s->error);
+    str_array_free(s->branches, s->branch_count); free(s->default_branch); free(s->branch); free(s->error); free(s->asked);
     screen_release(base);
+}
+/// ＋ New session again while this one shows: it moves to the project the sidebar has open, the prompt kept.
+static void new_session_adopt(Screen *base, Screen *fresh_) {
+    NewSessionScreen *s = (NewSessionScreen *)base, *fresh = (NewSessionScreen *)fresh_;
+    if (!fresh->asked || s->busy) return;
+    set_string(&s->asked, fresh->asked);
+    const Project *p = project(s);
+    if (p && str_eq(p->repo, fresh->asked)) return;
+    size_t i = 0;
+    while (i < s->count && !str_eq(s->projects[i].repo, fresh->asked)) i++;
+    if (i == s->count) {
+        const Project *wanted = project(fresh);
+        if (!wanted || !str_eq(wanted->repo, fresh->asked)) return;
+        s->projects = xrealloc(s->projects, (s->count + 1) * sizeof *s->projects);
+        project_copy(&s->projects[s->count++], wanted);
+    }
+    s->chosen = i;
+    set_string(&s->error, NULL); s->uncertain = false;
+    load_choices(s);
+    pane_relayout(base->pane); pane_footer_changed(base->pane);
 }
 static const ScreenVTable new_session_vt = {
     .destroy = new_session_destroy, .layout = new_session_layout, .header = new_session_header,
     .footer_height = new_session_footer_height, .footer_layout = new_session_footer_layout, .footer_paint = new_session_footer_paint,
     .footer_click = new_session_footer_click, .visible = new_session_visible, .command = new_session_command, .timer = new_session_timer,
-    .activated = new_session_activated,
+    .activated = new_session_activated, .adopt = new_session_adopt,
 };
 Screen *new_session_screen_new(const Project *project_, const Project *projects, size_t count) {
     NewSessionScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &new_session_vt; s->base.id = xstrdup("new-session");
+    if (project_) s->asked = xstrdup(project_->repo);
     s->projects = xcalloc(count, sizeof *s->projects);
     for (size_t i = 0; i < count; i++) { project_copy(&s->projects[i], &projects[i]); if (project_ && str_eq(projects[i].repo, project_->repo)) s->chosen = i; }
     s->count = count;
