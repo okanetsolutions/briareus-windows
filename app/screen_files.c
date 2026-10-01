@@ -358,8 +358,12 @@ void pull_files_layout(PullFiles *f, Doc *doc, int x, int w) {
         int tree_last = (int)doc->count, tree_bottom = doc->y;
         doc->y = top;
         layout_diff(f, doc, x + tree_w + gap, w - tree_w - gap);
-        if (doc->y < tree_bottom) doc->y = tree_bottom;
-        // The tree follows the scroll down the diff, as GitHub's file tree does.
+        // The tree stays in view beside the diff and scrolls on its own, as GitHub's file tree does: the page is as
+        // long as the diff, or the view's height when the tree needs that.
+        RECT view = pane_content_rect(files_pane(f));
+        int tree_h = tree_bottom - top, room = view.bottom - view.top - px(24);
+        if (tree_h > room) tree_h = room;
+        if (doc->y < top + tree_h) doc->y = top + tree_h;
         doc_sticky(doc, tree_first, tree_last, doc->y);
     } else {
         layout_tree(f, doc, x, w);

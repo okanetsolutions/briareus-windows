@@ -542,7 +542,17 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             int max_x = p->doc.content_width - pane_content_width(p); if (max_x < 0) max_x = 0;
             int x = p->scroll_x - delta / 2; if (x < 0) x = 0; if (x > max_x) x = max_x;
             if (x != p->scroll_x) { p->scroll_x = x; InvalidateRect(hwnd, NULL, FALSE); }
-        } else set_scroll(p, p->scroll_y - delta * px(40) / WHEEL_DELTA);
+            return 0;
+        }
+        // Over a sticky sidebar that overflows, such as the file tree, the wheel scrolls it and not the page.
+        POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; ScreenToClient(hwnd, &pt);
+        RECT content = pane_content_rect(p);
+        int dy = -delta * px(40) / WHEEL_DELTA;
+        if (in_rect(&content, pt.x, pt.y)) {
+            POINT c = to_content(p, pt.x, pt.y);
+            if (doc_sticky_wheel(&p->doc, c.x, c.y, dy)) { InvalidateRect(hwnd, NULL, FALSE); return 0; }
+        }
+        set_scroll(p, p->scroll_y + dy);
         return 0;
     }
     case WM_MOUSEHWHEEL: {
