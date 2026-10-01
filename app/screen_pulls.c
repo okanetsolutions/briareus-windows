@@ -1027,6 +1027,14 @@ static void paint_diffstat(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 }
 static const char *run_shown_profile(PullScreen *s);
 static void paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
+/// The trash button at the left end of the open Run tab: the button, with the tab's underline running on beneath it.
+static void paint_delete_run_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right + px(12), rc->bottom };
+    fill_round_rect(cv, &u, px(1), theme.accent, theme.accent);
+    int bh = px(26), top = rc->top + (rc->bottom - px(2) - rc->top - bh) / 2;
+    RECT b = { rc->left + px(4), top, rc->left + px(4) + px(28), top + bh };
+    paint_delete_run(doc, it, cv, &b);
+}
 /// The session the Run tab shows: the one serving it, else the one being prepared for it.
 static const char *run_target(PullScreen *s) { return s->run_session ? s->run_session : s->log_session; }
 static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
@@ -1063,16 +1071,18 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
         char *title = s->profile_count ? xstrfmt("Run \xC2\xB7 %s \xE2\x96\xBE", run_shown_profile(s)) : xstrdup("Run");
         doc_tab(doc, &x, &y, c.ix, right, h, 0xE768, title, NULL, on, ACT_PR_TAB, PR_TAB_RUN);
         free(title);
-        if (on && s->profile_count) { Item *it = doc_item(doc, (int)doc->count - 1); it->action = ACT_RUN_PROFILE; it->hand = true; }
-        // Beside the open tab, a trash button deletes the run's session, and the workspace serving it with it.
+        Item *tab = doc_item(doc, (int)doc->count - 1);
+        if (on && s->profile_count) { tab->action = ACT_RUN_PROFILE; tab->hand = true; }
+        // Inside the open tab, at its left end, a trash button deletes the run's session, and the workspace serving it
+        // with it. The tab moves right to make room, and the button carries the tab's underline on under itself.
         if (on && run_target(s) && store_supports("delete")) {
-            int bw = px(28);
-            RECT br = { x + px(4), y + (h - bw) / 2, x + px(4) + bw, y + (h + bw) / 2 };
-            Item *it = doc_item(doc, doc_add(doc, &br, paint_delete_run));
+            int slot = px(28);
+            RECT br = { tab->rc.left, tab->rc.top, tab->rc.left + slot, tab->rc.bottom };
+            OffsetRect(&tab->rc, slot, 0); x += slot;
+            Item *it = doc_item(doc, doc_add(doc, &br, paint_delete_run_tab));
             // cppcheck-suppress intToPointerCast
             it->data = str_eq(s->deleting_run, run_target(s)) ? (void *)1 : NULL;   // a marker only, never freed
             if (!s->deleting_run) { it->action = ACT_DELETE_SERVED; it->hand = true; }
-            x += bw + px(8);
         }
     }
     if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
