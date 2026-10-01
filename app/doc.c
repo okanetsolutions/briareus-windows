@@ -1,5 +1,6 @@
 #include "doc.h"
 #include "str.h"
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
@@ -22,6 +23,7 @@ void doc_free(Doc *doc) { clear_items(doc); free(doc->items); doc_init(doc); }
 void doc_begin(Doc *doc, HDC hdc, int width) {
     clear_items(doc);
     doc->hdc = hdc; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
+    doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
 }
 void doc_end(Doc *doc) { doc->hdc = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
@@ -792,6 +794,34 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
         }
     }
     md_free(blocks, n);
+}
+
+// MARK: - Sticky items
+
+void doc_sticky(Doc *doc, int first, int last, int limit) {
+    if (first < 0) first = 0;
+    if (last > (int)doc->count) last = (int)doc->count;
+    doc->sticky_first = first; doc->sticky_last = last > first ? last : first;
+    doc->sticky_limit = limit; doc->sticky_shift = 0;
+}
+void doc_set_view(Doc *doc, int scroll_y, int view_height) {
+    if (doc->sticky_first >= doc->sticky_last) return;
+    // The group's bounds where it was laid out.
+    int top = INT_MAX, bottom = INT_MIN;
+    for (int i = doc->sticky_first; i < doc->sticky_last; i++) {
+        const RECT *rc = &doc->items[i].rc;
+        if (rc->top < top) top = rc->top;
+        if (rc->bottom > bottom) bottom = rc->bottom;
+    }
+    top -= doc->sticky_shift; bottom -= doc->sticky_shift;
+    int pad = px(12), over = (bottom - top) - (view_height - 2 * pad);
+    int shift = scroll_y + pad - top - (over > 0 ? over : 0);
+    if (shift > doc->sticky_limit - bottom) shift = doc->sticky_limit - bottom;
+    if (shift < 0) shift = 0;
+    int delta = shift - doc->sticky_shift;
+    if (!delta) return;
+    for (int i = doc->sticky_first; i < doc->sticky_last; i++) OffsetRect(&doc->items[i].rc, 0, delta);
+    doc->sticky_shift = shift;
 }
 
 // MARK: - Paint and hit

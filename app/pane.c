@@ -139,6 +139,7 @@ bool pane_at_bottom(Pane *p) { return p->scroll_y >= max_scroll(p) - px(24); }
 static void after_scroll(Pane *p) {
     Screen *s = pane_top(p);
     RECT rc = pane_content_rect(p);
+    doc_set_view(&p->doc, p->scroll_y, rc.bottom - rc.top);
     if (s && s->vt->place) s->vt->place(s, &rc, p->scroll_y);
     if (s && s->vt->scrolled) s->vt->scrolled(s, pane_at_bottom(p));
     InvalidateRect(p->hwnd, NULL, FALSE);
@@ -215,6 +216,7 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     int max_x = p->doc.content_width - content_width; if (max_x < 0) max_x = 0;
     if (p->scroll_x > max_x) p->scroll_x = max_x;
     RECT content = pane_content_rect(p);
+    doc_set_view(&p->doc, p->scroll_y, content.bottom - content.top);
     if (s && s->vt->footer_layout) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_layout(s, &fr); }
     if (s && s->vt->place) s->vt->place(s, &content, p->scroll_y);
     if (s && s->vt->scrolled) s->vt->scrolled(s, pane_at_bottom(p));
