@@ -87,6 +87,8 @@ bool session_can_review_loop(const Session *s);
 const Json *session_held_triage(const Session *s);
 /// The pull request this conversation works on, once it has one; 0 without.
 int session_pull_number(const Session *s);
+/// Whether it was started on issue `number`: such a session is named by its prompt's first line, `Issue #N: title`.
+bool session_on_issue(const Session *s, int number);
 bool sessions_parse(const Json *list_or_array, Session **out, size_t *count);
 Json *sessions_json(const Session *sessions, size_t count);
 void sessions_free(Session *sessions, size_t count);

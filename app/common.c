@@ -253,7 +253,7 @@ static void paint_epic(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, text, &t, FONT_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     free(text);
 }
-static void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue) {
+void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue) {
     EpicData *d = xcalloc(1, sizeof *d); d->done = issue->sub_issues_done; d->total = issue->sub_issues;
     doc_custom(doc, x, w, font_height(doc->cv, FONT_CAPTION2) + px(4), paint_epic, d, free, 0, 0);
 }

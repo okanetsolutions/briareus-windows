@@ -63,6 +63,7 @@ typedef struct {
     char **assignees; size_t assignee_count;
     PullLabel *labels; size_t label_count;
     int comments;
+    bool has_created; time_t created_at;
     bool has_updated; time_t updated_at;
     bool has_parent; BoardLink parent;
     int sub_issues, sub_issues_done;   // sub-issues GitHub tracks under an epic, closed ones included; zero on an ordinary issue
@@ -79,6 +80,12 @@ typedef struct { size_t index; int depth; } IssueRow;
 IssueRow *issues_nested(const IssueSummary *issues, size_t count, const char *repo, size_t *row_count);
 /// What a session started on this issue is sent, as the dashboard words it. Its first line names the session.
 char *issue_prompt(const IssueSummary *issue, const char *repo);
+/// The board row of issue `number`, or NULL when it is not on the list (closed, or past the issue walk's last page).
+const IssueSummary *issues_find(const IssueSummary *issues, size_t count, int number);
+/// The rows on the list that are sub-issues of `epic` in `repo`, as indices in list order. Closed ones are never there.
+size_t *issue_open_sub_issues(const IssueSummary *issues, size_t count, int epic, const char *repo, size_t *found);
+/// The board row of this repository's pull request `number`, or NULL.
+const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number);
 
 /// What the board's pickers filter on, carried by pull requests and issues alike.
 typedef struct {

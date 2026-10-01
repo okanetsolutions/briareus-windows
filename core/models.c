@@ -241,6 +241,12 @@ int session_pull_number(const Session *s) {
     if (!json_num(json_get(json_get(s->raw, "prStatus"), "number"), &n) && !json_num(json_get(s->raw, "startedOnPr"), &n)) return 0;
     return n >= 1 ? (int)n : 0;
 }
+bool session_on_issue(const Session *s, int number) {
+    const char *t = json_str(json_get(s->raw, "title"));
+    if (!t || number < 1) return false;
+    char prefix[32]; snprintf(prefix, sizeof prefix, "Issue #%d:", number);
+    return strncmp(t, prefix, strlen(prefix)) == 0;
+}
 static DEFINE_LIST_PARSE(Session, session_list_parse, session_parse)
 bool sessions_parse(const Json *value, Session **out, size_t *count) {
     const Json *list = json_is_array(value) ? value : json_get(value, "sessions");

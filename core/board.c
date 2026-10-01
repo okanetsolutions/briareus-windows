@@ -143,6 +143,7 @@ bool issue_summary_parse(const Json *value, IssueSummary *out) {
     out->labels = labels_parse(json_get(value, "labels"), &out->label_count);
     out->comments = json_int_or(json_get(value, "comments"), 0);
     out->milestone = json_dup_str(json_get(value, "milestone"));
+    out->has_created = board_date_parse(json_str(json_get(value, "createdAt")), &out->created_at);
     out->has_updated = board_date_parse(json_str(json_get(value, "updatedAt")), &out->updated_at);
     out->has_parent = board_link_parse(json_get(value, "parent"), &out->parent);
     out->sub_issues = json_int_or(json_get(json_get(value, "subIssues"), "total"), 0);
@@ -195,6 +196,23 @@ char *issue_prompt(const IssueSummary *issue, const char *repo) {
     str_appendf(&s, "Then implement it on this session\xE2\x80\x99s own branch, verify the change the way this repository verifies changes, and open a pull request whose body says `Closes #%d`, so merging it closes the issue.\n\n", issue->number);
     str_appendz(&s, "If the issue is too ambiguous to implement as written, say what is missing and stop rather than guessing at it.");
     return str_detach(&s);
+}
+const IssueSummary *issues_find(const IssueSummary *issues, size_t count, int number) {
+    for (size_t i = 0; i < count; i++) if (issues[i].number == number) return &issues[i];
+    return NULL;
+}
+size_t *issue_open_sub_issues(const IssueSummary *issues, size_t count, int epic, const char *repo, size_t *found) {
+    size_t *out = xcalloc(count ? count : 1, sizeof *out);
+    *found = 0;
+    for (size_t i = 0; i < count; i++) {
+        const IssueSummary *it = &issues[i];
+        if (it->has_parent && it->parent.number == epic && it->number != epic && !board_link_is_foreign(&it->parent, repo)) out[(*found)++] = i;
+    }
+    return out;
+}
+const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number) {
+    for (size_t i = 0; i < count; i++) if (pulls[i].number == number) return &pulls[i];
+    return NULL;
 }
 
 // MARK: - Filters
