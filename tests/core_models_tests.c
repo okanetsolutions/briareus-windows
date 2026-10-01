@@ -404,6 +404,14 @@ static void test_session_pull_number_ignores_what_is_not_a_pull_request(void) {
     for (int i = 0; i < 4; i++) { Session s = session_of(cases[i]); CHECK_INT(session_pull_number(&s), expected[i]); session_free(&s); }
 }
 
+static void test_session_on_issue_reads_the_title_an_issue_start_gives(void) {
+    const char *cases[] = { "{\"id\":\"s\",\"status\":\"idle\",\"title\":\"Issue #12: Fix login\"}", "{\"id\":\"s\",\"status\":\"idle\",\"title\":\"Issue #123: Other\"}",
+                            "{\"id\":\"s\",\"status\":\"idle\",\"title\":\"Look at Issue #12: later\"}", "{\"id\":\"s\",\"status\":\"idle\"}", "{\"id\":\"s\",\"status\":\"idle\",\"title\":\"Issue #12\"}" };
+    bool expected[] = { true, false, false, false, false };
+    for (int i = 0; i < 5; i++) { Session s = session_of(cases[i]); CHECK(session_on_issue(&s, 12) == expected[i]); session_free(&s); }
+    Session s = session_of(cases[0]); CHECK(!session_on_issue(&s, 0)); session_free(&s);
+}
+
 // MARK: - Findings
 
 static void test_held_rounds_of_an_empty_list(void) {
@@ -910,6 +918,7 @@ void models_tests(void) {
     test_run("session review loop flags", test_session_review_loop_flags);
     test_run("held triage needs findings and prefers the standalone review", test_held_triage_needs_findings_and_prefers_the_standalone_review);
     test_run("session pull number ignores what is not a pull request", test_session_pull_number_ignores_what_is_not_a_pull_request);
+    test_run("session on issue reads the title an issue start gives", test_session_on_issue_reads_the_title_an_issue_start_gives);
     test_run("held rounds of an empty list", test_held_rounds_of_an_empty_list);
     test_run("held rounds with equal holds keep the list order", test_held_rounds_with_equal_holds_keep_the_list_order);
     test_run("held round URL reuses the conversation's own link only for its pull request", test_held_round_url_reuses_the_conversations_own_link_only_for_its_pull_request);

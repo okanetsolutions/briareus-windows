@@ -256,11 +256,46 @@ static void test_issue_summaries_read_every_field(void) {
                    "\"pulls\":[{\"number\":8,\"draft\":true},{\"title\":\"no number\"}]}", &i));
     CHECK_INT(i.number, 20); CHECK_STR(i.title, "Child"); CHECK_STR(i.url, "https://github.com/o/r/issues/20"); CHECK_STR(i.author, "ana");
     CHECK_STR(i.milestone, "v2"); CHECK_INT(i.assignee_count, 1); CHECK_INT(i.label_count, 1); CHECK_INT(i.comments, 4); CHECK(i.has_updated);
+    CHECK(!i.has_created);
     CHECK(i.has_parent); CHECK_INT(i.parent.number, 21); CHECK_STR(i.parent.title, "Epic");
     CHECK_INT(i.sub_issues, 2); CHECK_INT(i.sub_issues_done, 1); CHECK(issue_is_epic(&i));
     CHECK_INT(i.pull_count, 1); CHECK(i.pulls[0].draft);
     issue_summary_free(&i); CHECK(i.title == NULL && !i.has_parent);
     issue_summary_free(NULL);
+}
+static void test_issue_summaries_read_when_they_were_opened(void) {
+    IssueSummary i;
+    CHECK(issue_of("{\"number\":3,\"createdAt\":\"2026-09-28T15:55:49Z\",\"updatedAt\":\"2026-09-30T10:00:00Z\"}", &i));
+    CHECK(i.has_created && i.has_updated && i.created_at < i.updated_at);
+    issue_summary_free(&i);
+    CHECK(issue_of("{\"number\":3,\"createdAt\":\"yesterday\"}", &i));
+    CHECK(!i.has_created);
+    issue_summary_free(&i);
+}
+static void test_issue_open_sub_issues_are_the_epics_children_here(void) {
+    Json *j = json_parsez("[{\"number\":1,\"subIssues\":{\"total\":4,\"completed\":1}},"
+                          "{\"number\":2,\"parent\":{\"number\":1,\"repo\":\"o/r\"}},"
+                          "{\"number\":3,\"parent\":{\"number\":9}},"
+                          "{\"number\":4,\"parent\":{\"number\":1,\"repo\":\"other/repo\"}},"
+                          "{\"number\":5,\"parent\":{\"number\":1}}]");
+    size_t n; IssueSummary *issues = issue_summaries_parse(j, &n);
+    json_free(j);
+    CHECK_INT(n, 5);
+    size_t found; size_t *subs = issue_open_sub_issues(issues, n, 1, "o/r", &found);
+    // #4 has a parent numbered 1 in another repository, which is not this epic.
+    CHECK_INT(found, 2); CHECK_INT(issues[subs[0]].number, 2); CHECK_INT(issues[subs[1]].number, 5);
+    free(subs);
+    subs = issue_open_sub_issues(issues, n, 2, "o/r", &found); CHECK_INT(found, 0); free(subs);
+    subs = issue_open_sub_issues(NULL, 0, 1, "o/r", &found); CHECK_INT(found, 0); free(subs);
+    CHECK(issues_find(issues, n, 3) == &issues[2]); CHECK(issues_find(issues, n, 7) == NULL);
+    issue_summaries_free(issues, n);
+}
+static void test_pulls_find_by_number(void) {
+    Json *j = json_parsez("[{\"number\":8,\"title\":\"a\"},{\"number\":9,\"title\":\"b\"}]");
+    size_t n; PullSummary *pulls = pull_summaries_parse(j, &n);
+    json_free(j);
+    CHECK(pulls_find(pulls, n, 9) == &pulls[1]); CHECK(pulls_find(pulls, n, 4) == NULL); CHECK(pulls_find(NULL, 0, 9) == NULL);
+    pull_summaries_free(pulls, n);
 }
 static void test_issue_summaries_default_what_the_server_left_out(void) {
     IssueSummary i;
@@ -1032,6 +1067,9 @@ void board_tests(void) {
     test_run("pull predicates read mergeable, checks and labels", test_pull_predicates_read_mergeable_checks_and_labels);
     test_run("issue summaries read every field", test_issue_summaries_read_every_field);
     test_run("issue summaries default what the server left out", test_issue_summaries_default_what_the_server_left_out);
+    test_run("issue summaries read when they were opened", test_issue_summaries_read_when_they_were_opened);
+    test_run("issue open sub-issues are the epic's children here", test_issue_open_sub_issues_are_the_epics_children_here);
+    test_run("pulls find by number", test_pulls_find_by_number);
     test_run("issues nest depth first under epics on the list", test_issues_nest_depth_first_under_epics_on_the_list);
     test_run("issues in a cycle are each drawn once", test_issues_in_a_cycle_are_each_drawn_once);
     test_run("issue prompts name the issue, its epic and how to close it", test_issue_prompts_name_the_issue_its_epic_and_how_to_close_it);

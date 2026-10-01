@@ -292,6 +292,8 @@ static const ApiRoute ROUTES[] = {
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" },
+    // Issues
+    { "close_issue", "POST", "issues/{issue}/close" },      // `reason` completed or not_planned, and an optional `comment` posted first
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
     { "start_session", "POST", "sessions" },
