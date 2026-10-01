@@ -1632,8 +1632,10 @@ static void layout_run(PullScreen *s, Doc *doc, int w) {
         : s->run_busy && s->run_url ? (s->run_asked ? xstrfmt("Restarting with profile %s\xE2\x80\xA6", s->run_asked) : xstrdup("Serving it again\xE2\x80\xA6"))
         : s->run_url ? xstrdup("Starting the browser\xE2\x80\xA6")
         : s->run_busy && s->run_session ? xstrdup("Serving it\xE2\x80\xA6")
+        // Once the setup's console has lines it says what is happening; until then, a line saying what is coming.
+        : s->log.count ? NULL
         : xstrdup("Preparing a workspace for this pull request and serving it with the project\xE2\x80\x99s run commands. This can take a few minutes\xE2\x80\xA6");
-    doc_text(doc, px(4), w - px(8), text, FONT_BODY, error ? theme.danger : theme.muted, DT_WORDBREAK);
+    if (text) doc_text(doc, px(4), w - px(8), text, FONT_BODY, error ? theme.danger : theme.muted, DT_WORDBREAK);
     free(text);
     if (!s->run_url && s->serve_error && !s->run_busy) {
         doc_space(doc, px(10));
