@@ -2,6 +2,7 @@
 // handlers it implements. The slots follow WebView2.h (ICoreWebView2Environment, ICoreWebView2Controller, ICoreWebView2),
 // whose published interfaces never change order.
 #include "webview.h"
+#include "api.h"
 #include "str.h"
 #include <objbase.h>
 #include <shlobj.h>
@@ -20,19 +21,28 @@ enum { ENV_CREATE_CONTROLLER = 3 };
 // ICoreWebView2Controller
 enum { CTRL_PUT_IS_VISIBLE = 4, CTRL_PUT_BOUNDS = 6, CTRL_CLOSE = 24, CTRL_GET_CORE = 25 };
 // ICoreWebView2
-enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_RELOAD = 31, CORE_ADD_TITLE_CHANGED = 46, CORE_GET_TITLE = 48 };
+enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_RELOAD = 31, CORE_ADD_TITLE_CHANGED = 46, CORE_GET_TITLE = 48,
+       CORE_ADD_WEB_RESOURCE_REQUESTED = 55, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER = 57 };
+// ICoreWebView2WebResourceRequestedEventArgs, ICoreWebView2WebResourceRequest, ICoreWebView2HttpRequestHeaders
+enum { ARGS_GET_REQUEST = 3 };
+enum { REQUEST_GET_URI = 3, REQUEST_GET_HEADERS = 9 };
+enum { HEADERS_SET_HEADER = 6 };
+// COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL
+enum { RESOURCE_CONTEXT_ALL = 0 };
 
 struct WebView {
     LONG refs; bool closed;
     HWND parent; wchar_t *url; RECT bounds; bool shown;
     void *controller, *core;    // ICoreWebView2Controller, ICoreWebView2
     char *error, *title, *source;
+    char *access_suffix; wchar_t *access_id, *access_secret;   // the preview's service token, or NULL
     void (*changed)(void *ctx); void *ctx;
 };
 
 static void wv_release(WebView *wv) {
     if (--wv->refs) return;
     free(wv->url); free(wv->error); free(wv->title); free(wv->source);
+    free(wv->access_suffix); free(wv->access_id); free(wv->access_secret);
     free(wv);
 }
 static void notify(WebView *wv) { if (!wv->closed && wv->changed) wv->changed(wv->ctx); }
@@ -85,6 +95,31 @@ static HRESULT WINAPI page_changed(Handler *h, void *sender, void *args) {
 }
 static const AnyFn page_changed_vtbl[] = { (AnyFn)handler_qi, (AnyFn)handler_add_ref, (AnyFn)handler_release, (AnyFn)page_changed };
 
+/// WebResourceRequested: every request the page makes, the page itself included. One to a preview host carries the
+/// Cloudflare Access service token, so Access lets it through without a sign-in.
+static HRESULT WINAPI resource_requested(Handler *h, void *sender, void *args) {
+    (void)sender;
+    WebView *wv = h->wv;
+    if (wv->closed || !wv->access_suffix || !args) return S_OK;
+    void *request = NULL, *headers = NULL; LPWSTR uri = NULL;
+    if (FAILED(COM(args, ARGS_GET_REQUEST, HRESULT (WINAPI *)(void *, void **))(args, &request)) || !request) return S_OK;
+    if (SUCCEEDED(COM(request, REQUEST_GET_URI, HRESULT (WINAPI *)(void *, LPWSTR *))(request, &uri)) && uri) {
+        char *url = wide_to_utf8(uri);
+        if (preview_access_applies(url, wv->access_suffix)
+            && SUCCEEDED(COM(request, REQUEST_GET_HEADERS, HRESULT (WINAPI *)(void *, void **))(request, &headers)) && headers) {
+            typedef HRESULT (WINAPI *SetHeaderFn)(void *, LPCWSTR, LPCWSTR);
+            COM(headers, HEADERS_SET_HEADER, SetHeaderFn)(headers, L"CF-Access-Client-Id", wv->access_id);
+            COM(headers, HEADERS_SET_HEADER, SetHeaderFn)(headers, L"CF-Access-Client-Secret", wv->access_secret);
+            COM_RELEASE(headers);
+        }
+        free(url);
+        CoTaskMemFree(uri);
+    }
+    COM_RELEASE(request);
+    return S_OK;
+}
+static const AnyFn resource_requested_vtbl[] = { (AnyFn)handler_qi, (AnyFn)handler_add_ref, (AnyFn)handler_release, (AnyFn)resource_requested };
+
 static HRESULT WINAPI controller_created(Handler *h, HRESULT hr, void *controller) {
     WebView *wv = h->wv;
     if (FAILED(hr) || !controller) { fail(wv, "The browser could not open its window", hr); return S_OK; }
@@ -102,6 +137,12 @@ static HRESULT WINAPI controller_created(Handler *h, HRESULT hr, void *controlle
     COM(core, CORE_ADD_TITLE_CHANGED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, ev, &token);
     COM(core, CORE_ADD_SOURCE_CHANGED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, ev, &token);
     handler_release(ev);
+    if (wv->access_suffix) {
+        Handler *rr = handler_new(resource_requested_vtbl, wv);
+        COM(core, CORE_ADD_WEB_RESOURCE_REQUESTED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, rr, &token);
+        handler_release(rr);
+        COM(core, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER, HRESULT (WINAPI *)(void *, LPCWSTR, int))(core, L"*", RESOURCE_CONTEXT_ALL);
+    }
     COM(controller, CTRL_PUT_BOUNDS, HRESULT (WINAPI *)(void *, RECT))(controller, wv->bounds);
     COM(controller, CTRL_PUT_IS_VISIBLE, HRESULT (WINAPI *)(void *, BOOL))(controller, wv->shown);
     if (FAILED(hr = COM(core, CORE_NAVIGATE, HRESULT (WINAPI *)(void *, LPCWSTR))(core, wv->url))) fail(wv, "The browser would not open the address", hr);
@@ -157,12 +198,16 @@ bool webview_available(void) { return runtime_entry() != NULL; }
 
 // MARK: - API
 
-WebView *webview_new(HWND parent, const char *url, void (*changed)(void *ctx), void *ctx) {
+WebView *webview_new(HWND parent, const char *url, const WebViewAccess *access, void (*changed)(void *ctx), void *ctx) {
     WebView *wv = xcalloc(1, sizeof *wv);
     wv->refs = 1; wv->parent = parent; wv->url = utf8_to_wide(url); wv->changed = changed; wv->ctx = ctx;
+    if (access && access->client_id && access->client_secret && access->host_suffix && *access->host_suffix) {
+        wv->access_suffix = xstrdup(access->host_suffix);
+        wv->access_id = utf8_to_wide(access->client_id); wv->access_secret = utf8_to_wide(access->client_secret);
+    }
     CreateEnvironmentFn create = runtime_entry();
     if (!create) { wv->error = xstrdup("The Microsoft Edge WebView2 Runtime is not installed."); return wv; }
-    // Its own profile, so sign-ins (Cloudflare Access) last between runs.
+    // Its own profile, so a Cloudflare Access sign-in, where there is no service token, lasts between runs.
     wchar_t *base = NULL, folder[MAX_PATH];
     if (SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &base) != S_OK) base = NULL;
     swprintf(folder, MAX_PATH, L"%ls\\Okanet\\Briareus\\WebView2", base ? base : L".");

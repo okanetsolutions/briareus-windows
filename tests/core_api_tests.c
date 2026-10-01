@@ -124,6 +124,26 @@ static void test_server_address_copy_is_independent(void) {
     server_address_free(&b);
     server_address_free(NULL);
 }
+static void test_preview_access_goes_only_to_preview_hosts(void) {
+    const char *suffix = "preview.example.com";
+    CHECK(preview_access_applies("https://8123.preview.example.com", suffix));
+    CHECK(preview_access_applies("https://8123.preview.example.com/app?x=1#y", suffix));
+    CHECK(preview_access_applies("https://a.b.PREVIEW.example.com:8443/", suffix));
+    CHECK(preview_access_applies("https://8123.preview.example.com./", suffix));
+    CHECK(preview_access_applies("HTTPS://8123.preview.example.com", ".preview.example.com"));
+    // Not over plain HTTP, not the suffix itself, not a host that merely ends in the same letters, not another site.
+    CHECK(!preview_access_applies("http://8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://evilpreview.example.com", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com.evil.net", suffix));
+    CHECK(!preview_access_applies("https://evil.net/8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://evil.net?h=8123.preview.example.com", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com@evil.net", suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com", ""));
+    CHECK(!preview_access_applies(NULL, suffix));
+    CHECK(!preview_access_applies("https://8123.preview.example.com", NULL));
+}
 
 // MARK: - Tokens
 
@@ -912,6 +932,7 @@ void api_tests(void) {
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);
     test_run("server address refuses everything else", test_server_address_refuses_everything_else);
     test_run("server address copy is independent", test_server_address_copy_is_independent);
+    test_run("preview access goes only to preview hosts", test_preview_access_goes_only_to_preview_hosts);
     test_run("token shape", test_token_shape);
     test_run("client refuses a bad token without an error to fill", test_client_refuses_a_bad_token_without_an_error_to_fill);
     test_run("client keeps its own copy of the address and counts references", test_client_keeps_its_own_copy_of_the_address_and_counts_references);
