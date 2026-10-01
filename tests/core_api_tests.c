@@ -297,6 +297,7 @@ static const Expected ROUTE_TABLE[] = {
     { "link_pr", "POST", "sessions/{sessionId}/link-pr" }, { "complete_findings", "POST", "sessions/{sessionId}/findings/triage" },
     { "save_findings", "POST", "sessions/{sessionId}/findings/save" }, { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
     { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    { "preview_access", "GET", "preview/access" },
     { "upload", "POST", "uploads" }, { "transcribe", "POST", "transcribe" },
     { "settings_projects", "GET", "settings/projects" }, { "create_project", "POST", "settings/projects" },
     { "update_project", "PUT", "settings/projects/{id}" }, { "delete_project", "DELETE", "settings/projects/{id}" },
@@ -524,6 +525,21 @@ static void test_a_run_profile_switch_names_the_session_in_the_path(void) {
     // Without a profile the server serves the one it served last.
     r = call(c, "serve", "{\"sessionId\":\"run-1\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "sessions/run-1/serve"); CHECK_STR(stub.last_body, "{}");
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+static void test_the_preview_access_token_is_a_plain_read(void) {
+    Stub stub = { 0 }; stub_json(&stub, 200, "{\"clientId\":\"id.access\",\"clientSecret\":\"s3cret\",\"hostSuffix\":\"preview.example.com\"}");
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    // The Run tab reads it with no arguments: nothing in the path or the query.
+    Json *r = call(c, "preview_access", "{}", &e);
+    CHECK_STR(stub.last_url, BASE "preview/access"); CHECK_STR(stub.last_method, "GET");
+    CHECK_STR(json_str(json_get(r, "clientId")), "id.access"); CHECK_STR(json_str(json_get(r, "clientSecret")), "s3cret");
+    CHECK_STR(json_str(json_get(r, "hostSuffix")), "preview.example.com"); json_free(r);
+    api_error_clear(&e);
+    // No tunnel or no service token on the server: a 404, after which the browser opens without one.
+    stub_reset(&stub); stub_json(&stub, 404, "{\"error\":\"No preview service token is configured.\"}");
+    CHECK(call(c, "preview_access", "{}", &e) == NULL); CHECK_INT(e.status, 404); CHECK(api_error_is_refusal(&e));
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_the_set_flag_is_always_sent_true(void) {
@@ -928,6 +944,7 @@ static void test_retry_after_http_dates(void) {
 }
 
 void api_tests(void) {
+    test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);
     test_run("server address refuses everything else", test_server_address_refuses_everything_else);
