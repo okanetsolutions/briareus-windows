@@ -402,11 +402,13 @@ Screen *pulls_screen_new(const Project *project) {
 // MARK: - Pull request
 
 enum {
-    ACT_FILES = 1100, ACT_OPEN_URL, ACT_STACK_ITEM, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
+    ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD,
+    ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
+enum { TIMER_FILES_PAGE = 2 };
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
-enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS };
+enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS, PR_TAB_FILES };
 
 typedef struct {
     Screen base;
@@ -418,6 +420,7 @@ typedef struct {
     Json *catalog;      // the server's `actions`
     Session *runs; size_t run_count;
     Json *findings;
+    PullFiles *files;   // the Files changed tab
     char *error, *findings_error, *write_error, *merge_error;
     bool busy, uncertain, merging;
     int tab;
@@ -566,6 +569,7 @@ static void pull_destroy(Screen *base) {
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
     free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
+    pull_files_free(s->files);
     screen_release(base);
 }
 
@@ -827,8 +831,8 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
     bool has_files = json_num(json_get(s->pr, "changedFiles"), &files);
     if (has_files) snprintf(count, sizeof count, "%d", (int)files);
-    // Files open their own screen, or GitHub's page when the server cannot list them.
-    if (store_supports("pull_files")) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_FILES, 0);
+    // The files are a tab here, or GitHub's page when the server cannot list them.
+    if (store_supports("pull_files")) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, s->tab == PR_TAB_FILES, ACT_PR_TAB, PR_TAB_FILES);
     else if (safe_web_url(json_str(json_get(s->pr, "url")))) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_OPEN_URL, 1);
     if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
     doc->y = y + h;
@@ -1067,6 +1071,7 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
         return;
     }
     switch (s->tab) {
+    case PR_TAB_FILES: pull_files_layout(s->files, doc, c.x, c.w); break;
     case PR_TAB_COMMITS: layout_commit_list(s, doc, c); break;
     case PR_TAB_CHECKS: layout_checks(s, doc, c); break;
     case PR_TAB_FINDINGS: layout_findings(s, doc, c); break;
@@ -1205,7 +1210,10 @@ static void pull_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(12));
     layout_tabs(s, doc, head);
     doc_space(doc, px(18));
-    if (w >= px(880)) {
+    if (s->tab == PR_TAB_FILES && !json_is_null(s->pr)) {
+        // The files take the whole width: GitHub's Files changed tab has no sidebar.
+        layout_main(s, doc, col_make(0, w));
+    } else if (w >= px(880)) {
         // Wide: the conversation on the left, GitHub's sidebar on the right.
         int side_w = w * 26 / 100, gap = px(28);
         if (side_w < px(240)) side_w = px(240);
@@ -1348,14 +1356,13 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     PullScreen *s = (PullScreen *)base;
     switch (action) {
-    case ACT_FILES: app_push_detail(pull_files_screen_new(&s->project, s->number)); break;
     case ACT_OPEN_URL: {
         const char *url = json_str(json_get(s->pr, "url"));
         if (arg == 1) { char *files = xstrfmt("%s/files", url); open_web_url(files); free(files); } else open_web_url(url);
         break;
     }
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
-    case ACT_PR_TAB: s->tab = (int)arg; pane_relayout(base->pane); break;
+    case ACT_PR_TAB: s->tab = (int)arg; if (s->tab == PR_TAB_FILES) pull_files_load(s->files); pane_relayout(base->pane); break;
     case ACT_FINDING_TOGGLE: {
         bool open = finding_open(s, (int)arg);
         if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
@@ -1393,10 +1400,12 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
+    default: pull_files_action(s->files, action, arg); break;
     }
 }
 static void pull_timer(Screen *base, UINT id) {
     PullScreen *s = (PullScreen *)base;
+    if (pull_files_timer(s->files, id)) return;
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->merging && !s->deciding && !s->dialog_open;
         if (enabled) pull_load(s); else poller_finished(&s->poller, false, -1);
@@ -1404,8 +1413,8 @@ static void pull_timer(Screen *base, UINT id) {
 }
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
-    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 30000);
-    else { poller_stop(&s->poller); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); }
+    else { poller_stop(&s->poller); pull_files_cancel(s->files); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
@@ -1413,6 +1422,7 @@ static void pull_refresh(Screen *base) {
     s->uncertain = false; set_string(&s->write_error, NULL);
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_pull); pull_load(s);
+    if (pull_files_started(s->files)) pull_files_refresh(s->files);
     pane_relayout(base->pane);
 }
 static void pull_activated(Screen *base, bool active) { if (active) { PullScreen *s = (PullScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 30000); } }
@@ -1427,6 +1437,7 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
     if (stack) { stack_position_copy(&s->stack, stack); s->has_stack = true; }
     if (summary) { pull_summary_copy(&s->summary, summary); s->has_summary = true; }
     s->pr = json_null(); s->catalog = json_array(); s->findings = json_array();
+    s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_FILES_PAGE);
     return &s->base;
 }
 
