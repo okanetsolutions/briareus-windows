@@ -260,12 +260,14 @@ static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
         bool hovered = p->hover_button == i && b->enabled;
         COLORREF border = hovered ? (b->destructive ? theme.danger : theme.accent_dim) : theme.line;
         COLORREF text = !b->enabled ? theme.muted : (hovered && b->destructive) ? theme.danger : theme.ink;
+        COLORREF fill = theme.raise;
+        if (b->prominent && b->enabled) { fill = hovered ? blend(theme.accent, theme.white, 0.9) : theme.accent; border = fill; text = theme.on_accent; }
         if (pill) {
-            fill_round_rect(hdc, &br, px(7), theme.raise, border);
+            fill_round_rect(hdc, &br, px(7), fill, border);
             RECT t = { br.left + px(10), br.top, br.right - px(10) + 2, br.bottom };
             draw_text(hdc, b->label, &t, FONT_FOOTNOTE, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         } else {
-            fill_round_rect(hdc, &br, px(8), theme.raise, border);
+            fill_round_rect(hdc, &br, px(8), fill, border);
             draw_glyph(hdc, b->glyph, &br, FONT_ICON_SMALL, text);
         }
         right -= bw + px(8);

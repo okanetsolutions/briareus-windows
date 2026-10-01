@@ -155,6 +155,21 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_str(args, "sessionId", "../token");
     result = api_call(c, "session", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/..%2Ftoken");
+    // A project's settings: its id goes in the path, the rest of the row in the body; a new one has no id.
+    args = json_object(); json_set_num(args, "id", 7); json_set_str(args, "label", "Heedly"); json_object_set(args, "workerBudgetUsd", json_null());
+    result = api_call(c, "update_project", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/7"); CHECK_STR(stub.last_method, "PUT"); sent = json_parsez(stub.last_body);
+    CHECK(json_is_null(json_get(sent, "id"))); CHECK_STR(json_str(json_get(sent, "label")), "Heedly"); CHECK(json_count(sent) == 2); json_free(sent);
+    args = json_object(); json_set_str(args, "repo", "o/new");
+    result = api_call(c, "create_project", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects"); CHECK_STR(stub.last_method, "POST");
+    args = json_object(); json_set_num(args, "id", 7);
+    result = api_call(c, "delete_project", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/7"); CHECK_STR(stub.last_method, "DELETE"); CHECK(stub.last_body == NULL);
+    args = json_object();
+    { Json *ids = json_array(); json_array_push(ids, json_number(2)); json_array_push(ids, json_number(1)); json_object_set(args, "ids", ids); }
+    result = api_call(c, "order_projects", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/order"); CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_body, "{\"ids\":[2,1]}");
     // A filter picked more than once repeats its parameter.
     args = json_object(); json_set_str(args, "period", "all");
     { Json *picks = json_array(); json_array_push(picks, json_string("p:1")); json_array_push(picks, json_string("r:o/r")); json_object_set(args, "project", picks); }
@@ -182,7 +197,8 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "pull_comments",
                             "pull_reviews", "pull_review_comments", "findings",
                             "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
-                            "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe" };
+                            "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe",
+                            "settings_projects", "create_project", "update_project", "delete_project", "order_projects" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
     CHECK(api_route("operations") == NULL);
     free(bearer); api_error_clear(&e); api_client_release(c); stub_reset(&stub);

@@ -55,6 +55,13 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
+/// The sidebar's ⚙ Settings, as the dashboard's settings page: Devices and clients, and the projects with ＋ New.
+Screen *settings_screen_new(void);
+/// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
+/// one); `defaults` is what a new one starts from.
+Screen *project_settings_screen_new(const Json *row, const Json *defaults);
+/// The settings sidebar reads the projects again, after one was saved, cloned or deleted; `select_id` > 0 is highlighted.
+void settings_projects_changed(int select_id);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.
@@ -63,7 +70,7 @@ void projects_recount_findings(void);
 /// Shows a screen as the detail pane's root, unless one with the same id already is.
 void app_show_detail(Screen *screen);
 void app_push_detail(Screen *screen);
-/// Empties the detail pane after its conversation was deleted.
+/// Empties the detail pane after its conversation was deleted, unless a form there keeps its unsaved changes.
 void app_clear_detail(void);
 Pane *app_sidebar_pane(void);
 Pane *app_detail_pane(void);
@@ -115,6 +122,10 @@ wchar_t check_glyph(const char *result, COLORREF *color);
 wchar_t review_glyph(ReviewStatus status, COLORREF *color);
 /// The glyph a tool event shows, from its name.
 wchar_t tool_glyph(const char *kind, const char *name, bool is_error);
+/// One tab of a `tabnav` row: a glyph, a title and an optional count, the open one underlined in the accent. Tabs run
+/// left to right from `*x`, wrapping to a new line of height `h` past `right`; `*x` and `*y` follow. The open tab is not
+/// clickable.
+void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg);
 /// "Never" for 0.
 int content_left(Pane *pane);
 
