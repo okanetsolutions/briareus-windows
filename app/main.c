@@ -218,7 +218,9 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;
     case WM_APP_REQUEST_DONE: case WM_APP_ASYNC_DONE: store_handle_message(msg, wp, lp); return 0;
     case WM_SETTINGCHANGE: case WM_THEMECHANGED:
-        theme_refresh(); theme_apply_window(hwnd);
+        // Switching Windows between dark and light app mode arrives as WM_SETTINGCHANGE("ImmersiveColorSet").
+        if (!theme_refresh() && msg == WM_SETTINGCHANGE) return 0;
+        theme_apply_window(hwnd);
         if (g_pairing) { SendMessageW(pane_hwnd(g_pairing), WM_THEMECHANGED, 0, 0); pane_relayout(g_pairing); }
         if (g_sidebar) { SendMessageW(pane_hwnd(g_sidebar), WM_THEMECHANGED, 0, 0); pane_relayout(g_sidebar); }
         if (g_detail) { SendMessageW(pane_hwnd(g_detail), WM_THEMECHANGED, 0, 0); pane_relayout(g_detail); }
