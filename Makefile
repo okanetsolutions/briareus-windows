@@ -8,7 +8,7 @@ CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-i
 CFLAGS  += -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DNTDDI_VERSION=0x0A000006 -D_CRT_SECURE_NO_WARNINGS -Icore -Iapp
 LDFLAGS ?= -static -static-libgcc
 CORE_LIBS = -lwinhttp -ladvapi32 -lole32
-APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32
+APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -lgdiplus
 
 CORE_SRC = $(wildcard core/*.c)
 APP_SRC  = $(wildcard app/*.c)

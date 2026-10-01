@@ -9,6 +9,34 @@
 #include <string.h>
 #include <uxtheme.h>
 
+// The GDI+ flat API this file uses, declared here because the Windows SDK's gdiplus.h is C++ only.
+typedef int GpStatus;
+typedef DWORD ARGB;
+typedef struct GpGraphics GpGraphics;
+typedef struct GpBrush GpBrush;
+typedef struct GpSolidFill GpSolidFill;
+typedef struct GpPath GpPath;
+typedef struct GpPen GpPen;
+typedef struct { UINT32 GdiplusVersion; void *DebugEventCallback; BOOL SuppressBackgroundThread, SuppressExternalCodecs; } GdiplusStartupInput;
+enum { Ok = 0, SmoothingModeAntiAlias8x8 = 5, PixelOffsetModeHalf = 4, FillModeAlternate = 0, UnitPixel = 2 };
+GpStatus WINAPI GdiplusStartup(ULONG_PTR *token, const GdiplusStartupInput *input, void *output);
+GpStatus WINAPI GdipCreateFromHDC(HDC hdc, GpGraphics **graphics);
+GpStatus WINAPI GdipDeleteGraphics(GpGraphics *graphics);
+GpStatus WINAPI GdipSetSmoothingMode(GpGraphics *graphics, int mode);
+GpStatus WINAPI GdipSetPixelOffsetMode(GpGraphics *graphics, int mode);
+GpStatus WINAPI GdipCreateSolidFill(ARGB color, GpSolidFill **brush);
+GpStatus WINAPI GdipDeleteBrush(GpBrush *brush);
+GpStatus WINAPI GdipCreatePen1(ARGB color, float width, int unit, GpPen **pen);
+GpStatus WINAPI GdipDeletePen(GpPen *pen);
+GpStatus WINAPI GdipCreatePath(int fill_mode, GpPath **path);
+GpStatus WINAPI GdipDeletePath(GpPath *path);
+GpStatus WINAPI GdipAddPathArc(GpPath *path, float x, float y, float width, float height, float start, float sweep);
+GpStatus WINAPI GdipClosePathFigure(GpPath *path);
+GpStatus WINAPI GdipFillPath(GpGraphics *graphics, GpBrush *brush, GpPath *path);
+GpStatus WINAPI GdipFillRectangle(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
+GpStatus WINAPI GdipFillEllipse(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
+GpStatus WINAPI GdipDrawEllipse(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height);
+
 Palette theme;
 static HFONT fonts[FONT_COUNT];
 static int current_dpi = 96;
@@ -106,7 +134,12 @@ void theme_set_dpi(int dpi) {
     fonts[FONT_EMOJI_HUGE] = make_font(emoji, 26, FW_NORMAL, false);
 }
 
-void theme_init(void) { theme_refresh(); theme_set_dpi(96); }
+void theme_init(void) {
+    static ULONG_PTR gdiplus_token;
+    GdiplusStartupInput input = { .GdiplusVersion = 1 };
+    GdiplusStartup(&gdiplus_token, &input, NULL);
+    theme_refresh(); theme_set_dpi(96);
+}
 int theme_dpi(void) { return current_dpi; }
 int px(int units) { return MulDiv(units, current_dpi, 96); }
 HFONT font(FontId id) { return fonts[id]; }
@@ -135,28 +168,69 @@ void fill_rect(HDC hdc, const RECT *rc, COLORREF color) {
     FillRect(hdc, rc, brush);
     DeleteObject(brush);
 }
+// Curves go through GDI+ so their edges are anti-aliased like the dashboard's; plain GDI fills a pixel or doesn't.
+static ARGB argb(COLORREF c) { return 0xFF000000u | ((ARGB)GetRValue(c) << 16) | ((ARGB)GetGValue(c) << 8) | GetBValue(c); }
+
+static GpGraphics *smooth_graphics(HDC hdc) {
+    GpGraphics *g = NULL;
+    if (GdipCreateFromHDC(hdc, &g) != Ok) return NULL;
+    GdipSetSmoothingMode(g, SmoothingModeAntiAlias8x8);
+    GdipSetPixelOffsetMode(g, PixelOffsetModeHalf);   // pixel edges on whole coordinates, as GDI has them
+    return g;
+}
+
+static void fill_round_path(GpGraphics *g, float l, float t, float r, float b, float radius, COLORREF color) {
+    if (r <= l || b <= t) return;
+    GpSolidFill *brush = NULL;
+    GdipCreateSolidFill(argb(color), &brush);
+    float max = fminf(r - l, b - t) / 2;
+    if (radius > max) radius = max;
+    if (radius <= 0) GdipFillRectangle(g, (GpBrush *)brush, l, t, r - l, b - t);
+    else {
+        GpPath *path = NULL;
+        GdipCreatePath(FillModeAlternate, &path);
+        float d = radius * 2;
+        GdipAddPathArc(path, l, t, d, d, 180, 90);
+        GdipAddPathArc(path, r - d, t, d, d, 270, 90);
+        GdipAddPathArc(path, r - d, b - d, d, d, 0, 90);
+        GdipAddPathArc(path, l, b - d, d, d, 90, 90);
+        GdipClosePathFigure(path);
+        GdipFillPath(g, (GpBrush *)brush, path);
+        GdipDeletePath(path);
+    }
+    GdipDeleteBrush((GpBrush *)brush);
+}
+
 void fill_round_rect(HDC hdc, const RECT *rc, int radius, COLORREF fill, COLORREF border) {
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = border == fill ? CreatePen(PS_SOLID, 1, fill) : CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ old_brush = SelectObject(hdc, brush), old_pen = SelectObject(hdc, pen);
-    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, radius * 2, radius * 2);
-    SelectObject(hdc, old_brush); SelectObject(hdc, old_pen);
-    DeleteObject(brush); DeleteObject(pen);
+    GpGraphics *g = smooth_graphics(hdc);
+    if (!g) return;
+    // A 1px border is the outer shape in the border colour with the inner shape filled over it, so it stays crisp.
+    float l = (float)rc->left, t = (float)rc->top, r = (float)rc->right, b = (float)rc->bottom;
+    if (border == fill) fill_round_path(g, l, t, r, b, (float)radius, fill);
+    else {
+        fill_round_path(g, l, t, r, b, (float)radius, border);
+        fill_round_path(g, l + 1, t + 1, r - 1, b - 1, (float)radius - 1, fill);
+    }
+    GdipDeleteGraphics(g);
 }
 void fill_circle(HDC hdc, int cx, int cy, int radius, COLORREF fill) {
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = CreatePen(PS_SOLID, 1, fill);
-    HGDIOBJ old_brush = SelectObject(hdc, brush), old_pen = SelectObject(hdc, pen);
-    Ellipse(hdc, cx - radius, cy - radius, cx + radius + 1, cy + radius + 1);
-    SelectObject(hdc, old_brush); SelectObject(hdc, old_pen);
-    DeleteObject(brush); DeleteObject(pen);
+    GpGraphics *g = smooth_graphics(hdc);
+    if (!g) return;
+    GpSolidFill *brush = NULL;
+    GdipCreateSolidFill(argb(fill), &brush);
+    GdipFillEllipse(g, (GpBrush *)brush, (float)(cx - radius), (float)(cy - radius), (float)(radius * 2 + 1), (float)(radius * 2 + 1));
+    GdipDeleteBrush((GpBrush *)brush);
+    GdipDeleteGraphics(g);
 }
 void stroke_circle(HDC hdc, int cx, int cy, int radius, COLORREF color, int width) {
-    HPEN pen = CreatePen(PS_SOLID, width, color);
-    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH)), old_pen = SelectObject(hdc, pen);
-    Ellipse(hdc, cx - radius, cy - radius, cx + radius + 1, cy + radius + 1);
-    SelectObject(hdc, old_brush); SelectObject(hdc, old_pen);
-    DeleteObject(pen);
+    GpGraphics *g = smooth_graphics(hdc);
+    if (!g) return;
+    GpPen *pen = NULL;
+    GdipCreatePen1(argb(color), (float)width, UnitPixel, &pen);
+    float inset = width / 2.0f;
+    GdipDrawEllipse(g, pen, cx - radius + inset, cy - radius + inset, radius * 2 + 1 - width, radius * 2 + 1 - width);
+    GdipDeletePen(pen);
+    GdipDeleteGraphics(g);
 }
 void draw_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color) {
     HPEN pen = CreatePen(PS_SOLID, 1, color);
