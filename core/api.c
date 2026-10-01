@@ -316,6 +316,16 @@ static const ApiRoute ROUTES[] = {
     { "update_project", "PUT", "settings/projects/{id}" },
     { "delete_project", "DELETE", "settings/projects/{id}" },
     { "order_projects", "PUT", "settings/projects/order" },
+    // The providers sessions start on: every row, its connection and quota, its login, and a probe of an endpoint.
+    { "settings_providers", "GET", "settings/providers" },
+    { "create_provider", "POST", "settings/providers" },
+    { "update_provider", "PUT", "settings/providers/{id}" },
+    { "delete_provider", "DELETE", "settings/providers/{id}" },
+    { "test_provider", "POST", "settings/providers/test" },
+    { "provider_status", "GET", "settings/providers/{id}/status" },
+    { "provider_login", "POST", "settings/providers/{id}/login" },
+    { "provider_login_start", "POST", "settings/providers/{id}/login/start" },
+    { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];

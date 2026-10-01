@@ -60,6 +60,8 @@ void draw_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color);
 void draw_dashed_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color);
 /// A line `width` pixels thick with round ends, through the centres of its end pixels.
 void draw_thick_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color, int width);
+/// A checked checkbox's tick, drawn in the middle of its box.
+void draw_check_mark(Canvas *cv, const RECT *rc, COLORREF color);
 /// A 1px dotted outline of a rounded rectangle.
 void stroke_dotted_round_rect(Canvas *cv, const RECT *rc, int radius, COLORREF color);
 /// Draws UTF-8 text; DT_ flags as for DrawText (alignment, single line, word break, ellipses, no clip). Returns the height drawn.

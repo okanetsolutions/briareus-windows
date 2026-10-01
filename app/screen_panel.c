@@ -296,7 +296,7 @@ static void paint_checkbox(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     bool on = it->arg != 0;
     fill_round_rect(cv, rc, px(3), on ? theme.accent : theme.field, on ? theme.accent : theme.line_strong);
-    if (on) draw_glyph(cv, 0xE73E, rc, FONT_ICON_SMALL, theme.on_accent);
+    if (on) draw_check_mark(cv, rc, theme.on_accent);
 }
 static void paint_swatch(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
