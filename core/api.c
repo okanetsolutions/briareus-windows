@@ -326,6 +326,12 @@ static const ApiRoute ROUTES[] = {
     { "provider_login", "POST", "settings/providers/{id}/login" },
     { "provider_login_start", "POST", "settings/providers/{id}/login/start" },
     { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
+    // The database pool: the servers sessions claim one at a time, and a probe of one as its form holds it.
+    { "settings_db_servers", "GET", "settings/db-servers" },
+    { "create_db_server", "POST", "settings/db-servers" },
+    { "update_db_server", "PUT", "settings/db-servers/{id}" },
+    { "delete_db_server", "DELETE", "settings/db-servers/{id}" },
+    { "test_db_server", "POST", "settings/db-servers/test" },
     // The SSH servers agents may run commands on, each held to one project; also for an admin token.
     { "settings_ssh_servers", "GET", "settings/ssh/servers" },
     { "create_ssh_server", "POST", "settings/ssh/servers" },
