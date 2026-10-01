@@ -5,7 +5,9 @@
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
+#include "terminal.h"
 #include "theme.h"
+#include <stdio.h>
 #include <commctrl.h>
 #include <objbase.h>
 #include <stdlib.h>
@@ -242,8 +244,20 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         layout();
         return 0;
     }
-    case WM_CLOSE: DestroyWindow(hwnd); return 0;
+    case WM_CLOSE: {
+        // Open SSH sessions end with the app, so it asks first.
+        size_t live = 0;
+        for (size_t i = 0; i < term_count(); i++) if (term_running(term_at(i))) live++;
+        if (live) {
+            char message[160];
+            snprintf(message, sizeof message, "%zu SSH session%s still open; closing Briareus disconnects %s.", live, live == 1 ? " is" : "s are", live == 1 ? "it" : "them");
+            if (!app_confirm("Close Briareus?", message, "Close", true)) return 0;
+        }
+        DestroyWindow(hwnd);
+        return 0;
+    }
     case WM_DESTROY:
+        term_shutdown();
         media_stop();
         pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel);
         g_pairing = g_sidebar = g_detail = g_panel = NULL;
@@ -294,7 +308,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         if (m.message == WM_KEYDOWN && (GetKeyState(VK_MENU) & 0x8000) && m.wParam == VK_LEFT) {
             // Alt+Left goes back in whichever pane has the focus.
             HWND focus = GetFocus();
-            if (focus && (g_detail && (focus == pane_hwnd(g_detail) || IsChild(pane_hwnd(g_detail), focus)))) { SendMessageW(pane_hwnd(g_detail), WM_KEYDOWN, VK_LEFT, 0); continue; }
+            if (focus && !term_is_window(focus) && (g_detail && (focus == pane_hwnd(g_detail) || IsChild(pane_hwnd(g_detail), focus)))) { SendMessageW(pane_hwnd(g_detail), WM_KEYDOWN, VK_LEFT, 0); continue; }
         }
         TranslateMessage(&m);
         DispatchMessageW(&m);

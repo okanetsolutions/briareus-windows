@@ -248,6 +248,7 @@ void settings_projects_changed(int select_id) {
     projects_load(g_settings);
 }
 static void settings_ssh_changed(void) {
+    servers_ssh_changed();
     if (!g_settings) return;
     request_cancel(&g_settings->req_ssh);
     ssh_load(g_settings);
