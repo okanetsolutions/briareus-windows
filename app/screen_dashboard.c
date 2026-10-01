@@ -269,34 +269,34 @@ typedef struct { int chart; double value, max; char *tip; } BarData;
 typedef struct { int chart; char *title; } ChartTitle;
 static void bar_free(void *p) { BarData *d = p; free(d->tip); free(d); }
 static void title_free(void *p) { ChartTitle *d = p; free(d->title); free(d); }
-static void paint_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     BarData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered) fill_rect(hdc, rc, blend(theme.ink, theme.raise, 0.04));
+    if (hovered) fill_rect(cv, rc, blend(theme.ink, theme.raise, 0.04));
     if (d->value <= 0 || d->max <= 0) return;
     int full = rc->bottom - rc->top, h = (int)(d->value / d->max * full + 0.5);
     if (h < px(3)) h = px(3);
     RECT bar = { rc->left, rc->bottom - h, rc->right, rc->bottom };
     COLORREF color = hovered ? theme.accent : blend(theme.accent, theme.raise, 0.75);
     int r = px(4);
-    if (rc->right - rc->left < r * 2 || h < r * 2) { fill_rect(hdc, &bar, color); return; }
-    fill_round_rect(hdc, &bar, r, color, color);
+    if (rc->right - rc->left < r * 2 || h < r * 2) { fill_rect(cv, &bar, color); return; }
+    fill_round_rect(cv, &bar, r, color, color);
     RECT square = { bar.left, bar.top + r, bar.right, bar.bottom };   // `rounded-t-[4px]`: only the top is rounded
-    fill_rect(hdc, &square, color);
+    fill_rect(cv, &square, color);
 }
-static void paint_chart_title(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_chart_title(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ChartTitle *d = it->data;
     RECT t = *rc;
-    draw_text(hdc, d->title, &t, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->title, &t, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Item *h = doc->hover >= 0 ? doc_item(doc, doc->hover) : NULL;
     if (h && h->paint == paint_bar && ((BarData *)h->data)->chart == d->chart) {
         RECT r = *rc;
-        draw_text(hdc, ((BarData *)h->data)->tip, &r, FONT_CAPTION, theme.ink, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, ((BarData *)h->data)->tip, &r, FONT_CAPTION, theme.ink, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
-static void paint_axis_label(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_axis_label(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT t = *rc;
-    draw_text(hdc, it->text, &t, FONT_CAPTION2, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+    draw_text(cv, it->text, &t, FONT_CAPTION2, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
 }
 
 /// bucketChart: one bar per bucket the server's calendar has reached, `metric` high. False when there is nothing to plot.
@@ -320,7 +320,7 @@ static bool chart(Doc *doc, int x, int w, const Json *u, int chart_id, const cha
     int pad = px(12), ix = x + px(14), iw = w - px(28);
     int box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
     ChartTitle *t = xcalloc(1, sizeof *t); t->chart = chart_id; t->title = xstrdup(title);
-    doc_custom(doc, ix, iw, font_height(doc->hdc, FONT_CAPTION) + px(2), paint_chart_title, t, title_free, 0, 0);
+    doc_custom(doc, ix, iw, font_height(doc->cv, FONT_CAPTION) + px(2), paint_chart_title, t, title_free, 0, 0);
     doc_space(doc, px(10));
     int gap = px(2), plot = px(112), top = doc->y;
     int every = month ? (n > 12 ? 3 : 1) : 7;
@@ -352,14 +352,14 @@ static bool chart(Doc *doc, int x, int w, const Json *u, int chart_id, const cha
         it->data = d; it->free_data = bar_free; it->action = ACT_BAR;
         // A label under every nth column, and none that would run off the right edge.
         if (k % every == 0 && (k == 0 || ix + iw - left >= label_w)) {
-            RECT lr = { left, label_y, left + label_w < ix + iw ? left + label_w : ix + iw, label_y + font_height(doc->hdc, FONT_CAPTION2) };
+            RECT lr = { left, label_y, left + label_w < ix + iw ? left + label_w : ix + iw, label_y + font_height(doc->cv, FONT_CAPTION2) };
             int li = doc_add(doc, &lr, paint_axis_label);
             doc_item(doc, li)->text = xstrdup(name);
         }
         free(name);
         k++;
     }
-    doc->y = label_y + font_height(doc->hdc, FONT_CAPTION2);
+    doc->y = label_y + font_height(doc->cv, FONT_CAPTION2);
     doc_box_end(doc, box, pad);
     return true;
 }
@@ -395,7 +395,7 @@ static bool share_series(const Json *rows, Ring *ring, COLORREF *colors) {
     if (ring->count < 3) { for (size_t i = 0; i < n; i++) colors[i] = CLR_INVALID; return false; }
     return true;
 }
-static void paint_ring(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_ring(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     Ring *ring = it->data;
     // The web's 100-unit viewBox: radius 40, stroke 13, a 2-unit gap of surface between the arcs, starting at twelve.
@@ -405,7 +405,7 @@ static void paint_ring(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     double at = 0;
     for (int i = 0; i < ring->count; i++) {
         double sweep = ring->share[i] * 360 - gap;
-        stroke_arc(hdc, cx, cy, r, ring->color[i], stroke, -90 + at * 360, sweep > 0 ? sweep : 0);
+        stroke_arc(cv, cx, cy, r, ring->color[i], stroke, -90 + at * 360, sweep > 0 ? sweep : 0);
         at += ring->share[i];
     }
 }
@@ -432,43 +432,43 @@ typedef struct {
     bool head, on;
 } RowData;
 static void row_free(void *p) { RowData *d = p; for (int i = 0; i < d->n; i++) free(d->cell[i]); free(d->sub); free(d); }
-static void paint_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RowData *d = it->data;
     bool hovered = it->action && doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (d->on || hovered) fill_rect(hdc, rc, d->on ? theme.sunken : blend(theme.sunken, theme.raise, 0.6));
-    if (!d->head) draw_line(hdc, rc->left, rc->top, rc->right, rc->top, theme.line);
-    int line = font_height(hdc, d->font[0]);
+    if (d->on || hovered) fill_rect(cv, rc, d->on ? theme.sunken : blend(theme.sunken, theme.raise, 0.6));
+    if (!d->head) draw_line(cv, rc->left, rc->top, rc->right, rc->top, theme.line);
+    int line = font_height(cv, d->font[0]);
     for (int i = 0; i < d->n; i++) {
         RECT c = { rc->left + d->x[i], rc->top, rc->left + d->x[i] + d->w[i], rc->bottom };
         if (i == 0 && d->swatch != CLR_INVALID) {
             int s = px(8), cy = (rc->top + rc->bottom) / 2;
             RECT sw = { c.left, cy - s / 2, c.left + s, cy - s / 2 + s };
-            fill_round_rect(hdc, &sw, px(2), d->swatch, d->swatch);
+            fill_round_rect(cv, &sw, px(2), d->swatch, d->swatch);
             c.left += s + px(8);
         }
         if (i == d->bar_col) {
             // `flex items-center gap-2`: the track takes what the number leaves.
-            int nw = text_width(hdc, d->cell[i], d->font[i]);
+            int nw = text_width(cv, d->cell[i], d->font[i]);
             RECT t = { c.right - nw, c.top, c.right, c.bottom };
-            draw_text(hdc, d->cell[i], &t, d->font[i], d->color[i], DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            draw_text(cv, d->cell[i], &t, d->font[i], d->color[i], DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
             int cy = (rc->top + rc->bottom) / 2, th = px(6);
             RECT track = { c.left, cy - th / 2, c.right - nw - px(8), cy - th / 2 + th };
             if (track.right - track.left > th) {
-                fill_round_rect(hdc, &track, th / 2, theme.sunken, theme.sunken);
+                fill_round_rect(cv, &track, th / 2, theme.sunken, theme.sunken);
                 int fw = (int)((track.right - track.left) * d->bar + 0.5);
-                if (fw > 0) { RECT fill = track; fill.right = track.left + (fw > th ? fw : th); fill_round_rect(hdc, &fill, th / 2, d->bar_color, d->bar_color); }
+                if (fw > 0) { RECT fill = track; fill.right = track.left + (fw > th ? fw : th); fill_round_rect(cv, &fill, th / 2, d->bar_color, d->bar_color); }
             }
             continue;
         }
         if (i == 0 && d->sub) {
-            int sub_h = font_height(hdc, FONT_CAPTION), total = line + px(2) + sub_h;
+            int sub_h = font_height(cv, FONT_CAPTION), total = line + px(2) + sub_h;
             RECT a = { c.left, (rc->top + rc->bottom - total) / 2, c.right, 0 }; a.bottom = a.top + line;
-            draw_text(hdc, d->cell[i], &a, d->font[i], d->color[i], DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            draw_text(cv, d->cell[i], &a, d->font[i], d->color[i], DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
             RECT b = { c.left, a.bottom + px(2), c.right, a.bottom + px(2) + sub_h };
-            draw_text(hdc, d->sub, &b, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+            draw_text(cv, d->sub, &b, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
             continue;
         }
-        draw_text(hdc, d->cell[i], &c, d->font[i], d->color[i], d->align[i] | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, d->cell[i], &c, d->font[i], d->color[i], d->align[i] | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
 
@@ -500,8 +500,8 @@ static void table_emit(Doc *doc, int x, int w, Table *t, const int *actions, con
     for (int i = 0; i < t->n; i++) {
         if (t->fixed[i]) { width[i] = w * t->fixed[i] / 100; continue; }
         if (i == t->flex) continue;
-        int m = text_width(doc->hdc, t->head[i], t->head_font);
-        for (size_t r = 0; r < t->count; r++) { int cw = text_width(doc->hdc, t->rows[r]->cell[i], t->rows[r]->font[i]); if (cw > m) m = cw; }
+        int m = text_width(doc->cv, t->head[i], t->head_font);
+        for (size_t r = 0; r < t->count; r++) { int cw = text_width(doc->cv, t->rows[r]->cell[i], t->rows[r]->font[i]); if (cw > m) m = cw; }
         width[i] = m;
     }
     for (int i = 0; i < t->n; i++) used += width[i] + (i < t->n - 1 ? gap : 0);
@@ -515,7 +515,7 @@ static void table_emit(Doc *doc, int x, int w, Table *t, const int *actions, con
         head->x[i] = xs[i]; head->w[i] = width[i]; head->align[i] = t->align[i];
         head->cell[i] = xstrdup(t->head[i]); head->color[i] = t->head_color; head->font[i] = t->head_font;
     }
-    doc_custom(doc, x, w, font_height(doc->hdc, t->head_font) + px(10), paint_row, head, row_free, 0, 0);
+    doc_custom(doc, x, w, font_height(doc->cv, t->head_font) + px(10), paint_row, head, row_free, 0, 0);
     for (size_t r = 0; r < t->count; r++) {
         RowData *d = t->rows[r];
         for (int i = 0; i < t->n; i++) { d->x[i] = xs[i]; d->w[i] = width[i]; }

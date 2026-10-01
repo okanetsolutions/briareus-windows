@@ -1,4 +1,5 @@
 #include "dialogs.h"
+#include "canvas.h"
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
@@ -96,8 +97,14 @@ static void dialog_paint_frames(HWND dialog, const int *ids, size_t count) {
     for (size_t i = 0; i < count; i++) {
         HWND e = GetDlgItem(dialog, ids[i]);
         if (!e || !IsWindowVisible(e)) continue;
+        // Each frame is drawn on its own, since a borrowed canvas paints all of the rectangle it is given.
         RECT r = edit_frame_rect(dialog, e);
-        fill_round_rect(hdc, &r, px(9), theme.elevated, GetFocus() == e ? theme.accent : theme.border);
+        Canvas *cv = canvas_begin_dc(hdc, &r);
+        if (!cv) continue;
+        RECT local = { 0, 0, r.right - r.left, r.bottom - r.top };
+        fill_rect(cv, &local, theme.background);
+        fill_round_rect(cv, &local, px(9), theme.elevated, GetFocus() == e ? theme.accent : theme.border);
+        canvas_end_dc(cv);
     }
     EndPaint(dialog, &ps);
 }
@@ -110,17 +117,21 @@ static void dialog_invalidate_frame(HWND dialog, int id) {
 /// Buttons are owner-drawn as the app's: the one that goes ahead filled in the accent colour, the rest bordered.
 typedef enum { DIALOG_BUTTON_PROMINENT, DIALOG_BUTTON_BORDERED } DialogButtonStyle;
 static void dialog_draw_button(const DRAWITEMSTRUCT *di, DialogButtonStyle style) {
-    HDC hdc = di->hDC; RECT rc = di->rcItem;
+    RECT rc = di->rcItem;
     bool disabled = (di->itemState & ODS_DISABLED) != 0, pressed = (di->itemState & ODS_SELECTED) != 0, focused = (di->itemState & ODS_FOCUS) != 0;
     COLORREF fill, border, text;
     if (style == DIALOG_BUTTON_PROMINENT) { fill = disabled ? blend(theme.secondary, theme.background, 0.35) : theme.accent; border = fill; text = theme.white; }
     else { fill = theme.surface; border = focused ? theme.accent : theme.border; text = theme.text; }
     if (pressed) fill = blend(theme.text, fill, 0.12);
     if (disabled) text = blend(text, fill, 0.5);
-    fill_rect(hdc, &rc, theme.background);
-    fill_round_rect(hdc, &rc, px(6), fill, border);
+    Canvas *cv = canvas_begin_dc(di->hDC, &di->rcItem);
+    if (!cv) return;
+    OffsetRect(&rc, -rc.left, -rc.top);   // the canvas starts at the item's corner
+    fill_rect(cv, &rc, theme.background);
+    fill_round_rect(cv, &rc, px(6), fill, border);
     wchar_t label[64]; GetWindowTextW(di->hwndItem, label, 64);
-    draw_textw(hdc, label, &rc, FONT_SUBHEADLINE_SEMIBOLD, text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_textw(cv, label, &rc, FONT_SUBHEADLINE_SEMIBOLD, text, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    canvas_end_dc(cv);
 }
 static bool dialog_draw_item(WPARAM wp, LPARAM lp, int prominent_id) {
     (void)wp;

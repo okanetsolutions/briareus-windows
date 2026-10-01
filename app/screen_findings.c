@@ -588,9 +588,9 @@ static void layout_outcome(FindingsScreen *s, Doc *doc, int x, int w, size_t i) 
     int box = doc_box_begin(doc, x, w, px(8), theme.elevated, theme.border, px(8));
     doc_item(doc, box)->hover_fill = false;
     int ix = x + px(10), iw = w - px(20), close_w = px(22);
-    int tw = text_width(doc->hdc, o->title, FONT_CAPTION_SEMIBOLD) + px(2);
+    int tw = text_width(doc->cv, o->title, FONT_CAPTION_SEMIBOLD) + px(2);
     if (tw > iw / 2) tw = iw / 2;
-    int top = doc->y, lh = font_height(doc->hdc, FONT_CAPTION) + px(2);
+    int top = doc->y, lh = font_height(doc->cv, FONT_CAPTION) + px(2);
     RECT tr = { ix, top, ix + tw, top + lh };
     int ti = doc_text_at(doc, &tr, o->title, FONT_CAPTION_SEMIBOLD, theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     clickable(doc, ti, ACT_OUTCOME_SESSION, (intptr_t)i);
@@ -696,7 +696,7 @@ static void layout_round(FindingsScreen *s, Doc *doc, int x, int w, size_t r) {
     if (board_date_parse(json_str(json_get(held, "heldAt")), &held_at)) { char *when = format_event_time(held_at); str_appendf(&meta, " \xC2\xB7 held since %s", when); free(when); }
     const char *title = session_display_title(ses);
     int top = doc->y, th = px(22);
-    int tw = text_width(doc->hdc, title, FONT_BODY_SEMIBOLD) + px(4), mw = text_width(doc->hdc, meta.data, FONT_CAPTION) + px(4);
+    int tw = text_width(doc->cv, title, FONT_BODY_SEMIBOLD) + px(4), mw = text_width(doc->cv, meta.data, FONT_CAPTION) + px(4);
     if (tw + px(8) + mw <= iw) {
         RECT tr = { ix, top, ix + tw, top + th };
         int ti = doc_text_at(doc, &tr, title, FONT_BODY_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -794,7 +794,7 @@ static void layout_group(FindingsScreen *s, Doc *doc, int x, int w, const Group 
     char *heading = xstrfmt("%s \xC2\xB7 PR #%d \xE2\x86\x97", g->repo, g->pr);
     char *count = g->count > 1 ? xstrfmt("%zu finding%s across %zu reviews", findings, findings == 1 ? "" : "s", g->count) : xstrfmt("%zu finding%s", findings, findings == 1 ? "" : "s");
     int top = doc->y, h = px(22);
-    int hw = text_width(doc->hdc, heading, FONT_BODY_SEMIBOLD) + px(4);
+    int hw = text_width(doc->cv, heading, FONT_BODY_SEMIBOLD) + px(4);
     if (hw > w - px(80)) hw = w - px(80);
     RECT hr = { x, top, x + hw, top + h };
     int hi = doc_text_at(doc, &hr, heading, FONT_BODY_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
