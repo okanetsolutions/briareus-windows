@@ -1,4 +1,5 @@
 #include "theme.h"
+#include "canvas.h"
 #include "board.h"
 #include "str.h"
 #include <dwmapi.h>
@@ -8,35 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <uxtheme.h>
-
-// The GDI+ flat API this file uses, declared here because the Windows SDK's gdiplus.h is C++ only.
-typedef int GpStatus;
-typedef DWORD ARGB;
-typedef struct GpGraphics GpGraphics;
-typedef struct GpBrush GpBrush;
-typedef struct GpSolidFill GpSolidFill;
-typedef struct GpPath GpPath;
-typedef struct GpPen GpPen;
-typedef struct { UINT32 GdiplusVersion; void *DebugEventCallback; BOOL SuppressBackgroundThread, SuppressExternalCodecs; } GdiplusStartupInput;
-enum { Ok = 0, SmoothingModeAntiAlias8x8 = 5, PixelOffsetModeHalf = 4, FillModeAlternate = 0, UnitPixel = 2 };
-GpStatus WINAPI GdiplusStartup(ULONG_PTR *token, const GdiplusStartupInput *input, void *output);
-GpStatus WINAPI GdipCreateFromHDC(HDC hdc, GpGraphics **graphics);
-GpStatus WINAPI GdipDeleteGraphics(GpGraphics *graphics);
-GpStatus WINAPI GdipSetSmoothingMode(GpGraphics *graphics, int mode);
-GpStatus WINAPI GdipSetPixelOffsetMode(GpGraphics *graphics, int mode);
-GpStatus WINAPI GdipCreateSolidFill(ARGB color, GpSolidFill **brush);
-GpStatus WINAPI GdipDeleteBrush(GpBrush *brush);
-GpStatus WINAPI GdipCreatePen1(ARGB color, float width, int unit, GpPen **pen);
-GpStatus WINAPI GdipDeletePen(GpPen *pen);
-GpStatus WINAPI GdipCreatePath(int fill_mode, GpPath **path);
-GpStatus WINAPI GdipDeletePath(GpPath *path);
-GpStatus WINAPI GdipAddPathArc(GpPath *path, float x, float y, float width, float height, float start, float sweep);
-GpStatus WINAPI GdipClosePathFigure(GpPath *path);
-GpStatus WINAPI GdipFillPath(GpGraphics *graphics, GpBrush *brush, GpPath *path);
-GpStatus WINAPI GdipFillRectangle(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
-GpStatus WINAPI GdipFillEllipse(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
-GpStatus WINAPI GdipDrawEllipse(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height);
-GpStatus WINAPI GdipDrawArc(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height, float start, float sweep);
 
 Palette theme;
 static HFONT fonts[FONT_COUNT];
@@ -81,6 +53,11 @@ static HFONT make_font(const wchar_t *face, int pixels, int weight, bool italic)
     wcsncpy(lf.lfFaceName, face, LF_FACESIZE - 1);
     return CreateFontIndirectW(&lf);
 }
+/// A font for DirectWrite, which draws everything, and for GDI, which the Edit controls still use.
+static void set_font(FontId id, const wchar_t *face, int pixels, int weight, bool italic) {
+    fonts[id] = make_font(face, pixels, weight, italic);
+    canvas_set_font(id, face, pixels * current_dpi / 96.0f, weight, italic);
+}
 
 static bool font_exists(const wchar_t *face) {
     HDC hdc = GetDC(NULL);
@@ -101,44 +78,42 @@ void theme_set_dpi(int dpi) {
     const wchar_t *mono = font_exists(L"Cascadia Code") ? L"Cascadia Code" : font_exists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
     const wchar_t *icons = font_exists(L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
     const wchar_t *emoji = font_exists(L"Segoe UI Emoji") ? L"Segoe UI Emoji" : L"Segoe UI Symbol";
-    fonts[FONT_BODY] = make_font(ui, 15, FW_NORMAL, false);
-    fonts[FONT_BODY_MEDIUM] = make_font(ui, 15, FW_MEDIUM, false);
-    fonts[FONT_BODY_SEMIBOLD] = make_font(ui, 15, FW_SEMIBOLD, false);
-    fonts[FONT_HEADLINE] = make_font(ui, 15, FW_SEMIBOLD, false);
-    fonts[FONT_SUBHEADLINE] = make_font(ui, 14, FW_NORMAL, false);
-    fonts[FONT_SUBHEADLINE_SEMIBOLD] = make_font(ui, 14, FW_SEMIBOLD, false);
-    fonts[FONT_TITLE3] = make_font(ui, 17, FW_SEMIBOLD, false);
-    fonts[FONT_LARGE_TITLE] = make_font(ui, 26, FW_SEMIBOLD, false);
-    fonts[FONT_CALLOUT] = make_font(ui, 14, FW_NORMAL, false);
-    fonts[FONT_FOOTNOTE] = make_font(ui, 13, FW_NORMAL, false);
-    fonts[FONT_CAPTION] = make_font(ui, 12, FW_NORMAL, false);
-    fonts[FONT_CAPTION_MEDIUM] = make_font(ui, 12, FW_MEDIUM, false);
-    fonts[FONT_CAPTION_SEMIBOLD] = make_font(ui, 12, FW_SEMIBOLD, false);
-    fonts[FONT_CAPTION2] = make_font(ui, 11, FW_NORMAL, false);
-    fonts[FONT_BODY_ITALIC] = make_font(ui, 15, FW_NORMAL, true);
-    fonts[FONT_CALLOUT_ITALIC] = make_font(ui, 14, FW_NORMAL, true);
-    fonts[FONT_FOOTNOTE_SEMIBOLD] = make_font(ui, 13, FW_SEMIBOLD, false);
-    fonts[FONT_SUBHEADLINE_ITALIC] = make_font(ui, 14, FW_NORMAL, true);
-    fonts[FONT_MONO] = make_font(mono, 13, FW_NORMAL, false);
-    fonts[FONT_MONO_SMALL] = make_font(mono, 12, FW_NORMAL, false);
-    fonts[FONT_MONO_CAPTION2] = make_font(mono, 11, FW_NORMAL, false);
-    fonts[FONT_ICON] = make_font(icons, 14, FW_NORMAL, false);
-    fonts[FONT_ICON_SMALL] = make_font(icons, 12, FW_NORMAL, false);
-    fonts[FONT_ICON_LARGE] = make_font(icons, 20, FW_NORMAL, false);
-    fonts[FONT_ICON_HUGE] = make_font(icons, 34, FW_NORMAL, false);
-    fonts[FONT_SERIF_MONOGRAM] = make_font(ui, 17, FW_SEMIBOLD, false);
-    fonts[FONT_TINY_SEMIBOLD] = make_font(ui, 10, FW_SEMIBOLD, false);
-    fonts[FONT_TITLE] = make_font(ui, 23, FW_SEMIBOLD, false);
-    fonts[FONT_STAT] = make_font(ui, 22, FW_SEMIBOLD, false);
-    fonts[FONT_EMOJI] = make_font(emoji, 13, FW_NORMAL, false);
-    fonts[FONT_EMOJI_LARGE] = make_font(emoji, 15, FW_NORMAL, false);
-    fonts[FONT_EMOJI_HUGE] = make_font(emoji, 26, FW_NORMAL, false);
+    set_font(FONT_BODY, ui, 15, FW_NORMAL, false);
+    set_font(FONT_BODY_MEDIUM, ui, 15, FW_MEDIUM, false);
+    set_font(FONT_BODY_SEMIBOLD, ui, 15, FW_SEMIBOLD, false);
+    set_font(FONT_HEADLINE, ui, 15, FW_SEMIBOLD, false);
+    set_font(FONT_SUBHEADLINE, ui, 14, FW_NORMAL, false);
+    set_font(FONT_SUBHEADLINE_SEMIBOLD, ui, 14, FW_SEMIBOLD, false);
+    set_font(FONT_TITLE3, ui, 17, FW_SEMIBOLD, false);
+    set_font(FONT_LARGE_TITLE, ui, 26, FW_SEMIBOLD, false);
+    set_font(FONT_CALLOUT, ui, 14, FW_NORMAL, false);
+    set_font(FONT_FOOTNOTE, ui, 13, FW_NORMAL, false);
+    set_font(FONT_CAPTION, ui, 12, FW_NORMAL, false);
+    set_font(FONT_CAPTION_MEDIUM, ui, 12, FW_MEDIUM, false);
+    set_font(FONT_CAPTION_SEMIBOLD, ui, 12, FW_SEMIBOLD, false);
+    set_font(FONT_CAPTION2, ui, 11, FW_NORMAL, false);
+    set_font(FONT_BODY_ITALIC, ui, 15, FW_NORMAL, true);
+    set_font(FONT_CALLOUT_ITALIC, ui, 14, FW_NORMAL, true);
+    set_font(FONT_FOOTNOTE_SEMIBOLD, ui, 13, FW_SEMIBOLD, false);
+    set_font(FONT_SUBHEADLINE_ITALIC, ui, 14, FW_NORMAL, true);
+    set_font(FONT_MONO, mono, 13, FW_NORMAL, false);
+    set_font(FONT_MONO_SMALL, mono, 12, FW_NORMAL, false);
+    set_font(FONT_MONO_CAPTION2, mono, 11, FW_NORMAL, false);
+    set_font(FONT_ICON, icons, 14, FW_NORMAL, false);
+    set_font(FONT_ICON_SMALL, icons, 12, FW_NORMAL, false);
+    set_font(FONT_ICON_LARGE, icons, 20, FW_NORMAL, false);
+    set_font(FONT_ICON_HUGE, icons, 34, FW_NORMAL, false);
+    set_font(FONT_SERIF_MONOGRAM, ui, 17, FW_SEMIBOLD, false);
+    set_font(FONT_TINY_SEMIBOLD, ui, 10, FW_SEMIBOLD, false);
+    set_font(FONT_TITLE, ui, 23, FW_SEMIBOLD, false);
+    set_font(FONT_STAT, ui, 22, FW_SEMIBOLD, false);
+    set_font(FONT_EMOJI, emoji, 13, FW_NORMAL, false);
+    set_font(FONT_EMOJI_LARGE, emoji, 15, FW_NORMAL, false);
+    set_font(FONT_EMOJI_HUGE, emoji, 26, FW_NORMAL, false);
 }
 
 void theme_init(void) {
-    static ULONG_PTR gdiplus_token;
-    GdiplusStartupInput input = { .GdiplusVersion = 1 };
-    GdiplusStartup(&gdiplus_token, &input, NULL);
+    canvas_startup();
     theme_refresh(); theme_set_dpi(96);
 }
 int theme_dpi(void) { return current_dpi; }
@@ -163,184 +138,54 @@ COLORREF blend(COLORREF color, COLORREF background, double alpha) {
 }
 
 // MARK: - Drawing
+// The primitives (rectangles, curves, lines, text) are Direct2D's, in canvas.cpp; these are the dashboard's pieces built on them.
 
-void fill_rect(HDC hdc, const RECT *rc, COLORREF color) {
-    HBRUSH brush = CreateSolidBrush(color);
-    FillRect(hdc, rc, brush);
-    DeleteObject(brush);
-}
-// Curves go through GDI+ so their edges are anti-aliased like the dashboard's; plain GDI fills a pixel or doesn't.
-static ARGB argb(COLORREF c) { return 0xFF000000u | ((ARGB)GetRValue(c) << 16) | ((ARGB)GetGValue(c) << 8) | GetBValue(c); }
-
-static GpGraphics *smooth_graphics(HDC hdc) {
-    GpGraphics *g = NULL;
-    if (GdipCreateFromHDC(hdc, &g) != Ok) return NULL;
-    GdipSetSmoothingMode(g, SmoothingModeAntiAlias8x8);
-    GdipSetPixelOffsetMode(g, PixelOffsetModeHalf);   // pixel edges on whole coordinates, as GDI has them
-    return g;
-}
-
-static void fill_round_path(GpGraphics *g, float l, float t, float r, float b, float radius, COLORREF color) {
-    if (r <= l || b <= t) return;
-    GpSolidFill *brush = NULL;
-    GdipCreateSolidFill(argb(color), &brush);
-    float max = fminf(r - l, b - t) / 2;
-    if (radius > max) radius = max;
-    if (radius <= 0) GdipFillRectangle(g, (GpBrush *)brush, l, t, r - l, b - t);
-    else {
-        GpPath *path = NULL;
-        GdipCreatePath(FillModeAlternate, &path);
-        float d = radius * 2;
-        GdipAddPathArc(path, l, t, d, d, 180, 90);
-        GdipAddPathArc(path, r - d, t, d, d, 270, 90);
-        GdipAddPathArc(path, r - d, b - d, d, d, 0, 90);
-        GdipAddPathArc(path, l, b - d, d, d, 90, 90);
-        GdipClosePathFigure(path);
-        GdipFillPath(g, (GpBrush *)brush, path);
-        GdipDeletePath(path);
-    }
-    GdipDeleteBrush((GpBrush *)brush);
-}
-
-void fill_round_rect(HDC hdc, const RECT *rc, int radius, COLORREF fill, COLORREF border) {
-    GpGraphics *g = smooth_graphics(hdc);
-    if (!g) return;
-    // A 1px border is the outer shape in the border colour with the inner shape filled over it, so it stays crisp.
-    float l = (float)rc->left, t = (float)rc->top, r = (float)rc->right, b = (float)rc->bottom;
-    if (border == fill) fill_round_path(g, l, t, r, b, (float)radius, fill);
-    else {
-        fill_round_path(g, l, t, r, b, (float)radius, border);
-        fill_round_path(g, l + 1, t + 1, r - 1, b - 1, (float)radius - 1, fill);
-    }
-    GdipDeleteGraphics(g);
-}
-void fill_circle(HDC hdc, int cx, int cy, int radius, COLORREF fill) {
-    GpGraphics *g = smooth_graphics(hdc);
-    if (!g) return;
-    GpSolidFill *brush = NULL;
-    GdipCreateSolidFill(argb(fill), &brush);
-    GdipFillEllipse(g, (GpBrush *)brush, (float)(cx - radius), (float)(cy - radius), (float)(radius * 2 + 1), (float)(radius * 2 + 1));
-    GdipDeleteBrush((GpBrush *)brush);
-    GdipDeleteGraphics(g);
-}
-void stroke_circle(HDC hdc, int cx, int cy, int radius, COLORREF color, int width) {
-    GpGraphics *g = smooth_graphics(hdc);
-    if (!g) return;
-    GpPen *pen = NULL;
-    GdipCreatePen1(argb(color), (float)width, UnitPixel, &pen);
-    float inset = width / 2.0f;
-    GdipDrawEllipse(g, pen, cx - radius + inset, cy - radius + inset, radius * 2 + 1 - width, radius * 2 + 1 - width);
-    GdipDeletePen(pen);
-    GdipDeleteGraphics(g);
-}
-void stroke_arc(HDC hdc, int cx, int cy, int radius, COLORREF color, int width, double start, double sweep) {
-    if (sweep <= 0) return;
-    GpGraphics *g = smooth_graphics(hdc);
-    if (!g) return;
-    GpPen *pen = NULL;
-    GdipCreatePen1(argb(color), (float)width, UnitPixel, &pen);
-    GdipDrawArc(g, pen, (float)(cx - radius), (float)(cy - radius), (float)(radius * 2), (float)(radius * 2), (float)start, (float)sweep);
-    GdipDeletePen(pen);
-    GdipDeleteGraphics(g);
-}
-void draw_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color) {
-    HPEN pen = CreatePen(PS_SOLID, 1, color);
-    HGDIOBJ old = SelectObject(hdc, pen);
-    MoveToEx(hdc, x1, y1, NULL); LineTo(hdc, x2, y2);
-    SelectObject(hdc, old); DeleteObject(pen);
-}
-void draw_dashed_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color) {
-    // Three on, three off, as a browser dashes a 1px border.
-    int step = px(3);
-    HPEN pen = CreatePen(PS_SOLID, 1, color);
-    HGDIOBJ old = SelectObject(hdc, pen);
-    for (int x = x1; x < x2; x += step * 2) { MoveToEx(hdc, x, y1, NULL); LineTo(hdc, x + step < x2 ? x + step : x2, y2); }
-    SelectObject(hdc, old); DeleteObject(pen);
-}
-
-int draw_textw(HDC hdc, const wchar_t *text, RECT *rc, FontId f, COLORREF color, UINT flags) {
-    HFONT old = SelectObject(hdc, fonts[f]);
-    SetTextColor(hdc, color); SetBkMode(hdc, TRANSPARENT);
-    int h = DrawTextW(hdc, text, -1, rc, flags | DT_NOPREFIX);
-    SelectObject(hdc, old);
-    return h;
-}
-int draw_text(HDC hdc, const char *text, RECT *rc, FontId f, COLORREF color, UINT flags) {
+int draw_text(Canvas *cv, const char *text, RECT *rc, FontId f, COLORREF color, UINT flags) {
     wchar_t *w = utf8_to_wide(text ? text : "");
-    int h = draw_textw(hdc, w, rc, f, color, flags);
+    int h = draw_textw(cv, w, rc, f, color, flags);
     free(w);
     return h;
 }
-int measure_text(HDC hdc, const char *text, int width, FontId f, UINT flags) {
-    wchar_t *w = utf8_to_wide(text ? text : "");
-    RECT rc = { 0, 0, width > 0 ? width : 100000, 0 };
-    HFONT old = SelectObject(hdc, fonts[f]);
-    int h = DrawTextW(hdc, *w ? w : L" ", -1, &rc, flags | DT_CALCRECT | DT_NOPREFIX | (width > 0 ? DT_WORDBREAK | DT_EDITCONTROL : 0));
-    SelectObject(hdc, old);
-    free(w);
-    return h > 0 ? h : rc.bottom - rc.top;
-}
-int textw_width(HDC hdc, const wchar_t *text, FontId f) {
-    HFONT old = SelectObject(hdc, fonts[f]);
-    SIZE size = { 0, 0 };
-    GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &size);
-    SelectObject(hdc, old);
-    return size.cx;
-}
-int text_width(HDC hdc, const char *text, FontId f) {
-    wchar_t *w = utf8_to_wide(text ? text : "");
-    int width = textw_width(hdc, w, f);
-    free(w);
-    return width;
-}
-int font_height(HDC hdc, FontId f) {
-    HFONT old = SelectObject(hdc, fonts[f]);
-    TEXTMETRICW tm; GetTextMetricsW(hdc, &tm);
-    SelectObject(hdc, old);
-    return tm.tmHeight;
-}
-void draw_glyph(HDC hdc, wchar_t glyph, const RECT *rc, FontId f, COLORREF color) {
+void draw_glyph(Canvas *cv, wchar_t glyph, const RECT *rc, FontId f, COLORREF color) {
     wchar_t text[2] = { glyph, 0 };
     RECT r = *rc;
-    draw_textw(hdc, text, &r, f, color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_textw(cv, text, &r, f, color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
-void draw_status_dot(HDC hdc, int cx, int cy, const char *status) {
+void draw_status_dot(Canvas *cv, int cx, int cy, const char *status) {
     COLORREF color = theme_status_color(status);
     int r = px(7) / 2;
-    fill_circle(hdc, cx, cy, r, color);
+    fill_circle(cv, cx, cy, r, color);
 }
-int draw_badge(HDC hdc, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height) {
-    HDC measure = hdc ? hdc : GetDC(NULL);
-    int h = font_height(measure, FONT_CAPTION2) + px(4);
+int draw_badge(Canvas *cv, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height) {
+    int h = font_height(cv, FONT_CAPTION2) + px(4);
     int glyph_w = glyph ? px(11) : 0;
-    int text_w = text_width(measure, text, FONT_CAPTION2);
+    int text_w = text_width(cv, text, FONT_CAPTION2);
     int w = px(6) * 2 + glyph_w + (glyph && text && *text ? px(3) : 0) + text_w + 2;
-    if (hdc) {
+    if (cv) {
         RECT rc = { x, y, x + w, y + h };
-        fill_round_rect(hdc, &rc, px(5), background, color == theme.muted ? theme.line : color);
+        fill_round_rect(cv, &rc, px(5), background, color == theme.muted ? theme.line : color);
         int cx = x + px(6);
-        if (glyph) { RECT g = { cx, y, cx + glyph_w, y + h }; draw_glyph(hdc, glyph, &g, FONT_ICON_SMALL, color); cx += glyph_w + px(3); }
+        if (glyph) { RECT g = { cx, y, cx + glyph_w, y + h }; draw_glyph(cv, glyph, &g, FONT_ICON_SMALL, color); cx += glyph_w + px(3); }
         RECT t = { cx, y, cx + text_w + 2, y + h };
-        draw_text(hdc, text, &t, FONT_CAPTION2, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    } else ReleaseDC(NULL, measure);
+        draw_text(cv, text, &t, FONT_CAPTION2, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
     if (height) *height = h;
     return w;
 }
-int draw_chip(HDC hdc, int x, int y, const char *name, COLORREF color, COLORREF background, int *height) {
-    HDC measure = hdc ? hdc : GetDC(NULL);
-    int h = font_height(measure, FONT_CAPTION2) + px(4);
-    int text_w = text_width(measure, name, FONT_CAPTION2);
+int draw_chip(Canvas *cv, int x, int y, const char *name, COLORREF color, COLORREF background, int *height) {
+    int h = font_height(cv, FONT_CAPTION2) + px(4);
+    int text_w = text_width(cv, name, FONT_CAPTION2);
     int w = px(6) * 2 + text_w + 2;
-    if (hdc) {
+    if (cv) {
         RECT rc = { x, y, x + w, y + h };
-        fill_round_rect(hdc, &rc, h / 2, background, color);
+        fill_round_rect(cv, &rc, h / 2, background, color);
         RECT t = { x + px(6), y, x + w - px(4), y + h };
-        draw_text(hdc, name, &t, FONT_CAPTION2, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    } else ReleaseDC(NULL, measure);
+        draw_text(cv, name, &t, FONT_CAPTION2, color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
     if (height) *height = h;
     return w;
 }
-void draw_monogram(HDC hdc, int x, int y, int size, const char *text) {
+void draw_monogram(Canvas *cv, int x, int y, int size, const char *text) {
     const char *slash = text ? strrchr(text, '/') : NULL;
     const char *start = slash && slash[1] ? slash + 1 : (text ? text : "?");
     wchar_t *w = utf8_to_wide(start);
@@ -348,8 +193,8 @@ void draw_monogram(HDC hdc, int x, int y, int size, const char *text) {
     free(w);
     RECT rc = { x, y, x + size, y + size };
     COLORREF fill = blend(theme.accent, theme.background, 0.15);
-    fill_round_rect(hdc, &rc, size * 28 / 100, fill, fill);
-    draw_textw(hdc, letter, &rc, FONT_SERIF_MONOGRAM, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_round_rect(cv, &rc, size * 28 / 100, fill, fill);
+    draw_textw(cv, letter, &rc, FONT_SERIF_MONOGRAM, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 static const wchar_t *const glyphs[] = { L"·", L"✢", L"✳", L"✶", L"✻", L"✽", L"✻", L"✶", L"✳", L"✢" };

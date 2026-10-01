@@ -191,20 +191,20 @@ static void file_mark(const PullFile *file, MarkData *m) {
 /// A row of the tree: a chevron and folder for a directory, the status mark for a file, then the name.
 typedef struct { char *name; int depth; bool dir, open, selected; MarkData mark; } RowData;
 static void row_free(void *p) { RowData *d = p; free(d->name); free(d); }
-static void paint_tree_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_tree_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RowData *d = it->data;
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
-    if (d->selected || hovered) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(hdc, &h, px(6), d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise, d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise); }
+    if (d->selected || hovered) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(cv, &h, px(6), d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise, d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise); }
     int x = rc->left + px(6) + d->depth * px(16);
     if (d->dir) {
-        RECT c = { x, rc->top, x + px(14), rc->bottom }; draw_glyph(hdc, d->open ? 0xE70D : 0xE76C, &c, FONT_ICON_SMALL, theme.muted); x += px(16);
-        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, 0xE8B7, &g, FONT_ICON_SMALL, theme.accent); x += px(20);
+        RECT c = { x, rc->top, x + px(14), rc->bottom }; draw_glyph(cv, d->open ? 0xE70D : 0xE76C, &c, FONT_ICON_SMALL, theme.muted); x += px(16);
+        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(cv, 0xE8B7, &g, FONT_ICON_SMALL, theme.accent); x += px(20);
     } else {
         x += px(16);
-        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, d->mark.glyph, &g, FONT_ICON_SMALL, d->mark.color); x += px(20);
+        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(cv, d->mark.glyph, &g, FONT_ICON_SMALL, d->mark.color); x += px(20);
     }
     RECT t = { x, rc->top, rc->right - px(6), rc->bottom };
-    draw_text(hdc, d->name, &t, d->selected ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+    draw_text(cv, d->name, &t, d->selected ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
 }
 
 static void layout_tree_node(PullFiles *f, Doc *doc, int index, int x, int w) {
@@ -233,51 +233,51 @@ static void layout_tree(PullFiles *f, Doc *doc, int x, int w) {
 }
 
 typedef struct { DiffLine *line; bool wrap; } DiffRowData;
-static void paint_diff_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_diff_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     DiffRowData *d = it->data;
     DiffLine *l = d->line;
     if (l->kind == DIFF_HUNK || l->kind == DIFF_NOTE) {
-        if (l->kind == DIFF_HUNK) fill_rect(hdc, rc, blend(theme.accent, theme.raise, 0.08));
+        if (l->kind == DIFF_HUNK) fill_rect(cv, rc, blend(theme.accent, theme.raise, 0.08));
         RECT t = { rc->left + px(12), rc->top, rc->right - px(12), rc->bottom };
-        draw_text(hdc, l->text, &t, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE) | DT_NOCLIP);
+        draw_text(cv, l->text, &t, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE) | DT_NOCLIP);
         return;
     }
     COLORREF tint = l->kind == DIFF_ADDED ? theme.success : l->kind == DIFF_REMOVED ? theme.danger : theme.raise;
-    if (l->kind != DIFF_CONTEXT) fill_rect(hdc, rc, blend(tint, theme.raise, 0.13));
+    if (l->kind != DIFF_CONTEXT) fill_rect(cv, rc, blend(tint, theme.raise, 0.13));
     char number[16] = "";
     int n = l->new_line ? l->new_line : l->old_line;
     if (n) snprintf(number, sizeof number, "%d", n);
     RECT nr = { rc->left, rc->top, rc->left + px(40), rc->bottom };
-    draw_text(hdc, number, &nr, FONT_MONO_CAPTION2, theme.tertiary, DT_RIGHT | DT_TOP | DT_SINGLELINE);
+    draw_text(cv, number, &nr, FONT_MONO_CAPTION2, theme.tertiary, DT_RIGHT | DT_TOP | DT_SINGLELINE);
     const char *sign = l->kind == DIFF_ADDED ? "+" : l->kind == DIFF_REMOVED ? "\xE2\x88\x92" : " ";
     RECT sr = { rc->left + px(48), rc->top, rc->left + px(60), rc->bottom };
-    draw_text(hdc, sign, &sr, FONT_MONO_SMALL, l->kind == DIFF_CONTEXT ? theme.secondary : tint, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    draw_text(cv, sign, &sr, FONT_MONO_SMALL, l->kind == DIFF_CONTEXT ? theme.secondary : tint, DT_LEFT | DT_TOP | DT_SINGLELINE);
     RECT tr = { rc->left + px(62), rc->top, rc->right - px(12), rc->bottom };
-    draw_text(hdc, l->text[0] ? l->text : " ", &tr, FONT_MONO_SMALL, theme.text, DT_LEFT | DT_TOP | DT_EXPANDTABS | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE | DT_NOCLIP));
+    draw_text(cv, l->text[0] ? l->text : " ", &tr, FONT_MONO_SMALL, theme.text, DT_LEFT | DT_TOP | DT_EXPANDTABS | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE | DT_NOCLIP));
 }
 
 /// `.file-header`: the path in mono type, its diffstat, and the wrap and GitHub buttons.
 typedef struct { char *path, *from, *add, *del; } FileHeadData;
 static void file_head_free(void *p) { FileHeadData *d = p; free(d->path); free(d->from); free(d->add); free(d->del); free(d); }
-static void paint_file_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_file_head(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     FileHeadData *d = it->data;
     COLORREF tint = blend(theme.accent, theme.raise, 0.06);
-    RECT top = *rc; fill_round_rect(hdc, &top, px(7), tint, tint);
-    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(hdc, &low, tint);
-    draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
+    RECT top = *rc; fill_round_rect(cv, &top, px(7), tint, tint);
+    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(cv, &low, tint);
+    draw_line(cv, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
     int right = rc->right - px(12);
-    int dw = text_width(hdc, d->del, FONT_MONO_SMALL), aw = text_width(hdc, d->add, FONT_MONO_SMALL);
-    RECT dr = { right - dw, rc->top, right, rc->bottom }; draw_text(hdc, d->del, &dr, FONT_MONO_SMALL, theme.danger, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    RECT ar = { dr.left - px(6) - aw, rc->top, dr.left - px(6), rc->bottom }; draw_text(hdc, d->add, &ar, FONT_MONO_SMALL, theme.success, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    int dw = text_width(cv, d->del, FONT_MONO_SMALL), aw = text_width(cv, d->add, FONT_MONO_SMALL);
+    RECT dr = { right - dw, rc->top, right, rc->bottom }; draw_text(cv, d->del, &dr, FONT_MONO_SMALL, theme.danger, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    RECT ar = { dr.left - px(6) - aw, rc->top, dr.left - px(6), rc->bottom }; draw_text(cv, d->add, &ar, FONT_MONO_SMALL, theme.success, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     int x = rc->left + px(12), mid = (rc->top + rc->bottom) / 2;
-    RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, 0xE8A5, &g, FONT_ICON_SMALL, theme.muted); x += px(22);
+    RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(cv, 0xE8A5, &g, FONT_ICON_SMALL, theme.muted); x += px(22);
     if (d->from) {
-        RECT p = { x, rc->top, ar.left - px(12), mid + px(1) }; draw_text(hdc, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
-        RECT q = { x, mid + px(1), ar.left - px(12), rc->bottom }; draw_text(hdc, d->from, &q, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+        RECT p = { x, rc->top, ar.left - px(12), mid + px(1) }; draw_text(cv, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+        RECT q = { x, mid + px(1), ar.left - px(12), rc->bottom }; draw_text(cv, d->from, &q, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
     } else {
-        RECT p = { x, rc->top, ar.left - px(12), rc->bottom }; draw_text(hdc, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+        RECT p = { x, rc->top, ar.left - px(12), rc->bottom }; draw_text(cv, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
     }
 }
 
@@ -315,8 +315,8 @@ static void layout_diff(PullFiles *f, Doc *doc, int x, int w) {
         bool meta = l->kind == DIFF_HUNK || l->kind == DIFF_NOTE;
         FontId font = meta ? FONT_MONO_CAPTION2 : FONT_MONO_SMALL;
         int text_x = meta ? px(12) : px(62);
-        if (f->wrap) h = measure_text(doc->hdc, l->text[0] ? l->text : " ", w - 2 - text_x - px(12), font, DT_WORDBREAK | DT_EXPANDTABS);
-        else { h = font_height(doc->hdc, font); int tw = x + 1 + text_x + text_width(doc->hdc, l->text, font) + px(24); if (tw > widest) widest = tw; }
+        if (f->wrap) h = measure_text(doc->cv, l->text[0] ? l->text : " ", w - 2 - text_x - px(12), font, DT_WORDBREAK | DT_EXPANDTABS);
+        else { h = font_height(doc->cv, font); int tw = x + 1 + text_x + text_width(doc->cv, l->text, font) + px(24); if (tw > widest) widest = tw; }
         h += meta ? px(l->kind == DIFF_HUNK ? 12 : 4) : px(3);
         DiffRowData *d = xcalloc(1, sizeof *d); d->line = l; d->wrap = f->wrap;
         RECT rc = { x + 1, doc->y, x + w - 1, doc->y + h };

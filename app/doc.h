@@ -10,7 +10,7 @@
 typedef struct Doc Doc;
 typedef struct Item Item;
 typedef struct Rich Rich;   // text laid out in runs, for painting and selecting
-typedef void (*ItemPaint)(Doc *doc, Item *item, HDC hdc, const RECT *rc);
+typedef void (*ItemPaint)(Doc *doc, Item *item, Canvas *cv, const RECT *rc);
 typedef void (*ItemFree)(void *data);
 
 struct Item {
@@ -34,7 +34,7 @@ typedef struct { int item, offset; } DocPos;
 
 struct Doc {
     Item *items; size_t count, cap;
-    HDC hdc;              // the measuring DC while laying out
+    Canvas *cv;           // while laying out; NULL, since text is measured without one
     int width;            // content width
     int y;                // the running cursor for stacked items
     int content_width;    // widest item, for horizontal scrolling
@@ -49,7 +49,7 @@ struct Doc {
 void doc_init(Doc *doc);
 void doc_free(Doc *doc);
 /// Clears the items and starts a layout at the given width.
-void doc_begin(Doc *doc, HDC hdc, int width);
+void doc_begin(Doc *doc, Canvas *cv, int width);
 void doc_end(Doc *doc);
 Item *doc_item(Doc *doc, int index);
 int doc_height(const Doc *doc);
@@ -110,7 +110,7 @@ void doc_sticky(Doc *doc, int first, int last, int limit);
 /// Moves the sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
 void doc_set_view(Doc *doc, int scroll_y, int view_height);
 
-void doc_paint(Doc *doc, HDC hdc, int scroll_x, int scroll_y, const RECT *clip);
+void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip);
 /// The topmost clickable item at a content point, or -1.
 int doc_hit(Doc *doc, int x, int y);
 /// The URL under a content point inside a rich item, or NULL.
@@ -123,7 +123,7 @@ int doc_find(Doc *doc, int id);
 // Selection: text items are selected with the mouse across items, as in a browser. The selection survives a layout at the
 // same items; the pane clears it when a screen changes.
 /// The text position nearest a content point; false when the document has no text.
-bool doc_position_at(Doc *doc, HDC hdc, int x, int y, DocPos *pos);
+bool doc_position_at(Doc *doc, Canvas *cv, int x, int y, DocPos *pos);
 /// The selectable text item under a content point, or -1.
 int doc_text_item_at(Doc *doc, int x, int y);
 bool doc_has_selection(Doc *doc);

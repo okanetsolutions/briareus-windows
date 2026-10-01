@@ -1,10 +1,14 @@
 // The dashboard's own look, dark only: its Tailwind palette (canvas, sidebar, raise, field, sunken, line, ink, muted,
-// accent), its pixel sizes for Segoe UI and Cascadia Code, and the GDI helpers the screens share.
+// accent), its pixel sizes for Segoe UI and Cascadia Code, and the drawing helpers the screens share (see canvas.h).
 #ifndef BRIAREUS_THEME_H
 #define BRIAREUS_THEME_H
 #include <windows.h>
 #include <stdbool.h>
 #include <time.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct {
     // The dashboard's colour names.
@@ -27,6 +31,8 @@ typedef enum {
 } FontId;
 
 extern Palette theme;
+/// A surface to draw on: a pane's window, or a GDI paint borrowed for a moment (canvas.h).
+typedef struct Canvas Canvas;
 
 void theme_init(void);
 /// The dashboard is dark whatever the system prefers; kept for the callers that ask.
@@ -36,39 +42,48 @@ void theme_set_dpi(int dpi);
 int theme_dpi(void);
 /// Scales a 96-DPI length.
 int px(int units);
+/// The GDI font, for the Edit controls that draw their own text.
 HFONT font(FontId id);
 /// The `.dot` colours: running/queued in the accent, idle green, waiting amber, failed red, the rest grey.
 COLORREF theme_status_color(const char *status);
-/// `color` at `alpha` (0...1) over `background`, since GDI paints opaque.
+/// `color` at `alpha` (0...1) over `background`, as the dashboard's translucent tints come out on its opaque surfaces.
 COLORREF blend(COLORREF color, COLORREF background, double alpha);
 
 // Drawing
-void fill_rect(HDC hdc, const RECT *rc, COLORREF color);
-void fill_round_rect(HDC hdc, const RECT *rc, int radius, COLORREF fill, COLORREF border);
-void fill_circle(HDC hdc, int cx, int cy, int radius, COLORREF fill);
-void stroke_circle(HDC hdc, int cx, int cy, int radius, COLORREF color, int width);
-/// An arc of a ring centred on the stroke: degrees clockwise from three o'clock, as GDI+ measures them.
-void stroke_arc(HDC hdc, int cx, int cy, int radius, COLORREF color, int width, double start, double sweep);
-void draw_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color);
-void draw_dashed_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color);
-/// Draws UTF-8 text; DT_ flags as for DrawText. Returns the height drawn.
-int draw_text(HDC hdc, const char *text, RECT *rc, FontId f, COLORREF color, UINT flags);
-int draw_textw(HDC hdc, const wchar_t *text, RECT *rc, FontId f, COLORREF color, UINT flags);
+void fill_rect(Canvas *cv, const RECT *rc, COLORREF color);
+void fill_round_rect(Canvas *cv, const RECT *rc, int radius, COLORREF fill, COLORREF border);
+void fill_circle(Canvas *cv, int cx, int cy, int radius, COLORREF fill);
+void stroke_circle(Canvas *cv, int cx, int cy, int radius, COLORREF color, int width);
+/// An arc of a ring centred on the stroke: degrees clockwise from three o'clock.
+void stroke_arc(Canvas *cv, int cx, int cy, int radius, COLORREF color, int width, double start, double sweep);
+void draw_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color);
+void draw_dashed_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color);
+/// A line `width` pixels thick with round ends, through the centres of its end pixels.
+void draw_thick_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color, int width);
+/// A 1px dotted outline of a rounded rectangle.
+void stroke_dotted_round_rect(Canvas *cv, const RECT *rc, int radius, COLORREF color);
+/// Draws UTF-8 text; DT_ flags as for DrawText (alignment, single line, word break, ellipses, no clip). Returns the height drawn.
+int draw_text(Canvas *cv, const char *text, RECT *rc, FontId f, COLORREF color, UINT flags);
+int draw_textw(Canvas *cv, const wchar_t *text, RECT *rc, FontId f, COLORREF color, UINT flags);
 /// Height the text needs at `width`, wrapped.
-int measure_text(HDC hdc, const char *text, int width, FontId f, UINT flags);
-int text_width(HDC hdc, const char *text, FontId f);
-int textw_width(HDC hdc, const wchar_t *text, FontId f);
-int font_height(HDC hdc, FontId f);
+int measure_text(Canvas *cv, const char *text, int width, FontId f, UINT flags);
+int text_width(Canvas *cv, const char *text, FontId f);
+int textw_width(Canvas *cv, const wchar_t *text, FontId f);
+int font_height(Canvas *cv, FontId f);
+/// Width of the first `len` characters, measured by DirectWrite; no canvas is needed to measure.
+int textw_extent(FontId f, const wchar_t *text, size_t len);
+/// How many of the first `len` characters fit in `width`; a cluster (a surrogate pair, an accent) is never split.
+size_t textw_fit(FontId f, const wchar_t *text, size_t len, int width);
 /// A Segoe Fluent Icons glyph centred in a rectangle.
-void draw_glyph(HDC hdc, wchar_t glyph, const RECT *rc, FontId f, COLORREF color);
+void draw_glyph(Canvas *cv, wchar_t glyph, const RECT *rc, FontId f, COLORREF color);
 /// The dashboard's 7px `.dot`.
-void draw_status_dot(HDC hdc, int cx, int cy, const char *status);
-/// A small bordered tag (`rounded-[5px] border px-1.5 text-[11px] font-semibold`) in a colour; returns its width. NULL hdc measures.
-int draw_badge(HDC hdc, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height);
+void draw_status_dot(Canvas *cv, int cx, int cy, const char *status);
+/// A small bordered tag (`rounded-[5px] border px-1.5 text-[11px] font-semibold`) in a colour; returns its width. A NULL canvas measures.
+int draw_badge(Canvas *cv, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height);
 /// A GitHub label as the board draws it: `rounded-full border px-1.5 text-[11px]` in the label's colour; returns its width.
-int draw_chip(HDC hdc, int x, int y, const char *name, COLORREF color, COLORREF background, int *height);
+int draw_chip(Canvas *cv, int x, int y, const char *name, COLORREF color, COLORREF background, int *height);
 /// The square monogram used for projects.
-void draw_monogram(HDC hdc, int x, int y, int size, const char *text);
+void draw_monogram(Canvas *cv, int x, int y, int size, const char *text);
 /// The Claude-style working glyph for a tick.
 const wchar_t *working_glyph(int tick);
 const char *working_verb(int tick);
@@ -92,5 +107,9 @@ void copy_to_clipboard(HWND owner, const char *text);
 void theme_apply_window(HWND hwnd);
 /// Dark scrollbars and controls where Windows offers them.
 void theme_apply_control(HWND hwnd);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

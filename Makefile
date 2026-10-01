@@ -1,20 +1,26 @@
-# Briareus for Windows: native C, Win32, no third-party dependencies.
+# Briareus for Windows: native C, Win32, no third-party dependencies. One file, app/canvas.cpp, is C++ in C style:
+# the Windows SDK declares DirectWrite for C++ only.
 # Build with MinGW-w64 GCC (for example WinLibs): `mingw32-make` or `make`. See build.bat for the same steps.
 
 CC      = gcc
+CXX     = g++
 WINDRES = windres
 BUILD   ?= build
 CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CFLAGS  += -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DNTDDI_VERSION=0x0A000006 -D_CRT_SECURE_NO_WARNINGS -Icore -Iapp
+CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -fno-exceptions -fno-rtti
+DEFINES = -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DNTDDI_VERSION=0x0A000006 -D_CRT_SECURE_NO_WARNINGS -Icore -Iapp
+CFLAGS  += $(DEFINES)
+CXXFLAGS += $(DEFINES)
 LDFLAGS ?= -static -static-libgcc
 CORE_LIBS = -lwinhttp -ladvapi32 -lole32
-APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -lgdiplus
+APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -ld2d1 -ldwrite
 
 CORE_SRC = $(wildcard core/*.c)
 APP_SRC  = $(wildcard app/*.c)
+APP_CXX  = $(wildcard app/*.cpp)
 TEST_SRC = $(wildcard tests/*.c)
 CORE_OBJ = $(patsubst core/%.c,$(BUILD)/core/%.o,$(CORE_SRC))
-APP_OBJ  = $(patsubst app/%.c,$(BUILD)/app/%.o,$(APP_SRC))
+APP_OBJ  = $(patsubst app/%.c,$(BUILD)/app/%.o,$(APP_SRC)) $(patsubst app/%.cpp,$(BUILD)/app/%.o,$(APP_CXX))
 TEST_OBJ = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(TEST_SRC))
 RES      = $(BUILD)/briareus.res.o
 
@@ -41,6 +47,9 @@ $(BUILD)/core/%.o: core/%.c core/*.h | $(BUILD)/core
 
 $(BUILD)/app/%.o: app/%.c app/*.h core/*.h | $(BUILD)/app
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/app/%.o: app/%.cpp app/*.h core/*.h | $(BUILD)/app
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD)/tests/%.o: tests/%.c core/*.h | $(BUILD)/tests
 	$(CC) $(CFLAGS) -c -o $@ $<

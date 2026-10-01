@@ -58,12 +58,12 @@ static void pairing_destroy(Screen *base) {
     screen_release(base);
 }
 
-static void paint_logo(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_logo(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     COLORREF fill = blend(theme.accent, theme.background, 0.14);
-    fill_round_rect(hdc, rc, px(14), fill, fill);
-    draw_glyph(hdc, 0xE81E, rc, FONT_ICON_HUGE, theme.accent);
+    fill_round_rect(cv, rc, px(14), fill, fill);
+    draw_glyph(cv, 0xE81E, rc, FONT_ICON_HUGE, theme.accent);
 }
-static void paint_field_glyph(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_glyph(hdc, (wchar_t)it->arg, rc, FONT_ICON, theme.secondary); }
+static void paint_field_glyph(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { draw_glyph(cv, (wchar_t)it->arg, rc, FONT_ICON, theme.secondary); }
 
 static void pairing_layout(Screen *base, Doc *doc) {
     PairingScreen *s = (PairingScreen *)base;
