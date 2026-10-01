@@ -1,7 +1,7 @@
-// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects
-// and the providers, each with ＋ New) and a project's form, its sections and fields laid out as the dashboard's, saved
-// through /settings/projects. The provider form is screen_provider_settings.c. Those routes need an Admin token; any other
-// token gets a sentence saying so.
+// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects,
+// the providers and the database pool, each with ＋ New) and a project's form, its sections and fields laid out as the
+// dashboard's, saved through /settings/projects. The provider form is screen_provider_settings.c and a database server's
+// screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -17,8 +17,10 @@ static void sign_out(void) {
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static int row_id(const Json *row) { return json_int_or(json_get(row, "id"), 0); }
 static char *form_id(int id) { return id > 0 ? xstrfmt("settings-project:%d", id) : xstrdup("settings-project:new"); }
-/// A settings form in the detail pane: a project's or a provider's.
-static bool is_form_id(const char *id) { return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:")); }
+/// A settings form in the detail pane: a project's, a provider's or a database server's.
+static bool is_form_id(const char *id) {
+    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:"));
+}
 
 /// Why the settings cannot be shown here, as a new string; NULL when they can.
 static char *settings_unavailable(void) {
@@ -33,7 +35,7 @@ static char *settings_unavailable(void) {
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER };
+enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -47,6 +49,10 @@ typedef struct {
     bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
     char *providers_error;
     Request *req_providers;
+    Json *servers;      // the database pool: the server's DbServer rows (`list`) and what a new one starts from (`defaults`)
+    bool servers_loaded, open_first_server;   // the second: open the first row once the list is read (after a delete)
+    char *servers_error;
+    Request *req_servers;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -175,6 +181,47 @@ void settings_providers_changed(bool open_first) {
     request_cancel(&g_settings->req_providers);
     providers_load(g_settings);
 }
+static const Json *server_rows(SettingsScreen *s) { return json_get(s->servers, "list"); }
+static void servers_open_row(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(server_rows(s), index);
+    if (json_is_object(row)) app_show_detail(db_server_settings_screen_new(row, json_get(s->servers, "defaults")));
+}
+static void servers_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->servers_loaded = true;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->servers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    set_string(&s->servers_error, NULL);
+    json_free(s->servers);
+    s->servers = json_object();
+    json_object_set(s->servers, "list", json_clone(json_get(req->result, "servers")));
+    json_object_set(s->servers, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+    // After a server was removed, the first one left takes its place, as a project's deletion opens the first project.
+    if (!s->open_first_server) return;
+    s->open_first_server = false;
+    Screen *root = pane_root(app_detail_pane());
+    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (json_count(server_rows(s))) servers_open_row(s, 0);
+    else app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults")));
+}
+static void servers_load(SettingsScreen *s) {
+    if (s->req_servers || !store_supports("settings_db_servers")) { s->servers_loaded = true; return; }
+    store_call("settings_db_servers", json_object(), 0, s, servers_done, 0, &s->req_servers);
+}
+void settings_db_servers_changed(bool open_first) {
+    if (!g_settings) return;
+    g_settings->open_first_server = open_first;
+    request_cancel(&g_settings->req_servers);
+    servers_load(g_settings);
+}
+const Json *settings_project_rows(void) { return g_settings ? settings_rows(g_settings) : NULL; }
+const Json *settings_db_server_rows(void) { return g_settings ? server_rows(g_settings) : NULL; }
+size_t settings_pool_capacity(void) {
+    const Json *rows = settings_db_server_rows();
+    size_t n = 0;
+    for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
+    return n;
+}
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
@@ -209,16 +256,22 @@ static void settings_move(SettingsScreen *s, size_t index, int delta) {
 static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
-    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers);
+    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_servers);
     json_free(s->projects); free(s->error);
     json_free(s->providers); free(s->providers_error);
+    json_free(s->servers); free(s->servers_error);
     screen_release(base);
 }
-/// A section's summary: its title, and its ＋ New when `new_action` is set.
-static void section_title(Doc *doc, int w, const char *title, int new_action) {
+/// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
+static void section_title(Doc *doc, int w, const char *title, const char *note, int new_action) {
     int y = doc->y, h = px(20);
     RECT tr = { px(8), y, w - px(60), y + h };
     doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    int nx = px(8) + text_width(doc->cv, title, FONT_CAPTION_SEMIBOLD) + px(6);
+    if (note && nx < tr.right) {
+        RECT nr = { nx, y, tr.right, y + h };
+        doc_text_at(doc, &nr, note, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
     if (new_action) {
         int nw = text_width(doc->cv, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
         RECT nr = { w - px(4) - nw, y, w - px(4), y + h };
@@ -230,6 +283,7 @@ static void section_title(Doc *doc, int w, const char *title, int new_action) {
 }
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void settings_layout(Screen *base, Doc *doc) {
     SettingsScreen *s = (SettingsScreen *)base;
     int w = doc->width;
@@ -241,14 +295,52 @@ static void settings_layout(Screen *base, Doc *doc) {
     doc_custom(doc, 0, w, px(36), paint_nav, nav, free, ACT_DEVICES, 0);
     doc_space(doc, px(16));
     char *why = settings_unavailable();
-    section_title(doc, w, "Projects", why ? 0 : ACT_NEW_PROJECT);
+    section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(8)); return; }
     layout_projects(s, doc, w, selected);
-    // The providers sessions start on, below the projects as on the dashboard; a server without the routes shows none.
-    if (!store_supports("settings_providers")) return;
+    // The providers sessions start on, then the database pool, below the projects as on the dashboard; a server without
+    // the routes shows neither.
+    if (store_supports("settings_providers")) {
+        doc_space(doc, px(8));
+        section_title(doc, w, "Providers", NULL, store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
+        layout_providers(s, doc, w, selected);
+    }
+    if (store_supports("settings_db_servers")) {
+        doc_space(doc, px(8));
+        // One open session with a database per server in the pool, so the pool's size heads the section, as the sessions
+        // it lets run at once (the dashboard's "· 2 parallel sessions with a database", cut to the sidebar's width).
+        size_t n = settings_pool_capacity();
+        char *note = n ? xstrfmt("\xC2\xB7 %zu session%s", n, n == 1 ? "" : "s") : NULL;
+        section_title(doc, w, "Database pool", note, store_supports("create_db_server") ? ACT_NEW_SERVER : 0);
+        free(note);
+        layout_servers(s, doc, w, selected);
+    }
+}
+/// The database pool: each server with its dot and host:port.
+static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    if (s->servers_error) { doc_notice(doc, px(8), w - px(16), s->servers_error); doc_space(doc, px(8)); }
+    const Json *rows = server_rows(s);
+    int h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        const char *host = json_str(json_get(row, "host"));
+        d->repo = xstrfmt("%s:%d", host ? host : "", json_int_or(json_get(row, "port"), 0));
+        d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
+        d->enabled = json_bool_is(json_get(row, "enabled"), true);
+        char *id = xstrfmt("settings-db:%d", row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, ACT_OPEN_SERVER, (intptr_t)i);
+    }
+    if (str_eq(selected, "settings-db:new")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New database server"); d->repo = xstrdup("not saved yet"); d->selected = true;
+        doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, 0, 0);
+    }
+    if (s->servers_loaded && !json_count(rows) && !s->servers_error) doc_text(doc, px(8), w - px(16), "No servers yet. Add one so sessions can claim a database of their own.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->servers_loaded) doc_loading(doc, 0, w, "Loading the database pool\xE2\x80\xA6");
     doc_space(doc, px(8));
-    section_title(doc, w, "Providers", store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
-    layout_providers(s, doc, w, selected);
 }
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     if (s->providers_error) { doc_notice(doc, px(8), w - px(16), s->providers_error); doc_space(doc, px(8)); }
@@ -342,6 +434,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PROJECT: settings_open_row(s, (size_t)arg); break;
     case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
     case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
+    case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
+    case ACT_OPEN_SERVER: servers_open_row(s, (size_t)arg); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -360,11 +454,13 @@ static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (shown && !s->loaded && !s->req) settings_load(s);
     if (shown && !s->providers_loaded && !s->req_providers) providers_load(s);
+    if (shown && !s->servers_loaded && !s->req_servers) servers_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     request_cancel(&s->req); settings_load(s);
     request_cancel(&s->req_providers); providers_load(s);
+    request_cancel(&s->req_servers); servers_load(s);
 }
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     (void)ctrl; (void)shift;
@@ -383,6 +479,7 @@ Screen *settings_screen_new(void) {
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
     s->projects = json_object();
     s->providers = json_object();
+    s->servers = json_object();
     g_settings = s;
     return &s->base;
 }
@@ -418,7 +515,7 @@ static const FieldDef FIELDS[F_COUNT] = {
         "One extension name per line, created in the session's database right after it is created. A fresh Postgres database carries only what template1 does, so migrations that declare a vector column fail without this. The extension itself must already be installed on the server. Ignored on MySQL.", 2, true },
     [F_DB_POOL] = { "dbPoolEnabled", K_BOOL, "Give each session a database server of its own" },
     [F_DB_RESTORE] = { "dbRestoreSql", K_TEXT, "Restore from .sql", "/home/you/dumps/my_app.sql",
-        "A dump on this machine, piped into the database every time a server is claimed, right after it is created, before the setup steps run. Leave empty to skip. The servers themselves are added under Database pool on the web dashboard.", 0, true },
+        "A dump on this machine, piped into the database every time a server is claimed, right after it is created, before the setup steps run. Leave empty to skip. The servers themselves are added under Database pool in the sidebar.", 0, true },
     [F_REVIEW_AUTHOR] = { "reviewAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
