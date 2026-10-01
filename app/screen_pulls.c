@@ -408,7 +408,7 @@ enum {
 };
 enum { TIMER_FILES_PAGE = 2 };
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
-enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS, PR_TAB_FILES };
+enum { PR_TAB_BODY, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
 
 typedef struct {
     Screen base;
@@ -658,7 +658,7 @@ typedef struct { int passed, failed, pending; } CountsData;
 static void paint_counts(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     CountsData *d = it->data;
     int x = rc->left;
-    struct { wchar_t g; int n; COLORREF c; } parts[3] = { { 0xE930, d->passed, theme.success }, { 0xEA39, d->failed, theme.danger }, { 0xE823, d->pending, theme.warning } };
+    struct { wchar_t g; int n; COLORREF c; } parts[3] = { { 0xE930, d->passed, theme.success }, { 0xE823, d->pending, theme.warning }, { 0xEA39, d->failed, theme.danger } };
     for (int i = 0; i < 3; i++) {
         RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(hdc, parts[i].g, &g, FONT_ICON_SMALL, parts[i].c);
         char n[16]; snprintf(n, sizeof n, "%d", parts[i].n);
@@ -898,7 +898,7 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->merge_error); }
 }
 
-/// `tabnav`: Conversation, Commits, Checks and Files changed with their counts, and the diffstat at the right.
+/// `tabnav`: Sessions, PR Body, Files changed, Commits, Checks and Findings with their counts, and the diffstat at the right.
 typedef struct { wchar_t glyph; char *title, *count; bool active; } PrTabData;
 static void pr_tab_free(void *p) { PrTabData *d = p; free(d->title); free(d->count); free(d); }
 static int pr_tab_width(HDC hdc, const PrTabData *d) {
@@ -961,26 +961,27 @@ static void add_pr_tab(Doc *doc, int *x, int *y, int left, int right, int h, wch
 static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
     bool loaded = !json_is_null(s->pr);
-    double additions, deletions, files;
+    double additions, deletions;
     bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
     DiffStatData *ds = NULL; int dsw = 0;
     if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->hdc, ds); right -= dsw + px(16); }
     char count[24];
     const PullSummary *row = board_row(s);
+    if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
     double comments;
     bool has_comments = row && json_num(json_get(row->raw, "comments"), &comments);
     if (has_comments) snprintf(count, sizeof count, "%d", (int)comments);
-    add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "Conversation", has_comments ? count : NULL, s->tab == PR_TAB_CONVERSATION, ACT_PR_TAB, PR_TAB_CONVERSATION);
-    int commits = pull_commit_count(s);
-    if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
-    if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
-    if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
-    if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
+    add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "PR Body", has_comments ? count : NULL, s->tab == PR_TAB_BODY, ACT_PR_TAB, PR_TAB_BODY);
+    double files;
     bool has_files = json_num(json_get(s->pr, "changedFiles"), &files);
     if (has_files) snprintf(count, sizeof count, "%d", (int)files);
     // The files are a tab here, or GitHub's page when the server cannot list them.
     if (store_supports("pull_files")) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, s->tab == PR_TAB_FILES, ACT_PR_TAB, PR_TAB_FILES);
     else if (safe_web_url(json_str(json_get(s->pr, "url")))) add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_OPEN_URL, 1);
+    int commits = pull_commit_count(s);
+    if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
+    if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
+    if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
     if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
     doc->y = y + h;
     doc_rule(doc, c.x, c.w);
@@ -1249,6 +1250,17 @@ static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
     doc_space(doc, px(8));
     doc_text(doc, c.x, c.w, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
 }
+/// The checks as counts only: passed, pending and failed; the row opens the Checks tab for the individual runs.
+static void side_checks(PullScreen *s, Doc *doc, Col c, int *count) {
+    if (json_is_null(s->pr)) return;
+    const Json *checks = json_get(s->pr, "checks");
+    side_heading(doc, c, count, "Checks");
+    if (!json_count(json_get(checks, "runs"))) { doc_text(doc, c.x, c.w, "No checks reported", FONT_CAPTION, theme.secondary, DT_SINGLELINE); return; }
+    CountsData *cd = xcalloc(1, sizeof *cd);
+    cd->passed = json_int_or(json_get(checks, "passed"), 0); cd->pending = json_int_or(json_get(checks, "pending"), 0); cd->failed = json_int_or(json_get(checks, "failed"), 0);
+    int i = doc_custom(doc, c.x, c.w, px(22), paint_counts, cd, free, s->tab == PR_TAB_CHECKS ? 0 : ACT_PR_TAB, PR_TAB_CHECKS);
+    doc_item(doc, i)->hover_fill = false; doc_item(doc, i)->hand = s->tab != PR_TAB_CHECKS;
+}
 static void side_reviewer(Doc *doc, Col c, const char *user, const BadgeSpec *badge, const char *state) {
     int y = doc->y;
     RECT ur = { c.x, y, c.x + c.w / 2, y + px(22) }; doc_text_at(doc, &ur, user, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -1328,6 +1340,7 @@ static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
 static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     int count = 0;
     side_actions(s, doc, c, &count);
+    side_checks(s, doc, c, &count);
     side_reviewers(s, doc, c, &count);
     side_assignees(s, doc, c, &count);
     side_labels(s, doc, c, &count);
