@@ -1,5 +1,5 @@
 // One provider's settings, as the dashboard's provider form laid out as the project form is: tabs along the top
-// (Provider, Connection, Models and, once saved, Status), saved through /settings/providers. A provider is one login or
+// (Provider, Models and, once saved, Status), saved through /settings/providers. A provider is one login or
 // endpoint of one CLI; its login happens in the browser and its connection and quota are read from the server.
 #include "screens.h"
 #include "str.h"
@@ -34,17 +34,16 @@ static const FieldDef FIELDS[F_COUNT] = {
 };
 
 /// The dashboard's sections as tabs, as the project form has them. Status is a saved provider's alone.
-enum { T_PROVIDER, T_CONNECTION, T_MODELS, T_STATUS, T_COUNT };
+enum { T_PROVIDER, T_MODELS, T_STATUS, T_COUNT };
 static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
-    [T_PROVIDER] = { "Provider", 0xE713 }, [T_CONNECTION] = { "Connection", 0xE71B },
+    [T_PROVIDER] = { "Provider", 0xE713 },
     [T_MODELS] = { "Models", 0xE8FD }, [T_STATUS] = { "Status", 0xE9D9 },
 };
 /// The open tab stays open from one provider to the next.
 static int g_tab;
 static int field_tab(int f) {
     switch (f) {
-    case F_LABEL: return T_PROVIDER;
-    case F_BASE_URL: case F_API_KEY: case F_LOGIN_CODE: return T_CONNECTION;
+    case F_LABEL: case F_BASE_URL: case F_API_KEY: case F_LOGIN_CODE: return T_PROVIDER;
     default: return T_MODELS;
     }
 }
@@ -282,10 +281,11 @@ static void field_pair(FormScreen *s, Doc *doc, int x, int w, int a, const char 
 static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
+    // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
+    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
     fill_round_rect(cv, &b, px(3), s->active ? theme.accent : theme.field, s->active ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (s->active) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    if (s->active) draw_check_mark(cv, &b, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
     draw_text(cv, "Active: new sessions may start on this provider", &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -433,7 +433,7 @@ static void layout_status(FormScreen *s, Doc *doc, int x, int w) {
     note(doc, x, w, "Check usage reads the account and its quota again rather than the server's last answer.");
 }
 
-/// The Connection tab: the mode, then the login, or the endpoint with its token and Test.
+/// Under the label and binary: the mode, then the login, or the endpoint with its token and Test.
 static void layout_connection(FormScreen *s, Doc *doc, int x, int w) {
     if (mode_offered(s->binary)) select_box(doc, x, (w - px(14)) / 2, "Mode", s->token ? "API token" : "Login", ACT_MODE);
     else if (str_eq(s->binary, "grok")) note(doc, x, w, "grok signs in with its own login; it takes no API token.");
@@ -498,10 +498,9 @@ static void form_layout(Screen *base, Doc *doc) {
         doc->y = top;
         select_box(doc, x + half + gap, col - half - gap, "Binary", binary_title(s->binary), ACT_BINARY);
         if (doc->y < left_bottom) doc->y = left_bottom;
-        note(doc, x, col, "A provider is one login or endpoint of one CLI. Its mode, login and endpoint are under Connection.");
+        layout_connection(s, doc, x, col);
         break;
     }
-    case T_CONNECTION: layout_connection(s, doc, x, col); break;
     case T_MODELS:
         field_pair(s, doc, x, col, F_MODELS, "One model per line; empty offers the CLI's own list.", F_EFFORTS, "One effort per line; empty offers the CLI's own.");
         field_pair(s, doc, x, col, F_DEFAULT_MODEL, NULL, F_DEFAULT_EFFORT, NULL);

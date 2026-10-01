@@ -727,11 +727,12 @@ static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
+    // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
+    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
     bool on = s->bools[f];
     fill_round_rect(cv, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (on) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    if (on) draw_check_mark(cv, &b, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
     draw_text(cv, FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
