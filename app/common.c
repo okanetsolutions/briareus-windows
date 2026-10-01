@@ -191,8 +191,8 @@ static void meta_add(MetaData *d, const char *text, COLORREF color, bool mono) {
 }
 static void doc_meta(Doc *doc, int x, int w, MetaData *d) { doc_custom(doc, x, w, px(20), paint_meta, d, meta_free, 0, 0); }
 
-void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count) {
-    int box = doc_box_begin(doc, x, w, px(10), theme.raise, theme.line, px(12));
+void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running) {
+    int box = doc_box_begin(doc, x, w, px(10), theme.raise, running ? theme.accent_dim : theme.line, px(12));
     int ix = x + px(12), iw = w - px(24);
     doc_text(doc, ix, iw, pull->title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(4));
