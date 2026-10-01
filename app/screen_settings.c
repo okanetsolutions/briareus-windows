@@ -90,7 +90,7 @@ static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     int y2 = top + lh, right = rc->right - px(8);
     if (d->db) {
         // `rounded border border-line px-1 text-[11px]`: the database pool's tag.
-        int h; int bw = text_width(cv, "db", FONT_CAPTION2) + px(12) + 2;
+        int h; int bw = draw_chip(NULL, 0, 0, "db", theme.muted, theme.sidebar, &h);
         int rw = text_width(cv, d->repo, FONT_CAPTION);
         int bx = x + (rw < right - x - bw - px(8) ? rw : right - x - bw - px(8)) + px(8);
         draw_chip(cv, bx, y2 + (px(18) - h) / 2, "db", theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
