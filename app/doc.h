@@ -44,6 +44,8 @@ struct Doc {
     bool selecting;                 // the mouse is dragging the selection
     int sticky_first, sticky_last;  // items that follow the scroll, as CSS `position: sticky`; none when equal
     int sticky_limit, sticky_shift; // the content y they stop at, and how far they are moved now
+    int sticky_scroll, sticky_max;  // the group's own scroll inside its window, and how far it can go
+    RECT sticky_view;               // the window the group shows through, in content coordinates
 };
 
 void doc_init(Doc *doc);
@@ -107,10 +109,14 @@ int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count);
 int doc_section(Doc *doc, int x, int w, const char *title);
 
 /// Items [first, last) follow the scroll down to `limit`, as a sidebar beside a long column: they stay in view, and
-/// one taller than the view scrolls with the content until its bottom shows. One group per document.
+/// one taller than the view scrolls on its own inside a window the view's height, as GitHub's file tree does. The page
+/// needs room for that window: `limit` at least the group's top plus the view's height less 24px. One group per
+/// document; its own scroll survives layouts.
 void doc_sticky(Doc *doc, int first, int last, int limit);
 /// Moves the sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
 void doc_set_view(Doc *doc, int scroll_y, int view_height);
+/// Scrolls the sticky group by `dy` when the content point is over its window and it overflows; false otherwise.
+bool doc_sticky_wheel(Doc *doc, int x, int y, int dy);
 
 void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip);
 /// The topmost clickable item at a content point, or -1.

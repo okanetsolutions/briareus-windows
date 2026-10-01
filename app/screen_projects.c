@@ -1,6 +1,7 @@
 // The sidebar, as the dashboard draws it: the ＋ New session strip with the 📊 and ⚑ switches and ⚙ Settings, the projects
-// with their session counts, and inside a project its conversations; ☑ Select and ⎋ along the foot.
+// with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
+#include "media.h"
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
@@ -63,12 +64,57 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(14));
 }
 
-/// The foot: `☑ Select` and `⎋`, 13px muted, above a border.
-static int sidebar_footer_height(int width) { (void)width; return px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
-typedef struct { RECT select_rc, signout_rc; } FooterRects;
+/// The player above the foot while a media session is open: Spotify's, or whichever app plays, with ⏮ ⏯ ⏭.
+enum { PLAYER_ROW = 36, PLAYER_BUTTON = 26 };
+static int player_height(void) {
+    MediaState st; media_state(&st);
+    return st.available ? px(6) + 1 + px(8) + px(PLAYER_ROW) + px(2) : 0;
+}
+typedef struct { RECT select_rc, signout_rc, previous_rc, toggle_rc, next_rc; } FooterRects;
+static int player_paint(Canvas *cv, const RECT *rc, FooterRects *out) {
+    SetRectEmpty(&out->previous_rc); SetRectEmpty(&out->toggle_rc); SetRectEmpty(&out->next_rc);
+    MediaState st; media_state(&st);
+    if (!st.available) return rc->top;
+    int y = rc->top + px(6);
+    draw_line(cv, rc->left + px(10), y, rc->right - px(10), y, theme.line);
+    y += 1 + px(8);
+    int left = rc->left + px(16), right = rc->right - px(10), h = px(PLAYER_ROW), bw = px(PLAYER_BUTTON);
+    // Spotify's green on its own session, the muted note on another app's.
+    RECT note = { left, y, left + px(16), y + h };
+    draw_glyph(cv, 0xE8D6, &note, FONT_ICON, st.spotify ? RGB(0x1D, 0xB9, 0x54) : theme.muted);
+    RECT buttons[3]; const wchar_t glyphs[3] = { 0xE892, st.playing ? 0xE769 : 0xE768, 0xE893 };
+    const bool enabled[3] = { st.can_previous, st.can_toggle, st.can_next };
+    for (int i = 0; i < 3; i++) {
+        RECT b = { right - (3 - i) * bw, y + (h - bw) / 2, right - (2 - i) * bw, y + (h - bw) / 2 + bw };
+        if (i == 1 && enabled[i]) fill_round_rect(cv, &b, bw / 2, theme.raise, theme.line);
+        draw_glyph(cv, glyphs[i], &b, i == 1 ? FONT_ICON : FONT_ICON_SMALL, enabled[i] ? theme.ink : blend(theme.muted, theme.sidebar, 0.5));
+        buttons[i] = enabled[i] ? b : (RECT){ 0, 0, 0, 0 };
+    }
+    out->previous_rc = buttons[0]; out->toggle_rc = buttons[1]; out->next_rc = buttons[2];
+    int tl = note.right + px(8), tr = right - 3 * bw - px(6);
+    const char *title = st.title[0] ? st.title : st.spotify ? "Spotify" : "Nothing playing";
+    RECT t = { tl, y + px(1), tr, y + px(19) }, a = { tl, y + px(19), tr, y + h - px(1) };
+    draw_text(cv, title, &t, FONT_CAPTION_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (st.artist[0]) draw_text(cv, st.artist, &a, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    return y + h + px(2);
+}
+/// True when the click was on one of the player's buttons.
+static bool player_click(Pane *pane, const FooterRects *f, POINT pt) {
+    MediaCommand command;
+    if (PtInRect(&f->previous_rc, pt)) command = MEDIA_PREVIOUS;
+    else if (PtInRect(&f->toggle_rc, pt)) command = MEDIA_TOGGLE;
+    else if (PtInRect(&f->next_rc, pt)) command = MEDIA_NEXT;
+    else return false;
+    media_command(command);
+    pane_footer_changed(pane);
+    return true;
+}
+
+/// The foot: `☑ Select` and `⎋`, 13px muted, above a border, under the player.
+static int sidebar_footer_height(int width) { (void)width; return player_height() + px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
 static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, bool select_on) {
     fill_rect(cv, rc, theme.sidebar);
-    int top = rc->top + px(6);
+    int top = player_paint(cv, rc, out) + px(6);
     draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(10), h = px(18);
     int left = rc->left + px(16), right = rc->right - px(16);
@@ -362,6 +408,7 @@ static int projects_footer_height(Screen *base, int width) { (void)base; return 
 static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(cv, rc, &s->footer, false); }
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
+    if (player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
 static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -620,6 +667,7 @@ static void sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
 }
 static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;
+    if (player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
     if (PtInRect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;

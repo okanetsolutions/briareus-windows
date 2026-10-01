@@ -1,4 +1,5 @@
 #include "doc.h"
+#include "canvas.h"
 #include "str.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -791,30 +792,61 @@ void doc_sticky(Doc *doc, int first, int last, int limit) {
     doc->sticky_first = first; doc->sticky_last = last > first ? last : first;
     doc->sticky_limit = limit; doc->sticky_shift = 0;
 }
-void doc_set_view(Doc *doc, int scroll_y, int view_height) {
-    if (doc->sticky_first >= doc->sticky_last) return;
-    // The group's bounds where it was laid out.
-    int top = INT_MAX, bottom = INT_MIN;
-    for (int i = doc->sticky_first; i < doc->sticky_last; i++) {
-        const RECT *rc = &doc->items[i].rc;
-        if (rc->top < top) top = rc->top;
-        if (rc->bottom > bottom) bottom = rc->bottom;
-    }
-    top -= doc->sticky_shift; bottom -= doc->sticky_shift;
-    int pad = px(12), over = (bottom - top) - (view_height - 2 * pad);
-    int shift = scroll_y + pad - top - (over > 0 ? over : 0);
-    if (shift > doc->sticky_limit - bottom) shift = doc->sticky_limit - bottom;
-    if (shift < 0) shift = 0;
+static bool sticky_active(const Doc *doc) { return doc->sticky_first < doc->sticky_last; }
+static void sticky_move(Doc *doc, int shift) {
     int delta = shift - doc->sticky_shift;
     if (!delta) return;
     for (int i = doc->sticky_first; i < doc->sticky_last; i++) OffsetRect(&doc->items[i].rc, 0, delta);
     doc->sticky_shift = shift;
 }
+void doc_set_view(Doc *doc, int scroll_y, int view_height) {
+    if (!sticky_active(doc)) { doc->sticky_scroll = doc->sticky_max = 0; return; }
+    // The group's bounds where it was laid out.
+    int top = INT_MAX, bottom = INT_MIN, left = INT_MAX, right = INT_MIN;
+    for (int i = doc->sticky_first; i < doc->sticky_last; i++) {
+        const RECT *rc = &doc->items[i].rc;
+        if (rc->top < top) top = rc->top;
+        if (rc->bottom > bottom) bottom = rc->bottom;
+        if (rc->left < left) left = rc->left;
+        if (rc->right > right) right = rc->right;
+    }
+    top -= doc->sticky_shift; bottom -= doc->sticky_shift;
+    // The window keeps a 12px margin in the view and stops at the limit; the group scrolls inside it.
+    int pad = px(12), height = bottom - top;
+    int want = view_height - 2 * pad; if (want > height) want = height; if (want < 0) want = 0;
+    int win_top = scroll_y + pad;
+    if (win_top > doc->sticky_limit - want) win_top = doc->sticky_limit - want;
+    if (win_top < top) win_top = top;
+    int win_bottom = scroll_y + view_height - pad;
+    if (win_bottom > win_top + height) win_bottom = win_top + height;
+    if (win_bottom > doc->sticky_limit) win_bottom = doc->sticky_limit;
+    if (win_bottom < win_top) win_bottom = win_top;
+    doc->sticky_max = height - (win_bottom - win_top);
+    if (doc->sticky_scroll > doc->sticky_max) doc->sticky_scroll = doc->sticky_max;
+    if (doc->sticky_scroll < 0) doc->sticky_scroll = 0;
+    SetRect(&doc->sticky_view, left, win_top, right, win_bottom);
+    sticky_move(doc, win_top - top - doc->sticky_scroll);
+}
+bool doc_sticky_wheel(Doc *doc, int x, int y, int dy) {
+    if (!sticky_active(doc) || doc->sticky_max <= 0) return false;
+    const RECT *v = &doc->sticky_view;
+    if (x < v->left || x >= v->right || y < v->top || y >= v->bottom) return false;
+    int s = doc->sticky_scroll + dy;
+    if (s > doc->sticky_max) s = doc->sticky_max;
+    if (s < 0) s = 0;
+    sticky_move(doc, doc->sticky_shift - (s - doc->sticky_scroll));
+    doc->sticky_scroll = s;
+    return true;
+}
+/// A sticky item scrolled out of the group's window at this content y.
+static bool sticky_hidden(const Doc *doc, size_t i, int y) {
+    return sticky_active(doc) && (int)i >= doc->sticky_first && (int)i < doc->sticky_last && (y < doc->sticky_view.top || y >= doc->sticky_view.bottom);
+}
 
 // MARK: - Paint and hit
 
-void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
-    for (size_t i = 0; i < doc->count; i++) {
+static void paint_items(Doc *doc, Canvas *cv, int first, int last, int scroll_x, int scroll_y, const RECT *clip) {
+    for (int i = first; i < last; i++) {
         Item *it = &doc->items[i];
         RECT rc = { it->rc.left - scroll_x, it->rc.top - scroll_y, it->rc.right - scroll_x, it->rc.bottom - scroll_y };
         if (rc.bottom < clip->top - px(4) || rc.top > clip->bottom + px(4)) continue;
@@ -822,10 +854,29 @@ void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *cli
         if (it->paint) it->paint(doc, it, cv, &rc);
     }
 }
+void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
+    if (!sticky_active(doc)) { paint_items(doc, cv, 0, (int)doc->count, scroll_x, scroll_y, clip); return; }
+    paint_items(doc, cv, 0, doc->sticky_first, scroll_x, scroll_y, clip);
+    // The sticky group shows through its window, with a thin bar at its right edge while it overflows.
+    RECT v = doc->sticky_view; OffsetRect(&v, -scroll_x, -scroll_y);
+    RECT within; IntersectRect(&within, &v, clip);
+    canvas_clip(cv, &v);
+    paint_items(doc, cv, doc->sticky_first, doc->sticky_last, scroll_x, scroll_y, &within);
+    canvas_unclip(cv);
+    if (doc->sticky_max > 0) {
+        int track = v.bottom - v.top, total = track + doc->sticky_max;
+        int thumb = track * track / total; if (thumb < px(24)) thumb = px(24);
+        int y = v.top + (track - thumb) * doc->sticky_scroll / doc->sticky_max;
+        RECT r = { v.right - px(6), y, v.right - px(1), y + thumb };
+        COLORREF c = RGB(0x3C, 0x3B, 0x38);
+        fill_round_rect(cv, &r, px(3), c, c);
+    }
+    paint_items(doc, cv, doc->sticky_last, (int)doc->count, scroll_x, scroll_y, clip);
+}
 int doc_hit(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (!it->action) continue;
+        if (!it->action || sticky_hidden(doc, i, y)) continue;
         if (x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) {
             if (it->paint == paint_segments) it->arg = ((SegmentData *)it->data)->arg_base + segment_at(it, x);
             // Linked text is clickable on its links alone; the rest of it selects.
