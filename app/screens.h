@@ -20,8 +20,26 @@ void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
+/// The changed files on their own, for the conversation's menu.
 Screen *pull_files_screen_new(const Project *project, int number);
-Screen *file_diff_screen_new(const PullFile *file);
+/// A pull request's changed files as GitHub's Files changed tab: the tree of paths beside the chosen file's diff, laid out
+/// inside a host screen. Its items use `PULL_FILES_ACTIONS` actions from `action_base` up and one timer id for the next page.
+typedef struct PullFiles PullFiles;
+enum { PULL_FILES_ACTIONS = 8 };
+PullFiles *pull_files_new(const Project *project, int number, Screen *host, int action_base, UINT page_timer);
+void pull_files_free(PullFiles *files);
+/// Reads the list, or the pages still missing; nothing once every page was read.
+void pull_files_load(PullFiles *files);
+void pull_files_cancel(PullFiles *files);
+/// Reads the list again from its first page.
+void pull_files_refresh(PullFiles *files);
+/// True once a list was read or asked for.
+bool pull_files_started(PullFiles *files);
+void pull_files_layout(PullFiles *files, Doc *doc, int x, int w);
+/// True when the action was one of the component's.
+bool pull_files_action(PullFiles *files, int action, intptr_t arg);
+/// True when the timer was the component's.
+bool pull_files_timer(PullFiles *files, UINT id);
 /// The column beside a conversation: its pull request, commits, reviews and findings, as the dashboard's `#pr-panel`.
 Screen *pull_panel_screen_new(const char *repo, int number);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);

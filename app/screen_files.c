@@ -1,4 +1,5 @@
-// A pull request's description and changed files, and one file's diff.
+// A pull request's changed files as GitHub's Files changed tab: the tree of paths on the left, the chosen file's diff beside it.
+// The component is laid out inside the pull request screen, and the standalone screen wraps it for the conversation's menu.
 #include "diff.h"
 #include "screens.h"
 #include "str.h"
@@ -6,174 +7,419 @@
 #include <stdlib.h>
 #include <string.h>
 
-// MARK: - Files
+// MARK: - Tree
 
-enum { ACT_OPEN_FILE = 1000, ACT_RETRY, ACT_WRAP, ACT_OPEN_FILE_URL };
-enum { TIMER_NEXT_PAGE = 5 };
-
+/// A directory or file of the tree. Directories hold only one child directory are shown as one row, `a/b/c`, as GitHub does.
 typedef struct {
-    Screen base;
+    char *name, *path;   // the row's text and the full directory path (files: the filename)
+    int file;            // index into the list, or -1 for a directory
+    int *kids; size_t kid_count, kid_cap;
+    int depth;
+} TreeNode;
+
+struct PullFiles {
+    Screen *host; int action_base; UINT page_timer;
     Project project; int number;
     PullFileList list;
     bool loading, changed, confirmed, retried;
     char *error;
     Request *req;
-} FilesScreen;
+    // The tree, rebuilt when the list changes.
+    TreeNode *nodes; size_t node_count, node_cap; size_t tree_files; bool tree_valid;
+    char **collapsed; size_t collapsed_count;   // directory paths folded by the user
+    // The chosen file and its parsed patch.
+    int selected; char *selected_path;
+    DiffLine *lines; size_t line_count; int lines_for;
+    bool wrap;
+};
 
-static char *files_key(FilesScreen *s) { return xstrfmt("files:%s#%d", s->project.repo, s->number); }
-static void files_load(FilesScreen *s);
+enum { ACT_SELECT, ACT_TOGGLE, ACT_RETRY, ACT_WRAP, ACT_OPEN_URL };
+
+static int node_add(PullFiles *f, const char *name, const char *path, int file, int depth) {
+    if (f->node_count == f->node_cap) { f->node_cap = f->node_cap ? f->node_cap * 2 : 64; f->nodes = xrealloc(f->nodes, f->node_cap * sizeof *f->nodes); }
+    TreeNode *n = &f->nodes[f->node_count];
+    memset(n, 0, sizeof *n);
+    n->name = xstrdup(name); n->path = xstrdup(path); n->file = file; n->depth = depth;
+    return (int)f->node_count++;
+}
+static void node_link(PullFiles *f, int parent, int kid) {
+    TreeNode *p = &f->nodes[parent];
+    if (p->kid_count == p->kid_cap) { p->kid_cap = p->kid_cap ? p->kid_cap * 2 : 4; p->kids = xrealloc(p->kids, p->kid_cap * sizeof *p->kids); }
+    p->kids[p->kid_count++] = kid;
+}
+static void tree_free(PullFiles *f) {
+    for (size_t i = 0; i < f->node_count; i++) { free(f->nodes[i].name); free(f->nodes[i].path); free(f->nodes[i].kids); }
+    free(f->nodes); f->nodes = NULL; f->node_count = f->node_cap = 0; f->tree_valid = false;
+}
+static PullFiles *sort_owner;
+static int node_compare(const void *a, const void *b) {
+    const TreeNode *x = &sort_owner->nodes[*(const int *)a], *y = &sort_owner->nodes[*(const int *)b];
+    if ((x->file < 0) != (y->file < 0)) return x->file < 0 ? -1 : 1;   // directories first
+    return _stricmp(x->name, y->name);
+}
+static void tree_sort(PullFiles *f, int index) {
+    TreeNode *n = &f->nodes[index];
+    sort_owner = f;
+    if (n->kid_count > 1) qsort(n->kids, n->kid_count, sizeof *n->kids, node_compare);
+    for (size_t i = 0; i < n->kid_count; i++) tree_sort(f, n->kids[i]);
+}
+/// A directory whose only child is a directory takes it in: `src/Services/Export`.
+static void tree_compact(PullFiles *f, int index) {
+    TreeNode *n = &f->nodes[index];
+    while (n->file < 0 && n->kid_count == 1 && f->nodes[n->kids[0]].file < 0 && n->depth > 0) {
+        TreeNode *only = &f->nodes[n->kids[0]];
+        char *joined = xstrfmt("%s/%s", n->name, only->name);
+        free(n->name); n->name = joined;
+        free(n->path); n->path = xstrdup(only->path);
+        free(n->kids); n->kids = only->kids; n->kid_count = only->kid_count; n->kid_cap = only->kid_cap;
+        only->kids = NULL; only->kid_count = only->kid_cap = 0; only->file = -2;   // dropped
+    }
+    for (size_t i = 0; i < n->kid_count; i++) tree_compact(f, n->kids[i]);
+}
+static void tree_depths(PullFiles *f, int index, int depth) {
+    TreeNode *n = &f->nodes[index];
+    n->depth = depth;
+    for (size_t i = 0; i < n->kid_count; i++) tree_depths(f, n->kids[i], depth + 1);
+}
+static void tree_build(PullFiles *f) {
+    tree_free(f);
+    int root = node_add(f, "", "", -1, 0);
+    for (size_t i = 0; i < f->list.file_count; i++) {
+        const char *path = f->list.files[i].filename;
+        int parent = root;
+        for (const char *p = path; *p;) {
+            const char *slash = strchr(p, '/');
+            size_t n = slash ? (size_t)(slash - p) : strlen(p);
+            char *part = xstrndup(p, n), *full = xstrndup(path, (size_t)(p - path) + n);
+            int found = -1;
+            if (slash) for (size_t k = 0; k < f->nodes[parent].kid_count; k++) { int kid = f->nodes[parent].kids[k]; if (f->nodes[kid].file < 0 && str_eq(f->nodes[kid].name, part)) { found = kid; break; } }
+            if (found < 0) { found = node_add(f, part, full, slash ? -1 : (int)i, f->nodes[parent].depth + 1); node_link(f, parent, found); }
+            free(part); free(full);
+            parent = found;
+            p = slash ? slash + 1 : p + n;
+        }
+    }
+    tree_compact(f, root);
+    tree_depths(f, root, 0);
+    tree_sort(f, root);
+    f->tree_files = f->list.file_count; f->tree_valid = true;
+}
+static bool dir_collapsed(PullFiles *f, const char *path) { for (size_t i = 0; i < f->collapsed_count; i++) if (str_eq(f->collapsed[i], path)) return true; return false; }
+static void dir_toggle(PullFiles *f, const char *path) {
+    for (size_t i = 0; i < f->collapsed_count; i++) if (str_eq(f->collapsed[i], path)) { free(f->collapsed[i]); f->collapsed[i] = f->collapsed[--f->collapsed_count]; return; }
+    f->collapsed = xrealloc(f->collapsed, (f->collapsed_count + 1) * sizeof *f->collapsed);
+    f->collapsed[f->collapsed_count++] = xstrdup(path);
+}
+
+// MARK: - Reading
+
+static char *files_key(PullFiles *f) { return xstrfmt("files:%s#%d", f->project.repo, f->number); }
+static Pane *files_pane(PullFiles *f) { return f->host->pane; }
+static void list_changed(PullFiles *f) { f->tree_valid = false; f->lines_for = -1; }
 
 static void files_done(void *owner, Request *req) {
-    FilesScreen *s = owner;
-    s->loading = false;
+    PullFiles *f = owner;
+    f->loading = false;
     if (!req->ok) {
         // A push or rebase invalidates the pages already read; never mix two revisions.
-        if (req->error.kind == API_HTTP && req->error.status == 409 && !s->retried) {
-            pull_file_list_free(&s->list); pull_file_list_init(&s->list);
-            s->changed = true; s->confirmed = true; s->retried = true;
-            files_load(s);
+        if (req->error.kind == API_HTTP && req->error.status == 409 && !f->retried) {
+            pull_file_list_free(&f->list); pull_file_list_init(&f->list); list_changed(f);
+            f->changed = true; f->confirmed = true; f->retried = true;
+            pull_files_load(f);
             return;
         }
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
-        pane_relayout(s->base.pane);
+        char *text = request_error_text(req); set_string(&f->error, text); free(text);
+        pane_relayout(files_pane(f));
         return;
     }
     PullFilesPage page;
-    if (!pull_files_page_parse(req->result, &page)) { set_string(&s->error, "The server returned an unexpected response."); pane_relayout(s->base.pane); return; }
-    set_string(&s->error, NULL);
-    s->retried = false;
-    if (!s->confirmed) {
-        s->confirmed = true;
+    if (!pull_files_page_parse(req->result, &page)) { set_string(&f->error, "The server returned an unexpected response."); pane_relayout(files_pane(f)); return; }
+    set_string(&f->error, NULL);
+    f->retried = false;
+    if (!f->confirmed) {
+        f->confirmed = true;
         // The same revision has the same files; only a push or rebase makes them worth reading again.
-        if (pull_file_list_confirm(&s->list, &page)) { pull_files_page_free(&page); pane_relayout(s->base.pane); return; }
-        pull_file_list_free(&s->list); pull_file_list_init(&s->list);
+        if (pull_file_list_confirm(&f->list, &page)) { pull_files_page_free(&page); pane_relayout(files_pane(f)); return; }
+        pull_file_list_free(&f->list); pull_file_list_init(&f->list); list_changed(f);
     }
-    pull_file_list_append(&s->list, &page);
+    pull_file_list_append(&f->list, &page); list_changed(f);
     pull_files_page_free(&page);
     // Only whole lists are saved, so a saved one never waits on a page.
-    if (!s->list.next_page) { char *key = files_key(s); Json *j = pull_file_list_json(&s->list); cache_store(g_store.cache, j, key); json_free(j); free(key); }
-    pane_relayout(s->base.pane);
+    if (!f->list.next_page) { char *key = files_key(f); Json *j = pull_file_list_json(&f->list); cache_store(g_store.cache, j, key); json_free(j); free(key); }
+    pane_relayout(files_pane(f));
 }
-static void files_load(FilesScreen *s) {
-    if (s->loading) return;
-    if (!s->confirmed && json_is_null(s->list.pr)) {
-        char *key = files_key(s);
+void pull_files_load(PullFiles *f) {
+    if (f->loading || !store_supports("pull_files")) return;
+    if (!f->confirmed && json_is_null(f->list.pr)) {
+        char *key = files_key(f);
         Json *saved = cache_value(g_store.cache, key);
-        if (saved) { PullFileList list; if (pull_file_list_parse(saved, &list)) { pull_file_list_free(&s->list); s->list = list; } json_free(saved); }
+        if (saved) { PullFileList list; if (pull_file_list_parse(saved, &list)) { pull_file_list_free(&f->list); f->list = list; list_changed(f); } json_free(saved); }
         free(key);
     }
     PullFileList fresh; pull_file_list_init(&fresh);
-    Json *args = pull_file_list_arguments(s->confirmed ? &s->list : &fresh, s->project.repo, s->number);
+    Json *args = pull_file_list_arguments(f->confirmed ? &f->list : &fresh, f->project.repo, f->number);
     pull_file_list_free(&fresh);
     if (!args) return;
-    s->loading = true;
-    store_call("pull_files", args, 0, s, files_done, 0, &s->req);
+    f->loading = true;
+    store_call("pull_files", args, 0, f, files_done, 0, &f->req);
+}
+void pull_files_cancel(PullFiles *f) { request_cancel(&f->req); f->loading = false; }
+void pull_files_refresh(PullFiles *f) {
+    pull_files_cancel(f);
+    pull_file_list_free(&f->list); pull_file_list_init(&f->list); list_changed(f);
+    f->changed = false; f->confirmed = true;
+    pull_files_load(f);
+}
+bool pull_files_started(PullFiles *f) { return f->confirmed || !json_is_null(f->list.pr); }
+bool pull_files_timer(PullFiles *f, UINT id) {
+    if (id != f->page_timer) return false;
+    KillTimer(pane_hwnd(files_pane(f)), id);
+    pull_files_load(f);
+    return true;
 }
 
-static void files_destroy(Screen *base) {
-    FilesScreen *s = (FilesScreen *)base;
-    request_cancel(&s->req);
-    pull_file_list_free(&s->list); project_free(&s->project); free(s->error);
-    screen_release(base);
-}
+// MARK: - Painting
 
 typedef struct { wchar_t glyph; COLORREF color; } MarkData;
-static void paint_mark(Doc *doc, Item *it, HDC hdc, const RECT *rc) { MarkData *d = it->data; draw_glyph(hdc, d->glyph, rc, FONT_ICON, d->color); }
+static void file_mark(const PullFile *file, MarkData *m) {
+    if (str_eq(file->status, "added")) { m->glyph = 0xE710; m->color = theme.success; }
+    else if (str_eq(file->status, "removed")) { m->glyph = 0xE738; m->color = theme.danger; }
+    else if (str_eq(file->status, "renamed") || str_eq(file->status, "copied")) { m->glyph = 0xE72A; m->color = theme.accent; }
+    else { m->glyph = 0xE70F; m->color = theme.warning; }
+}
 
-static void files_layout(Screen *base, Doc *doc) {
-    FilesScreen *s = (FilesScreen *)base;
-    int w = doc->width;
-    doc_space(doc, px(10));
-    if (s->changed) { doc_label(doc, px(4), w - px(8), 0xE72C, "This pull request changed while reading. Showing its latest revision.", FONT_FOOTNOTE, theme.secondary); doc_space(doc, px(10)); }
-    if (!json_is_null(s->list.pr)) {
-        doc_section(doc, 0, w, "Description");
-        int box = doc_box_begin(doc, 0, w, px(12), theme.elevated, theme.border, px(12));
-        doc_item(doc, box)->hover_fill = false;
-        char *body = str_trim(json_str(json_get(s->list.pr, "body")));
-        if (!*body) doc_text(doc, px(12), w - px(24), "No description provided", FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
-        else doc_markdown(doc, px(12), w - px(24), body, FONT_CALLOUT);
-        free(body);
-        const char *author = json_str(json_get(s->list.pr, "author"));
-        if (author) { doc_space(doc, px(8)); doc_label(doc, px(12), w - px(24), 0xE77B, author, FONT_CAPTION, theme.secondary); }
-        doc_box_end(doc, box, px(12));
-        // Files header with counts
-        doc_space(doc, px(14));
-        int y = doc->y;
-        double changed, additions, deletions;
-        char *title = json_num(json_get(s->list.pr, "changedFiles"), &changed) ? xstrfmt("%d files changed", (int)changed) : xstrdup("Files changed");
-        RECT tr = { px(4), y, w * 2 / 3, y + font_height(doc->hdc, FONT_CAPTION_SEMIBOLD) + px(4) };
-        doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        free(title);
-        if (json_num(json_get(s->list.pr, "additions"), &additions) && json_num(json_get(s->list.pr, "deletions"), &deletions)) {
-            char *del = xstrfmt("\xE2\x88\x92%d", (int)deletions); char *add = xstrfmt("+%d", (int)additions);
-            int dw = text_width(doc->hdc, del, FONT_MONO_SMALL), aw = text_width(doc->hdc, add, FONT_MONO_SMALL);
-            RECT dr = { w - px(4) - dw, y, w - px(4), tr.bottom }; doc_text_at(doc, &dr, del, FONT_MONO_SMALL, theme.danger, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            RECT ar = { dr.left - px(8) - aw, y, dr.left - px(8), tr.bottom }; doc_text_at(doc, &ar, add, FONT_MONO_SMALL, theme.success, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            free(del); free(add);
-        }
-        doc->y = tr.bottom + px(6);
-        for (size_t i = 0; i < s->list.file_count; i++) {
-            const PullFile *f = &s->list.files[i];
-            int row = doc_box_begin(doc, 0, w, px(8), theme.elevated, theme.border, px(10));
-            int left = px(12), inner = w - px(24);
-            MarkData *m = xcalloc(1, sizeof *m);
-            if (str_eq(f->status, "added")) { m->glyph = 0xE710; m->color = theme.success; }
-            else if (str_eq(f->status, "removed")) { m->glyph = 0xE738; m->color = theme.danger; }
-            else if (str_eq(f->status, "renamed") || str_eq(f->status, "copied")) { m->glyph = 0xE72A; m->color = theme.accent; }
-            else { m->glyph = 0xE70F; m->color = theme.warning; }
-            RECT mr = { left, doc->y, left + px(20), doc->y + px(20) };
-            int mi = doc_add(doc, &mr, paint_mark); doc_item(doc, mi)->data = m; doc_item(doc, mi)->free_data = free;
-            char *add = xstrfmt("+%d", f->additions >= 0 ? f->additions : 0), *del = xstrfmt("\xE2\x88\x92%d", f->deletions >= 0 ? f->deletions : 0);
-            int cw = text_width(doc->hdc, add, FONT_MONO_SMALL) + text_width(doc->hdc, del, FONT_MONO_SMALL) + px(10);
-            int tx = left + px(28), tw = inner - px(28) - cw - px(8);
-            int y0 = doc->y;
-            doc_text(doc, tx, tw, pull_file_name(f), FONT_MONO, theme.text, DT_SINGLELINE | DT_PATH_ELLIPSIS);
-            char *dir = pull_file_directory(f);
-            if (*dir) { doc_space(doc, px(2)); doc_text(doc, tx, tw, dir, FONT_MONO_CAPTION2, theme.secondary, DT_SINGLELINE | DT_PATH_ELLIPSIS); }
-            free(dir);
-            if (f->previous_filename) { char *from = xstrfmt("from %s", f->previous_filename); doc_space(doc, px(2)); doc_text(doc, tx, tw, from, FONT_MONO_CAPTION2, theme.secondary, DT_SINGLELINE | DT_PATH_ELLIPSIS); free(from); }
-            int lh = font_height(doc->hdc, FONT_MONO_SMALL) + px(4);
-            int dw = text_width(doc->hdc, del, FONT_MONO_SMALL), aw = text_width(doc->hdc, add, FONT_MONO_SMALL);
-            RECT dr = { left + inner - dw, y0, left + inner, y0 + lh }; doc_text_at(doc, &dr, del, FONT_MONO_SMALL, theme.danger, DT_RIGHT | DT_SINGLELINE);
-            RECT ar = { dr.left - px(6) - aw, y0, dr.left - px(6), y0 + lh }; doc_text_at(doc, &ar, add, FONT_MONO_SMALL, theme.success, DT_RIGHT | DT_SINGLELINE);
-            free(add); free(del);
-            doc_box_end(doc, row, px(8));
-            doc_box_action(doc, row, ACT_OPEN_FILE, (intptr_t)i);
-            doc_space(doc, px(4));
-        }
-        if (s->list.next_page && s->list.file_count && !s->error) {
-            doc_loading(doc, 0, w, "Loading more files\xE2\x80\xA6");
-            if (!s->loading) SetTimer(pane_hwnd(base->pane), TIMER_NEXT_PAGE, 1, NULL);
-        }
-        if (!s->list.file_count && !s->list.next_page) doc_text(doc, px(8), w - px(16), "No files changed", FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
-        if (s->list.truncated) { doc_space(doc, px(8)); doc_text(doc, px(4), w - px(8), "GitHub lists only the first 3,000 files of this pull request.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
+/// A row of the tree: a chevron and folder for a directory, the status mark for a file, then the name.
+typedef struct { char *name; int depth; bool dir, open, selected; MarkData mark; } RowData;
+static void row_free(void *p) { RowData *d = p; free(d->name); free(d); }
+static void paint_tree_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    RowData *d = it->data;
+    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    if (d->selected || hovered) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(hdc, &h, px(6), d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise, d->selected ? blend(theme.accent, theme.canvas, 0.16) : theme.raise); }
+    int x = rc->left + px(6) + d->depth * px(16);
+    if (d->dir) {
+        RECT c = { x, rc->top, x + px(14), rc->bottom }; draw_glyph(hdc, d->open ? 0xE70D : 0xE76C, &c, FONT_ICON_SMALL, theme.muted); x += px(16);
+        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, 0xE8B7, &g, FONT_ICON_SMALL, theme.accent); x += px(20);
+    } else {
+        x += px(16);
+        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, d->mark.glyph, &g, FONT_ICON_SMALL, d->mark.color); x += px(20);
     }
-    if (s->error) {
-        doc_space(doc, px(12));
-        doc_notice(doc, px(4), w - px(8), s->error);
+    RECT t = { x, rc->top, rc->right - px(6), rc->bottom };
+    draw_text(hdc, d->name, &t, d->selected ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+}
+
+static void layout_tree_node(PullFiles *f, Doc *doc, int index, int x, int w) {
+    TreeNode *n = &f->nodes[index];
+    if (n->file == -2) return;
+    if (n->depth > 0) {
+        RowData *d = xcalloc(1, sizeof *d);
+        d->name = xstrdup(n->name); d->depth = n->depth - 1; d->dir = n->file < 0;
+        d->open = d->dir && !dir_collapsed(f, n->path);
+        d->selected = !d->dir && n->file == f->selected;
+        if (!d->dir) file_mark(&f->list.files[n->file], &d->mark);
+        int i = doc_custom(doc, x, w, px(26), paint_tree_row, d, row_free, f->action_base + (d->dir ? ACT_TOGGLE : ACT_SELECT), d->dir ? (intptr_t)index : (intptr_t)n->file);
+        doc_item(doc, i)->hover_fill = false;
+        doc_space(doc, px(1));
+        if (d->dir && !d->open) return;
+    }
+    for (size_t k = 0; k < n->kid_count; k++) layout_tree_node(f, doc, n->kids[k], x, w);
+}
+static void layout_tree(PullFiles *f, Doc *doc, int x, int w) {
+    if (!f->tree_valid || f->tree_files != f->list.file_count) tree_build(f);
+    char *title = xstrfmt("%zu file%s", f->list.file_count, f->list.file_count == 1 ? "" : "s");
+    doc_text(doc, x + px(6), w - px(12), title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    free(title);
+    doc_space(doc, px(6));
+    if (f->node_count) layout_tree_node(f, doc, 0, x, w);
+}
+
+typedef struct { DiffLine *line; bool wrap; } DiffRowData;
+static void paint_diff_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    DiffRowData *d = it->data;
+    DiffLine *l = d->line;
+    if (l->kind == DIFF_HUNK || l->kind == DIFF_NOTE) {
+        if (l->kind == DIFF_HUNK) fill_rect(hdc, rc, blend(theme.accent, theme.raise, 0.08));
+        RECT t = { rc->left + px(12), rc->top, rc->right - px(12), rc->bottom };
+        draw_text(hdc, l->text, &t, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE) | DT_NOCLIP);
+        return;
+    }
+    COLORREF tint = l->kind == DIFF_ADDED ? theme.success : l->kind == DIFF_REMOVED ? theme.danger : theme.raise;
+    if (l->kind != DIFF_CONTEXT) fill_rect(hdc, rc, blend(tint, theme.raise, 0.13));
+    char number[16] = "";
+    int n = l->new_line ? l->new_line : l->old_line;
+    if (n) snprintf(number, sizeof number, "%d", n);
+    RECT nr = { rc->left, rc->top, rc->left + px(40), rc->bottom };
+    draw_text(hdc, number, &nr, FONT_MONO_CAPTION2, theme.tertiary, DT_RIGHT | DT_TOP | DT_SINGLELINE);
+    const char *sign = l->kind == DIFF_ADDED ? "+" : l->kind == DIFF_REMOVED ? "\xE2\x88\x92" : " ";
+    RECT sr = { rc->left + px(48), rc->top, rc->left + px(60), rc->bottom };
+    draw_text(hdc, sign, &sr, FONT_MONO_SMALL, l->kind == DIFF_CONTEXT ? theme.secondary : tint, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    RECT tr = { rc->left + px(62), rc->top, rc->right - px(12), rc->bottom };
+    draw_text(hdc, l->text[0] ? l->text : " ", &tr, FONT_MONO_SMALL, theme.text, DT_LEFT | DT_TOP | DT_EXPANDTABS | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE | DT_NOCLIP));
+}
+
+/// `.file-header`: the path in mono type, its diffstat, and the wrap and GitHub buttons.
+typedef struct { char *path, *from, *add, *del; } FileHeadData;
+static void file_head_free(void *p) { FileHeadData *d = p; free(d->path); free(d->from); free(d->add); free(d->del); free(d); }
+static void paint_file_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    FileHeadData *d = it->data;
+    COLORREF tint = blend(theme.accent, theme.raise, 0.06);
+    RECT top = *rc; fill_round_rect(hdc, &top, px(7), tint, tint);
+    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(hdc, &low, tint);
+    draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
+    int right = rc->right - px(12);
+    int dw = text_width(hdc, d->del, FONT_MONO_SMALL), aw = text_width(hdc, d->add, FONT_MONO_SMALL);
+    RECT dr = { right - dw, rc->top, right, rc->bottom }; draw_text(hdc, d->del, &dr, FONT_MONO_SMALL, theme.danger, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    RECT ar = { dr.left - px(6) - aw, rc->top, dr.left - px(6), rc->bottom }; draw_text(hdc, d->add, &ar, FONT_MONO_SMALL, theme.success, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    int x = rc->left + px(12), mid = (rc->top + rc->bottom) / 2;
+    RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(hdc, 0xE8A5, &g, FONT_ICON_SMALL, theme.muted); x += px(22);
+    if (d->from) {
+        RECT p = { x, rc->top, ar.left - px(12), mid + px(1) }; draw_text(hdc, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+        RECT q = { x, mid + px(1), ar.left - px(12), rc->bottom }; draw_text(hdc, d->from, &q, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+    } else {
+        RECT p = { x, rc->top, ar.left - px(12), rc->bottom }; draw_text(hdc, d->path, &p, FONT_MONO_SMALL, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+    }
+}
+
+static void layout_diff(PullFiles *f, Doc *doc, int x, int w) {
+    if (f->selected < 0 || (size_t)f->selected >= f->list.file_count) return;
+    const PullFile *file = &f->list.files[f->selected];
+    if (f->lines_for != f->selected) {
+        diff_free(f->lines, f->line_count); f->lines = NULL; f->line_count = 0;
+        if (file->patch) f->lines = diff_parse(file->patch, &f->line_count);
+        f->lines_for = f->selected;
+    }
+    int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
+    doc_item(doc, box)->hover_fill = false;
+    FileHeadData *h = xcalloc(1, sizeof *h);
+    h->path = xstrdup(file->filename);
+    if (file->previous_filename) h->from = xstrfmt("renamed from %s", file->previous_filename);
+    h->add = xstrfmt("+%d", file->additions >= 0 ? file->additions : 0); h->del = xstrfmt("\xE2\x88\x92%d", file->deletions >= 0 ? file->deletions : 0);
+    doc_custom(doc, x + 1, w - 2, px(40), paint_file_head, h, file_head_free, 0, 0);
+    // The buttons under the header: wrap or scroll long lines, and the file on GitHub.
+    doc_space(doc, px(8));
+    ButtonSpec buttons[2]; size_t bc = 0;
+    if (file->patch) buttons[bc++] = (ButtonSpec){ f->wrap ? 0xE8E4 : 0xE8E3, f->wrap ? "Scroll long lines" : "Wrap long lines", BUTTON_PLAIN, f->action_base + ACT_WRAP, 0, true };
+    if (safe_web_url(file->url)) buttons[bc++] = (ButtonSpec){ 0xE8A7, "Open on GitHub", BUTTON_PLAIN, f->action_base + ACT_OPEN_URL, 0, true };
+    if (bc) { doc_button_row(doc, x + px(8), w - px(16), buttons, bc); doc_space(doc, px(8)); }
+    if (!file->patch) {
+        doc_label(doc, x + px(12), w - px(24), 0xE8A5, "No diff available", FONT_SUBHEADLINE_SEMIBOLD, theme.text);
+        doc_space(doc, px(6));
+        doc_text(doc, x + px(12), w - px(24), "GitHub returns no patch for binary files and very large changes.", FONT_FOOTNOTE, theme.secondary, DT_WORDBREAK);
         doc_space(doc, px(8));
-        doc_button(doc, px(4), 0, "Try again", BUTTON_BORDERED, ACT_RETRY, 0, !s->loading);
     }
-    if (json_is_null(s->list.pr) && !s->error) doc_loading(doc, 0, w, "Loading changes\xE2\x80\xA6");
-    doc_space(doc, px(16));
+    int widest = x + w, first = (int)doc->count;
+    for (size_t i = 0; i < f->line_count; i++) {
+        DiffLine *l = &f->lines[i];
+        int h;
+        bool meta = l->kind == DIFF_HUNK || l->kind == DIFF_NOTE;
+        FontId font = meta ? FONT_MONO_CAPTION2 : FONT_MONO_SMALL;
+        int text_x = meta ? px(12) : px(62);
+        if (f->wrap) h = measure_text(doc->hdc, l->text[0] ? l->text : " ", w - 2 - text_x - px(12), font, DT_WORDBREAK | DT_EXPANDTABS);
+        else { h = font_height(doc->hdc, font); int tw = x + 1 + text_x + text_width(doc->hdc, l->text, font) + px(24); if (tw > widest) widest = tw; }
+        h += meta ? px(l->kind == DIFF_HUNK ? 12 : 4) : px(3);
+        DiffRowData *d = xcalloc(1, sizeof *d); d->line = l; d->wrap = f->wrap;
+        RECT rc = { x + 1, doc->y, x + w - 1, doc->y + h };
+        int ii = doc_add(doc, &rc, paint_diff_row);
+        doc_item(doc, ii)->data = d; doc_item(doc, ii)->free_data = free;
+        doc->y += h;
+    }
+    if (f->line_count) doc_space(doc, px(6));
+    doc_box_end(doc, box, 0);
+    if (!f->wrap && widest > x + w) {
+        // Long lines scroll sideways: the rows and their box grow to the widest line.
+        for (size_t i = (size_t)first; i < doc->count; i++) if (doc->items[i].paint == paint_diff_row) doc->items[i].rc.right = widest - 1;
+        doc_item(doc, box)->rc.right = widest;
+        if (widest > doc->content_width) doc->content_width = widest;
+    }
 }
-static void files_header(Screen *base, HeaderInfo *info) { FilesScreen *s = (FilesScreen *)base; snprintf(info->title, sizeof info->title, "#%d", s->number); snprintf(info->subtitle, sizeof info->subtitle, "Description and changes"); }
-static void files_action(Screen *base, int action, intptr_t arg, POINT pt) {
-    (void)pt;
-    FilesScreen *s = (FilesScreen *)base;
-    if (action == ACT_OPEN_FILE && (size_t)arg < s->list.file_count) app_push_detail(file_diff_screen_new(&s->list.files[arg]));
-    if (action == ACT_RETRY) files_load(s);
+
+void pull_files_layout(PullFiles *f, Doc *doc, int x, int w) {
+    if (f->changed) { doc_label(doc, x + px(4), w - px(8), 0xE72C, "This pull request changed while reading. Showing its latest revision.", FONT_FOOTNOTE, theme.secondary); doc_space(doc, px(10)); }
+    if (f->error) {
+        doc_notice(doc, x + px(4), w - px(8), f->error);
+        doc_space(doc, px(8));
+        doc_button(doc, x + px(4), 0, "Try again", BUTTON_BORDERED, f->action_base + ACT_RETRY, 0, !f->loading);
+        doc_space(doc, px(12));
+    }
+    if (json_is_null(f->list.pr)) { if (!f->error) doc_loading(doc, x, w, "Loading changes\xE2\x80\xA6"); return; }
+    if (!f->list.file_count && !f->list.next_page) { doc_text(doc, x + px(8), w - px(16), "No files changed", FONT_CALLOUT, theme.secondary, DT_WORDBREAK); return; }
+    // The chosen file follows its path across revisions; the first file is chosen until then.
+    if (f->selected_path) { f->selected = -1; for (size_t i = 0; i < f->list.file_count; i++) if (str_eq(f->list.files[i].filename, f->selected_path)) { f->selected = (int)i; break; } }
+    if (f->selected < 0 || (size_t)f->selected >= f->list.file_count) f->selected = f->list.file_count ? 0 : -1;
+    int top = doc->y;
+    if (w >= px(720)) {
+        // Wide: the tree on the left, the diff on the right, as GitHub's `.pr-toolbar` layout.
+        int tree_w = w * 28 / 100, gap = px(16);
+        if (tree_w < px(220)) tree_w = px(220);
+        if (tree_w > px(320)) tree_w = px(320);
+        layout_tree(f, doc, x, tree_w);
+        int tree_bottom = doc->y;
+        doc->y = top;
+        layout_diff(f, doc, x + tree_w + gap, w - tree_w - gap);
+        if (doc->y < tree_bottom) doc->y = tree_bottom;
+    } else {
+        layout_tree(f, doc, x, w);
+        doc_space(doc, px(12));
+        layout_diff(f, doc, x, w);
+    }
+    if (f->list.next_page && !f->error) {
+        doc_space(doc, px(8));
+        doc_loading(doc, x, w, "Loading more files\xE2\x80\xA6");
+        if (!f->loading) SetTimer(pane_hwnd(files_pane(f)), f->page_timer, 1, NULL);
+    }
+    if (f->list.truncated) { doc_space(doc, px(8)); doc_text(doc, x + px(4), w - px(8), "GitHub lists only the first 3,000 files of this pull request.", FONT_CAPTION, theme.secondary, DT_WORDBREAK); }
 }
-static void files_timer(Screen *base, UINT id) { FilesScreen *s = (FilesScreen *)base; if (id == TIMER_NEXT_PAGE) { KillTimer(pane_hwnd(base->pane), id); files_load(s); } }
-static void files_visible(Screen *base, bool shown) { FilesScreen *s = (FilesScreen *)base; if (shown) { if (!s->confirmed) files_load(s); } else { request_cancel(&s->req); s->loading = false; } }
-static void files_refresh(Screen *base) {
-    FilesScreen *s = (FilesScreen *)base;
-    request_cancel(&s->req); s->loading = false;
-    pull_file_list_free(&s->list); pull_file_list_init(&s->list);
-    s->changed = false; s->confirmed = true;
-    files_load(s);
-    pane_relayout(base->pane);
+
+bool pull_files_action(PullFiles *f, int action, intptr_t arg) {
+    int a = action - f->action_base;
+    if (a < 0 || a >= PULL_FILES_ACTIONS) return false;
+    switch (a) {
+    case ACT_SELECT:
+        if ((size_t)arg < f->list.file_count) { f->selected = (int)arg; set_string(&f->selected_path, f->list.files[arg].filename); pane_relayout(files_pane(f)); }
+        break;
+    case ACT_TOGGLE: if ((size_t)arg < f->node_count) { dir_toggle(f, f->nodes[arg].path); pane_relayout(files_pane(f)); } break;
+    case ACT_RETRY: pull_files_load(f); pane_relayout(files_pane(f)); break;
+    case ACT_WRAP: f->wrap = !f->wrap; pane_relayout(files_pane(f)); break;
+    case ACT_OPEN_URL: if (f->selected >= 0 && (size_t)f->selected < f->list.file_count) open_web_url(f->list.files[f->selected].url); break;
+    }
+    return true;
 }
+
+PullFiles *pull_files_new(const Project *project, int number, Screen *host, int action_base, UINT page_timer) {
+    PullFiles *f = xcalloc(1, sizeof *f);
+    f->host = host; f->action_base = action_base; f->page_timer = page_timer;
+    project_copy(&f->project, project); f->number = number;
+    pull_file_list_init(&f->list);
+    f->selected = -1; f->lines_for = -1; f->wrap = true;
+    return f;
+}
+void pull_files_free(PullFiles *f) {
+    if (!f) return;
+    request_cancel(&f->req);
+    pull_file_list_free(&f->list); project_free(&f->project); free(f->error);
+    tree_free(f);
+    for (size_t i = 0; i < f->collapsed_count; i++) free(f->collapsed[i]);
+    free(f->collapsed);
+    free(f->selected_path);
+    diff_free(f->lines, f->line_count);
+    free(f);
+}
+
+// MARK: - Standalone screen
+
+enum { ACT_FILES_BASE = 1000 };
+enum { TIMER_NEXT_PAGE = 5 };
+
+typedef struct { Screen base; int number; PullFiles *files; } FilesScreen;
+
+static void files_destroy(Screen *base) { FilesScreen *s = (FilesScreen *)base; pull_files_free(s->files); screen_release(base); }
+static void files_layout(Screen *base, Doc *doc) { FilesScreen *s = (FilesScreen *)base; doc_space(doc, px(10)); pull_files_layout(s->files, doc, 0, doc->width); doc_space(doc, px(16)); }
+static void files_header(Screen *base, HeaderInfo *info) { FilesScreen *s = (FilesScreen *)base; snprintf(info->title, sizeof info->title, "#%d", s->number); snprintf(info->subtitle, sizeof info->subtitle, "Files changed"); }
+static void files_action(Screen *base, int action, intptr_t arg, POINT pt) { (void)pt; FilesScreen *s = (FilesScreen *)base; pull_files_action(s->files, action, arg); }
+static void files_timer(Screen *base, UINT id) { FilesScreen *s = (FilesScreen *)base; pull_files_timer(s->files, id); }
+static void files_visible(Screen *base, bool shown) { FilesScreen *s = (FilesScreen *)base; if (shown) pull_files_load(s->files); else pull_files_cancel(s->files); }
+static void files_refresh(Screen *base) { FilesScreen *s = (FilesScreen *)base; pull_files_refresh(s->files); pane_relayout(base->pane); }
 static const ScreenVTable files_vt = {
     .destroy = files_destroy, .layout = files_layout, .header = files_header, .action = files_action, .timer = files_timer,
     .visible = files_visible, .refresh = files_refresh,
@@ -181,105 +427,7 @@ static const ScreenVTable files_vt = {
 Screen *pull_files_screen_new(const Project *project, int number) {
     FilesScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &files_vt; s->base.id = xstrfmt("files:%s#%d", project->repo, number);
-    project_copy(&s->project, project); s->number = number;
-    pull_file_list_init(&s->list);
-    return &s->base;
-}
-
-// MARK: - Diff
-
-typedef struct {
-    Screen base;
-    PullFile file;
-    DiffLine *lines; size_t line_count;
-    bool wrap;
-} DiffScreen;
-
-typedef struct { DiffLine *line; bool wrap; } RowData;
-static void paint_diff_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    RowData *d = it->data;
-    DiffLine *l = d->line;
-    if (l->kind == DIFF_HUNK || l->kind == DIFF_NOTE) {
-        if (l->kind == DIFF_HUNK) fill_rect(hdc, rc, theme.surface);
-        RECT t = { rc->left + px(12), rc->top, rc->right - px(12), rc->bottom };
-        draw_text(hdc, l->text, &t, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE) | DT_NOCLIP);
-        return;
-    }
-    COLORREF tint = l->kind == DIFF_ADDED ? theme.success : l->kind == DIFF_REMOVED ? theme.danger : theme.background;
-    if (l->kind != DIFF_CONTEXT) fill_rect(hdc, rc, blend(tint, theme.background, 0.13));
-    char number[16] = "";
-    int n = l->new_line ? l->new_line : l->old_line;
-    if (n) snprintf(number, sizeof number, "%d", n);
-    RECT nr = { rc->left, rc->top, rc->left + px(34), rc->bottom };
-    draw_text(hdc, number, &nr, FONT_MONO_CAPTION2, theme.tertiary, DT_RIGHT | DT_TOP | DT_SINGLELINE);
-    const char *sign = l->kind == DIFF_ADDED ? "+" : l->kind == DIFF_REMOVED ? "\xE2\x88\x92" : " ";
-    RECT sr = { rc->left + px(40), rc->top, rc->left + px(52), rc->bottom };
-    draw_text(hdc, sign, &sr, FONT_MONO_SMALL, l->kind == DIFF_CONTEXT ? theme.secondary : tint, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    RECT tr = { rc->left + px(54), rc->top, rc->right - px(12), rc->bottom };
-    draw_text(hdc, l->text[0] ? l->text : " ", &tr, FONT_MONO_SMALL, theme.text, DT_LEFT | DT_TOP | DT_EXPANDTABS | (d->wrap ? DT_WORDBREAK | DT_EDITCONTROL : DT_SINGLELINE | DT_NOCLIP));
-}
-
-static void diff_layout(Screen *base, Doc *doc) {
-    DiffScreen *s = (DiffScreen *)base;
-    int w = doc->width;
-    doc_space(doc, px(10));
-    doc_text(doc, px(4), w - px(8), s->file.filename, FONT_MONO, theme.text, DT_WORDBREAK);
-    if (s->file.previous_filename) { char *t = xstrfmt("Renamed from %s", s->file.previous_filename); doc_space(doc, px(4)); doc_text(doc, px(4), w - px(8), t, FONT_MONO_SMALL, theme.secondary, DT_WORDBREAK); free(t); }
-    doc_space(doc, px(10));
-    if (!s->file.patch) {
-        doc_label(doc, px(4), w - px(8), 0xE8A5, "No diff available", FONT_SUBHEADLINE_SEMIBOLD, theme.text);
-        doc_space(doc, px(6));
-        doc_text(doc, px(4), w - px(8), "GitHub returns no patch for binary files and very large changes.", FONT_FOOTNOTE, theme.secondary, DT_WORDBREAK);
-    }
-    int widest = w;
-    for (size_t i = 0; i < s->line_count; i++) {
-        DiffLine *l = &s->lines[i];
-        int h;
-        bool meta = l->kind == DIFF_HUNK || l->kind == DIFF_NOTE;
-        FontId f = meta ? FONT_MONO_CAPTION2 : FONT_MONO_SMALL;
-        int text_x = meta ? px(12) : px(54);
-        if (s->wrap) h = measure_text(doc->hdc, l->text[0] ? l->text : " ", w - text_x - px(12), f, DT_WORDBREAK | DT_EXPANDTABS);
-        else { h = font_height(doc->hdc, f); int tw = text_x + text_width(doc->hdc, l->text, f) + px(24); if (tw > widest) widest = tw; }
-        h += meta ? px(l->kind == DIFF_HUNK ? 12 : 4) : px(3);
-        RowData *d = xcalloc(1, sizeof *d); d->line = l; d->wrap = s->wrap;
-        RECT rc = { 0, doc->y, s->wrap ? w : widest, doc->y + h };
-        int ii = doc_add(doc, &rc, paint_diff_row);
-        doc_item(doc, ii)->data = d; doc_item(doc, ii)->free_data = free;
-        doc->y += h;
-    }
-    if (!s->wrap) for (size_t i = 0; i < doc->count; i++) if (doc->items[i].paint == paint_diff_row) doc->items[i].rc.right = widest;
-    if (!s->wrap && widest > doc->content_width) doc->content_width = widest;
-    if (safe_web_url(s->file.url)) {
-        doc_space(doc, px(12));
-        int li = doc_label(doc, px(4), w - px(8), 0xE8A7, "Open file on GitHub", FONT_FOOTNOTE, theme.accent);
-        doc_item(doc, li)->action = ACT_OPEN_FILE_URL; doc_item(doc, li)->hand = true;
-    }
-    doc_space(doc, px(16));
-}
-static void diff_header(Screen *base, HeaderInfo *info) {
-    DiffScreen *s = (DiffScreen *)base;
-    snprintf(info->title, sizeof info->title, "%s", pull_file_name(&s->file));
-    info->buttons[0].glyph = s->wrap ? 0xE8E4 : 0xE8E3; info->buttons[0].action = ACT_WRAP; info->buttons[0].enabled = true;
-    info->buttons[0].tip = s->wrap ? "Scroll long lines" : "Wrap long lines";
-    info->button_count = 1;
-}
-static void diff_action(Screen *base, int action, intptr_t arg, POINT pt) {
-    (void)arg; (void)pt;
-    DiffScreen *s = (DiffScreen *)base;
-    if (action == ACT_WRAP) { s->wrap = !s->wrap; pane_relayout(base->pane); }
-    if (action == ACT_OPEN_FILE_URL) open_web_url(s->file.url);
-}
-static void diff_destroy(Screen *base) {
-    DiffScreen *s = (DiffScreen *)base;
-    diff_free(s->lines, s->line_count); pull_file_free(&s->file);
-    screen_release(base);
-}
-static const ScreenVTable diff_vt = { .destroy = diff_destroy, .layout = diff_layout, .header = diff_header, .action = diff_action };
-Screen *file_diff_screen_new(const PullFile *file) {
-    DiffScreen *s = xcalloc(1, sizeof *s);
-    s->base.vt = &diff_vt; s->base.id = xstrfmt("diff:%s", file->filename);
-    pull_file_copy(&s->file, file);
-    s->wrap = true;
-    if (s->file.patch) s->lines = diff_parse(s->file.patch, &s->line_count);
+    s->number = number;
+    s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_NEXT_PAGE);
     return &s->base;
 }
