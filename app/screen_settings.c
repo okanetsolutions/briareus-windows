@@ -1404,7 +1404,7 @@ enum { SP_REPO, SP_MODE, SP_COUNT };
 static const char *const SSH_PICK_KEYS[SP_COUNT] = { "repo", "permissionMode" };
 
 /// The form's cells, two to a row: what the server is, how it is reached, and what it may run unasked.
-enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_NONE };
+enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_ENABLED };
 static const char *mode_title(const char *mode) { return str_eq(mode, "allow") ? "Don\xE2\x80\x99t ask anything" : "Ask for all commands"; }
 
 enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS };
@@ -1558,6 +1558,14 @@ static void ssh_cell(SshForm *s, Doc *doc, int x, int w, int cell) {
     case C_PORT: ssh_field(s, doc, x, w, S_PORT); break;
     case C_USER: ssh_field(s, doc, x, w, S_USER); break;
     case C_KEY: ssh_field(s, doc, x, w, S_KEY); break;
+    case C_ENABLED: {
+        // Level with the boxes beside it: below where their label sits, centred on their height.
+        doc_space(doc, font_height(doc->cv, FONT_FOOTNOTE) + px(6));
+        int i = doc_custom(doc, x, w, px(36), paint_ssh_check, s, NULL, ACT_SSH_TOGGLE, 0);
+        doc_item(doc, i)->hand = true;
+        doc_space(doc, px(14));
+        break;
+    }
     case C_MODE: ssh_select(s, doc, x, w, SP_MODE, "Permission mode", "Ask shows the exact command in the dashboard for approval. Don't ask anything sends every command immediately."); break;
     }
 }
@@ -1586,13 +1594,10 @@ static void ssh_layout(Screen *base, Doc *doc) {
     doc_rule(doc, x, col);
     doc_space(doc, px(18));
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
-    int i = doc_custom(doc, x, col, px(26), paint_ssh_check, s, NULL, ACT_SSH_TOGGLE, 0);
-    doc_item(doc, i)->hand = true;
-    doc_space(doc, px(10));
     ssh_row(s, doc, x, col, C_LABEL, C_REPO);
     ssh_row(s, doc, x, col, C_HOST, C_PORT);
     ssh_row(s, doc, x, col, C_USER, C_KEY);
-    ssh_row(s, doc, x, col, C_MODE, C_NONE);
+    ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
     note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
     doc_space(doc, px(40));
 }
