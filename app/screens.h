@@ -55,13 +55,20 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
-/// The sidebar's ⚙ Settings, as the dashboard's settings page: Devices and clients, and the projects with ＋ New.
+/// The sidebar's ⚙ Settings, as the dashboard's settings page: Devices and clients, and the projects and the providers,
+/// each with ＋ New.
 Screen *settings_screen_new(void);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);
 /// The settings sidebar reads the projects again, after one was saved, cloned or deleted; `select_id` > 0 is highlighted.
 void settings_projects_changed(int select_id);
+/// One provider's settings, the dashboard's provider form, as tabs. `row` is the server's Provider (NULL with `defaults`
+/// for a new one); `defaults` is what a new one starts from.
+Screen *provider_settings_screen_new(const Json *row, const Json *defaults);
+/// The settings sidebar reads the providers again, after one was saved, cloned, deleted or logged in; `open_first` opens
+/// the first one left once read (after a delete).
+void settings_providers_changed(bool open_first);
 /// One server of the database pool, the dashboard's database server form. `row` is the server's DbServer (NULL with
 /// `defaults` for a new one).
 Screen *db_server_settings_screen_new(const Json *row, const Json *defaults);

@@ -1,7 +1,7 @@
-// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects
-// and the database pool, each with ＋ New) and a project's form, its sections and fields laid out as the dashboard's,
-// saved through /settings/projects. Those routes need an Admin token; any other token gets a sentence saying so.
-// A database server's form is screen_db_servers.c.
+// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects,
+// the providers and the database pool, each with ＋ New) and a project's form, its sections and fields laid out as the
+// dashboard's, saved through /settings/projects. The provider form is screen_provider_settings.c and a database server's
+// screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -17,7 +17,10 @@ static void sign_out(void) {
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static int row_id(const Json *row) { return json_int_or(json_get(row, "id"), 0); }
 static char *form_id(int id) { return id > 0 ? xstrfmt("settings-project:%d", id) : xstrdup("settings-project:new"); }
-static bool is_form_id(const char *id) { return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-db:")); }
+/// A settings form in the detail pane: a project's, a provider's or a database server's.
+static bool is_form_id(const char *id) {
+    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:"));
+}
 
 /// Why the settings cannot be shown here, as a new string; NULL when they can.
 static char *settings_unavailable(void) {
@@ -32,18 +35,24 @@ static char *settings_unavailable(void) {
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_SERVER, ACT_OPEN_SERVER };
+enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
     Screen base;
     Json *projects;     // the server's Project rows, in their order
     Json *defaults;     // what a new one starts from
-    Json *servers;      // the database pool: `list`, the server's DbServer rows, and `defaults`
-    bool loaded, servers_loaded;
-    bool open_first_server;   // a server was removed: the next read of the pool opens the first one left
-    char *error, *servers_error;
-    Request *req, *req_order, *req_servers;
+    bool loaded;
+    char *error;
+    Request *req, *req_order;
+    Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
+    bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
+    char *providers_error;
+    Request *req_providers;
+    Json *servers;      // the database pool: the server's DbServer rows (`list`) and what a new one starts from (`defaults`)
+    bool servers_loaded, open_first_server;   // the second: open the first row once the list is read (after a delete)
+    char *servers_error;
+    Request *req_servers;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -88,11 +97,39 @@ static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+typedef struct { char *label, *binary; bool active, login, endpoint, selected, unsaved; } ProviderRowData;
+static void provider_row_free(void *p) { ProviderRowData *d = p; free(d->label); free(d->binary); free(d); }
+static void paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    ProviderRowData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    COLORREF background = hovered || d->selected ? theme.raise : theme.sidebar;
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
+    int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
+    draw_status_dot(cv, x + px(3), top + lh / 2, d->active ? "idle" : "");
+    RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
+    draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The dashboard's badges: the CLI it runs, and what sets it apart.
+    const char *tags[] = { d->binary, d->active || d->unsaved ? NULL : "inactive", d->login ? "own login" : NULL, d->endpoint ? "custom endpoint" : NULL };
+    int bx = x, y2 = top + lh, right = rc->right - px(8);
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) {
+        if (str_empty(tags[i])) continue;
+        int bw = text_width(cv, tags[i], FONT_CAPTION2) + px(12) + 2;
+        if (bx + bw > right) break;
+        int h; draw_chip(cv, bx, y2 + px(1), tags[i], theme.muted, background, &h);
+        bx += bw + px(6);
+    }
+}
+
 static void settings_open_row(SettingsScreen *s, size_t index) {
     const Json *row = json_at(json_get(s->projects, "list"), index);
     if (json_is_object(row)) app_show_detail(project_settings_screen_new(row, json_get(s->projects, "defaults")));
 }
 static const Json *settings_rows(SettingsScreen *s) { return json_get(s->projects, "list"); }
+static const Json *provider_rows(SettingsScreen *s) { return json_get(s->providers, "list"); }
+static void settings_open_provider(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(provider_rows(s), index);
+    if (json_is_object(row)) app_show_detail(provider_settings_screen_new(row, json_get(s->providers, "defaults")));
+}
 
 static void settings_load(SettingsScreen *s);
 static void settings_done(void *owner, Request *req) {
@@ -115,6 +152,34 @@ static void settings_done(void *owner, Request *req) {
 static void settings_load(SettingsScreen *s) {
     if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
     store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
+}
+static void providers_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->providers_loaded = true;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->providers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    set_string(&s->providers_error, NULL);
+    json_free(s->providers);
+    s->providers = json_object();
+    json_object_set(s->providers, "list", json_clone(json_get(req->result, "providers")));
+    json_object_set(s->providers, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+    // After a delete the first provider left opens in its place, as a project's delete opens the first project left.
+    if (!s->open_first_provider) return;
+    s->open_first_provider = false;
+    Screen *root = pane_root(app_detail_pane());
+    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (json_count(provider_rows(s))) settings_open_provider(s, 0);
+    else app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults")));
+}
+static void providers_load(SettingsScreen *s) {
+    if (s->req_providers || !store_supports("settings_providers")) { s->providers_loaded = true; return; }
+    store_call("settings_providers", json_object(), 0, s, providers_done, 0, &s->req_providers);
+}
+void settings_providers_changed(bool open_first) {
+    if (!g_settings) return;
+    g_settings->open_first_provider = open_first;
+    request_cancel(&g_settings->req_providers);
+    providers_load(g_settings);
 }
 static const Json *server_rows(SettingsScreen *s) { return json_get(s->servers, "list"); }
 static void servers_open_row(SettingsScreen *s, size_t index) {
@@ -145,8 +210,8 @@ static void servers_load(SettingsScreen *s) {
 }
 void settings_db_servers_changed(bool open_first) {
     if (!g_settings) return;
-    request_cancel(&g_settings->req_servers);
     g_settings->open_first_server = open_first;
+    request_cancel(&g_settings->req_servers);
     servers_load(g_settings);
 }
 const Json *settings_project_rows(void) { return g_settings ? settings_rows(g_settings) : NULL; }
@@ -157,7 +222,6 @@ size_t settings_pool_capacity(void) {
     for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
     return n;
 }
-
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
@@ -192,61 +256,34 @@ static void settings_move(SettingsScreen *s, size_t index, int delta) {
 static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
-    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_servers);
-    json_free(s->projects); json_free(s->servers); free(s->error); free(s->servers_error);
+    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_servers);
+    json_free(s->projects); free(s->error);
+    json_free(s->providers); free(s->providers_error);
+    json_free(s->servers); free(s->servers_error);
     screen_release(base);
 }
-/// A section's summary, as the dashboard's `.side-sec`: its title, a muted note after it, and ＋ New when `action` is set.
-static void section_head(Doc *doc, int w, const char *title, const char *note, int action) {
-    int y = doc->y, h = px(20), nw = action ? text_width(doc->cv, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8) : 0;
-    RECT tr = { px(8), y, w - px(8) - nw, y + h };
-    doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+/// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
+static void section_title(Doc *doc, int w, const char *title, const char *note, int new_action) {
+    int y = doc->y, h = px(20);
+    RECT tr = { px(8), y, w - px(60), y + h };
+    doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     int nx = px(8) + text_width(doc->cv, title, FONT_CAPTION_SEMIBOLD) + px(6);
     if (note && nx < tr.right) {
         RECT nr = { nx, y, tr.right, y + h };
         doc_text_at(doc, &nr, note, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
-    if (action) {
+    if (new_action) {
+        int nw = text_width(doc->cv, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
         RECT nr = { w - px(4) - nw, y, w - px(4), y + h };
         Item *it = doc_item(doc, doc_text_at(doc, &nr, "\xEF\xBC\x8B New", FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE));
-        it->action = action; it->hand = true;
+        it->action = new_action; it->hand = true;
     }
     doc->y = y + h;
     doc_space(doc, px(4));
 }
-/// The database pool under the projects: each server with its dot and host:port, and ＋ New.
-static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
-    if (!store_supports("settings_db_servers")) return;
-    doc_space(doc, px(16));
-    // One open session with a database per server in the pool, so the pool's size heads the section, as the sessions
-    // it lets run at once (the dashboard's "· 2 parallel sessions with a database", cut to the sidebar's width).
-    size_t n = settings_pool_capacity();
-    char *note = n ? xstrfmt("\xC2\xB7 %zu session%s", n, n == 1 ? "" : "s") : NULL;
-    section_head(doc, w, "Database pool", note, store_supports("create_db_server") ? ACT_NEW_SERVER : 0);
-    free(note);
-    if (s->servers_error) { doc_notice(doc, px(8), w - px(16), s->servers_error); doc_space(doc, px(8)); }
-    const Json *rows = server_rows(s);
-    for (size_t i = 0; i < json_count(rows); i++) {
-        const Json *row = json_at(rows, i);
-        ProjectRowData *d = xcalloc(1, sizeof *d);
-        const char *host = json_str(json_get(row, "host"));
-        d->repo = xstrfmt("%s:%d", host ? host : "", json_int_or(json_get(row, "port"), 0));
-        d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
-        d->enabled = json_bool_is(json_get(row, "enabled"), true);
-        char *id = xstrfmt("settings-db:%d", row_id(row));
-        d->selected = str_eq(selected, id);
-        free(id);
-        doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, d, project_row_free, ACT_OPEN_SERVER, (intptr_t)i);
-    }
-    if (str_eq(selected, "settings-db:new")) {
-        ProjectRowData *d = xcalloc(1, sizeof *d);
-        d->label = xstrdup("New database server"); d->repo = xstrdup("not saved yet"); d->selected = true;
-        doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, d, project_row_free, 0, 0);
-    }
-    if (s->servers_loaded && !json_count(rows) && !s->servers_error) doc_text(doc, px(8), w - px(16), "No servers yet. Add one so sessions can claim a database of their own.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-    if (!s->servers_loaded) doc_loading(doc, 0, w, "Loading the database pool\xE2\x80\xA6");
-}
-
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void settings_layout(Screen *base, Doc *doc) {
     SettingsScreen *s = (SettingsScreen *)base;
     int w = doc->width;
@@ -258,8 +295,81 @@ static void settings_layout(Screen *base, Doc *doc) {
     doc_custom(doc, 0, w, px(36), paint_nav, nav, free, ACT_DEVICES, 0);
     doc_space(doc, px(16));
     char *why = settings_unavailable();
-    section_head(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
+    section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(8)); return; }
+    layout_projects(s, doc, w, selected);
+    // The providers sessions start on, then the database pool, below the projects as on the dashboard; a server without
+    // the routes shows neither.
+    if (store_supports("settings_providers")) {
+        doc_space(doc, px(8));
+        section_title(doc, w, "Providers", NULL, store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
+        layout_providers(s, doc, w, selected);
+    }
+    if (store_supports("settings_db_servers")) {
+        doc_space(doc, px(8));
+        // One open session with a database per server in the pool, so the pool's size heads the section, as the sessions
+        // it lets run at once (the dashboard's "· 2 parallel sessions with a database", cut to the sidebar's width).
+        size_t n = settings_pool_capacity();
+        char *note = n ? xstrfmt("\xC2\xB7 %zu session%s", n, n == 1 ? "" : "s") : NULL;
+        section_title(doc, w, "Database pool", note, store_supports("create_db_server") ? ACT_NEW_SERVER : 0);
+        free(note);
+        layout_servers(s, doc, w, selected);
+    }
+}
+/// The database pool: each server with its dot and host:port.
+static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    if (s->servers_error) { doc_notice(doc, px(8), w - px(16), s->servers_error); doc_space(doc, px(8)); }
+    const Json *rows = server_rows(s);
+    int h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        const char *host = json_str(json_get(row, "host"));
+        d->repo = xstrfmt("%s:%d", host ? host : "", json_int_or(json_get(row, "port"), 0));
+        d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
+        d->enabled = json_bool_is(json_get(row, "enabled"), true);
+        char *id = xstrfmt("settings-db:%d", row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, ACT_OPEN_SERVER, (intptr_t)i);
+    }
+    if (str_eq(selected, "settings-db:new")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New database server"); d->repo = xstrdup("not saved yet"); d->selected = true;
+        doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, 0, 0);
+    }
+    if (s->servers_loaded && !json_count(rows) && !s->servers_error) doc_text(doc, px(8), w - px(16), "No servers yet. Add one so sessions can claim a database of their own.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->servers_loaded) doc_loading(doc, 0, w, "Loading the database pool\xE2\x80\xA6");
+    doc_space(doc, px(8));
+}
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    if (s->providers_error) { doc_notice(doc, px(8), w - px(16), s->providers_error); doc_space(doc, px(8)); }
+    const Json *rows = provider_rows(s);
+    int h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        const char *label = json_str_nonempty(json_get(row, "label")), *binary = json_str(json_get(row, "binary"));
+        d->label = label ? xstrdup(label) : xstrfmt("Provider #%d", row_id(row));
+        d->binary = xstrdup(binary ? binary : "");
+        d->active = !json_bool_is(json_get(row, "active"), false);
+        d->login = json_bool_is(json_get(row, "hasLogin"), true);
+        d->endpoint = json_str_nonempty(json_get(row, "baseUrl")) != NULL;
+        char *id = xstrfmt("settings-provider:%d", row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, ACT_OPEN_PROVIDER, (intptr_t)i);
+    }
+    if (str_eq(selected, "settings-provider:new")) {
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New provider"); d->binary = xstrdup("not saved yet"); d->unsaved = true; d->selected = true;
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, 0, 0);
+    }
+    if (s->providers_loaded && !json_count(rows) && !s->providers_error) doc_text(doc, px(8), w - px(16), "No providers yet. Add one so sessions can be started.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->providers_loaded) doc_loading(doc, 0, w, "Loading providers\xE2\x80\xA6");
+    doc_space(doc, px(8));
+}
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     const Json *rows = settings_rows(s);
     for (size_t i = 0; i < json_count(rows); i++) {
@@ -283,7 +393,6 @@ static void settings_layout(Screen *base, Doc *doc) {
     }
     if (s->loaded && !json_count(rows) && !s->error) doc_text(doc, px(8), w - px(16), "No projects yet. \xEF\xBC\x8B New adds a repository sessions can be started against.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading projects\xE2\x80\xA6");
-    layout_servers(s, doc, w, selected);
     doc_space(doc, px(8));
 }
 static void settings_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
@@ -323,6 +432,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_DEVICES: app_show_detail(connection_screen_new()); break;
     case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
     case ACT_OPEN_PROJECT: settings_open_row(s, (size_t)arg); break;
+    case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
+    case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
     case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
     case ACT_OPEN_SERVER: servers_open_row(s, (size_t)arg); break;
     }
@@ -342,12 +453,14 @@ static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (shown && !s->loaded && !s->req) settings_load(s);
+    if (shown && !s->providers_loaded && !s->req_providers) providers_load(s);
     if (shown && !s->servers_loaded && !s->req_servers) servers_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_servers);
-    settings_load(s); servers_load(s);
+    request_cancel(&s->req); settings_load(s);
+    request_cancel(&s->req_providers); providers_load(s);
+    request_cancel(&s->req_servers); servers_load(s);
 }
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     (void)ctrl; (void)shift;
@@ -364,7 +477,9 @@ static const ScreenVTable settings_vt = {
 Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
-    s->projects = json_object(); s->servers = json_object();
+    s->projects = json_object();
+    s->providers = json_object();
+    s->servers = json_object();
     g_settings = s;
     return &s->base;
 }
@@ -709,11 +824,12 @@ static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
+    // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
+    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
     bool on = s->bools[f];
     fill_round_rect(cv, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (on) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    if (on) draw_check_mark(cv, &b, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
     draw_text(cv, FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
