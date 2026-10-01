@@ -1,6 +1,7 @@
 // The dashboard's `#pr-panel`: the column on the right of a conversation with its pull request, commits, reviews and
 // findings, each finding with its verdict buttons, and under them the session's context usage.
 #include "screens.h"
+#include "canvas.h"
 #include "dialogs.h"
 #include "str.h"
 #include <stdio.h>
@@ -119,17 +120,17 @@ static const char *severity_label(const char *severity, COLORREF *color) {
 }
 typedef struct { char *label; COLORREF color; } SevData;
 static void sev_free(void *p) { SevData *d = p; free(d->label); free(d); }
-static void paint_sev(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SevData *d = it->data;
-    fill_round_rect(hdc, rc, px(4), theme.sidebar, d->color == theme.muted ? theme.line : d->color);
+    fill_round_rect(cv, rc, px(4), theme.sidebar, d->color == theme.muted ? theme.line : d->color);
     RECT t = *rc;
-    draw_text(hdc, d->label, &t, FONT_TINY_SEMIBOLD, d->color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->label, &t, FONT_TINY_SEMIBOLD, d->color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 /// `rounded-[4px] border px-1 text-[10px] font-semibold`; returns its width.
 static int doc_severity(Doc *doc, int x, int y, const char *severity) {
     SevData *d = xcalloc(1, sizeof *d);
     d->label = xstrdup(severity_label(severity, &d->color));
-    int w = px(4) * 2 + text_width(doc->hdc, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
+    int w = px(4) * 2 + text_width(doc->cv, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
     RECT rc = { x, y, x + w, y + h };
     int i = doc_add(doc, &rc, paint_sev);
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = sev_free;
@@ -152,7 +153,7 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
     doc_space(doc, px(6));
     // `#70` and the state tag.
     char *number = xstrfmt("#%d", s->number);
-    int nw = text_width(doc->hdc, number, FONT_CAPTION);
+    int nw = text_width(doc->cv, number, FONT_CAPTION);
     int y = doc->y;
     RECT nr = { 0, y, nw + 2, y + px(20) };
     int ni = doc_text_at(doc, &nr, number, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -173,7 +174,7 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
         int x = 0; y = doc->y;
         char *a = xstrfmt("+%d", (int)add), *d = xstrfmt("\xE2\x88\x92%d", (int)del);
         char *rest = xstrfmt(" \xC2\xB7 %d files \xC2\xB7 %d commits", (int)files, (int)commits);
-        int aw = text_width(doc->hdc, a, FONT_CAPTION), dw = text_width(doc->hdc, d, FONT_CAPTION);
+        int aw = text_width(doc->cv, a, FONT_CAPTION), dw = text_width(doc->cv, d, FONT_CAPTION);
         RECT ar = { x, y, x + aw + 2, y + px(20) }; doc_text_at(doc, &ar, a, FONT_CAPTION, theme.ok, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += aw + px(4);
         RECT dr = { x, y, x + dw + 2, y + px(20) }; doc_text_at(doc, &dr, d, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += dw;
         RECT rr = { x, y, w, y + px(20) }; doc_text_at(doc, &rr, rest, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -192,7 +193,7 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
             for (size_t i = 0; i < json_count(commit_list); i++) {
                 const Json *cm = json_at(commit_list, i);
                 const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
-                int sw = text_width(doc->hdc, short_sha, FONT_MONO_CAPTION2);
+                int sw = text_width(doc->cv, short_sha, FONT_MONO_CAPTION2);
                 y = doc->y;
                 RECT sr = { 0, y, sw + 2, y + px(20) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 const char *message = json_str(json_get(cm, "message"));
@@ -237,7 +238,7 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
                 bool is_fixed = json_bool_is(json_get(f, "fixed"), true);
                 const char *decision = json_str(json_get(f, "decision"));
                 const char *right = is_fixed ? "\xE2\x9C\x93 fixed" : "";
-                int rw = *right ? text_width(doc->hdc, right, FONT_CAPTION2) + px(6) : 0;
+                int rw = *right ? text_width(doc->cv, right, FONT_CAPTION2) + px(6) : 0;
                 const char *ft = json_str(json_get(f, "title"));
                 RECT tr = { sw + px(6), y, w - rw, y + px(20) };
                 int fi = doc_text_at(doc, &tr, ft ? ft : "Finding", FONT_CAPTION, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -274,44 +275,38 @@ static COLORREF context_color(const char *name) {
 typedef struct { size_t count; COLORREF *colors; double *pct; } BarData;
 static void bar_free(void *p) { BarData *d = p; free(d->colors); free(d->pct); free(d); }
 /// `flex h-1.5 overflow-hidden rounded-full bg-sunken`, one segment per category.
-static void paint_bar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     BarData *d = it->data;
     int h = rc->bottom - rc->top, w = rc->right - rc->left;
-    // Clip regions are in device units; the pane paints with its scroll offset as the origin.
-    POINT corners[2] = { { rc->left, rc->top }, { rc->right, rc->bottom } };
-    LPtoDP(hdc, corners, 2);
-    HRGN clip = CreateRoundRectRgn(corners[0].x, corners[0].y, corners[1].x + 1, corners[1].y + 1, h, h);
-    SaveDC(hdc);
-    SelectClipRgn(hdc, clip);
-    fill_rect(hdc, rc, theme.sunken);
+    canvas_clip_round(cv, rc, h / 2);
+    fill_rect(cv, rc, theme.sunken);
     double x = rc->left;
     for (size_t i = 0; i < d->count; i++) {
         double pct = d->pct[i] < 0 ? 0 : d->pct[i] > 100 ? 100 : d->pct[i];
         double next = x + w * pct / 100;
         RECT seg = { (int)(x + 0.5), rc->top, (int)(next + 0.5), rc->bottom };
-        if (seg.right > seg.left) fill_rect(hdc, &seg, d->colors[i]);
+        if (seg.right > seg.left) fill_rect(cv, &seg, d->colors[i]);
         x = next;
     }
-    RestoreDC(hdc, -1);
-    DeleteObject(clip);
+    canvas_unclip(cv);
 }
 /// `<input type="checkbox" class="accent-accent">`
-static void paint_checkbox(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_checkbox(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     bool on = it->arg != 0;
-    fill_round_rect(hdc, rc, px(3), on ? theme.accent : theme.field, on ? theme.accent : theme.line_strong);
-    if (on) draw_glyph(hdc, 0xE73E, rc, FONT_ICON_SMALL, theme.on_accent);
+    fill_round_rect(cv, rc, px(3), on ? theme.accent : theme.field, on ? theme.accent : theme.line_strong);
+    if (on) draw_glyph(cv, 0xE73E, rc, FONT_ICON_SMALL, theme.on_accent);
 }
-static void paint_swatch(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_swatch(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     COLORREF color = (COLORREF)it->arg;
-    fill_round_rect(hdc, rc, px(3), color, color);
+    fill_round_rect(cv, rc, px(3), color, color);
 }
 /// `flex justify-between text-[12px] text-muted`: the label, and the value in ink at the right.
 static void usage_row(Doc *doc, int w, const char *label, const char *value) {
     int y = doc->y, h = px(18);
-    int vw = text_width(doc->hdc, value, FONT_CAPTION) + 2;
+    int vw = text_width(doc->cv, value, FONT_CAPTION) + 2;
     RECT vr = { w - vw, y, w, y + h }, lr = { 0, y, w - vw - px(6), y + h };
     doc_text_at(doc, &lr, label, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_text_at(doc, &vr, value, FONT_CAPTION, theme.ink, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
@@ -373,7 +368,7 @@ static void usage_layout(PanelScreen *s, Doc *doc, int w, bool after_pr) {
         double at = 0; num_at(raw, "autoCompactAt", &at);
         char *label = xstrfmt("Auto-compact %dk", (int)(at / 1000 + 0.5));
         bool on = json_bool_is(json_get(raw, "autoCompact"), true);
-        int lw = text_width(doc->hdc, label, FONT_CAPTION) + 2, box = px(12);
+        int lw = text_width(doc->cv, label, FONT_CAPTION) + 2, box = px(12);
         int x = w - lw - box - px(5);
         RECT br = { x, y + (h - box) / 2, x + box, y + (h - box) / 2 + box };
         int bi = doc_add(doc, &br, paint_checkbox);
@@ -433,7 +428,7 @@ static void usage_layout(PanelScreen *s, Doc *doc, int w, bool after_pr) {
             const char *name = json_str(json_get(c, "name"));
             char *tokens = format_tokens(v), *pct = xstrfmt("%.1f%%", json_num_or(json_get(c, "pct"), 0));
             int y = doc->y, h = px(18), sq = px(8);
-            int pw = px(44), tw = text_width(doc->hdc, tokens, FONT_CAPTION) + 2;
+            int pw = px(44), tw = text_width(doc->cv, tokens, FONT_CAPTION) + 2;
             RECT sw = { 0, y + (h - sq) / 2, sq, y + (h - sq) / 2 + sq };
             int si = doc_add(doc, &sw, paint_swatch); doc_item(doc, si)->arg = (intptr_t)context_color(name);
             RECT nr = { sq + px(6), y, w - pw - tw - px(6), y + h };
