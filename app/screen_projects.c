@@ -1,4 +1,4 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with the 📊 and ⚑ switches and ⚙ Settings, the projects
+// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp, the 📊 and ⚑ switches and ⚙ Settings, the projects
 // with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
 #include "media.h"
@@ -12,18 +12,29 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS };
-enum { STRIP_H = 32, ICON_W = 32, STRIP_GAP = 6 };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP };
+enum { STRIP_H = 32, ICON_W = 30, STRIP_GAP = 4, STRIP_ICONS = 4 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
-typedef struct { char text[40]; int badge; bool active, wide; } StripData;
+typedef struct { char text[40]; int badge; bool active, wide, whatsapp; } StripData;
+/// WhatsApp's mark, which no font has: a green chat bubble with its tail at the lower left, and a white handset.
+static void paint_whatsapp_mark(Canvas *cv, const RECT *rc) {
+    const COLORREF green = RGB(0x25, 0xD3, 0x66);
+    int d = px(18), cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
+    RECT bubble = { cx - d / 2, cy - d / 2, cx - d / 2 + d, cy - d / 2 + d };
+    draw_thick_line(cv, bubble.left + px(4), bubble.bottom - px(5), bubble.left + px(1), bubble.bottom, green, px(4));
+    fill_round_rect(cv, &bubble, d / 2, green, green);
+    draw_glyph(cv, 0xE717, &bubble, FONT_ICON_SMALL, RGB(0xFF, 0xFF, 0xFF));
+}
 static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StripData *d = it->data;
     bool hovered = doc_item_hovered(doc, it);
     COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
     fill_round_rect(cv, rc, px(8), theme.raise, border);
-    if (d->wide) {
+    if (d->whatsapp) {
+        paint_whatsapp_mark(cv, rc);
+    } else if (d->wide) {
         RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
         draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
@@ -40,21 +51,24 @@ static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
         draw_text(cv, n, &b, FONT_TINY_SEMIBOLD, theme.on_accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
-static void strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, int badge, bool active, int action) {
+static StripData *strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, int badge, bool active, int action) {
     int i = doc_add(doc, rc, paint_strip);
     StripData *d = xcalloc(1, sizeof *d);
     snprintf(d->text, sizeof d->text, "%s", text); d->wide = wide; d->badge = badge; d->active = active;
     Item *it = doc_item(doc, i);
     it->data = d; it->free_data = free; it->action = action; it->hand = true;
+    return d;
 }
-/// The strip; `selected` is the detail pane's root id, for the 📊 and ⚑ switches' accent.
+/// The strip; `selected` is the detail pane's root id, for the WhatsApp, 📊 and ⚑ switches' accent.
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
-    int icons_w = iw * 3 + gap * 2;
+    int icons_w = iw * STRIP_ICONS + gap * (STRIP_ICONS - 1);
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
+    RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->whatsapp = true;
+    x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
@@ -136,6 +150,7 @@ static void sign_out(void) {
 static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
+    case ACT_WHATSAPP: app_show_detail(whatsapp_screen_new()); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;
