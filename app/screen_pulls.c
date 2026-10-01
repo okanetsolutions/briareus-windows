@@ -406,7 +406,7 @@ enum {
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2 };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN };
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
@@ -437,10 +437,9 @@ typedef struct {
     char *deciding;
     int *open_findings; size_t open_finding_count;
     BoardAction *actions; size_t action_count;
-    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_prepare, *req_body, *req_delete_run;
+    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_body, *req_delete_run;
     Poller poller;
     bool dialog_open;
-    int prepared_head_differs;
 } PullScreen;
 
 static const PullSummary *board_row(PullScreen *s) { return s->row_read ? (s->has_row ? &s->row : NULL) : (s->has_row ? &s->row : (s->has_summary ? &s->summary : NULL)); }
@@ -617,7 +616,7 @@ static void pull_load(PullScreen *s) {
 static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
-    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare); request_cancel(&s->req_body);
+    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_body);
     request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
@@ -1654,54 +1653,6 @@ static void merge(PullScreen *s, const char *method) {
     store_call("merge_pull", args, 0, s, merge_done, TAG_MERGE, &s->req_merge);
     pane_relayout(s->base.pane);
 }
-static void offer_merge(PullScreen *s, const Json *page) {
-    // Reads what GitHub allows before asking, so the dialog offers only methods the repository accepts.
-    static const char *const all[] = { "squash", "merge", "rebase" };
-    static const char *const titles[] = { "Squash and merge", "Create a merge commit", "Rebase and merge" };
-    const char *methods[3]; const char *method_titles[3]; size_t mn = 0;
-    const Json *allowed = page ? json_get(json_get(page, "pr"), "mergeMethods") : NULL;
-    for (int i = 0; i < 3; i++) {
-        bool ok = true;
-        if (json_count(allowed)) { ok = false; for (size_t k = 0; k < json_count(allowed); k++) if (str_eq(json_str(json_at(allowed, k)), all[i])) ok = true; }
-        if (ok) { methods[mn] = all[i]; method_titles[mn] = titles[i]; mn++; }
-    }
-    Str notes; str_init(&notes);
-    if (page) {
-        size_t wn; char **warnings = merge_warnings(json_get(json_get(page, "pr"), "mergeable"), json_str(json_get(json_get(page, "pr"), "mergeableState")), &wn);
-        for (size_t i = 0; i < wn; i++) str_appendf(&notes, "%s%s", notes.len ? " " : "", warnings[i]);
-        str_array_free(warnings, wn);
-        if (s->prepared_head_differs) str_appendf(&notes, "%sNew commits were pushed; the checks were refreshed.", notes.len ? " " : "");
-    }
-    int failed = json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), pending = json_int_or(json_get(json_get(s->pr, "checks"), "pending"), 0);
-    if (failed > 0) str_appendf(&notes, "%s%d check%s failing.", notes.len ? " " : "", failed, failed == 1 ? " is" : "s are");
-    if (pending > 0) str_appendf(&notes, "%s%d check%s still running.", notes.len ? " " : "", pending, pending == 1 ? " is" : "s are");
-    char *title = xstrfmt("Merge #%d into %s?", s->number, json_str(json_get(s->pr, "baseRef")) ? json_str(json_get(s->pr, "baseRef")) : "its base");
-    s->dialog_open = true;
-    int chosen = app_choose(title, notes.len ? notes.data : NULL, method_titles, mn);
-    s->dialog_open = false;
-    free(title); str_free(&notes);
-    s->merging = false;
-    if (chosen >= 0) merge(s, methods[chosen]); else pane_relayout(s->base.pane);
-}
-static void prepare_done(void *owner, Request *req) {
-    PullScreen *s = owner;
-    const Json *page = req->ok ? req->result : NULL;
-    s->prepared_head_differs = false;
-    if (page) {
-        const char *head = json_str(json_get(json_get(page, "pr"), "headSha"));
-        if (head && !str_eq(head, json_str(json_get(s->pr, "headSha")))) { s->prepared_head_differs = true; request_cancel(&s->req_pull); pull_load(s); }
-    }
-    offer_merge(s, page);
-}
-static void prepare_merge(PullScreen *s) {
-    if (s->merging) return;
-    s->merging = true; set_string(&s->merge_error, NULL);
-    pane_relayout(s->base.pane);
-    if (store_supports("pull_description")) {
-        Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
-        store_call("pull_description", args, 0, s, prepare_done, TAG_MERGE_PREPARE, &s->req_prepare);
-    } else offer_merge(s, NULL);
-}
 static void decide_done(void *owner, Request *req) {
     PullScreen *s = owner;
     set_string(&s->deciding, NULL);
@@ -1764,7 +1715,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         else open_web_url(json_str(json_get(json_at(json_get(s->pr, "issues"), (size_t)arg), "url")));
         break;
     }
-    case ACT_MERGE: prepare_merge(s); break;
+    case ACT_MERGE: merge(s, "squash"); break;
     case ACT_RELOAD: pull_refresh(base); break;
     case ACT_START_ACTION: {
         if ((size_t)arg >= s->action_count) break;
