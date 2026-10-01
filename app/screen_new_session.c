@@ -127,7 +127,7 @@ static void start_done(void *owner, Request *req) {
             Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
             store_call("review_loop", a, 0, NULL, loop_done, 0, NULL);
         }
-        app_show_detail(conversation_screen_new(&started));
+        app_show_detail(session_screen_new(&started));
         session_free(&started);
         return;
     }

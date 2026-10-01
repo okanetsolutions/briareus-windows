@@ -841,7 +841,7 @@ static void findings_header(Screen *base, HeaderInfo *info) {
 // MARK: - Actions
 
 static void open_session_by_id(FindingsScreen *s, const char *sid) {
-    for (size_t i = 0; i < s->all_count; i++) if (str_eq(session_id(&s->all[i]), sid)) { app_push_detail(conversation_screen_new(&s->all[i])); return; }
+    for (size_t i = 0; i < s->all_count; i++) if (str_eq(session_id(&s->all[i]), sid)) { app_push_detail(session_screen_new(&s->all[i])); return; }
 }
 static void set_all(FindingsScreen *s, size_t r, const char *decision) {
     const Session *ses = round_session(s, r);
@@ -879,7 +879,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     const char *key = json_str(json_get(f, "key"));
     int round = round_number(held);
     switch (action) {
-    case ACT_OPEN_SESSION: app_push_detail(conversation_screen_new(ses)); break;
+    case ACT_OPEN_SESSION: app_push_detail(session_screen_new(ses)); break;
     case ACT_OPEN_PR: { char *url = held_round_pr_url(ses, held); open_web_url(url); free(url); break; }
     case ACT_OPEN_FINDING: {
         const char *url = json_str(json_get(f, "url"));

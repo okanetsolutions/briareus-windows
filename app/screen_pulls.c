@@ -152,7 +152,7 @@ static void board_start_done(void *owner, Request *req) {
     if (req->ok) {
         Session started;
         set_string(&s->write_error, NULL);
-        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(session_screen_new(&started)); session_free(&started); return; }
     } else {
         char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
         // A refusal is definite; anything else may have started the session.
@@ -405,8 +405,9 @@ enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
+    ACT_CONV_BASE = 1300,    // the conversation under the Sessions tab, CONVERSATION_ACTIONS of them
 };
-enum { TIMER_FILES_PAGE = 2 };
+enum { TIMER_FILES_PAGE = 2, TIMER_CONV_BASE = 10 };   // the conversation's CONVERSATION_TIMERS from TIMER_CONV_BASE up
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
 enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS, PR_TAB_FILES };
 
@@ -419,6 +420,7 @@ typedef struct {
     bool has_row; PullSummary row; bool row_read;
     Json *catalog;      // the server's `actions`
     Session *runs; size_t run_count;
+    Screen *conv;       // the conversation open under the Sessions tab, laid out inside this page
     Json *findings;
     PullFiles *files;   // the Files changed tab
     char *error, *findings_error, *write_error, *merge_error;
@@ -434,6 +436,52 @@ typedef struct {
     bool dialog_open;
     int prepared_head_differs;
 } PullScreen;
+
+/// The conversation when the Sessions tab shows it, on this screen's pane.
+static Screen *conv_shown(PullScreen *s) {
+    if (!s->conv || s->tab != PR_TAB_SESSIONS) return NULL;
+    s->conv->pane = s->base.pane;
+    return s->conv;
+}
+static bool on_top(PullScreen *s) { return s->base.pane && pane_top(s->base.pane) == &s->base; }
+/// The page's id follows the conversation it shows, so the sidebar highlights that session and does not reopen it.
+static void sync_id(PullScreen *s) {
+    char *id = s->conv ? xstrdup(s->conv->id) : xstrfmt("pull:%s#%d", s->project.repo, s->number);
+    free(s->base.id); s->base.id = id;
+    if (s->base.pane && pane_root(s->base.pane) == &s->base && s->base.pane == app_detail_pane()) pane_set_selected_id(app_sidebar_pane(), id);
+}
+static void conv_drop(PullScreen *s) {
+    if (!s->conv) return;
+    Screen *conv = s->conv;
+    conv->pane = s->base.pane;
+    if (on_top(s) && s->tab == PR_TAB_SESSIONS && conv->vt->visible) conv->vt->visible(conv, false);
+    s->conv = NULL;
+    conv->vt->destroy(conv);
+    if (s->base.pane) { pane_stick_to_bottom(s->base.pane, false); pane_show_bottom_button(s->base.pane, false); }
+}
+/// The session was deleted from inside the page: its row and transcript go, the list stays.
+static void conv_gone(Screen *host) {
+    PullScreen *s = (PullScreen *)host;
+    const char *id = s->conv ? session_id(conversation_session(s->conv)) : NULL;
+    for (size_t i = 0; id && i < s->run_count; i++)
+        if (str_eq(session_id(&s->runs[i]), id)) { session_free(&s->runs[i]); memmove(&s->runs[i], &s->runs[i + 1], (s->run_count - i - 1) * sizeof *s->runs); s->run_count--; break; }
+    conv_drop(s);
+    sync_id(s);
+    if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_footer_changed(s->base.pane); }
+}
+/// Opens a session under the Sessions tab, in place of the one there.
+static void conv_show(PullScreen *s, const Session *session) {
+    if (s->conv && str_eq(session_id(conversation_session(s->conv)), session_id(session))) { s->tab = PR_TAB_SESSIONS; }
+    else {
+        conv_drop(s);
+        s->conv = conversation_screen_new(session);
+        conversation_host(s->conv, &s->base, ACT_CONV_BASE, TIMER_CONV_BASE, conv_gone);
+        s->tab = PR_TAB_SESSIONS;
+    }
+    sync_id(s);
+    if (on_top(s)) { Screen *conv = conv_shown(s); if (conv->vt->visible) conv->vt->visible(conv, true); }
+    if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_footer_changed(s->base.pane); }
+}
 
 static const PullSummary *board_row(PullScreen *s) { return s->row_read ? (s->has_row ? &s->row : NULL) : (s->has_row ? &s->row : (s->has_summary ? &s->summary : NULL)); }
 static bool is_open(PullScreen *s) { return json_is_null(s->pr) ? board_row(s) != NULL : str_eq(json_str(json_get(s->pr, "state")), "open"); }
@@ -573,6 +621,7 @@ static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
     request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare); request_cancel(&s->req_body);
+    conv_drop(s);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -1122,8 +1171,17 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
 }
 
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
-    if (!s->run_count) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
-    for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
+    const Session *open = s->conv ? conversation_session(s->conv) : NULL;
+    bool listed = false;
+    for (size_t i = 0; i < s->run_count; i++) {
+        bool selected = open && str_eq(session_id(&s->runs[i]), session_id(open));
+        listed = listed || selected;
+        doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, selected, theme.elevated); doc_space(doc, px(6));
+    }
+    // A session opened before the list was read is listed from what it knows of itself.
+    if (open && !listed) { doc_session_row(doc, c.x, c.w, open, 0, 0, true, theme.elevated); doc_space(doc, px(6)); }
+    if (!s->run_count && !open) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
+    if (s->conv) { doc_space(doc, px(4)); doc_rule(doc, c.x, c.w); conversation_layout_in(s->conv, doc, c.x, c.w); }
 }
 
 /// The main column: what the selected tab holds.
@@ -1296,6 +1354,8 @@ static void pull_layout(Screen *base, Doc *doc) {
 
 static void pull_header(Screen *base, HeaderInfo *info) {
     PullScreen *s = (PullScreen *)base;
+    Screen *conv = conv_shown(s);
+    if (conv) { conv->vt->header(conv, info); return; }
     snprintf(info->title, sizeof info->title, "Pull request");
     snprintf(info->subtitle, sizeof info->subtitle, "%s #%d", s->project.repo, s->number);
 }
@@ -1306,7 +1366,12 @@ static void start_done(void *owner, Request *req) {
     if (req->ok) {
         Session started;
         set_string(&s->write_error, NULL);
-        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+        if (session_parse(json_get(req->result, "session"), &started)) {
+            s->runs = xrealloc(s->runs, (s->run_count + 1) * sizeof *s->runs);
+            memmove(&s->runs[1], &s->runs[0], s->run_count * sizeof *s->runs);
+            session_copy(&s->runs[0], &started); s->run_count++;
+            conv_show(s, &started); session_free(&started); return;
+        }
     } else {
         char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
         // A refusal is definite; anything else may have started the session.
@@ -1413,8 +1478,8 @@ static void decide(PullScreen *s, const char *key, const char *decision) {
 
 static void pull_refresh(Screen *base);
 static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
-    (void)pt;
     PullScreen *s = (PullScreen *)base;
+    if (action >= ACT_CONV_BASE && action < ACT_CONV_BASE + CONVERSATION_ACTIONS) { Screen *conv = conv_shown(s); if (conv) conv->vt->action(conv, action, arg, pt); return; }
     switch (action) {
     case ACT_OPEN_URL: {
         const char *url = json_str(json_get(s->pr, "url"));
@@ -1423,7 +1488,17 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
-    case ACT_PR_TAB: s->tab = (int)arg; if (s->tab == PR_TAB_FILES) pull_files_load(s->files); pane_relayout(base->pane); break;
+    case ACT_PR_TAB: {
+        if ((int)arg == s->tab) break;
+        Screen *was = conv_shown(s);
+        if (was && on_top(s) && was->vt->visible) { was->vt->visible(was, false); pane_stick_to_bottom(base->pane, false); pane_show_bottom_button(base->pane, false); }
+        s->tab = (int)arg;
+        if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
+        Screen *now = conv_shown(s);
+        if (now && on_top(s) && now->vt->visible) now->vt->visible(now, true);
+        pane_relayout(base->pane); pane_header_changed(base->pane); pane_footer_changed(base->pane);
+        break;
+    }
     case ACT_FINDING_TOGGLE: {
         bool open = finding_open(s, (int)arg);
         if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
@@ -1480,12 +1555,13 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         board_action_free(&a);
         break;
     }
-    case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
+    case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) conv_show(s, &s->runs[arg]); break;
     default: pull_files_action(s->files, action, arg); break;
     }
 }
 static void pull_timer(Screen *base, UINT id) {
     PullScreen *s = (PullScreen *)base;
+    if (id >= TIMER_CONV_BASE && id < TIMER_CONV_BASE + CONVERSATION_TIMERS) { Screen *conv = conv_shown(s); if (conv) conv->vt->timer(conv, id); return; }
     if (pull_files_timer(s->files, id)) return;
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->merging && !s->deciding && !s->dialog_open;
@@ -1494,9 +1570,18 @@ static void pull_timer(Screen *base, UINT id) {
 }
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
-    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); }
+    Screen *conv = conv_shown(s);
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); sync_id(s); }
     else { poller_stop(&s->poller); pull_files_cancel(s->files); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
+    if (conv && conv->vt->visible) conv->vt->visible(conv, shown);
 }
+// The composer is the page's footer while a conversation is shown.
+static int pull_footer_height(Screen *base, int width) { Screen *conv = conv_shown((PullScreen *)base); return conv ? conv->vt->footer_height(conv, width) : 0; }
+static void pull_footer_layout(Screen *base, const RECT *rc) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_layout(conv, rc); }
+static void pull_footer_paint(Screen *base, HDC hdc, const RECT *rc) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_paint(conv, hdc, rc); }
+static void pull_footer_click(Screen *base, POINT pt) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_click(conv, pt); }
+static void pull_command(Screen *base, int id, int code, HWND control) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->command(conv, id, code, control); }
+static void pull_scrolled(Screen *base, bool at_bottom) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->scrolled(conv, at_bottom); }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
@@ -1504,12 +1589,21 @@ static void pull_refresh(Screen *base) {
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_pull); pull_load(s);
     if (pull_files_started(s->files)) pull_files_refresh(s->files);
+    Screen *conv = conv_shown(s);
+    if (conv) conv->vt->refresh(conv);
     pane_relayout(base->pane);
 }
-static void pull_activated(Screen *base, bool active) { if (active) { PullScreen *s = (PullScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 30000); } }
+static void pull_activated(Screen *base, bool active) {
+    PullScreen *s = (PullScreen *)base;
+    if (active) poller_start(&s->poller, base->pane, TIMER_POLL, 30000);
+    Screen *conv = conv_shown(s);
+    if (conv) conv->vt->activated(conv, active);
+}
 static const ScreenVTable pull_vt = {
     .destroy = pull_destroy, .layout = pull_layout, .header = pull_header, .action = pull_action, .timer = pull_timer,
     .visible = pull_visible, .refresh = pull_refresh, .activated = pull_activated,
+    .footer_height = pull_footer_height, .footer_layout = pull_footer_layout, .footer_paint = pull_footer_paint, .footer_click = pull_footer_click,
+    .command = pull_command, .scrolled = pull_scrolled,
 };
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary) {
     PullScreen *s = xcalloc(1, sizeof *s);
@@ -1520,6 +1614,16 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
     s->pr = json_null(); s->catalog = json_array(); s->findings = json_array();
     s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_FILES_PAGE);
     return &s->base;
+}
+Screen *session_screen_new(const Session *session) {
+    int number = session_pull_number(session);
+    const char *repo = session_repo(session);
+    if (!number || str_empty(repo) || !store_supports("pull")) return conversation_screen_new(session);
+    Project p = { xstrdup(repo), NULL };
+    Screen *page = pull_detail_screen_new(&p, number, NULL, NULL);
+    project_free(&p);
+    conv_show((PullScreen *)page, session);
+    return page;
 }
 
 // MARK: - Issue

@@ -638,7 +638,7 @@ static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if ((size_t)arg >= s->count) break;
         // Ctrl-clicking a row turns ☑ Select on with that row ticked, as the dashboard does.
         if (GetKeyState(VK_CONTROL) & 0x8000) { s->select_mode = true; toggle_pick(s, session_id(&s->sessions[arg])); pane_footer_changed(base->pane); break; }
-        app_show_detail(conversation_screen_new(&s->sessions[arg]));
+        app_show_detail(session_screen_new(&s->sessions[arg]));
         break;
     case ACT_PICK: if ((size_t)arg < s->count) { toggle_pick(s, session_id(&s->sessions[arg])); pane_footer_changed(base->pane); } break;
     }
