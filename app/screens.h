@@ -49,6 +49,10 @@ void session_panel_update(const Session *session);
 /// Runs a session operation (`compact`, `clear`, `rename` with compaction settings) through its open conversation,
 /// which shows its progress and errors and reads the session again afterwards.
 void conversation_session_op(const char *session_id, const char *operation, Json *extra);
+/// What ▶ Run serves, opened in an embedded browser; `title` names it until the page has a title of its own.
+Screen *preview_screen_new(const char *url, const char *title);
+/// After `serve_pull` answered: opens the served `url` over `from`, when `from` is still its pane's top. True when opened.
+bool preview_open_served(Screen *from, const Json *result, const char *title);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
 /// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
 Screen *findings_screen_new(void);

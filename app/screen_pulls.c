@@ -180,6 +180,7 @@ static void board_start_done(void *owner, Request *req) {
     s->busy = false;
     if (req->ok) {
         set_string(&s->write_error, NULL);
+        if (str_eq(s->starting_id, "run")) { char *t = xstrfmt("#%d", s->starting_number); preview_open_served(&s->base, req->result, t); free(t); }
         // The list stays shown; the new session joins the runs counted on its pull request.
         if (store_supports("sessions")) { request_cancel(&s->req_runs); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
     } else {
@@ -460,7 +461,7 @@ typedef struct {
     PullFiles *files;   // the Files changed tab
     ConvFeed conv[CONV_FEEDS];   // the Conversation tab
     char *error, *findings_error, *write_error, *merge_error;
-    bool busy, uncertain, merging;
+    bool busy, uncertain, merging, serving;   // serving: the errand under way is ▶ Run, whose page opens when it answers
     int tab;
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
     bool body_read;
@@ -1608,6 +1609,7 @@ static void start_done(void *owner, Request *req) {
     s->busy = false;
     if (req->ok) {
         set_string(&s->write_error, NULL);
+        if (s->serving) { char *t = xstrfmt("#%d", s->number); preview_open_served(&s->base, req->result, t); free(t); }
         // The pull request stays shown; the new session joins its runs.
         if (store_supports("sessions")) { request_cancel(&s->req_sessions); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
     } else {
@@ -1620,7 +1622,7 @@ static void start_done(void *owner, Request *req) {
 static void start_action(PullScreen *s, const BoardAction *action, const char *input) {
     const char *branch = json_str(json_get(s->pr, "headRef"));
     if (s->busy || s->uncertain || !branch) return;
-    s->busy = true;
+    s->busy = true; s->serving = str_eq(action->id, "run");
     char *op = board_action_operation(action);
     Json *args = board_action_arguments(action, s->project.repo, s->number, branch, input);
     store_call(op, args, board_action_timeout_ms(action), s, start_done, TAG_START, &s->req_start);
