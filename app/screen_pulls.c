@@ -40,7 +40,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_VIEW_PULL, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
 enum { TIMER_POLL = 1 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -236,11 +236,10 @@ static void pulls_layout(Screen *base, Doc *doc) {
             if (!board_filter_passes(filter, &rows[i], -1)) continue;
             const PullSummary *pull = &s->pulls[i];
             StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
-            // The dashboard's buttons: View PR, then the errands its state offers, the suggested one filled.
+            // The dashboard's buttons: the errands its state offers, the suggested one filled. Clicking the row opens the PR.
             size_t an = 0; BoardAction *actions = str_empty(pull->branch) ? NULL : row_actions(s->catalog, pull, 0, &an);
-            ButtonSpec *buttons = xcalloc(an + 2, sizeof *buttons); size_t bn = 0;
+            ButtonSpec *buttons = xcalloc(an + 1, sizeof *buttons); size_t bn = 0;
             char **labels = xcalloc(an + 1, sizeof *labels);
-            if (!str_empty(pull->url)) { ButtonSpec b = { 0, "View PR", BUTTON_BORDERED, ACT_VIEW_PULL, (intptr_t)i, true }; buttons[bn++] = b; }
             for (size_t k = 0; k < an && k < ACTION_STRIDE; k++) {
                 bool starting = s->busy && s->starting_number == pull->number && str_eq(s->starting_id, actions[k].id);
                 bool suggested = str_eq(pull->recommended, actions[k].id);
@@ -350,7 +349,6 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_detail(issue_detail_screen_new(&s->project, &s->issues[arg])); break;
-    case ACT_VIEW_PULL: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_PULL_ACTION: {
         size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;
         if (index >= s->pull_count || s->busy || s->uncertain) break;
