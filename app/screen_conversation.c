@@ -744,7 +744,7 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
 }
 // MARK: - Footer (composer)
 
-enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_QA, CHIP_COUNT };
+enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
 static RECT g_chip_rc[CHIP_COUNT];
 
 static int composer_height(ConversationScreen *s, HDC hdc) {
@@ -763,18 +763,16 @@ static char *chip_text(ConversationScreen *s, int chip) {
     case CHIP_MODEL: return xstrdup(session_model(ss) ? session_model(ss) : "");
     case CHIP_EFFORT: { const char *e = json_str_nonempty(json_get(ss->raw, "effort")); return xstrdup(e ? e : ""); }
     case CHIP_LOOP: return xstrdup(session_review_loop_on(ss) ? "\xF0\x9F\x94\x81 Review loop: on" : "\xF0\x9F\x94\x81 Review loop");
-    case CHIP_QA: return xstrdup(!json_is_null(json_get(ss->raw, "qaLoop")) ? "\xF0\x9F\x8E\xAC QA loop: on" : "\xF0\x9F\x8E\xAC QA loop");
     }
     return xstrdup("");
 }
 static bool chip_shown(ConversationScreen *s, int chip) {
     const Session *ss = session(s);
     if (chip == CHIP_LOOP) return store_supports("review_loop") && session_can_review_loop(ss);
-    if (chip == CHIP_QA) return store_supports("qa_loop");
     char *text = chip_text(s, chip); bool shown = *text != 0; free(text);
     return shown;
 }
-static bool chip_live(int chip) { return chip == CHIP_LOOP || chip == CHIP_QA; }
+static bool chip_live(int chip) { return chip == CHIP_LOOP; }
 static int chips_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (int c = 0; c < CHIP_COUNT; c++) {
@@ -835,7 +833,7 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
         if (chip_live(c) && can) g_chip_rc[c] = r;
-        bool on = (c == CHIP_LOOP && session_review_loop_on(ss)) || (c == CHIP_QA && !json_is_null(json_get(ss->raw, "qaLoop")));
+        bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
         fill_round_rect(hdc, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
@@ -903,11 +901,6 @@ static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < 
 static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && in_rect(&g_chip_rc[CHIP_LOOP], pt)) { menu_choice(s, session_review_loop_on(session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
-    if (!IsRectEmpty(&g_chip_rc[CHIP_QA]) && in_rect(&g_chip_rc[CHIP_QA], pt)) {
-        Json *extra = json_object(); json_set_bool(extra, "on", json_is_null(json_get(session(s)->raw, "qaLoop")));
-        mutate(s, "qa_loop", extra);
-        return;
-    }
     if (!can_message(s)) { if (in_rect(&s->send_rc, pt) && !s->busy && !s->uncertain) confirm_and_mutate(s, "reopen"); return; }
     if (in_rect(&s->send_rc, pt)) {
         bool active = session_is_active(session(s));
