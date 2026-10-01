@@ -203,7 +203,7 @@ static bool effective_choice(NewConversation *d, RuntimeChoice *out) {
 static void fill_effort(NewConversation *d) {
     HWND combo = GetDlgItem(d->dialog, IDC_EFFORT);
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    RuntimeChoice eff;
+    RuntimeChoice eff = { 0 };
     bool has = d->has_catalog && effective_choice(d, &eff);
     size_t n = 0; const char *const *efforts = has ? runtime_catalog_efforts(&d->catalog, &eff, &n) : NULL;
     bool show = n > 0;

@@ -35,10 +35,14 @@ static const GUID IID_AsyncInfo = { 0x00000036, 0x0000, 0x0000, { 0xc0, 0x00, 0x
 static const wchar_t MANAGER_CLASS[] = L"Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager";
 
 typedef void *WinString;
-static HRESULT (WINAPI *ro_get_factory)(WinString, REFIID, void **);
-static HRESULT (WINAPI *hstr_create)(const wchar_t *, UINT32, WinString *);
-static HRESULT (WINAPI *hstr_delete)(WinString);
-static const wchar_t *(WINAPI *hstr_buffer)(WinString, UINT32 *);
+typedef HRESULT (WINAPI *RoGetFactoryFn)(WinString, REFIID, void **);
+typedef HRESULT (WINAPI *HstrCreateFn)(const wchar_t *, UINT32, WinString *);
+typedef HRESULT (WINAPI *HstrDeleteFn)(WinString);
+typedef const wchar_t *(WINAPI *HstrBufferFn)(WinString, UINT32 *);
+static RoGetFactoryFn ro_get_factory;
+static HstrCreateFn hstr_create;
+static HstrDeleteFn hstr_delete;
+static HstrBufferFn hstr_buffer;
 
 static CRITICAL_SECTION g_lock;
 static MediaState g_state;
@@ -151,10 +155,10 @@ static void run_command(void *manager, MediaCommand command) {
 static void *open_manager(void) {
     HMODULE combase = LoadLibraryW(L"combase.dll");
     if (!combase) return NULL;
-    ro_get_factory = (void *)GetProcAddress(combase, "RoGetActivationFactory");
-    hstr_create = (void *)GetProcAddress(combase, "WindowsCreateString");
-    hstr_delete = (void *)GetProcAddress(combase, "WindowsDeleteString");
-    hstr_buffer = (void *)GetProcAddress(combase, "WindowsGetStringRawBuffer");
+    ro_get_factory = (RoGetFactoryFn)(void *)GetProcAddress(combase, "RoGetActivationFactory");
+    hstr_create = (HstrCreateFn)(void *)GetProcAddress(combase, "WindowsCreateString");
+    hstr_delete = (HstrDeleteFn)(void *)GetProcAddress(combase, "WindowsDeleteString");
+    hstr_buffer = (HstrBufferFn)(void *)GetProcAddress(combase, "WindowsGetStringRawBuffer");
     if (!ro_get_factory || !hstr_create || !hstr_delete || !hstr_buffer) return NULL;
     WinString name = NULL;
     if (FAILED(hstr_create(MANAGER_CLASS, (UINT32)wcslen(MANAGER_CLASS), &name))) return NULL;
