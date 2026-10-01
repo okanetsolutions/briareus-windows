@@ -129,6 +129,9 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "pr", 12); json_set_num(args, "page", 2); json_set_str(args, "headSha", "h1"); json_set_str(args, "baseSha", "b1");
     result = api_call(c, "pull_files", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/files?repo=o%2Fr&page=2&headSha=h1&baseSha=b1");
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "pr", 12); json_set_num(args, "page", 2);
+    result = api_call(c, "pull_review_comments", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/review-comments?repo=o%2Fr&page=2"); CHECK_STR(stub.last_method, "GET");
     // Run takes its number from the errand's `prNumber`; the project stays in the body.
     args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "prNumber", 12);
     result = api_call(c, "serve_pull", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
@@ -171,7 +174,8 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     json_free(args);
     CHECK(stub.calls == calls);
     // Every call the board and the screens make is in the table.
-    const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "findings",
+    const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "pull_comments",
+                            "pull_reviews", "pull_review_comments", "findings",
                             "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
                             "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
