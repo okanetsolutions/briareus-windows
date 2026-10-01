@@ -310,6 +310,12 @@ static const ApiRoute ROUTES[] = {
     // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.
     { "upload", "POST", "uploads" },
     { "transcribe", "POST", "transcribe" },
+    // Settings, for an admin token: every project with all its settings, and the values a new one starts from.
+    { "settings_projects", "GET", "settings/projects" },
+    { "create_project", "POST", "settings/projects" },
+    { "update_project", "PUT", "settings/projects/{id}" },
+    { "delete_project", "DELETE", "settings/projects/{id}" },
+    { "order_projects", "PUT", "settings/projects/order" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];

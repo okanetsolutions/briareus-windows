@@ -103,7 +103,10 @@ static void rebuild_for_connection(void) {
 
 void app_show_detail(Screen *screen) {
     Screen *root = pane_root(g_detail);
-    if (root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1) {
+    // A form with unsaved changes may keep its place.
+    bool same = root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1;
+    if (root && !same && root->vt->can_leave && !root->vt->can_leave(root)) { screen->vt->destroy(screen); return; }
+    if (same) {
         screen->vt->destroy(screen);
     } else {
         pane_set_root(g_panel, NULL);
@@ -116,6 +119,8 @@ void app_show_detail(Screen *screen) {
 }
 void app_push_detail(Screen *screen) { pane_push(g_detail, screen); g_narrow_detail = true; layout(); }
 void app_clear_detail(void) {
+    Screen *root = pane_root(g_detail);
+    if (root && root->vt->can_leave && !root->vt->can_leave(root)) return;
     pane_set_root(g_panel, NULL);
     pane_set_root(g_detail, placeholder_screen_new());
     pane_set_selected_id(g_sidebar, NULL);
