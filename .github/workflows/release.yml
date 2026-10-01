@@ -1,22 +1,52 @@
 name: Release
 
-# Pushing a tag such as v1.2.0 builds the app, strips it and publishes a GitHub release with the executable and a zip.
+# Every push to main (each merged pull request) cuts a release: the minor version in app/resource.h is bumped,
+# committed as "Version resource x.y.z" and tagged vx.y.z, then the app is built, stripped and published with
+# the executable and a zip. Pushing a v* tag by hand still releases that tag as it is, without a bump.
 on:
   push:
+    branches: [main]
     tags: ['v*']
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build and publish
     runs-on: windows-latest
+    # The version bump commit the job pushes must not release again (the token's own pushes do not trigger
+    # workflows anyway, but keep the guard explicit).
+    if: github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'Version resource ')
     defaults:
       run:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bump the version, commit and tag
+        id: version
+        if: github.ref_type == 'branch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          last=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          last=${last#v}; last=${last:-0.0.0}
+          IFS=. read -r major minor patch <<< "$last"
+          next="$major.$((minor + 1)).0"
+          sed -i -E "s/^(#define APP_VERSION_COMMAS +)[0-9,]+/\1$major,$((minor + 1)),0,0/; s/^(#define APP_VERSION_STRING +)\"[^\"]*\"/\1\"$next\"/" app/resource.h
+          grep -q "\"$next\"" app/resource.h
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Version resource $next"
+          git tag -a "v$next" -m "Briareus for Windows $next"
+          git push origin HEAD:main "v$next"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -31,7 +61,8 @@ jobs:
           cd build/release && zip Briareus-windows-x64.zip Briareus.exe
       - uses: softprops/action-gh-release@v2
         with:
-          name: Briareus for Windows ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.tag || github.ref_name }}
+          name: Briareus for Windows ${{ steps.version.outputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
             build/release/Briareus.exe
