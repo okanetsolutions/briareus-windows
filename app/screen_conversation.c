@@ -350,31 +350,31 @@ static void ev_log(Doc *doc, int x, int w, const char *text, COLORREF color) {
 /// A `<details>` summary: 13px muted, `▸`/`▾` before it, ink on hover.
 typedef struct { char *text; bool open; } SummaryData;
 static void summary_free(void *p) { SummaryData *d = p; free(d->text); free(d); }
-static void paint_summary(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_summary(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SummaryData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     RECT r = *rc;
-    draw_text(hdc, d->text, &r, FONT_FOOTNOTE, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->text, &r, FONT_FOOTNOTE, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void doc_summary(Doc *doc, int x, int w, const char *text, bool open, int action, intptr_t arg) {
     SummaryData *d = xcalloc(1, sizeof *d);
     d->text = xstrfmt("%s %s", open ? "\xE2\x96\xBE" : "\xE2\x96\xB8", text); d->open = open;
     doc_custom(doc, x, w, px(18), paint_summary, d, summary_free, action, arg);
 }
-static void paint_left_border(Doc *doc, Item *it, HDC hdc, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(2), rc->bottom }; fill_rect(hdc, &r, theme.line); }
+static void paint_left_border(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { RECT r = { rc->left, rc->top, rc->left + px(2), rc->bottom }; fill_rect(cv, &r, theme.line); }
 
 /// One step of a tool block: the tool's name in a chip, then what it did, in mono, on one line.
 typedef struct { char *name, *summary; bool error; } StepData;
 static void step_free(void *p) { StepData *d = p; free(d->name); free(d->summary); free(d); }
-static void paint_step(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_step(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StepData *d = it->data;
-    int cw = px(6) * 2 + text_width(hdc, d->name, FONT_CAPTION) + 2, ch = px(19);
+    int cw = px(6) * 2 + text_width(cv, d->name, FONT_CAPTION) + 2, ch = px(19);
     RECT chip = { rc->left, rc->top + (rc->bottom - rc->top - ch) / 2, rc->left + cw, rc->top + (rc->bottom - rc->top - ch) / 2 + ch };
-    fill_round_rect(hdc, &chip, px(5), theme.raise, d->error ? theme.danger : theme.line);
+    fill_round_rect(cv, &chip, px(5), theme.raise, d->error ? theme.danger : theme.line);
     RECT n = { chip.left + px(6), chip.top, chip.right - px(6) + 2, chip.bottom };
-    draw_text(hdc, d->name, &n, FONT_CAPTION, d->error ? theme.danger : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->name, &n, FONT_CAPTION, d->error ? theme.danger : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     RECT s = { chip.right + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, d->summary, &s, FONT_MONO_SMALL, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->summary, &s, FONT_MONO_SMALL, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static const char *tool_title(const Event *e) {
     if (!str_empty(e->name)) return e->name;
@@ -417,30 +417,27 @@ static void add_time(Doc *doc, int x, int w, const Event *e, bool right) {
     free(text);
 }
 
-static void paint_queued_box(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    HPEN pen = CreatePen(PS_DOT, 1, theme.line);
-    HGDIOBJ old_pen = SelectObject(hdc, pen), old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, px(24), px(24));
-    SelectObject(hdc, old_pen); SelectObject(hdc, old_brush); DeleteObject(pen);
+static void paint_queued_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    stroke_dotted_round_rect(cv, rc, px(12), theme.line);
 }
 
-static void paint_working(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_working(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ConversationScreen *s = it->data;
     const char *status = session_status(session(s));
     const char *verb = str_eq(status, "queued") ? "Queued" : (str_eq(status, "preparing") || str_eq(status, "starting")) ? "Starting up" : working_verb(s->tick);
     RECT g = { rc->left, rc->top, rc->left + px(16), rc->bottom };
-    draw_textw(hdc, working_glyph(s->tick), &g, FONT_BODY_SEMIBOLD, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_textw(cv, working_glyph(s->tick), &g, FONT_BODY_SEMIBOLD, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     char *text = xstrfmt("%s\xE2\x80\xA6", verb);
     RECT t = { rc->left + px(24), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, text, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, text, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     free(text);
 }
 
 /// "— $2.9565 · 455s · 57 turns · 5.6M in / 36.4k out · 151.6k context", above a dashed rule.
-static void paint_turn_footer(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    draw_dashed_line(hdc, rc->left, rc->top, rc->right, rc->top, theme.line);
+static void paint_turn_footer(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    draw_dashed_line(cv, rc->left, rc->top, rc->right, rc->top, theme.line);
     RECT t = { rc->left, rc->top + px(8), rc->right, rc->bottom };
-    draw_text(hdc, it->text, &t, FONT_CAPTION, it->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, it->text, &t, FONT_CAPTION, it->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void layout_turn_footer(Doc *doc, int x, int w, const Event *e) {
     Str bits; str_init(&bits);
@@ -683,7 +680,7 @@ static void conversation_layout(Screen *base, Doc *doc) {
         const char *text = json_str(json_get(json_at(queued, q), "text"));
         if (!text) text = "Message";
         doc_space(doc, px(10));
-        int th = measure_text(doc->hdc, text, w - px(28), FONT_BODY, DT_WORDBREAK);
+        int th = measure_text(doc->cv, text, w - px(28), FONT_BODY, DT_WORDBREAK);
         RECT br = { x, doc->y, x + w, doc->y + th + px(20) };
         doc_add(doc, &br, paint_queued_box);
         RECT tr = { br.left + px(14), br.top + px(10), br.right - px(14), br.bottom - px(10) };
@@ -840,10 +837,10 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
 enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
 static RECT g_chip_rc[CHIP_COUNT];
 
-static int composer_height(ConversationScreen *s, HDC hdc) {
+static int composer_height(ConversationScreen *s, Canvas *cv) {
     int line_h = px(24);
     int lines = s->composer_lines < 1 ? 1 : s->composer_lines > 8 ? 8 : s->composer_lines;
-    (void)hdc;
+    (void)cv;
     return lines * line_h;
 }
 static char *chip_text(ConversationScreen *s, int chip) {
@@ -866,13 +863,13 @@ static bool chip_shown(ConversationScreen *s, int chip) {
     return shown;
 }
 static bool chip_live(int chip) { return chip == CHIP_LOOP; }
-static int chips_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
+static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (int c = 0; c < CHIP_COUNT; c++) {
         if (out) SetRectEmpty(&out[c]);
         if (!chip_shown(s, c)) continue;
         char *label = chip_text(s, c);
-        int w = px(6) * 2 + text_width(hdc, label, FONT_CAPTION) + px(4);
+        int w = px(6) * 2 + text_width(cv, label, FONT_CAPTION) + px(4);
         if (w > px(150)) w = px(150);
         free(label);
         if (x > 0 && x + w > width) { x = 0; y += h + gap; }
@@ -882,13 +879,13 @@ static int chips_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
     return y + h;
 }
 // `.attach-list`: the files for the next message, as chips above the text, wrapping; returns the height they take with the gap under them.
-static int attachments_layout(ConversationScreen *s, HDC hdc, int width, RECT *out) {
+static int attachments_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
     if (!s->attachment_count) return 0;
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (size_t i = 0; i < s->attachment_count; i++) {
         char *size = format_file_size(s->attachments[i]->size);
         char *label = xstrfmt("\xF0\x9F\x93\x8E %s \xC2\xB7 %s", s->attachments[i]->name, size);
-        int w = px(8) + text_width(hdc, label, FONT_CAPTION) + px(6) + px(16) + px(6);
+        int w = px(8) + text_width(cv, label, FONT_CAPTION) + px(6) + px(16) + px(6);
         if (w > px(280)) w = px(280);
         free(label); free(size);
         if (x > 0 && x + w > width) { x = 0; y += h + gap; }
@@ -905,38 +902,36 @@ static RECT footer_column(const RECT *rc) {
 }
 static int conversation_footer_height(Screen *base, int width) {
     ConversationScreen *s = (ConversationScreen *)base;
-    HDC hdc = GetDC(pane_hwnd(base->pane));
+    Canvas *cv = NULL;   // measuring only
     int inner = width - px(24) * 2; if (inner > px(860)) inner = px(860);
-    int chips = chips_layout(s, hdc, inner, NULL);
-    int files = can_message(s) ? attachments_layout(s, hdc, inner - px(24), NULL) : 0;
-    int box = can_message(s) ? px(10) + files + composer_height(s, hdc) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
+    int chips = chips_layout(s, cv, inner, NULL);
+    int files = can_message(s) ? attachments_layout(s, cv, inner - px(24), NULL) : 0;
+    int box = can_message(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
     int h = px(8) + chips + px(8) + box + px(6) + px(16) + px(14);
-    ReleaseDC(pane_hwnd(base->pane), hdc);
     return h;
 }
 static void conversation_footer_layout(Screen *base, const RECT *rc) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (!can_message(s)) { ShowWindow(s->composer, SW_HIDE); return; }
-    HDC hdc = GetDC(pane_hwnd(base->pane));
+    Canvas *cv = NULL;   // measuring only
     RECT col = footer_column(rc);
-    int chips = chips_layout(s, hdc, col.right - col.left, NULL);
-    int files = attachments_layout(s, hdc, col.right - col.left - px(24), NULL);
-    int ch = composer_height(s, hdc);
-    ReleaseDC(pane_hwnd(base->pane), hdc);
+    int chips = chips_layout(s, cv, col.right - col.left, NULL);
+    int files = attachments_layout(s, cv, col.right - col.left - px(24), NULL);
+    int ch = composer_height(s, cv);
     int top = col.top + px(8) + chips + px(8);
     RECT er = { col.left + px(12) + 1, top + px(10) + 1 + files, col.right - px(12) - 1, top + px(10) + 1 + files + ch };
     s->composer_rc = er;
     MoveWindow(s->composer, er.left, er.top, er.right - er.left, er.bottom - er.top, TRUE);
     ShowWindow(s->composer, SW_SHOW);
 }
-static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
+static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     ConversationScreen *s = (ConversationScreen *)base;
     const Session *ss = session(s);
-    fill_rect(hdc, rc, theme.canvas);
+    fill_rect(cv, rc, theme.canvas);
     RECT col = footer_column(rc);
     int width = col.right - col.left;
     RECT rects[CHIP_COUNT];
-    int chips = chips_layout(s, hdc, width, rects);
+    int chips = chips_layout(s, cv, width, rects);
     int y0 = col.top + px(8);
     bool can = !s->busy && !s->uncertain;
     for (int c = 0; c < CHIP_COUNT; c++) {
@@ -945,46 +940,46 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
         if (chip_live(c) && can) g_chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
-        fill_round_rect(hdc, &r, px(6), theme.raise, on ? theme.accent : theme.line);
+        fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
-        draw_text(hdc, label, &t, FONT_CAPTION, on ? theme.accent : chip_live(c) && can ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : chip_live(c) && can ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label);
     }
     int top = y0 + chips + px(8);
     memset(&s->mic_rc, 0, sizeof s->mic_rc); memset(&s->send_rc, 0, sizeof s->send_rc); memset(&s->discard_rc, 0, sizeof s->discard_rc);
     if (!can_message(s)) {
         RECT box = { col.left, top, col.right, top + px(30) + px(20) + 2 };
-        fill_round_rect(hdc, &box, px(16), theme.raise, theme.line);
+        fill_round_rect(cv, &box, px(16), theme.raise, theme.line);
         bool reopen = store_supports("reopen") && str_eq(session_status(ss), "closed");
-        int bw = reopen ? px(10) * 2 + text_width(hdc, "\xE2\x9F\xB3 Reopen", FONT_FOOTNOTE) + 2 : 0;
+        int bw = reopen ? px(10) * 2 + text_width(cv, "\xE2\x9F\xB3 Reopen", FONT_FOOTNOTE) + 2 : 0;
         RECT t = { box.left + px(12), box.top, box.right - bw - px(24), box.bottom };
-        draw_text(hdc, store_can_manage() ? "This session is closed." : "Read-only access", &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, store_can_manage() ? "This session is closed." : "Read-only access", &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (reopen) {
             RECT b = { box.right - px(12) - bw, (box.top + box.bottom) / 2 - px(15), box.right - px(12), (box.top + box.bottom) / 2 + px(15) };
             s->send_rc = b;
-            fill_round_rect(hdc, &b, px(7), theme.raise, can ? theme.line : theme.line);
-            draw_text(hdc, "\xE2\x9F\xB3 Reopen", &b, FONT_FOOTNOTE, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            fill_round_rect(cv, &b, px(7), theme.raise, can ? theme.line : theme.line);
+            draw_text(cv, "\xE2\x9F\xB3 Reopen", &b, FONT_FOOTNOTE, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         return;
     }
-    int ch = composer_height(s, hdc);
+    int ch = composer_height(s, cv);
     RECT *frects = xcalloc(s->attachment_count ? s->attachment_count : 1, sizeof *frects);
-    int files = attachments_layout(s, hdc, width - px(24), frects);
+    int files = attachments_layout(s, cv, width - px(24), frects);
     RECT box = { col.left, top, col.right, top + px(10) + files + ch + px(6) + px(30) + px(8) + 2 };
-    fill_round_rect(hdc, &box, px(16), theme.raise, GetFocus() == s->composer ? theme.line_strong : theme.line);
+    fill_round_rect(cv, &box, px(16), theme.raise, GetFocus() == s->composer ? theme.line_strong : theme.line);
     for (size_t i = 0; i < s->attachment_count; i++) {
         Attachment *a = s->attachments[i];
         RECT r = { box.left + px(12) + frects[i].left, box.top + px(10) + 1 + frects[i].top, box.left + px(12) + frects[i].right, box.top + px(10) + 1 + frects[i].bottom };
-        fill_round_rect(hdc, &r, px(6), theme.field, theme.line);
+        fill_round_rect(cv, &r, px(6), theme.field, theme.line);
         char *size = format_file_size(a->size);
         char *label = xstrfmt("%s %s \xC2\xB7 %s", a->id ? "\xF0\x9F\x93\x8E" : "\xE2\x80\xA6", a->name, size);
         RECT t = { r.left + px(8), r.top, r.right - px(6) - px(16), r.bottom };
-        draw_text(hdc, label, &t, FONT_CAPTION, a->id ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, a->id ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label); free(size);
         RECT x = { r.right - px(6) - px(16), r.top, r.right - px(6), r.bottom };
         a->remove_rc = x;
-        draw_text(hdc, "\xE2\x9C\x95", &x, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        draw_text(cv, "\xE2\x9C\x95", &x, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     free(frects);
     int row_y = box.top + px(10) + 1 + files + ch + px(6), bh = px(30), bw = px(32);
@@ -996,35 +991,35 @@ static void conversation_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
     RECT send = { box.right - px(12) - bw, row_y, box.right - px(12), row_y + bh };
     s->send_rc = send;
     if (active && store_supports("cancel") && trimmed_empty) {
-        fill_round_rect(hdc, &send, px(8), theme.raise, theme.line);
-        draw_text(hdc, "\xE2\x96\xA0", &send, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &send, px(8), theme.raise, theme.line);
+        draw_text(cv, "\xE2\x96\xA0", &send, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
         bool enabled = can && !trimmed_empty && !uploading;
-        fill_round_rect(hdc, &send, px(8), enabled || s->busy ? theme.accent : theme.field, enabled || s->busy ? theme.accent : theme.field);
-        draw_text(hdc, "\xE2\x86\xB5", &send, FONT_BODY, enabled || s->busy ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &send, px(8), enabled || s->busy ? theme.accent : theme.field, enabled || s->busy ? theme.accent : theme.field);
+        draw_text(cv, "\xE2\x86\xB5", &send, FONT_BODY, enabled || s->busy ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     int x = box.left + px(12);
     if (store_can_transcribe()) {
         RECT mic = { x, row_y, x + bw, row_y + bh };
         s->mic_rc = mic;
         bool rec = vs == VOICE_RECORDING;
-        fill_round_rect(hdc, &mic, px(8), rec ? theme.danger : theme.raise, rec ? theme.danger : theme.line);
-        draw_text(hdc, rec ? "\xE2\x96\xA0" : (vs == VOICE_TRANSCRIBING || vs == VOICE_STARTING) ? "\xE2\x80\xA6" : "\xF0\x9F\x8E\xA4", &mic, FONT_EMOJI_LARGE, rec ? theme.white : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &mic, px(8), rec ? theme.danger : theme.raise, rec ? theme.danger : theme.line);
+        draw_text(cv, rec ? "\xE2\x96\xA0" : (vs == VOICE_TRANSCRIBING || vs == VOICE_STARTING) ? "\xE2\x80\xA6" : "\xF0\x9F\x8E\xA4", &mic, FONT_EMOJI_LARGE, rec ? theme.white : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += bw + px(6);
         if (rec || vs == VOICE_TRANSCRIBING) {
             RECT discard = { x, row_y, x + bw, row_y + bh };
             s->discard_rc = discard;
-            fill_round_rect(hdc, &discard, px(8), theme.raise, theme.line);
-            draw_text(hdc, "\xE2\x9C\x95", &discard, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            fill_round_rect(cv, &discard, px(8), theme.raise, theme.line);
+            draw_text(cv, "\xE2\x9C\x95", &discard, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             x += bw + px(6);
-            if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(hdc, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
+            if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
     // `#composer-note`: what a message sent now does.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
                       : uploading ? "Uploading\xE2\x80\xA6" : s->attachment_count && trimmed_empty ? "Add a few words to send the files" : "";
-    draw_text(hdc, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static void conversation_footer_click(Screen *base, POINT pt) {

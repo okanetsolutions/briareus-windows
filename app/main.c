@@ -1,4 +1,5 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
+#include "canvas.h"
 #include "dialogs.h"
 #include "resource.h"
 #include "screens.h"
@@ -62,12 +63,12 @@ static void layout(void) {
     }
 }
 
-static void paint_divider(HDC hdc) {
+static void paint_divider(Canvas *cv) {
     if (!g_connected_layout || is_narrow()) return;
     RECT rc; GetClientRect(g_main, &rc);
     int x = px(SIDEBAR_WIDTH);
-    draw_line(hdc, x - 1, rc.top, x - 1, rc.bottom, theme.line);
-    if (panel_shown()) { int px_ = rc.right - px(PANEL_WIDTH); draw_line(hdc, px_, rc.top, px_, rc.bottom, theme.line); }
+    draw_line(cv, x - 1, rc.top, x - 1, rc.bottom, theme.line);
+    if (panel_shown()) { int px_ = rc.right - px(PANEL_WIDTH); draw_line(cv, px_, rc.top, px_, rc.bottom, theme.line); }
 }
 
 void app_set_panel(Screen *screen) {
@@ -199,7 +200,14 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }
         return 0;
     case WM_ACTIVATEAPP: set_active(wp != 0 && !IsIconic(hwnd)); return 0;
-    case WM_PAINT: { PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps); fill_rect(hdc, &ps.rcPaint, theme.canvas); paint_divider(hdc); EndPaint(hwnd, &ps); return 0; }
+    case WM_PAINT: {
+        PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        Canvas *cv = canvas_begin_dc(hdc, &rc);
+        if (cv) { fill_rect(cv, &ps.rcPaint, theme.canvas); paint_divider(cv); canvas_end_dc(cv); }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_ERASEBKGND: return 1;
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(360); return 0; }
     case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;

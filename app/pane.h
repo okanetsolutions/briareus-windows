@@ -29,7 +29,7 @@ typedef struct ScreenVTable {
     void (*timer)(Screen *s, UINT id);
     int (*footer_height)(Screen *s, int width);
     void (*footer_layout)(Screen *s, const RECT *rc);
-    void (*footer_paint)(Screen *s, HDC hdc, const RECT *rc);
+    void (*footer_paint)(Screen *s, Canvas *cv, const RECT *rc);
     void (*footer_click)(Screen *s, POINT pt);
     /// Moves content child controls after a layout or scroll; optional.
     void (*place)(Screen *s, const RECT *content, int scroll_y);

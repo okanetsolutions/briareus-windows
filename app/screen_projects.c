@@ -17,26 +17,26 @@ enum { STRIP_H = 32, ICON_W = 32, STRIP_GAP = 6 };
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
 typedef struct { char text[40]; int badge; bool active, wide; } StripData;
-static void paint_strip(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StripData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
-    fill_round_rect(hdc, rc, px(8), theme.raise, border);
+    fill_round_rect(cv, rc, px(8), theme.raise, border);
     if (d->wide) {
         RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
-        draw_text(hdc, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
         RECT t = *rc;
-        draw_text(hdc, d->text, &t, FONT_EMOJI, d->active ? theme.accent : theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        draw_text(cv, d->text, &t, FONT_EMOJI, d->active ? theme.accent : theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
     if (d->badge) {
         // `absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-accent px-1 text-[10px] font-semibold leading-4`
         char n[16]; snprintf(n, sizeof n, "%d", d->badge);
-        int tw = text_width(hdc, n, FONT_TINY_SEMIBOLD) + px(8);
+        int tw = text_width(cv, n, FONT_TINY_SEMIBOLD) + px(8);
         if (tw < px(16)) tw = px(16);
         RECT b = { rc->right + px(6) - tw, rc->top - px(6), rc->right + px(6), rc->top - px(6) + px(16) };
-        fill_round_rect(hdc, &b, px(8), theme.accent, theme.accent);
-        draw_text(hdc, n, &b, FONT_TINY_SEMIBOLD, theme.on_accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &b, px(8), theme.accent, theme.accent);
+        draw_text(cv, n, &b, FONT_TINY_SEMIBOLD, theme.on_accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 static void strip_button(Doc *doc, const RECT *rc, const char *text, bool wide, int badge, bool active, int action) {
@@ -64,19 +64,19 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
 /// The foot: `☑ Select` and `⎋`, 13px muted, above a border.
 static int sidebar_footer_height(int width) { (void)width; return px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
 typedef struct { RECT select_rc, signout_rc; } FooterRects;
-static void sidebar_footer_paint(HDC hdc, const RECT *rc, FooterRects *out, bool select_on) {
-    fill_rect(hdc, rc, theme.sidebar);
+static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, bool select_on) {
+    fill_rect(cv, rc, theme.sidebar);
     int top = rc->top + px(6);
-    draw_line(hdc, rc->left + px(10), top, rc->right - px(10), top, theme.line);
+    draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(10), h = px(18);
     int left = rc->left + px(16), right = rc->right - px(16);
     const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B", *version = "v" APP_VERSION_STRING;
-    int sw = text_width(hdc, sel, FONT_FOOTNOTE), ow = text_width(hdc, out_, FONT_FOOTNOTE), vw = text_width(hdc, version, FONT_CAPTION2);
+    int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = text_width(cv, out_, FONT_FOOTNOTE), vw = text_width(cv, version, FONT_CAPTION2);
     RECT a = { left, y, left + sw, y + h }, c = { right - ow, y, right, y + h };
     RECT v = { (left + right) / 2 - vw / 2, y, (left + right) / 2 + vw / 2 + 1, y + h };
-    draw_text(hdc, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, out_, &c, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, out_, &c, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     InflateRect(&a, px(4), px(4)); InflateRect(&c, px(4), px(4));
     out->select_rc = a; out->signout_rc = c;
 }
@@ -99,19 +99,19 @@ static bool sidebar_common_action(Pane *pane, int action) {
 
 typedef struct { char *name; int count; bool busy, selected, chevron; } ProjectRowData;
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->name); free(d); }
-static void paint_project_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered || d->selected) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     int right = rc->right - px(8);
-    if (d->chevron) { RECT c = { right - px(6), rc->top, right, rc->bottom }; draw_text(hdc, "\xE2\x80\xBA", &c, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= px(6) + px(8); }
+    if (d->chevron) { RECT c = { right - px(6), rc->top, right, rc->bottom }; draw_text(cv, "\xE2\x80\xBA", &c, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= px(6) + px(8); }
     char n[16]; snprintf(n, sizeof n, "%d", d->count);
-    int nw = text_width(hdc, n, FONT_CAPTION);
-    RECT cr = { right - nw, rc->top, right, rc->bottom }; draw_text(hdc, n, &cr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    int nw = text_width(cv, n, FONT_CAPTION);
+    RECT cr = { right - nw, rc->top, right, rc->bottom }; draw_text(cv, n, &cr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     right -= nw + px(8);
-    if (d->busy) { draw_status_dot(hdc, right - px(4), (rc->top + rc->bottom) / 2, "running"); right -= px(7) + px(8); }
+    if (d->busy) { draw_status_dot(cv, right - px(4), (rc->top + rc->bottom) / 2, "running"); right -= px(7) + px(8); }
     RECT t = { rc->left + px(8), rc->top, right, rc->bottom };
-    draw_text(hdc, d->name, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->name, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void doc_project_row(Doc *doc, int w, const char *name, int count, bool busy, bool selected, bool chevron, int h, int action, intptr_t arg) {
     ProjectRowData *d = xcalloc(1, sizeof *d);
@@ -119,14 +119,14 @@ static void doc_project_row(Doc *doc, int w, const char *name, int count, bool b
     doc_custom(doc, 0, w, h, paint_project_row, d, project_row_free, action, arg);
 }
 
-static void paint_back_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    if (hovered) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     COLORREF c = hovered ? theme.ink : theme.muted;
     RECT a = { rc->left + px(8), rc->top, rc->left + px(8) + px(8), rc->bottom };
-    draw_text(hdc, "\xE2\x80\xB9", &a, FONT_FOOTNOTE, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, "\xE2\x80\xB9", &a, FONT_FOOTNOTE, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     RECT t = { a.right + px(6), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, "All projects", &t, FONT_CAPTION, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, "All projects", &t, FONT_CAPTION, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 /// A conversation as the dashboard lists it: its mark, title, and a line of provider, branch, state and age.
@@ -136,13 +136,13 @@ typedef struct {
     int meta_h;
 } SessionRowData;
 static void session_row_free(void *p) { SessionRowData *d = p; free(d->title); free(d->provider); free(d->branch); free(d->state); free(d->ago); free(d->pr_state); free(d); }
-static int chip_w(HDC hdc, const char *text) { return px(5) * 2 + text_width(hdc, text, FONT_CAPTION2) + 2; }
-/// Lays the metadata chips out at `width`, wrapping as `flex-wrap` does; NULL hdc rects only measure. Returns the height.
-static int meta_layout(HDC hdc, SessionRowData *d, int width, RECT *rects) {
+static int chip_w(Canvas *cv, const char *text) { return px(5) * 2 + text_width(cv, text, FONT_CAPTION2) + 2; }
+/// Lays the metadata chips out at `width`, wrapping as `flex-wrap` does; NULL cv rects only measure. Returns the height.
+static int meta_layout(Canvas *cv, SessionRowData *d, int width, RECT *rects) {
     // provider chip, branch chip (at most 45% wide), state, age; `gap-2` between them, 20px lines.
     int lh = px(20), gap = px(8), x = 0, y = 0;
     const char *branch = d->orchestrator ? (d->zeus ? "\xE2\x9A\xA1 zeus" : "\xF0\x9F\xA7\xAD orchestrator") : d->branch;
-    int widths[4] = { chip_w(hdc, d->provider), branch && *branch ? chip_w(hdc, branch) : 0, text_width(hdc, d->state, FONT_CAPTION), text_width(hdc, d->ago, FONT_CAPTION) };
+    int widths[4] = { chip_w(cv, d->provider), branch && *branch ? chip_w(cv, branch) : 0, text_width(cv, d->state, FONT_CAPTION), text_width(cv, d->ago, FONT_CAPTION) };
     if (widths[1] > width * 45 / 100) widths[1] = width * 45 / 100;
     for (int i = 0; i < 4; i++) {
         if (!widths[i]) { SetRectEmpty(&rects[i]); continue; }
@@ -156,27 +156,25 @@ static int meta_layout(HDC hdc, SessionRowData *d, int width, RECT *rects) {
     return y + lh;
 }
 /// GitHub's pull request mark, drawn in 13px: a branch with a commit at each end and the merge ring beside it.
-static void draw_pr_mark(HDC hdc, int x, int y, COLORREF color) {
+static void draw_pr_mark(Canvas *cv, int x, int y, COLORREF color) {
     int s = px(13);
-    HPEN pen = CreatePen(PS_SOLID, px(1) + 1, color);
-    HGDIOBJ old = SelectObject(hdc, pen);
+    int w = px(1) + 1;
     int lx = x + s * 3 / 13, top = y + s * 3 / 13, bottom = y + s * 11 / 13, rx = x + s * 10 / 13;
-    MoveToEx(hdc, lx, top, NULL); LineTo(hdc, lx, bottom);
-    MoveToEx(hdc, rx, bottom, NULL); LineTo(hdc, rx, y + s * 5 / 13);
-    MoveToEx(hdc, rx, y + s * 4 / 13, NULL); LineTo(hdc, x + s * 6 / 13, y + s * 4 / 13);
-    SelectObject(hdc, old); DeleteObject(pen);
+    draw_thick_line(cv, lx, top, lx, bottom, color, w);
+    draw_thick_line(cv, rx, bottom, rx, y + s * 5 / 13, color, w);
+    draw_thick_line(cv, rx, y + s * 4 / 13, x + s * 6 / 13, y + s * 4 / 13, color, w);
     int r = s * 2 / 13 + 1;
-    fill_circle(hdc, lx, top, r, color); fill_circle(hdc, lx, bottom, r, color); fill_circle(hdc, rx, bottom, r, color);
+    fill_circle(cv, lx, top, r, color); fill_circle(cv, lx, bottom, r, color); fill_circle(cv, rx, bottom, r, color);
 }
-static void paint_session_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_session_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SessionRowData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    if (hovered || d->lit) fill_round_rect(hdc, rc, px(8), theme.raise, theme.raise);
+    if (hovered || d->lit) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(7);
     if (d->select_mode) {
         RECT box = { x, top + px(4), x + px(13), top + px(4) + px(13) };
-        fill_round_rect(hdc, &box, px(2), d->picked ? theme.accent : theme.field, d->picked ? theme.accent : theme.line_strong);
-        if (d->picked) draw_glyph(hdc, 0xE73E, &box, FONT_ICON_SMALL, theme.on_accent);
+        fill_round_rect(cv, &box, px(2), d->picked ? theme.accent : theme.field, d->picked ? theme.accent : theme.line_strong);
+        if (d->picked) draw_glyph(cv, 0xE73E, &box, FONT_ICON_SMALL, theme.on_accent);
         x += px(13) + px(8);
     }
     x += px(8) + px(8);   // the fold gutter and the gap after it
@@ -186,14 +184,14 @@ static void paint_session_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     int mark_w;
     if (d->pr_state) {
         COLORREF c = str_eq(d->pr_state, "open") ? theme.ok : str_eq(d->pr_state, "merged") ? theme.accent : str_eq(d->pr_state, "closed") ? theme.danger : theme.muted;
-        draw_pr_mark(hdc, x, top + (line_h - px(13)) / 2, c);
+        draw_pr_mark(cv, x, top + (line_h - px(13)) / 2, c);
         mark_w = px(13);
-    } else { draw_status_dot(hdc, x + px(3), top + line_h / 2, d->state); mark_w = px(7); }
+    } else { draw_status_dot(cv, x + px(3), top + line_h / 2, d->state); mark_w = px(7); }
     l1.left = x + mark_w + px(7);
-    draw_text(hdc, d->title, &l1, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->title, &l1, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     // Line two: the chips, wrapped as they were measured.
     RECT rects[4];
-    meta_layout(hdc, d, right - x, rects);
+    meta_layout(cv, d, right - x, rects);
     int my = top + line_h + px(2);
     const char *branch = d->orchestrator ? (d->zeus ? "\xE2\x9A\xA1 zeus" : "\xF0\x9F\xA7\xAD orchestrator") : d->branch;
     const char *texts[4] = { d->provider, branch, d->state, d->ago };
@@ -202,10 +200,10 @@ static void paint_session_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
         RECT r = { x + rects[i].left, my + rects[i].top, x + rects[i].right, my + rects[i].bottom };
         if (i < 2) {
             RECT chip = { r.left, r.top + px(1), r.right, r.bottom - px(1) };
-            fill_round_rect(hdc, &chip, px(4), hovered || d->lit ? theme.raise : theme.sidebar, theme.line);
+            fill_round_rect(cv, &chip, px(4), hovered || d->lit ? theme.raise : theme.sidebar, theme.line);
             RECT t = { chip.left + px(5), chip.top, chip.right - px(5) + 2, chip.bottom };
-            draw_text(hdc, texts[i], &t, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        } else draw_text(hdc, texts[i], &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            draw_text(cv, texts[i], &t, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        } else draw_text(cv, texts[i], &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 /// The dashboard's `sessionState`: an idle conversation with a question up is "waiting".
@@ -232,7 +230,7 @@ static void doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool li
     d->lit = lit; d->select_mode = select_mode; d->picked = picked;
     int x = px(8) + (select_mode ? px(13) + px(8) : 0) + px(16);
     RECT rects[4];
-    d->meta_h = meta_layout(doc->hdc, d, w - x - px(8), rects);
+    d->meta_h = meta_layout(doc->cv, d, w - x - px(8), rects);
     int h = px(7) + px(23) + px(2) + d->meta_h + px(7);
     doc_custom(doc, 0, w, h, paint_session_row, d, session_row_free, action, arg);
 }
@@ -358,7 +356,7 @@ static void projects_layout(Screen *base, Doc *doc) {
 }
 static void projects_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
 static int projects_footer_height(Screen *base, int width) { (void)base; return sidebar_footer_height(width); }
-static void projects_footer_paint(Screen *base, HDC hdc, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(hdc, rc, &s->footer, false); }
+static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(cv, rc, &s->footer, false); }
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (in_rect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
@@ -588,34 +586,34 @@ static int bulk_bar_height(SessionsScreen *s) { return s->select_mode ? px(6) + 
 static int sessions_footer_height(Screen *base, int width) { SessionsScreen *s = (SessionsScreen *)base; return sidebar_footer_height(width) + bulk_bar_height(s); }
 typedef struct { RECT all, close_, delete_, delete_all; } BulkRects;
 static BulkRects g_bulk;
-static void sessions_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
+static void sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     SessionsScreen *s = (SessionsScreen *)base;
-    fill_rect(hdc, rc, theme.sidebar);
+    fill_rect(cv, rc, theme.sidebar);
     int y = rc->top;
     memset(&g_bulk, 0, sizeof g_bulk);
     if (s->select_mode) {
         int left = rc->left + px(16), right = rc->right - px(16);
-        y += px(6); draw_line(hdc, rc->left + px(10), y, rc->right - px(10), y, theme.line); y += 1 + px(10);
+        y += px(6); draw_line(cv, rc->left + px(10), y, rc->right - px(10), y, theme.line); y += 1 + px(10);
         char *count = xstrfmt("%zu selected", s->picked_count);
-        RECT cr = { left, y, right - px(70), y + px(18) }; draw_text(hdc, count, &cr, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(count);
-        int aw = text_width(hdc, "Select all", FONT_FOOTNOTE);
-        RECT ar = { right - aw, y, right, y + px(18) }; draw_text(hdc, "Select all", &ar, FONT_FOOTNOTE, s->count ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        RECT cr = { left, y, right - px(70), y + px(18) }; draw_text(cv, count, &cr, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(count);
+        int aw = text_width(cv, "Select all", FONT_FOOTNOTE);
+        RECT ar = { right - aw, y, right, y + px(18) }; draw_text(cv, "Select all", &ar, FONT_FOOTNOTE, s->count ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         g_bulk.all = ar;
         y += px(18) + px(6);
         int bw = (right - left - px(6)) / 2, bh = px(30);
         bool can = s->picked_count && !s->req_bulk;
         RECT c1 = { left, y, left + bw, y + bh }, c2 = { left + bw + px(6), y, right, y + bh };
-        fill_round_rect(hdc, &c1, px(7), theme.raise, theme.line); draw_text(hdc, s->req_bulk && !s->queue_delete ? "Closing\xE2\x80\xA6" : "\xE2\x8F\xBB Close", &c1, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        fill_round_rect(hdc, &c2, px(7), theme.raise, theme.line); draw_text(hdc, s->req_bulk && s->queue_delete ? "Deleting\xE2\x80\xA6" : "\xF0\x9F\x97\x91 Delete", &c2, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &c1, px(7), theme.raise, theme.line); draw_text(cv, s->req_bulk && !s->queue_delete ? "Closing\xE2\x80\xA6" : "\xE2\x8F\xBB Close", &c1, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        fill_round_rect(cv, &c2, px(7), theme.raise, theme.line); draw_text(cv, s->req_bulk && s->queue_delete ? "Deleting\xE2\x80\xA6" : "\xF0\x9F\x97\x91 Delete", &c2, FONT_CAPTION, can ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         g_bulk.close_ = c1; g_bulk.delete_ = c2;
         y += bh + px(6);
-        RECT dr = { left, y, right, y + px(18) }; draw_text(hdc, "\xF0\x9F\x97\x91 Delete all", &dr, FONT_CAPTION, s->count && !s->req_bulk ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT dr = { left, y, right, y + px(18) }; draw_text(cv, "\xF0\x9F\x97\x91 Delete all", &dr, FONT_CAPTION, s->count && !s->req_bulk ? theme.muted : blend(theme.muted, theme.sidebar, 0.5), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         g_bulk.delete_all = dr;
         y += px(18) + px(10);
-        if (s->bulk_error) { RECT er = { left, y - px(8), right, y + px(6) }; draw_text(hdc, s->bulk_error, &er, FONT_CAPTION2, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
+        if (s->bulk_error) { RECT er = { left, y - px(8), right, y + px(6) }; draw_text(cv, s->bulk_error, &er, FONT_CAPTION2, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
     }
     RECT foot = { rc->left, y, rc->right, rc->bottom };
-    sidebar_footer_paint(hdc, &foot, &s->footer, s->select_mode);
+    sidebar_footer_paint(cv, &foot, &s->footer, s->select_mode);
 }
 static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;

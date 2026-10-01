@@ -1,4 +1,5 @@
 #include "pane.h"
+#include "canvas.h"
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@ struct Pane {
     // scrollbar drag
     bool dragging_thumb; int drag_offset;
     RECT thumb_rect;
-    HDC mem_dc; HBITMAP mem_bmp; int mem_w, mem_h;
+    Canvas *canvas;         // Direct2D, drawing to the window on the GPU
 };
 
 static Pane **all_panes; static size_t pane_count;
@@ -54,6 +55,7 @@ Pane *pane_create(HWND parent, bool sidebar) {
     p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1;
     doc_init(&p->doc);
     p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
+    p->canvas = canvas_for_window(p->hwnd);
     all_panes = xrealloc(all_panes, (pane_count + 1) * sizeof *all_panes);
     all_panes[pane_count++] = p;
     return p;
@@ -65,8 +67,7 @@ void pane_destroy(Pane *p) {
     if (p->hwnd) DestroyWindow(p->hwnd);
     doc_free(&p->doc); free(p->stack); free(p->selected_id);
     if (p->edit_brush) DeleteObject(p->edit_brush);
-    if (p->mem_dc) DeleteDC(p->mem_dc);
-    if (p->mem_bmp) DeleteObject(p->mem_bmp);
+    canvas_free(p->canvas);
     free(p);
 }
 HWND pane_hwnd(Pane *p) { return p->hwnd; }
@@ -185,7 +186,7 @@ static void refresh_header(Pane *p) {
     p->header_h = has_header ? content + px(20) + 1 : 0;
 }
 
-static void layout_if_needed(Pane *p, HDC hdc) {
+static void layout_if_needed(Pane *p, Canvas *cv) {
     if (!p->dirty) return;
     p->dirty = false;
     Screen *s = pane_top(p);
@@ -196,7 +197,7 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     bool was_bottom = p->scroll_y >= 0x3fffffff || pane_at_bottom(p);
     int content_width = width - 2 * margin(p);
     if (content_width < px(120)) content_width = px(120);
-    doc_begin(&p->doc, hdc, content_width);
+    doc_begin(&p->doc, cv, content_width);
     if (s && s->vt->layout) s->vt->layout(s, &p->doc);
     doc_end(&p->doc);
     p->content_height = doc_height(&p->doc);
@@ -204,7 +205,7 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     // width, as `::-webkit-scrollbar` does, instead of covering the ⚑ badge and the rows' edges.
     if (p->sidebar && max_scroll(p) > 0) {
         content_width -= px(10);
-        doc_begin(&p->doc, hdc, content_width);
+        doc_begin(&p->doc, cv, content_width);
         if (s && s->vt->layout) s->vt->layout(s, &p->doc);
         doc_end(&p->doc);
         p->content_height = doc_height(&p->doc);
@@ -222,19 +223,19 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     if (s && s->vt->scrolled) s->vt->scrolled(s, pane_at_bottom(p));
 }
 
-static int header_button_width(HDC hdc, const HeaderButton *b, bool labels) {
+static int header_button_width(Canvas *cv, const HeaderButton *b, bool labels) {
     if (!b->label[0] || !labels) return px(32);
-    return px(10) * 2 + text_width(hdc, b->label, FONT_FOOTNOTE) + 2;
+    return px(10) * 2 + text_width(cv, b->label, FONT_FOOTNOTE) + 2;
 }
 /// A `.btn-icon`: a 32px square with a border, as the dashboard's ☰ ＋ ⓘ and ⟳.
-static void paint_icon_button(HDC hdc, const RECT *rc, bool hovered) {
-    fill_round_rect(hdc, rc, px(8), theme.raise, hovered ? theme.accent_dim : theme.line);
+static void paint_icon_button(Canvas *cv, const RECT *rc, bool hovered) {
+    fill_round_rect(cv, rc, px(8), theme.raise, hovered ? theme.accent_dim : theme.line);
 }
-static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
+static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
     if (!p->header_h) return;
     RECT hr = { rc->left, rc->top, rc->right, rc->top + p->header_h };
-    fill_rect(hdc, &hr, pane_bg(p));
-    draw_line(hdc, hr.left, hr.bottom - 1, hr.right, hr.bottom - 1, theme.line);
+    fill_rect(cv, &hr, pane_bg(p));
+    draw_line(cv, hr.left, hr.bottom - 1, hr.right, hr.bottom - 1, theme.line);
     int x = px(18);
     int size = px(32);
     int cy = hr.top + (p->header_h - 1) / 2;
@@ -242,59 +243,59 @@ static void paint_header(Pane *p, HDC hdc, const RECT *rc) {
     if (shows_back(p)) {
         RECT br = { x, cy - size / 2, x + size, cy + size / 2 };
         p->back_rect = br;
-        paint_icon_button(hdc, &br, p->hover_button == -2);
-        draw_text(hdc, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        paint_icon_button(cv, &br, p->hover_button == -2);
+        draw_text(cv, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += size + px(8);
     }
     int right = hr.right - px(18);
     // The dashboard's `.btn` pills, 8px apart; when they would leave the title no room at all, they fall back to icons.
     int labelled_w = 0;
-    for (int i = 0; i < p->header.button_count; i++) labelled_w += header_button_width(hdc, &p->header.buttons[i], true) + px(8);
+    for (int i = 0; i < p->header.button_count; i++) labelled_w += header_button_width(cv, &p->header.buttons[i], true) + px(8);
     bool labels = labelled_w <= right - x - px(120);
     for (int i = p->header.button_count - 1; i >= 0; i--) {
         HeaderButton *b = &p->header.buttons[i];
         bool pill = b->label[0] && labels;
-        int bw = header_button_width(hdc, b, labels), bh = pill ? px(30) : size;
+        int bw = header_button_width(cv, b, labels), bh = pill ? px(30) : size;
         RECT br = { right - bw, cy - bh / 2, right, cy + bh / 2 };
         p->button_rects[i] = br;
         bool hovered = p->hover_button == i && b->enabled;
         COLORREF border = hovered ? (b->destructive ? theme.danger : theme.accent_dim) : theme.line;
         COLORREF text = !b->enabled ? theme.muted : (hovered && b->destructive) ? theme.danger : theme.ink;
         if (pill) {
-            fill_round_rect(hdc, &br, px(7), theme.raise, border);
+            fill_round_rect(cv, &br, px(7), theme.raise, border);
             RECT t = { br.left + px(10), br.top, br.right - px(10) + 2, br.bottom };
-            draw_text(hdc, b->label, &t, FONT_FOOTNOTE, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            draw_text(cv, b->label, &t, FONT_FOOTNOTE, text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         } else {
-            fill_round_rect(hdc, &br, px(8), theme.raise, border);
-            draw_glyph(hdc, b->glyph, &br, FONT_ICON_SMALL, text);
+            fill_round_rect(cv, &br, px(8), theme.raise, border);
+            draw_glyph(cv, b->glyph, &br, FONT_ICON_SMALL, text);
         }
         right -= bw + px(8);
     }
     RECT tr = { x, hr.top, right - px(8), hr.bottom - 1 };
     memset(&p->title_action_rect, 0, sizeof p->title_action_rect);
     // `#btn-edit-title`: a ✎ right after the title, 13px muted, ink on hover.
-    int pencil_w = p->header.title_action ? px(8) + text_width(hdc, "\xE2\x9C\x8E", FONT_FOOTNOTE) + px(8) : 0;
+    int pencil_w = p->header.title_action ? px(8) + text_width(cv, "\xE2\x9C\x8E", FONT_FOOTNOTE) + px(8) : 0;
     if (p->header.subtitle[0]) {
         int th = px(22), sh = px(18);
         int top = cy - (th + sh) / 2;
         RECT t1 = { tr.left, top, tr.right - pencil_w, top + th };
-        draw_text(hdc, p->header.title, &t1, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, p->header.title, &t1, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         if (pencil_w) {
-            int tw = text_width(hdc, p->header.title, FONT_HEADLINE);
+            int tw = text_width(cv, p->header.title, FONT_HEADLINE);
             int px_ = t1.left + (tw < t1.right - t1.left ? tw : t1.right - t1.left);
             RECT pr = { px_ + px(2), top, px_ + pencil_w, top + th };
             p->title_action_rect = pr;
-            draw_text(hdc, "\xE2\x9C\x8E", &pr, FONT_FOOTNOTE, p->hover_button == -4 ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            draw_text(cv, "\xE2\x9C\x8E", &pr, FONT_FOOTNOTE, p->hover_button == -4 ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         RECT t2 = { tr.left, top + th, tr.right, top + th + sh };
-        if (p->header.status[0]) { draw_status_dot(hdc, t2.left + px(4), (t2.top + t2.bottom) / 2, p->header.status); t2.left += px(13); }
-        draw_text(hdc, p->header.subtitle, &t2, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (p->header.status[0]) { draw_status_dot(cv, t2.left + px(4), (t2.top + t2.bottom) / 2, p->header.status); t2.left += px(13); }
+        draw_text(cv, p->header.subtitle, &t2, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
-        draw_text(hdc, p->header.title, &tr, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, p->header.title, &tr, FONT_HEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
 
-static void paint_scrollbar(Pane *p, HDC hdc, const RECT *content) {
+static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
     // `::-webkit-scrollbar { width: 10px }` with a `#3c3b38` thumb and no track.
     int m = max_scroll(p);
     memset(&p->thumb_rect, 0, sizeof p->thumb_rect);
@@ -308,45 +309,37 @@ static void paint_scrollbar(Pane *p, HDC hdc, const RECT *content) {
     RECT r = { content->right - px(10), y, content->right, y + thumb };
     p->thumb_rect = r;
     COLORREF c = p->dragging_thumb ? blend(theme.ink, RGB(0x3C, 0x3B, 0x38), 0.15) : RGB(0x3C, 0x3B, 0x38);
-    fill_round_rect(hdc, &r, px(6), c, c);
+    fill_round_rect(cv, &r, px(6), c, c);
 }
 
-static void paint(Pane *p, HDC target) {
+static void paint(Pane *p) {
     RECT rc = client(p);
     int w = rc.right - rc.left, h = rc.bottom - rc.top;
     if (w <= 0 || h <= 0) return;
-    if (!p->mem_dc || p->mem_w != w || p->mem_h != h) {
-        if (p->mem_dc) DeleteDC(p->mem_dc);
-        if (p->mem_bmp) DeleteObject(p->mem_bmp);
-        p->mem_dc = CreateCompatibleDC(target); p->mem_bmp = CreateCompatibleBitmap(target, w, h);
-        SelectObject(p->mem_dc, p->mem_bmp); p->mem_w = w; p->mem_h = h;
-    }
-    HDC hdc = p->mem_dc;
-    layout_if_needed(p, hdc);
-    fill_rect(hdc, &rc, pane_bg(p));
+    Canvas *cv = p->canvas;
+    if (!canvas_begin(cv)) return;
+    layout_if_needed(p, cv);
+    fill_rect(cv, &rc, pane_bg(p));
     Screen *s = pane_top(p);
     RECT content = pane_content_rect(p);
     // Content, clipped.
-    HRGN clip = CreateRectRgn(content.left, content.top, content.right, content.bottom);
-    SelectClipRgn(hdc, clip);
-    RECT clip_rc = content;
-    SetViewportOrgEx(hdc, margin(p), content.top, NULL);
-    RECT local_clip = { clip_rc.left - margin(p), 0, clip_rc.right - margin(p), clip_rc.bottom - content.top };
-    doc_paint(&p->doc, hdc, p->scroll_x, p->scroll_y, &local_clip);
-    SetViewportOrgEx(hdc, 0, 0, NULL);
-    SelectClipRgn(hdc, NULL);
-    DeleteObject(clip);
-    paint_scrollbar(p, hdc, &content);
+    canvas_clip(cv, &content);
+    canvas_offset(cv, margin(p), content.top);
+    RECT local_clip = { content.left - margin(p), 0, content.right - margin(p), content.bottom - content.top };
+    doc_paint(&p->doc, cv, p->scroll_x, p->scroll_y, &local_clip);
+    canvas_offset(cv, 0, 0);
+    canvas_unclip(cv);
+    paint_scrollbar(p, cv, &content);
     if (p->show_bottom_button && !pane_at_bottom(p) && p->doc.count) {
         int size = px(32);
         RECT b = { (content.left + content.right) / 2 - size / 2, content.bottom - size - px(10), (content.left + content.right) / 2 + size / 2, content.bottom - px(10) };
         p->bottom_button_rect = b;
-        fill_round_rect(hdc, &b, px(8), theme.raise, p->hover_button == -3 ? theme.accent_dim : theme.line);
-        draw_glyph(hdc, 0xE74B, &b, FONT_ICON_SMALL, theme.ink);
+        fill_round_rect(cv, &b, px(8), theme.raise, p->hover_button == -3 ? theme.accent_dim : theme.line);
+        draw_glyph(cv, 0xE74B, &b, FONT_ICON_SMALL, theme.ink);
     } else memset(&p->bottom_button_rect, 0, sizeof p->bottom_button_rect);
-    if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, hdc, &fr); }
-    paint_header(p, hdc, &rc);
-    BitBlt(target, 0, 0, w, h, hdc, 0, 0, SRCCOPY);
+    if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, cv, &fr); }
+    paint_header(p, cv, &rc);
+    canvas_end(cv);
 }
 
 // MARK: - Mouse
@@ -373,10 +366,7 @@ enum { MENU_COPY = 1, MENU_COPY_TEXT, MENU_SELECT_ALL };
 /// The text position under a client point.
 static bool position_at(Pane *p, int x, int y, DocPos *pos) {
     POINT c = to_content(p, x, y);
-    HDC hdc = GetDC(p->hwnd);
-    bool ok = doc_position_at(&p->doc, hdc, c.x, c.y, pos);
-    ReleaseDC(p->hwnd, hdc);
-    return ok;
+    return doc_position_at(&p->doc, NULL, c.x, c.y, pos);
 }
 static void copy_selection(Pane *p) {
     char *text = doc_selection_text(&p->doc);
@@ -521,9 +511,9 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (!p) return DefWindowProcW(hwnd, msg, wp, lp);
     Screen *s = pane_top(p);
     switch (msg) {
-    case WM_PAINT: { PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps); paint(p, hdc); EndPaint(hwnd, &ps); return 0; }
+    case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps); return 0; }
     case WM_ERASEBKGND: return 1;
-    case WM_SIZE: p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
+    case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
     case WM_MOUSELEAVE: p->tracking = false; if (p->hover_button != -1 || p->doc.hover != -1) { p->hover_button = -1; p->doc.hover = -1; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;

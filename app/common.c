@@ -40,7 +40,7 @@ char *session_subtitle(const Session *session) {
 
 typedef struct { char *status; } DotData;
 static void dot_free(void *p) { DotData *d = p; free(d->status); free(d); }
-static void paint_dot(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_status_dot(hdc, rc->left + px(4), (rc->top + rc->bottom) / 2, ((DotData *)it->data)->status); }
+static void paint_dot(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { draw_status_dot(cv, rc->left + px(4), (rc->top + rc->bottom) / 2, ((DotData *)it->data)->status); }
 
 int doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background, int trailing) {
     int box = doc_box_begin(doc, x, w, px(7), selected ? theme.raise : background, selected ? theme.raise : background, px(8));
@@ -139,20 +139,20 @@ char *people(char **logins, size_t count, size_t limit) {
 
 typedef struct { char *reference, *title, *state; COLORREF state_color; } LinkedData;
 static void linked_free(void *p) { LinkedData *d = p; free(d->reference); free(d->title); free(d->state); free(d); }
-static void paint_linked(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_linked(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     LinkedData *d = it->data;
     int x = rc->left;
-    RECT g = { x, rc->top, x + px(12), rc->bottom }; draw_text(hdc, "\xE2\x86\xB3", &g, FONT_CAPTION, theme.tertiary, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(16);
-    int rw = text_width(hdc, d->reference, FONT_MONO_CAPTION2);
-    RECT r = { x, rc->top, x + rw, rc->bottom }; draw_text(hdc, d->reference, &r, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += rw + px(5);
-    int sw = d->state ? text_width(hdc, d->state, FONT_CAPTION2) + px(6) : 0;
+    RECT g = { x, rc->top, x + px(12), rc->bottom }; draw_text(cv, "\xE2\x86\xB3", &g, FONT_CAPTION, theme.tertiary, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(16);
+    int rw = text_width(cv, d->reference, FONT_MONO_CAPTION2);
+    RECT r = { x, rc->top, x + rw, rc->bottom }; draw_text(cv, d->reference, &r, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += rw + px(5);
+    int sw = d->state ? text_width(cv, d->state, FONT_CAPTION2) + px(6) : 0;
     RECT t = { x, rc->top, rc->right - sw, rc->bottom };
-    draw_text(hdc, d->title, &t, FONT_CAPTION, it->action ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->title, &t, FONT_CAPTION, it->action ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (d->state) {
-        int tw = text_width(hdc, d->title, FONT_CAPTION);
+        int tw = text_width(cv, d->title, FONT_CAPTION);
         int sx = x + (tw < rc->right - sw - x ? tw : rc->right - sw - x) + px(6);
         RECT s = { sx, rc->top, sx + sw, rc->bottom };
-        draw_text(hdc, d->state, &s, FONT_CAPTION2, d->state_color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        draw_text(cv, d->state, &s, FONT_CAPTION2, d->state_color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) {
@@ -170,18 +170,18 @@ void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *r
 /// One 12px muted line of facts, `·` between them, the last one pushed to the right edge.
 typedef struct { char **parts; COLORREF *colors; bool *mono; size_t count; char *right; } MetaData;
 static void meta_free(void *p) { MetaData *d = p; str_array_free(d->parts, d->count); free(d->colors); free(d->mono); free(d->right); free(d); }
-static void paint_meta(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_meta(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     MetaData *d = it->data;
     int x = rc->left, right = rc->right;
-    if (d->right) { int rw = text_width(hdc, d->right, FONT_CAPTION); RECT rr = { right - rw, rc->top, right, rc->bottom }; draw_text(hdc, d->right, &rr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= rw + px(8); }
-    int dot_w = text_width(hdc, "\xC2\xB7", FONT_CAPTION);
+    if (d->right) { int rw = text_width(cv, d->right, FONT_CAPTION); RECT rr = { right - rw, rc->top, right, rc->bottom }; draw_text(cv, d->right, &rr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= rw + px(8); }
+    int dot_w = text_width(cv, "\xC2\xB7", FONT_CAPTION);
     for (size_t i = 0; i < d->count && x < right; i++) {
-        if (i) { RECT dr = { x + px(6), rc->top, x + px(6) + dot_w, rc->bottom }; draw_text(hdc, "\xC2\xB7", &dr, FONT_CAPTION, theme.line, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(6) * 2 + dot_w; }
+        if (i) { RECT dr = { x + px(6), rc->top, x + px(6) + dot_w, rc->bottom }; draw_text(cv, "\xC2\xB7", &dr, FONT_CAPTION, theme.line, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(6) * 2 + dot_w; }
         FontId f = d->mono[i] ? FONT_MONO_CAPTION2 : FONT_CAPTION;
-        int w = text_width(hdc, d->parts[i], f);
+        int w = text_width(cv, d->parts[i], f);
         if (x + w > right) w = right - x;
         RECT pr = { x, rc->top, x + w, rc->bottom };
-        draw_text(hdc, d->parts[i], &pr, f, d->colors[i], DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, d->parts[i], &pr, f, d->colors[i], DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         x += w;
     }
 }
@@ -223,22 +223,22 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
 }
 
 typedef struct { int done, total; } EpicData;
-static void paint_epic(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_epic(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     EpicData *d = it->data;
     int bar_w = px(70), h = px(6);
     RECT track = { rc->left, rc->top + (rc->bottom - rc->top) / 2 - h / 2, rc->left + bar_w, rc->top + (rc->bottom - rc->top) / 2 + h / 2 };
-    fill_round_rect(hdc, &track, h / 2, blend(theme.accent, theme.elevated, 0.15), blend(theme.accent, theme.elevated, 0.15));
+    fill_round_rect(cv, &track, h / 2, blend(theme.accent, theme.elevated, 0.15), blend(theme.accent, theme.elevated, 0.15));
     int total = d->total > 0 ? d->total : 1;
     RECT fill = track; fill.right = track.left + bar_w * (d->done > total ? total : d->done) / total;
-    if (fill.right > fill.left) fill_round_rect(hdc, &fill, h / 2, theme.accent, theme.accent);
+    if (fill.right > fill.left) fill_round_rect(cv, &fill, h / 2, theme.accent, theme.accent);
     char *text = xstrfmt("%d/%d done", d->done, d->total);
     RECT t = { rc->left + bar_w + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(hdc, text, &t, FONT_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, text, &t, FONT_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     free(text);
 }
 static void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue) {
     EpicData *d = xcalloc(1, sizeof *d); d->done = issue->sub_issues_done; d->total = issue->sub_issues;
-    doc_custom(doc, x, w, font_height(doc->hdc, FONT_CAPTION2) + px(4), paint_epic, d, free, 0, 0);
+    doc_custom(doc, x, w, font_height(doc->cv, FONT_CAPTION2) + px(4), paint_epic, d, free, 0, 0);
 }
 
 void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg) {

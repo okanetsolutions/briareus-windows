@@ -113,17 +113,17 @@ static const char *severity_label(const char *severity, COLORREF *color) {
 }
 typedef struct { char *label; COLORREF color; } SevData;
 static void sev_free(void *p) { SevData *d = p; free(d->label); free(d); }
-static void paint_sev(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SevData *d = it->data;
-    fill_round_rect(hdc, rc, px(4), theme.sidebar, d->color == theme.muted ? theme.line : d->color);
+    fill_round_rect(cv, rc, px(4), theme.sidebar, d->color == theme.muted ? theme.line : d->color);
     RECT t = *rc;
-    draw_text(hdc, d->label, &t, FONT_TINY_SEMIBOLD, d->color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->label, &t, FONT_TINY_SEMIBOLD, d->color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 /// `rounded-[4px] border px-1 text-[10px] font-semibold`; returns its width.
 static int doc_severity(Doc *doc, int x, int y, const char *severity) {
     SevData *d = xcalloc(1, sizeof *d);
     d->label = xstrdup(severity_label(severity, &d->color));
-    int w = px(4) * 2 + text_width(doc->hdc, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
+    int w = px(4) * 2 + text_width(doc->cv, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
     RECT rc = { x, y, x + w, y + h };
     int i = doc_add(doc, &rc, paint_sev);
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = sev_free;
@@ -149,7 +149,7 @@ static void panel_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(6));
     // `#70` and the state tag.
     char *number = xstrfmt("#%d", s->number);
-    int nw = text_width(doc->hdc, number, FONT_CAPTION);
+    int nw = text_width(doc->cv, number, FONT_CAPTION);
     int y = doc->y;
     RECT nr = { 0, y, nw + 2, y + px(20) };
     int ni = doc_text_at(doc, &nr, number, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -170,7 +170,7 @@ static void panel_layout(Screen *base, Doc *doc) {
         int x = 0; y = doc->y;
         char *a = xstrfmt("+%d", (int)add), *d = xstrfmt("\xE2\x88\x92%d", (int)del);
         char *rest = xstrfmt(" \xC2\xB7 %d files \xC2\xB7 %d commits", (int)files, (int)commits);
-        int aw = text_width(doc->hdc, a, FONT_CAPTION), dw = text_width(doc->hdc, d, FONT_CAPTION);
+        int aw = text_width(doc->cv, a, FONT_CAPTION), dw = text_width(doc->cv, d, FONT_CAPTION);
         RECT ar = { x, y, x + aw + 2, y + px(20) }; doc_text_at(doc, &ar, a, FONT_CAPTION, theme.ok, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += aw + px(4);
         RECT dr = { x, y, x + dw + 2, y + px(20) }; doc_text_at(doc, &dr, d, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += dw;
         RECT rr = { x, y, w, y + px(20) }; doc_text_at(doc, &rr, rest, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -189,7 +189,7 @@ static void panel_layout(Screen *base, Doc *doc) {
             for (size_t i = 0; i < json_count(commit_list); i++) {
                 const Json *cm = json_at(commit_list, i);
                 const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
-                int sw = text_width(doc->hdc, short_sha, FONT_MONO_CAPTION2);
+                int sw = text_width(doc->cv, short_sha, FONT_MONO_CAPTION2);
                 y = doc->y;
                 RECT sr = { 0, y, sw + 2, y + px(20) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                 const char *message = json_str(json_get(cm, "message"));
@@ -234,7 +234,7 @@ static void panel_layout(Screen *base, Doc *doc) {
                 bool is_fixed = json_bool_is(json_get(f, "fixed"), true);
                 const char *decision = json_str(json_get(f, "decision"));
                 const char *right = is_fixed ? "\xE2\x9C\x93 fixed" : "";
-                int rw = *right ? text_width(doc->hdc, right, FONT_CAPTION2) + px(6) : 0;
+                int rw = *right ? text_width(doc->cv, right, FONT_CAPTION2) + px(6) : 0;
                 const char *ft = json_str(json_get(f, "title"));
                 RECT tr = { sw + px(6), y, w - rw, y + px(20) };
                 int fi = doc_text_at(doc, &tr, ft ? ft : "Finding", FONT_CAPTION, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);

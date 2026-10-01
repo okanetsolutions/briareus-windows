@@ -183,17 +183,17 @@ static void pulls_destroy(Screen *base) {
 /// `#proj-tabs`: 13px, `px-2 py-2`, the open one underlined in the accent.
 typedef struct { char *label; bool active; } TabData;
 static void tab_free(void *p) { TabData *d = p; free(d->label); free(d); }
-static void paint_tab(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     TabData *d = it->data;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
     RECT t = *rc;
-    draw_text(hdc, d->label, &t, FONT_FOOTNOTE, d->active || hovered ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    if (d->active) { RECT u = { rc->left, rc->bottom - px(2), rc->right, rc->bottom }; fill_rect(hdc, &u, theme.accent); }
+    draw_text(cv, d->label, &t, FONT_FOOTNOTE, d->active || hovered ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (d->active) { RECT u = { rc->left, rc->bottom - px(2), rc->right, rc->bottom }; fill_rect(cv, &u, theme.accent); }
 }
 static void doc_tabs(Doc *doc, int w, const char *const *labels, size_t count, int active) {
     int x = 0, h = px(34);
     for (size_t i = 0; i < count; i++) {
-        int tw = px(8) * 2 + text_width(doc->hdc, labels[i], FONT_FOOTNOTE) + px(2);
+        int tw = px(8) * 2 + text_width(doc->cv, labels[i], FONT_FOOTNOTE) + px(2);
         TabData *d = xcalloc(1, sizeof *d); d->label = xstrdup(labels[i]); d->active = (int)i == active;
         RECT rc = { x, doc->y, x + tw, doc->y + h };
         int it = doc_add(doc, &rc, paint_tab);
@@ -222,7 +222,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
     if (board_filter_is_on(filter)) {
         char *text = xstrfmt("Showing %zu of %zu", shown, total);
         int y = doc->y;
-        int cw = text_width(doc->hdc, "Clear filters", FONT_CAPTION) + px(8);
+        int cw = text_width(doc->cv, "Clear filters", FONT_CAPTION) + px(8);
         RECT tr = { 0, y, w - cw - px(8), y + px(20) };
         doc_text_at(doc, &tr, text, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         RECT cr = { w - cw, y, w, tr.bottom };
@@ -634,23 +634,23 @@ static const char *const decision_titles[] = { "Undecided", "Fix", "Optional", "
 
 typedef struct { wchar_t glyph; COLORREF color; char *name, *result; } CheckData;
 static void check_free(void *p) { CheckData *d = p; free(d->name); free(d->result); free(d); }
-static void paint_check(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     CheckData *d = it->data;
-    RECT g = { rc->left, rc->top, rc->left + px(18), rc->bottom }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->color);
-    int rw = text_width(hdc, d->result, FONT_CALLOUT);
-    RECT n = { rc->left + px(22), rc->top, rc->right - rw - px(8), rc->bottom }; draw_text(hdc, d->name, &n, FONT_CALLOUT, it->action ? theme.accent : theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    RECT r = { rc->right - rw, rc->top, rc->right, rc->bottom }; draw_text(hdc, d->result, &r, FONT_CALLOUT, theme.secondary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    RECT g = { rc->left, rc->top, rc->left + px(18), rc->bottom }; draw_glyph(cv, d->glyph, &g, FONT_ICON_SMALL, d->color);
+    int rw = text_width(cv, d->result, FONT_CALLOUT);
+    RECT n = { rc->left + px(22), rc->top, rc->right - rw - px(8), rc->bottom }; draw_text(cv, d->name, &n, FONT_CALLOUT, it->action ? theme.accent : theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT r = { rc->right - rw, rc->top, rc->right, rc->bottom }; draw_text(cv, d->result, &r, FONT_CALLOUT, theme.secondary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 typedef struct { int passed, failed, pending; } CountsData;
-static void paint_counts(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_counts(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     CountsData *d = it->data;
     int x = rc->left;
     struct { wchar_t g; int n; COLORREF c; } parts[3] = { { 0xE930, d->passed, theme.success }, { 0xE823, d->pending, theme.warning }, { 0xEA39, d->failed, theme.danger } };
     for (int i = 0; i < 3; i++) {
-        RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(hdc, parts[i].g, &g, FONT_ICON_SMALL, parts[i].c);
+        RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(cv, parts[i].g, &g, FONT_ICON_SMALL, parts[i].c);
         char n[16]; snprintf(n, sizeof n, "%d", parts[i].n);
-        int nw = text_width(hdc, n, FONT_SUBHEADLINE_SEMIBOLD);
-        RECT t = { x + px(20), rc->top, x + px(20) + nw, rc->bottom }; draw_text(hdc, n, &t, FONT_SUBHEADLINE_SEMIBOLD, parts[i].c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        int nw = text_width(cv, n, FONT_SUBHEADLINE_SEMIBOLD);
+        RECT t = { x + px(20), rc->top, x + px(20) + nw, rc->bottom }; draw_text(cv, n, &t, FONT_SUBHEADLINE_SEMIBOLD, parts[i].c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         x += px(20) + nw + px(14);
     }
 }
@@ -667,33 +667,33 @@ static void col_gap(Doc *doc, Col c) { doc_space(doc, px(6)); doc_rule(doc, c.ix
 /// `.prv-state`: a filled pill, capitalised, green for open, the accent for merged, red for closed, grey for a draft.
 typedef struct { char *text; COLORREF color; } PillData;
 static void pill_free(void *p) { PillData *d = p; free(d->text); free(d); }
-static void paint_pill(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_pill(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     PillData *d = it->data;
-    fill_round_rect(hdc, rc, (rc->bottom - rc->top) / 2, d->color, d->color);
+    fill_round_rect(cv, rc, (rc->bottom - rc->top) / 2, d->color, d->color);
     RECT t = *rc;
-    draw_text(hdc, d->text, &t, FONT_FOOTNOTE_SEMIBOLD, theme.canvas, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->text, &t, FONT_FOOTNOTE_SEMIBOLD, theme.canvas, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 static int doc_pill(Doc *doc, int x, int y, const char *text, COLORREF color) {
     PillData *d = xcalloc(1, sizeof *d); d->text = str_capitalized(text); d->color = color;
-    int w = px(12) * 2 + text_width(doc->hdc, d->text, FONT_FOOTNOTE_SEMIBOLD) + 2, h = px(26);
+    int w = px(12) * 2 + text_width(doc->cv, d->text, FONT_FOOTNOTE_SEMIBOLD) + 2, h = px(26);
     RECT rc = { x, y, x + w, y + h };
     int i = doc_add(doc, &rc, paint_pill);
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = pill_free;
     return w;
 }
 /// GitHub's stack button beside the state: the stack glyph and `2/3` in a bordered pill, pressed while the overview is open.
-static void paint_stack_pill(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_stack_pill(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     PillData *d = it->data;
     bool open = it->arg != 0, hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
     COLORREF fill = open ? blend(theme.accent, theme.canvas, 0.18) : hovered ? theme.raise : theme.canvas;
-    fill_round_rect(hdc, rc, (rc->bottom - rc->top) / 2, fill, open ? theme.accent : theme.line);
-    RECT g = { rc->left + px(10), rc->top, rc->left + px(10) + px(16), rc->bottom }; draw_glyph(hdc, 0xE81E, &g, FONT_ICON_SMALL, theme.accent);
+    fill_round_rect(cv, rc, (rc->bottom - rc->top) / 2, fill, open ? theme.accent : theme.line);
+    RECT g = { rc->left + px(10), rc->top, rc->left + px(10) + px(16), rc->bottom }; draw_glyph(cv, 0xE81E, &g, FONT_ICON_SMALL, theme.accent);
     RECT t = { g.right + px(4), rc->top, rc->right - px(10), rc->bottom };
-    draw_text(hdc, d->text, &t, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, d->text, &t, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 static int doc_stack_pill(Doc *doc, int x, int y, const char *text, bool open) {
     PillData *d = xcalloc(1, sizeof *d); d->text = xstrdup(text); d->color = theme.accent;
-    int w = px(10) * 2 + px(16) + px(4) + text_width(doc->hdc, text, FONT_FOOTNOTE_SEMIBOLD) + 2, h = px(26);
+    int w = px(10) * 2 + px(16) + px(4) + text_width(doc->cv, text, FONT_FOOTNOTE_SEMIBOLD) + 2, h = px(26);
     RECT rc = { x, y, x + w, y + h };
     int i = doc_add(doc, &rc, paint_stack_pill);
     Item *it = doc_item(doc, i);
@@ -703,32 +703,32 @@ static int doc_stack_pill(Doc *doc, int x, int y, const char *text, bool open) {
 /// One pull request of the overview: the pull request glyph, its title, and `#number · branch` under it, as GitHub's popover rows.
 typedef struct { char *title, *sub; bool current; } StackRowData;
 static void stack_row_free(void *p) { StackRowData *d = p; free(d->title); free(d->sub); free(d); }
-static void paint_stack_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_stack_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StackRowData *d = it->data;
     bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
-    if (hovered || d->current) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(hdc, &h, px(6), d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas, d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas); }
-    if (d->current) { RECT bar = { rc->left, rc->top + px(6), rc->left + px(3), rc->bottom - px(6) }; fill_round_rect(hdc, &bar, px(1), theme.accent, theme.accent); }
+    if (hovered || d->current) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(cv, &h, px(6), d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas, d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas); }
+    if (d->current) { RECT bar = { rc->left, rc->top + px(6), rc->left + px(3), rc->bottom - px(6) }; fill_round_rect(cv, &bar, px(1), theme.accent, theme.accent); }
     int x = rc->left + px(10);
-    RECT g = { x, rc->top, x + px(18), rc->top + px(22) }; draw_glyph(hdc, 0xE81E, &g, FONT_ICON_SMALL, d->current ? theme.ink : theme.accent); x += px(18) + px(8);
+    RECT g = { x, rc->top, x + px(18), rc->top + px(22) }; draw_glyph(cv, 0xE81E, &g, FONT_ICON_SMALL, d->current ? theme.ink : theme.accent); x += px(18) + px(8);
     RECT t = { x, rc->top + px(2), rc->right - px(8), rc->top + px(22) };
-    draw_text(hdc, d->title, &t, FONT_FOOTNOTE_SEMIBOLD, d->current ? theme.ink : hovered ? theme.accent : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->title, &t, FONT_FOOTNOTE_SEMIBOLD, d->current ? theme.ink : hovered ? theme.accent : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     // The rail of the stack: a thin line under the glyph joining the rows.
-    draw_line(hdc, rc->left + px(10) + px(9), rc->top + px(22), rc->left + px(10) + px(9), rc->bottom, theme.line);
+    draw_line(cv, rc->left + px(10) + px(9), rc->top + px(22), rc->left + px(10) + px(9), rc->bottom, theme.line);
     RECT u = { x, rc->top + px(22), rc->right - px(8), rc->bottom - px(2) };
-    draw_text(hdc, d->sub, &u, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->sub, &u, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 /// The base the bottom merges into, as GitHub closes its popover: a hollow dot and the branch in a chip.
 typedef struct { char *base; } StackBaseData;
 static void stack_base_free(void *p) { StackBaseData *d = p; free(d->base); free(d); }
-static void paint_stack_base(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_stack_base(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     StackBaseData *d = it->data;
     int cx = rc->left + px(10) + px(9), cy = rc->top + (rc->bottom - rc->top) / 2;
-    draw_line(hdc, cx, rc->top, cx, cy - px(5), theme.line);
-    stroke_circle(hdc, cx, cy, px(4), theme.muted, 1);
+    draw_line(cv, cx, rc->top, cx, cy - px(5), theme.line);
+    stroke_circle(cv, cx, cy, px(4), theme.muted, 1);
     int x = rc->left + px(10) + px(18) + px(8);
-    if (d->base) { int h; draw_chip(hdc, x, cy - px(10), d->base, theme.accent, theme.raise, &h); }
-    else { RECT t = { x, rc->top, rc->right - px(8), rc->bottom }; draw_text(hdc, "base branch not on the board", &t, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
+    if (d->base) { int h; draw_chip(cv, x, cy - px(10), d->base, theme.accent, theme.raise, &h); }
+    else { RECT t = { x, rc->top, rc->right - px(8), rc->bottom }; draw_text(cv, "base branch not on the board", &t, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
 }
 /// GitHub's stack popover, laid out under the title: the stack top first, this pull request marked, and the base branch at the bottom.
 static void layout_stack_overview(PullScreen *s, Doc *doc, Col c) {
@@ -779,7 +779,7 @@ static void flow_add(FlowData *d, const char *text, FontId font, COLORREF color,
         p = e;
     }
 }
-static void paint_flow(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_flow(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     FlowData *d = it->data;
     for (size_t i = 0; i < d->count; i++) {
@@ -787,12 +787,12 @@ static void paint_flow(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
         RECT t = { rc->left + r->x, rc->top + r->y, rc->left + r->x + r->w, rc->top + r->y + d->line_h };
         if (r->chip) {
             // `.commit-ref`: the branch in small mono type on a tint of the accent.
-            int ch = font_height(hdc, r->font) + px(6);
+            int ch = font_height(cv, r->font) + px(6);
             RECT c = { t.left, t.top + (d->line_h - ch) / 2, t.right, t.top + (d->line_h - ch) / 2 + ch };
             COLORREF tint = blend(theme.accent, theme.canvas, 0.16);
-            fill_round_rect(hdc, &c, px(6), tint, tint);
-            draw_text(hdc, r->text, &c, r->font, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-        } else draw_text(hdc, r->text, &t, r->font, r->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+            fill_round_rect(cv, &c, px(6), tint, tint);
+            draw_text(cv, r->text, &c, r->font, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        } else draw_text(cv, r->text, &t, r->font, r->color, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 }
 /// Lays the runs out in `w`, the first line starting `indent` in, as one item.
@@ -800,7 +800,7 @@ static int doc_flow(Doc *doc, int x, int w, int indent, FlowData *d) {
     int cx = indent, cy = 0;
     for (size_t i = 0; i < d->count; i++) {
         FlowRun *r = &d->runs[i];
-        r->w = text_width(doc->hdc, r->text, r->font) + (r->chip ? px(12) : 0);
+        r->w = text_width(doc->cv, r->text, r->font) + (r->chip ? px(12) : 0);
         if (cx > 0 && cx + r->w > w) { cx = 0; cy += d->line_h; }
         if (r->w > w) r->w = w;
         r->x = cx; r->y = cy;
@@ -813,9 +813,9 @@ static int doc_flow(Doc *doc, int x, int w, int indent, FlowData *d) {
     return i;
 }
 
-static int toolbar_width(HDC hdc, const ButtonSpec *buttons, size_t count) {
+static int toolbar_width(Canvas *cv, const ButtonSpec *buttons, size_t count) {
     int w = 0;
-    for (size_t i = 0; i < count; i++) w += px(10) * 2 + text_width(hdc, buttons[i].text, FONT_FOOTNOTE) + 2 + (i ? px(6) : 0);
+    for (size_t i = 0; i < count; i++) w += px(10) * 2 + text_width(cv, buttons[i].text, FONT_FOOTNOTE) + 2 + (i ? px(6) : 0);
     return w;
 }
 static const char *pull_author(PullScreen *s) {
@@ -835,8 +835,8 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     { ButtonSpec b = { 0, "\xE2\x9F\xB3 Refresh", BUTTON_BORDERED, ACT_RELOAD, 0, !s->req_pull }; buttons[bn++] = b; }
     if (can_merge) { ButtonSpec b = { 0, s->merging ? "Merging\xE2\x80\xA6" : "Merge", BUTTON_PROMINENT, ACT_MERGE, 0, !s->merging && !s->busy }; buttons[bn++] = b; }
     if (safe_web_url(json_str(json_get(s->pr, "url")))) { ButtonSpec b = { 0, "Open in GitHub \xE2\x86\x97", BUTTON_BORDERED, ACT_OPEN_URL, 0, true }; buttons[bn++] = b; }
-    int tw = toolbar_width(doc->hdc, buttons, bn) + px(2);
-    int title_line = font_height(doc->hdc, FONT_TITLE) + px(6);
+    int tw = toolbar_width(doc->cv, buttons, bn) + px(2);
+    int title_line = font_height(doc->cv, FONT_TITLE) + px(6);
     // Beside the title when there is room, above it when there is not.
     bool beside = c.iw - tw - px(16) >= px(320);
     int top = doc->y, buttons_bottom = top;
@@ -895,43 +895,43 @@ static size_t conv_count(PullScreen *s);
 /// `tabnav`: Sessions, PR Body, Conversation, Files changed, Commits, Checks and Findings with their counts, and the diffstat at the right.
 typedef struct { wchar_t glyph; char *title, *count; bool active; } PrTabData;
 static void pr_tab_free(void *p) { PrTabData *d = p; free(d->title); free(d->count); free(d); }
-static int pr_tab_width(HDC hdc, const PrTabData *d) {
-    int w = px(12) + px(16) + px(8) + text_width(hdc, d->title, FONT_FOOTNOTE_SEMIBOLD) + px(12);
-    if (d->count) w += px(6) + text_width(hdc, d->count, FONT_CAPTION) + px(12);
+static int pr_tab_width(Canvas *cv, const PrTabData *d) {
+    int w = px(12) + px(16) + px(8) + text_width(cv, d->title, FONT_FOOTNOTE_SEMIBOLD) + px(12);
+    if (d->count) w += px(6) + text_width(cv, d->count, FONT_CAPTION) + px(12);
     return w;
 }
-static void paint_pr_tab(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_pr_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     PrTabData *d = it->data;
     bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
     COLORREF ink = d->active || hovered ? theme.ink : theme.muted;
-    if (hovered && !d->active) { RECT h = { rc->left + px(2), rc->top + px(5), rc->right - px(2), rc->bottom - px(7) }; fill_round_rect(hdc, &h, px(6), theme.raise, theme.raise); }
+    if (hovered && !d->active) { RECT h = { rc->left + px(2), rc->top + px(5), rc->right - px(2), rc->bottom - px(7) }; fill_round_rect(cv, &h, px(6), theme.raise, theme.raise); }
     int x = rc->left + px(12);
-    RECT g = { x, rc->top, x + px(16), rc->bottom - px(2) }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->active ? theme.ink : theme.muted); x += px(16) + px(8);
+    RECT g = { x, rc->top, x + px(16), rc->bottom - px(2) }; draw_glyph(cv, d->glyph, &g, FONT_ICON_SMALL, d->active ? theme.ink : theme.muted); x += px(16) + px(8);
     FontId f = d->active ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE;
-    int lw = text_width(hdc, d->title, f);
-    RECT t = { x, rc->top, x + lw + px(2), rc->bottom - px(2) }; draw_text(hdc, d->title, &t, f, ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += lw + px(6);
+    int lw = text_width(cv, d->title, f);
+    RECT t = { x, rc->top, x + lw + px(2), rc->bottom - px(2) }; draw_text(cv, d->title, &t, f, ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += lw + px(6);
     if (d->count) {
         // `.Counter`: the number in a small rounded bubble.
-        int cw = text_width(hdc, d->count, FONT_CAPTION) + px(12), ch = font_height(hdc, FONT_CAPTION) + px(4);
+        int cw = text_width(cv, d->count, FONT_CAPTION) + px(12), ch = font_height(cv, FONT_CAPTION) + px(4);
         int cy = rc->top + (rc->bottom - px(2) - rc->top - ch) / 2;
-        RECT b = { x, cy, x + cw, cy + ch }; fill_round_rect(hdc, &b, ch / 2, theme.line, theme.line);
-        draw_text(hdc, d->count, &b, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        RECT b = { x, cy, x + cw, cy + ch }; fill_round_rect(cv, &b, ch / 2, theme.line, theme.line);
+        draw_text(cv, d->count, &b, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    if (d->active) { RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right - px(4), rc->bottom }; fill_round_rect(hdc, &u, px(1), theme.accent, theme.accent); }
+    if (d->active) { RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right - px(4), rc->bottom }; fill_round_rect(cv, &u, px(1), theme.accent, theme.accent); }
 }
 typedef struct { int additions, deletions; } DiffStatData;
-static int diffstat_width(HDC hdc, const DiffStatData *d) {
+static int diffstat_width(Canvas *cv, const DiffStatData *d) {
     char add[16], del[24]; snprintf(add, sizeof add, "+%d", d->additions); snprintf(del, sizeof del, "\xE2\x88\x92%d", d->deletions);
-    return text_width(hdc, add, FONT_CAPTION_SEMIBOLD) + px(4) + text_width(hdc, del, FONT_CAPTION_SEMIBOLD) + px(6) + 5 * px(10);
+    return text_width(cv, add, FONT_CAPTION_SEMIBOLD) + px(4) + text_width(cv, del, FONT_CAPTION_SEMIBOLD) + px(6) + 5 * px(10);
 }
-static void paint_diffstat(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_diffstat(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     DiffStatData *d = it->data;
     char add[16], del[24]; snprintf(add, sizeof add, "+%d", d->additions); snprintf(del, sizeof del, "\xE2\x88\x92%d", d->deletions);
     int x = rc->left, mid = rc->bottom - px(2);
-    int aw = text_width(hdc, add, FONT_CAPTION_SEMIBOLD), dw = text_width(hdc, del, FONT_CAPTION_SEMIBOLD);
-    RECT a = { x, rc->top, x + aw, mid }; draw_text(hdc, add, &a, FONT_CAPTION_SEMIBOLD, theme.success, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += aw + px(4);
-    RECT r = { x, rc->top, x + dw, mid }; draw_text(hdc, del, &r, FONT_CAPTION_SEMIBOLD, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += dw + px(6);
+    int aw = text_width(cv, add, FONT_CAPTION_SEMIBOLD), dw = text_width(cv, del, FONT_CAPTION_SEMIBOLD);
+    RECT a = { x, rc->top, x + aw, mid }; draw_text(cv, add, &a, FONT_CAPTION_SEMIBOLD, theme.success, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += aw + px(4);
+    RECT r = { x, rc->top, x + dw, mid }; draw_text(cv, del, &r, FONT_CAPTION_SEMIBOLD, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += dw + px(6);
     // `.diffstat-block-*`: five squares split by the share of lines added and deleted.
     long total = (long)d->additions + d->deletions;
     int green = total ? (int)(5L * d->additions / total) : 0, red = total ? (int)(5L * d->deletions / total) : 0;
@@ -939,13 +939,13 @@ static void paint_diffstat(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     for (int i = 0; i < 5; i++) {
         RECT b = { x, top, x + sq, top + sq };
         COLORREF color = i < green ? theme.success : i < green + red ? theme.danger : theme.line;
-        fill_round_rect(hdc, &b, px(2), color, color);
+        fill_round_rect(cv, &b, px(2), color, color);
         x += sq + px(2);
     }
 }
 static void add_pr_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg) {
     PrTabData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->title = xstrdup(title); d->count = count ? xstrdup(count) : NULL; d->active = active;
-    int w = pr_tab_width(doc->hdc, d);
+    int w = pr_tab_width(doc->cv, d);
     if (*x > left && *x + w > right) { *x = left; *y += h; }
     doc->y = *y;
     int i = doc_custom(doc, *x, w, h, paint_pr_tab, d, pr_tab_free, active ? 0 : action, arg);
@@ -958,7 +958,7 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     double additions, deletions;
     bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
     DiffStatData *ds = NULL; int dsw = 0;
-    if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->hdc, ds); right -= dsw + px(16); }
+    if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->cv, ds); right -= dsw + px(16); }
     char count[24];
     const PullSummary *row = board_row(s);
     if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
@@ -987,28 +987,28 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
 
 /// The author's initial in a circle, where GitHub shows the avatar.
 typedef struct { char initial[8]; } AvatarData;
-static void paint_avatar(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_avatar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     AvatarData *d = it->data;
     int r = (rc->right - rc->left) / 2;
-    fill_circle(hdc, rc->left + r, rc->top + r, r, blend(theme.accent, theme.canvas, 0.35));
-    RECT t = *rc; draw_text(hdc, d->initial, &t, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_circle(cv, rc->left + r, rc->top + r, r, blend(theme.accent, theme.canvas, 0.35));
+    RECT t = *rc; draw_text(cv, d->initial, &t, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 /// `.timeline-comment-header`: a tinted strip with `author commented · updated …`, a review's verdict glyph first.
 typedef struct { char *author, *when; wchar_t glyph; COLORREF glyph_color; } CommentHeadData;
 static void comment_head_free(void *p) { CommentHeadData *d = p; free(d->author); free(d->when); free(d); }
-static void paint_comment_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_comment_head(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     CommentHeadData *d = it->data;
     COLORREF tint = blend(theme.accent, theme.raise, 0.10);
-    RECT top = *rc; fill_round_rect(hdc, &top, px(7), tint, tint);
-    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(hdc, &low, tint);
-    draw_line(hdc, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
+    RECT top = *rc; fill_round_rect(cv, &top, px(7), tint, tint);
+    RECT low = { rc->left, (rc->top + rc->bottom) / 2, rc->right, rc->bottom }; fill_rect(cv, &low, tint);
+    draw_line(cv, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.line);
     int x = rc->left + px(16);
-    if (d->glyph) { RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->glyph_color); x += px(24); }
-    if (d->author) { int aw = text_width(hdc, d->author, FONT_FOOTNOTE_SEMIBOLD); RECT a = { x, rc->top, x + aw + px(2), rc->bottom }; draw_text(hdc, d->author, &a, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); x += aw + px(5); }
+    if (d->glyph) { RECT g = { x, rc->top, x + px(18), rc->bottom }; draw_glyph(cv, d->glyph, &g, FONT_ICON_SMALL, d->glyph_color); x += px(24); }
+    if (d->author) { int aw = text_width(cv, d->author, FONT_FOOTNOTE_SEMIBOLD); RECT a = { x, rc->top, x + aw + px(2), rc->bottom }; draw_text(cv, d->author, &a, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX); x += aw + px(5); }
     RECT t = { x, rc->top, rc->right - px(16), rc->bottom };
-    draw_text(hdc, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 /// What GitHub shows of a description: without HTML comments and raw HTML lines (bots' badges and footers), code blocks kept whole.
 static char *visible_markdown(const char *body) {
@@ -1195,7 +1195,7 @@ static void layout_thread(PullScreen *s, Doc *doc, int x, int w, size_t root) {
         doc_space(doc, px(10));
         int y = doc->y, h = px(20), ix = x + px(12), iw = w - px(24);
         const char *author = json_str(json_get(cm, "author")); if (!author) author = "Someone";
-        int aw = text_width(doc->hdc, author, FONT_FOOTNOTE_SEMIBOLD); if (aw > iw) aw = iw;
+        int aw = text_width(doc->cv, author, FONT_FOOTNOTE_SEMIBOLD); if (aw > iw) aw = iw;
         RECT a = { ix, y, ix + aw + px(2), y + h }; doc_text_at(doc, &a, author, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         time_t at = conv_time(cm, "createdAt");
         if (at) { char *rel = format_relative(at); RECT t = { ix + aw + px(8), y, ix + iw, y + h }; doc_text_at(doc, &t, rel, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(rel); }
@@ -1272,7 +1272,7 @@ static void layout_commit_list(PullScreen *s, Doc *doc, Col c) {
         const Json *cm = json_at(commits, i);
         if (i) col_gap(doc, c);
         const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
-        int y = doc->y; int sw = text_width(doc->hdc, short_sha, FONT_MONO_SMALL);
+        int y = doc->y; int sw = text_width(doc->cv, short_sha, FONT_MONO_SMALL);
         RECT sr = { c.ix + c.iw - sw, y, c.ix + c.iw, y + px(18) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_SMALL, theme.secondary, DT_RIGHT | DT_SINGLELINE);
         const char *message = json_str(json_get(cm, "message"));
         int mi = doc_label(doc, c.ix, c.iw - sw - px(12), 0xE8EE, message ? message : "", FONT_CALLOUT, theme.text);
@@ -1364,13 +1364,13 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
 }
 
 /// The trash button at the right of a session row: muted, red with a tint under the pointer, an ellipsis while deleting.
-static void paint_delete_run(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+static void paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool deleting = it->data != NULL;
     bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
-    if (hovered) fill_round_rect(hdc, rc, px(6), blend(theme.danger, theme.elevated, 0.14), blend(theme.danger, theme.elevated, 0.14));
+    if (hovered) fill_round_rect(cv, rc, px(6), blend(theme.danger, theme.elevated, 0.14), blend(theme.danger, theme.elevated, 0.14));
     RECT r = *rc;
-    if (deleting) draw_text(hdc, "\xE2\x80\xA6", &r, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    else draw_glyph(hdc, 0xE74D, rc, FONT_ICON_SMALL, hovered ? theme.danger : (it->action ? theme.muted : theme.line_strong));
+    if (deleting) draw_text(cv, "\xE2\x80\xA6", &r, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    else draw_glyph(cv, 0xE74D, rc, FONT_ICON_SMALL, hovered ? theme.danger : (it->action ? theme.muted : theme.line_strong));
 }
 
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
