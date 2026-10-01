@@ -33,7 +33,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 
 **Connection**
 
-- Pairs with a per-device token stored in Windows Credential Manager (this device only), and revokes it remotely or forgets the local connection.
+- Pairs with a per-device token stored in Windows Credential Manager (this device only); signing out forgets it locally, and the token is issued and revoked on the web dashboard.
 - Hides write controls on a Read-only token. The server's own route catalog (`GET /api/v1/openapi.json`) is read at pairing and on every launch, and a control whose route the server lacks, or that the token's permission may not call, is kept unavailable, so the app adapts to older and newer servers.
 - Saves projects, conversations, transcripts and pull requests on the computer. A screen opens on what it last showed and then asks the server only for what changed; a saved transcript resumes from its last event, and F5 reads it again in full.
 - Pauses polling while the window is minimized or in the background, with exponential backoff and `Retry-After` after failures.
