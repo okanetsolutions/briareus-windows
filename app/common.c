@@ -110,10 +110,10 @@ wchar_t tool_glyph(const char *kind, const char *name, bool is_error) {
     wchar_t g = 0xE90F;
     if (strstr(n, "bash") || strstr(n, "shell") || strstr(n, "exec")) g = 0xE756;
     else if (strstr(n, "read") || strstr(n, "view")) g = 0xE8A5;
+    else if (strstr(n, "todo") || strstr(n, "plan")) g = 0xE9D5;
     else if (strstr(n, "edit") || strstr(n, "write") || strstr(n, "patch")) g = 0xE70F;
     else if (strstr(n, "grep") || strstr(n, "glob") || strstr(n, "search") || strstr(n, "find")) g = 0xE721;
     else if (strstr(n, "web") || strstr(n, "fetch")) g = 0xE774;
-    else if (strstr(n, "todo") || strstr(n, "plan")) g = 0xE9D5;
     else if (strstr(n, "task") || strstr(n, "agent")) g = 0xE716;
     free(n);
     return g;
