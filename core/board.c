@@ -334,8 +334,6 @@ static const BoardAction known_actions[] = {
     { "implement-feedback", "Implement feedback", "Address the review findings on this pull request, push the fixes, and have those changes reviewed automatically", false, { NULL, NULL, false } },
     { "custom-feedback", "Give feedback", "Say in your own words what to change on this pull request, and it is implemented and pushed", true,
       { "Your feedback", "What should change on this pull request?", true } },
-    { "test-sheet", "Test sheet", "Derive the manual QA checklist from this pull request\xE2\x80\x99s diff and post it as one editable comment", false, { NULL, NULL, false } },
-    { "qa", "QA", "Write the test sheet for this pull request and execute it in a session of its own", false, { NULL, NULL, false } },
     { "pr-body-summary", "PR body", "Rewrite this pull request\xE2\x80\x99s description from its own diff, following the team template", false, { NULL, NULL, false } },
     { "delete-self-comments", "Delete my comments", "Remove every comment and review the configured GitHub account left on this pull request", false, { NULL, NULL, false } },
 };
@@ -359,7 +357,7 @@ int board_action_timeout_ms(const BoardAction *a) { return str_eq(a->id, "run") 
 Json *board_action_arguments(const BoardAction *a, const char *repo, int number, const char *branch, const char *input) {
     Json *args = json_object();
     json_set_str(args, "repo", repo); json_set_num(args, "prNumber", number);
-    if ((str_eq(a->id, "review") || str_eq(a->id, "qa")) && branch) json_set_str(args, "branch", branch);
+    if (str_eq(a->id, "review") && branch) json_set_str(args, "branch", branch);
     if (a->has_input && input) {
         char *trimmed = str_trim(input);
         if (*trimmed) json_set_str(args, "input", trimmed);
@@ -413,9 +411,12 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
             a->input.required = input_source->input.required;
         }
     }
+    // Errands this app no longer offers, even when the server still lists them.
+    static const char *const dropped[] = { "qa", "test-sheet", "test-run" };
     for (size_t j = 0; j < sn; j++) {
         bool known = false;
         for (size_t i = 0; i < KNOWN_COUNT && !known; i++) known = str_eq(known_actions[i].id, served[j].id);
+        for (size_t i = 0; i < sizeof dropped / sizeof *dropped && !known; i++) known = str_eq(dropped[i], served[j].id);
         if (known) continue;
         board_action_copy(&out[n++], &served[j]);
     }

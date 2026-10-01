@@ -555,17 +555,19 @@ static bool has_id(const BoardAction *a, size_t n, const char *id) { for (size_t
 static void test_board_offers_the_errands_a_pull_request_is_in_a_state_for(void) {
     Json *b = board(); size_t n; PullSummary *pulls = pull_summaries_parse(json_get(b, "pulls"), &n);
     size_t an; BoardAction *a = board_actions_offered(NULL, &pulls[0], 0, &an);
-    char *s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,fix-checks,custom-feedback,test-sheet,qa,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
+    char *s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,fix-checks,custom-feedback,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[1], 0, &an);
-    s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,implement-feedback,custom-feedback,test-sheet,qa,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
+    s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[2], 0, &an);
     CHECK(!has_id(a, an, "solve-conflicts") && !has_id(a, an, "fix-checks") && !has_id(a, an, "implement-feedback")); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[2], 1, &an); CHECK(has_id(a, an, "fix-checks")); board_actions_free(a, an);
     a = board_actions_offered(NULL, NULL, 0, &an); CHECK(has_id(a, an, "solve-conflicts")); board_actions_free(a, an);
     Json *catalog = json_parsez("[{\"id\":\"custom-feedback\",\"label\":\"Give feedback\",\"hint\":\"h\",\"input\":{\"label\":\"Tell it\",\"placeholder\":\"e.g.\",\"required\":true}},"
-                                "{\"id\":\"test-run\",\"label\":\"Run test sheet\",\"icon\":\"x\",\"hint\":\"Execute it\",\"input\":null},{\"label\":\"No id\"}]");
+                                "{\"id\":\"label-pull\",\"label\":\"Label it\",\"icon\":\"x\",\"hint\":\"Tag it\",\"input\":null},{\"label\":\"No id\"},"
+                                "{\"id\":\"qa\",\"label\":\"QA\"},{\"id\":\"test-sheet\",\"label\":\"Test sheet\"},{\"id\":\"test-run\",\"label\":\"Run test sheet\"}]");
     a = board_actions_offered(catalog, &pulls[2], 0, &an);
-    CHECK(an > 0); if (an) { CHECK_STR(a[an - 1].id, "test-run"); char *op = board_action_operation(&a[an - 1]); CHECK_STR(op, "test_run"); free(op); }
+    CHECK(an > 0); if (an) { CHECK_STR(a[an - 1].id, "label-pull"); char *op = board_action_operation(&a[an - 1]); CHECK_STR(op, "label_pull"); free(op); }
+    CHECK(!has_id(a, an, "qa") && !has_id(a, an, "test-sheet") && !has_id(a, an, "test-run"));
     const BoardAction *feedback = NULL; for (size_t i = 0; i < an; i++) if (str_eq(a[i].id, "custom-feedback")) feedback = &a[i];
     CHECK(feedback && feedback->has_input); if (feedback) CHECK_STR(feedback->input.label, "Tell it");
     if (feedback) {

@@ -10,7 +10,7 @@
 
 enum { ID_COMPOSER = 401 };
 enum { TIMER_VOICE = 3 };
-enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_QA, CHIP_COUNT };
+enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
 
 typedef struct {
     Screen base;
@@ -18,7 +18,7 @@ typedef struct {
     bool has_catalog; RuntimeCatalog catalog;
     bool has_runtime; RuntimeChoice runtime;   // the pick; none starts on the project default
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
-    bool review_loop, qa_loop;
+    bool review_loop;
     Request *req_runtimes, *req_branches, *req_start, *req_projects;
     bool busy, uncertain;
     char *error;
@@ -122,14 +122,10 @@ static void start_done(void *owner, Request *req) {
     Session started;
     if (req->ok && session_parse(json_get(req->result, "session"), &started)) {
         set_composer_text(s, "");
-        // The loops the chips asked for that the server does not arm by default.
+        // The loop the chip asked for that the server does not arm by default.
         if (!s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
             Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
             store_call("review_loop", a, 0, NULL, loop_done, 0, NULL);
-        }
-        if (s->qa_loop && store_supports("qa_loop")) {
-            Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", true);
-            store_call("qa_loop", a, 0, NULL, loop_done, 0, NULL);
         }
         app_show_detail(conversation_screen_new(&started));
         session_free(&started);
@@ -247,7 +243,6 @@ static char *chip_label(NewSessionScreen *s, int chip) {
     }
     case CHIP_EFFORT: out = xstrdup(has && eff.effort ? eff.effort : "effort"); break;
     case CHIP_LOOP: out = xstrdup(s->review_loop ? "\xF0\x9F\x94\x81 Review loop: on" : "\xF0\x9F\x94\x81 Review loop"); break;
-    case CHIP_QA: out = xstrdup(s->qa_loop ? "\xF0\x9F\x8E\xAC QA loop: on" : "\xF0\x9F\x8E\xAC QA loop"); break;
     }
     if (has) runtime_choice_free(&eff);
     return out;
@@ -258,11 +253,10 @@ static bool chip_shown(NewSessionScreen *s, int chip) {
     case CHIP_EFFORT: { RuntimeChoice eff; if (!effective_choice(s, &eff)) return false; size_t n = 0; runtime_catalog_efforts(&s->catalog, &eff, &n); runtime_choice_free(&eff); return n > 0; }
     case CHIP_BRANCH: return store_supports("branches");
     case CHIP_LOOP: return store_supports("review_loop");
-    case CHIP_QA: return store_supports("qa_loop");
     default: return true;
     }
 }
-static bool chip_picker(int chip) { return chip != CHIP_LOOP && chip != CHIP_QA && chip != CHIP_WORKSPACE; }
+static bool chip_picker(int chip) { return chip != CHIP_LOOP && chip != CHIP_WORKSPACE; }
 static int chip_width(HDC hdc, const char *label, bool picker) {
     int w = px(6) * 2 + text_width(hdc, label, FONT_CAPTION) + px(4);   // a glyph from a fallback font measures a touch narrow
     if (picker) w += px(4) + text_width(hdc, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
@@ -333,7 +327,7 @@ static void new_session_footer_paint(Screen *base, HDC hdc, const RECT *rc) {
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
         s->chip_rc[c] = r;
-        bool on = (c == CHIP_LOOP && s->review_loop) || (c == CHIP_QA && s->qa_loop);
+        bool on = (c == CHIP_LOOP && s->review_loop);
         bool dim = c == CHIP_WORKSPACE || s->busy;
         fill_round_rect(hdc, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_label(s, c);
@@ -453,7 +447,6 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         break;
     }
     case CHIP_LOOP: s->review_loop = !s->review_loop; pane_footer_changed(s->base.pane); break;
-    case CHIP_QA: s->qa_loop = !s->qa_loop; pane_footer_changed(s->base.pane); break;
     }
     if (has) runtime_choice_free(&eff);
 }
