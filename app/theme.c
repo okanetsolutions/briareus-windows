@@ -2,13 +2,40 @@
 #include "board.h"
 #include "str.h"
 #include <dwmapi.h>
-#include <gdiplus.h>
 #include <math.h>
 #include <shellapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uxtheme.h>
+
+// The GDI+ flat API this file uses, declared here because the Windows SDK's gdiplus.h is C++ only.
+typedef int GpStatus;
+typedef DWORD ARGB;
+typedef struct GpGraphics GpGraphics;
+typedef struct GpBrush GpBrush;
+typedef struct GpSolidFill GpSolidFill;
+typedef struct GpPath GpPath;
+typedef struct GpPen GpPen;
+typedef struct { UINT32 GdiplusVersion; void *DebugEventCallback; BOOL SuppressBackgroundThread, SuppressExternalCodecs; } GdiplusStartupInput;
+enum { Ok = 0, SmoothingModeAntiAlias8x8 = 5, PixelOffsetModeHalf = 4, FillModeAlternate = 0, UnitPixel = 2 };
+GpStatus WINAPI GdiplusStartup(ULONG_PTR *token, const GdiplusStartupInput *input, void *output);
+GpStatus WINAPI GdipCreateFromHDC(HDC hdc, GpGraphics **graphics);
+GpStatus WINAPI GdipDeleteGraphics(GpGraphics *graphics);
+GpStatus WINAPI GdipSetSmoothingMode(GpGraphics *graphics, int mode);
+GpStatus WINAPI GdipSetPixelOffsetMode(GpGraphics *graphics, int mode);
+GpStatus WINAPI GdipCreateSolidFill(ARGB color, GpSolidFill **brush);
+GpStatus WINAPI GdipDeleteBrush(GpBrush *brush);
+GpStatus WINAPI GdipCreatePen1(ARGB color, float width, int unit, GpPen **pen);
+GpStatus WINAPI GdipDeletePen(GpPen *pen);
+GpStatus WINAPI GdipCreatePath(int fill_mode, GpPath **path);
+GpStatus WINAPI GdipDeletePath(GpPath *path);
+GpStatus WINAPI GdipAddPathArc(GpPath *path, float x, float y, float width, float height, float start, float sweep);
+GpStatus WINAPI GdipClosePathFigure(GpPath *path);
+GpStatus WINAPI GdipFillPath(GpGraphics *graphics, GpBrush *brush, GpPath *path);
+GpStatus WINAPI GdipFillRectangle(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
+GpStatus WINAPI GdipFillEllipse(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
+GpStatus WINAPI GdipDrawEllipse(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height);
 
 Palette theme;
 static HFONT fonts[FONT_COUNT];
