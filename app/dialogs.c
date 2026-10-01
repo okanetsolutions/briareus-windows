@@ -80,7 +80,7 @@ static void dialog_prepare_edit(HWND dialog, int id) {
     SetWindowRgn(e, CreateRoundRectRgn(0, 0, r.right + 1, r.bottom + 1, px(8), px(8)), TRUE);
     SendMessageW(e, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(px(8), px(8)));
     if (GetWindowLongW(e, GWL_STYLE) & ES_MULTILINE) {
-        RECT f; SendMessageW(e, EM_GETRECT, 0, (LPARAM)&f);
+        RECT f = { 0 }; SendMessageW(e, EM_GETRECT, 0, (LPARAM)&f);
         f.top += px(6); f.bottom -= px(6);
         SendMessageW(e, EM_SETRECT, 0, (LPARAM)&f);
     }

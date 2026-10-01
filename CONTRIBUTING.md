@@ -17,7 +17,13 @@ mingw32-make test
 
 Everything under `core/` (JSON, models, API client, cache, diff, Markdown, board logic) has no UI code and is covered by `tests/core_tests.c`, with HTTP stubbed through the client's pluggable transport. New core behaviour needs a test there. UI changes in `app/` are checked by running the app against a Briareus server; a screenshot in the pull request helps.
 
-The same build and tests run in CI for every pull request, with both GCC and MSVC.
+The same build and tests run in CI for every pull request, with both GCC and MSVC, and every check must pass:
+
+- **Warnings are errors.** GCC builds with `WERROR=1` and MSVC with `/W4 /WX`. Run `mingw32-make WERROR=1` before pushing.
+- **Coverage.** `mingw32-make coverage` (needs `pip install gcovr`) measures line coverage of `core/` and fails below the floor set by `COVERAGE_MIN` in the Makefile; the HTML report lands in `build-cov/coverage/index.html`. Raise the floor when coverage goes up, never lower it to make a change pass.
+- **AddressSanitizer.** The tests also run under MSVC's AddressSanitizer, which stops on buffer overruns, use after free and double frees.
+- **Static analysis.** `mingw32-make lint` runs cppcheck. Silence a false positive on its line with `// cppcheck-suppress <id>`, saying why.
+- **Formatting.** Files follow `.editorconfig` (LF, final newline, no trailing spaces), checked by editorconfig-checker.
 
 ## Layout
 

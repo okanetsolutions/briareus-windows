@@ -415,17 +415,17 @@ static void usage_layout(PanelScreen *s, Doc *doc, int w, bool after_pr) {
             if (!num_at(c, "tokens", &v)) continue;
             const char *name = json_str(json_get(c, "name"));
             char *tokens = format_tokens(v), *pct = xstrfmt("%.1f%%", json_num_or(json_get(c, "pct"), 0));
-            int y = doc->y, h = px(18), sq = px(8);
+            int ry = doc->y, rh = px(18), sq = px(8);
             int pw = px(44), tw = text_width(doc->cv, tokens, FONT_CAPTION) + 2;
-            RECT sw = { 0, y + (h - sq) / 2, sq, y + (h - sq) / 2 + sq };
+            RECT sw = { 0, ry + (rh - sq) / 2, sq, ry + (rh - sq) / 2 + sq };
             int si = doc_add(doc, &sw, paint_swatch); doc_item(doc, si)->arg = (intptr_t)context_color(name);
-            RECT nr = { sq + px(6), y, w - pw - tw - px(6), y + h };
+            RECT nr = { sq + px(6), ry, w - pw - tw - px(6), ry + rh };
             doc_text_at(doc, &nr, name ? name : "", FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            RECT tr = { w - pw - tw, y, w - pw, y + h };
+            RECT tr = { w - pw - tw, ry, w - pw, ry + rh };
             doc_text_at(doc, &tr, tokens, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            RECT pr = { w - pw, y, w, y + h };
+            RECT pr = { w - pw, ry, w, ry + rh };
             doc_text_at(doc, &pr, pct, FONT_CAPTION, theme.ink, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            doc->y = y + h;
+            doc->y = ry + rh;
             free(tokens); free(pct);
         }
     }

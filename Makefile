@@ -6,8 +6,15 @@ CC      = gcc
 CXX     = g++
 WINDRES = windres
 BUILD   ?= build
-CFLAGS  ?= -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -fno-exceptions -fno-rtti
+OPT     ?= -O2
+WARNINGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wshadow -Wformat=2 -Wpointer-arith \
+	-Wundef -Wvla -Wdouble-promotion
+# CI builds with WERROR=1, so a new warning fails the pull request instead of piling up.
+ifdef WERROR
+WARNINGS += -Werror
+endif
+CFLAGS  ?= -std=c11 $(OPT) $(WARNINGS) -Wstrict-prototypes -Wmissing-prototypes
+CXXFLAGS = -std=c++17 $(OPT) $(WARNINGS) -fno-exceptions -fno-rtti
 DEFINES = -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DNTDDI_VERSION=0x0A000006 -D_CRT_SECURE_NO_WARNINGS -Icore -Iapp
 CFLAGS  += $(DEFINES)
 CXXFLAGS += $(DEFINES)
@@ -26,7 +33,7 @@ CORE_TEST_OBJ = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(CORE_TEST_SRC))
 APP_TEST_OBJ  = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(APP_TEST_SRC))
 RES      = $(BUILD)/briareus.res.o
 
-.PHONY: all app test clean run
+.PHONY: all app test coverage lint clean run
 
 all: app test
 
@@ -45,6 +52,21 @@ $(BUILD)/app_tests.exe: $(CORE_OBJ) $(APP_OBJ) $(APP_TEST_OBJ)
 test: $(BUILD)/core_tests.exe $(BUILD)/app_tests.exe
 	$(BUILD)/core_tests.exe
 	$(BUILD)/app_tests.exe
+
+# Line coverage of core/ under the tests, in a build of its own: fails below COVERAGE_MIN percent and writes an HTML
+# report to build-cov/coverage/index.html. Needs gcovr (pip install gcovr). app/ is drawing code, checked by running it.
+GCOVR ?= gcovr
+COVERAGE_MIN ?= 90
+coverage:
+	rm -rf build-cov/coverage && find build-cov -name '*.gcda' -delete 2>/dev/null; true
+	$(MAKE) BUILD=build-cov OPT="-O0 --coverage" test
+	mkdir -p build-cov/coverage
+	$(GCOVR) --root . --object-directory build-cov --filter core/ --txt-summary --html-details build-cov/coverage/index.html 		--fail-under-line $(COVERAGE_MIN)
+
+# Static analysis with cppcheck: fails on any finding. canvas.cpp is C in a .cpp file, so the C++-only checks are off there.
+CPPCHECK ?= cppcheck
+lint:
+	$(CPPCHECK) -q -j4 --error-exitcode=1 --enable=warning,performance,portability --inline-suppr --std=c11 		-DUNICODE -D_UNICODE -D_WIN32 -D_WIN64 -Icore -Iapp --suppress=missingIncludeSystem 		--suppress=uninitMemberVarNoCtor --suppress=dangerousTypeCast:app/canvas.cpp core app tests
 
 run: app
 	$(BUILD)/Briareus.exe
@@ -68,4 +90,4 @@ $(BUILD) $(BUILD)/core $(BUILD)/app $(BUILD)/tests:
 	mkdir -p $@
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) build-cov

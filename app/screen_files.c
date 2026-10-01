@@ -291,11 +291,11 @@ static void layout_diff(PullFiles *f, Doc *doc, int x, int w) {
     }
     int box = doc_box_begin(doc, x, w, 0, theme.raise, theme.line, px(8));
     doc_item(doc, box)->hover_fill = false;
-    FileHeadData *h = xcalloc(1, sizeof *h);
-    h->path = xstrdup(file->filename);
-    if (file->previous_filename) h->from = xstrfmt("renamed from %s", file->previous_filename);
-    h->add = xstrfmt("+%d", file->additions >= 0 ? file->additions : 0); h->del = xstrfmt("\xE2\x88\x92%d", file->deletions >= 0 ? file->deletions : 0);
-    doc_custom(doc, x + 1, w - 2, px(40), paint_file_head, h, file_head_free, 0, 0);
+    FileHeadData *head = xcalloc(1, sizeof *head);
+    head->path = xstrdup(file->filename);
+    if (file->previous_filename) head->from = xstrfmt("renamed from %s", file->previous_filename);
+    head->add = xstrfmt("+%d", file->additions >= 0 ? file->additions : 0); head->del = xstrfmt("\xE2\x88\x92%d", file->deletions >= 0 ? file->deletions : 0);
+    doc_custom(doc, x + 1, w - 2, px(40), paint_file_head, head, file_head_free, 0, 0);
     // The buttons under the header: wrap or scroll long lines, and the file on GitHub.
     doc_space(doc, px(8));
     ButtonSpec buttons[2]; size_t bc = 0;
