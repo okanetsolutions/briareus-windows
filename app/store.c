@@ -220,27 +220,6 @@ void store_forget(void) {
     notify();
 }
 
-typedef struct { ApiClient *client; ApiError error; bool ok; void (*done)(void *, const char *); void *ctx; } RevokeJob;
-static void revoke_work(void *p) { RevokeJob *j = p; api_error_init(&j->error); j->ok = api_revoke(j->client, &j->error); }
-static void revoke_done(void *p) {
-    RevokeJob *j = p;
-    if (!j->ok && !api_error_unauthorized(&j->error)) {
-        char *text = api_error_description(&j->error);
-        if (j->done) j->done(j->ctx, text);
-        free(text);
-    } else {
-        store_forget();
-        if (j->done) j->done(j->ctx, NULL);
-    }
-    api_client_release(j->client); api_error_clear(&j->error); free(j);
-}
-void store_revoke(void (*done)(void *ctx, const char *error), void *ctx) {
-    if (!g_store.client) { store_forget(); if (done) done(ctx, NULL); return; }
-    RevokeJob *j = xcalloc(1, sizeof *j);
-    j->client = api_client_retain(g_store.client); j->done = done; j->ctx = ctx;
-    async_run(revoke_work, revoke_done, j);
-}
-
 typedef struct { ApiClient *client; Discovery discovery; bool ok; ApiError error; void (*done)(void *, const char *); void *ctx; } VoiceCheckJob;
 static void voice_check_work(void *p) { VoiceCheckJob *j = p; api_error_init(&j->error); j->ok = api_discovery(j->client, &j->discovery, &j->error); }
 static void voice_check_done(void *p) {

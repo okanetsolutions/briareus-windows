@@ -41,8 +41,6 @@ void store_restore(void);
 void store_connect(const char *server, const char *token);
 /// Removes local credentials and saved conversations only.
 void store_forget(void);
-/// Disables the token on the server, then forgets. `done` runs on the UI thread with NULL or an error.
-void store_revoke(void (*done)(void *ctx, const char *error), void *ctx);
 /// Asks the server again before refusing voice notes; `done` gets NULL when they work, else what is missing.
 void store_voice_notes_off(void (*done)(void *ctx, const char *reason), void *ctx);
 /// Handles a 401 from any request: the token was revoked or expired.

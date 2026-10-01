@@ -251,12 +251,6 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
     if (!ok) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return ok;
 }
-bool api_revoke(ApiClient *c, ApiError *error) {
-    Json *j = request(c, "token", "DELETE", NULL, 0, error);
-    if (!j) return false;
-    json_free(j);
-    return true;
-}
 
 // MARK: - Calls
 
@@ -332,6 +326,11 @@ static const ApiRoute ROUTES[] = {
     { "update_db_server", "PUT", "settings/db-servers/{id}" },
     { "delete_db_server", "DELETE", "settings/db-servers/{id}" },
     { "test_db_server", "POST", "settings/db-servers/test" },
+    // The SSH servers agents may run commands on, each held to one project; also for an admin token.
+    { "settings_ssh_servers", "GET", "settings/ssh/servers" },
+    { "create_ssh_server", "POST", "settings/ssh/servers" },
+    { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },
+    { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
