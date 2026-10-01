@@ -700,7 +700,7 @@ bool sftp_askpass_main(int *exit_code) {
     if (!GetEnvironmentVariableW(L"BRIAREUS_ASKPASS", flag, 8) || wcscmp(flag, L"1") != 0) return false;
     int argc = 0;
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    char *prompt = argc > 1 ? wide_to_utf8(argv[1]) : xstrdup("Password:");
+    char *prompt = argv && argc > 1 ? wide_to_utf8(argv[1]) : xstrdup("Password:");
     if (argv) LocalFree(argv);
     wchar_t kind[16] = L"";
     GetEnvironmentVariableW(L"SSH_ASKPASS_PROMPT", kind, 16);
