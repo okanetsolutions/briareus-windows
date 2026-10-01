@@ -199,6 +199,15 @@ static void layout_if_needed(Pane *p, HDC hdc) {
     if (s && s->vt->layout) s->vt->layout(s, &p->doc);
     doc_end(&p->doc);
     p->content_height = doc_height(&p->doc);
+    // The sidebar's padding is no wider than its scrollbar, so once it scrolls the bar takes its own 10px of
+    // width, as `::-webkit-scrollbar` does, instead of covering the ⚑ badge and the rows' edges.
+    if (p->sidebar && max_scroll(p) > 0) {
+        content_width -= px(10);
+        doc_begin(&p->doc, hdc, content_width);
+        if (s && s->vt->layout) s->vt->layout(s, &p->doc);
+        doc_end(&p->doc);
+        p->content_height = doc_height(&p->doc);
+    }
     int m = max_scroll(p);
     if ((p->stick_bottom && was_bottom) || p->scroll_y >= 0x3fffffff) p->scroll_y = m;
     if (p->scroll_y > m) p->scroll_y = m;
