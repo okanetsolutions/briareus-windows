@@ -1,9 +1,10 @@
-// The board: labels, links, pull request and issue rows, filters, errands, merge warnings, reviews and stacks.
+// The board: labels, links, pull request and issue rows, filters, errands, merge warnings, reviews, stacks and ▶ Run.
 #include "board.h"
 #include "json.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -920,6 +921,102 @@ static void test_only_https_urls_with_a_host_and_no_credentials_are_opened(void)
     }
 }
 
+// MARK: - ▶ Run
+
+static void test_run_profiles_are_read_for_the_project_default_first(void) {
+    Json *j = json_parsez("{\"projects\":[{\"repo\":\"o/other\",\"runProfiles\":[\"x\"]},"
+                         "{\"repo\":\"o/r\",\"runProfiles\":[\"veterinary_central\",\"\",\"demo\",7]}]}");
+    size_t n = 99;
+    char **p = run_profiles_parse(j, "o/r", &n);
+    CHECK_INT(n, 2); CHECK_STR(p[0], "veterinary_central"); CHECK_STR(p[1], "demo"); CHECK(p[2] == NULL);
+    str_array_free(p, n);
+    // The bare array reads the same.
+    p = run_profiles_parse(json_get(j, "projects"), "o/other", &n);
+    CHECK_INT(n, 1); CHECK_STR(p[0], "x"); str_array_free(p, n);
+    json_free(j);
+}
+static void test_run_profiles_are_empty_when_none_or_unlisted(void) {
+    Json *j = json_parsez("{\"projects\":[{\"repo\":\"o/r\"},{\"repo\":\"o/s\",\"runProfiles\":[]}]}");
+    size_t n = 99;
+    char **p = run_profiles_parse(j, "o/r", &n); CHECK_INT(n, 0); CHECK(p && p[0] == NULL); str_array_free(p, n);
+    p = run_profiles_parse(j, "o/s", &n); CHECK_INT(n, 0); str_array_free(p, n);
+    p = run_profiles_parse(j, "o/missing", &n); CHECK_INT(n, 0); CHECK(p && p[0] == NULL); str_array_free(p, n);
+    p = run_profiles_parse(NULL, "o/r", &n); CHECK_INT(n, 0); str_array_free(p, n);
+    json_free(j);
+}
+static void test_the_run_being_prepared_is_the_newest_run_session_on_the_pull_request(void) {
+    Json *j = json_parsez("{\"sessions\":["
+        "{\"id\":\"old\",\"title\":\"Run: #7 Fix\",\"startedOnPr\":7,\"createdAt\":\"2026-10-01T10:00:00Z\"},"
+        "{\"id\":\"chat\",\"title\":\"Fix the bug\",\"startedOnPr\":7,\"createdAt\":\"2026-10-01T12:00:00Z\"},"
+        "{\"id\":\"other\",\"title\":\"Run: #8\",\"startedOnPr\":8,\"createdAt\":\"2026-10-01T12:00:00Z\"},"
+        "{\"id\":\"new\",\"title\":\"Run: #7 Fix\",\"prStatus\":{\"number\":7},\"createdAt\":\"2026-10-01T11:00:00Z\"}]}");
+    CHECK_OWNED_STR(run_session_preparing(j, 7), "new");
+    CHECK_OWNED_STR(run_session_preparing(j, 8), "other");
+    CHECK(run_session_preparing(j, 9) == NULL);
+    CHECK(run_session_preparing(NULL, 7) == NULL);
+    json_free(j);
+}
+static void test_a_run_already_serving_is_found_by_its_serve_link(void) {
+    Json *j = json_parsez("{\"sessions\":["
+        "{\"id\":\"idle\",\"startedOnPr\":7,\"serveLinks\":null},"
+        "{\"id\":\"local\",\"startedOnPr\":7,\"serveLinks\":[{\"url\":\"http://127.0.0.1:8123\"}]},"
+        "{\"id\":\"elsewhere\",\"startedOnPr\":8,\"serveLinks\":[{\"url\":\"https://8124.preview.example.com\"}]},"
+        "{\"id\":\"live\",\"startedOnPr\":7,\"serveLinks\":[{\"tenant\":\"a\",\"url\":\"https://a-8125.preview.example.com\"},{\"url\":\"https://b\"}]}]}");
+    char *id = NULL, *url = NULL;
+    // Only an https link is opened in the tab.
+    CHECK(run_session_serving(j, 7, &id, &url));
+    CHECK_STR(id, "live"); CHECK_STR(url, "https://a-8125.preview.example.com"); free(id); free(url);
+    id = url = NULL;
+    CHECK(run_session_serving(json_get(j, "sessions"), 8, &id, &url)); CHECK_STR(id, "elsewhere"); free(id); free(url);
+    id = url = NULL;
+    CHECK(!run_session_serving(j, 9, &id, &url)); CHECK(id == NULL && url == NULL);
+    json_free(j);
+}
+static void test_the_run_log_reads_log_lines_past_its_cursor(void) {
+    RunLog log; memset(&log, 0, sizeof log);
+    Json *events = json_parsez("["
+        "{\"seq\":1,\"kind\":\"user\",\"text\":\"hello\"},"
+        "{\"seq\":2,\"kind\":\"info\",\"text\":\"Preparing pull request #7\"},"
+        "{\"seq\":3,\"kind\":\"cmd\",\"text\":\"composer install\"},"
+        "{\"seq\":4,\"kind\":\"setup\",\"text\":\"Installing\\r\\n\\nDone\"},"
+        "{\"seq\":5,\"kind\":\"stderr\",\"text\":\"npm WARN deprecated\"},"
+        "{\"seq\":6,\"kind\":\"status\",\"status\":\"idle\"},"
+        "{\"seq\":7,\"kind\":\"text\",\"text\":\"the agent speaking\"},"
+        "{\"seq\":8,\"kind\":\"git\",\"text\":\"Cloning\"},"
+        "{\"seq\":9,\"kind\":\"tool\",\"text\":\"Bash\"}]");
+    CHECK(run_log_add_events(&log, events));
+    CHECK_INT(log.count, 7); CHECK_INT((int)log.cursor, 9);
+    CHECK_STR(log.lines[0], "Preparing pull request #7");
+    CHECK_STR(log.lines[1], "$ composer install");
+    CHECK_STR(log.lines[2], "Installing"); CHECK_STR(log.lines[3], "Done");
+    CHECK_STR(log.lines[4], "npm WARN deprecated"); CHECK(log.errors[4]); CHECK(!log.errors[3]);
+    CHECK_STR(log.lines[5], "\xE2\x80\xA2 idle");
+    CHECK_STR(log.lines[6], "Cloning");
+    // Read again from the same answer: nothing is added twice.
+    CHECK(!run_log_add_events(&log, events)); CHECK_INT(log.count, 7);
+    json_free(events);
+    events = json_parsez("[{\"seq\":9,\"kind\":\"info\",\"text\":\"again\"},{\"seq\":10,\"kind\":\"info\",\"text\":\"Serving on 8123\"}]");
+    CHECK(run_log_add_events(&log, events)); CHECK_INT(log.count, 8); CHECK_STR(log.lines[7], "Serving on 8123");
+    json_free(events);
+    run_log_clear(&log);
+    CHECK_INT(log.count, 0); CHECK(log.lines == NULL); CHECK_INT((int)log.cursor, 0);
+}
+static void test_the_run_log_keeps_its_latest_lines(void) {
+    RunLog log; memset(&log, 0, sizeof log);
+    CHECK_INT(run_log_add(&log, "", false), 0);
+    CHECK_INT(run_log_add(&log, "one\ntwo\n", false), 2);
+    for (int i = 0; i < RUN_LOG_CAP; i++) { char line[16]; snprintf(line, sizeof line, "line %d", i); run_log_add(&log, line, i % 2 == 0); }
+    CHECK_INT(log.count, RUN_LOG_CAP);
+    CHECK_STR(log.lines[0], "line 0"); CHECK(log.errors[0]);
+    CHECK_STR(log.lines[RUN_LOG_CAP - 1], "line 399"); CHECK(!log.errors[RUN_LOG_CAP - 1]);
+    // A full log still reports what it added.
+    Json *events = json_parsez("[{\"seq\":1,\"kind\":\"info\",\"text\":\"newest\"}]");
+    CHECK(run_log_add_events(&log, events)); CHECK_INT(log.count, RUN_LOG_CAP);
+    CHECK_STR(log.lines[0], "line 1"); CHECK_STR(log.lines[RUN_LOG_CAP - 1], "newest");
+    json_free(events);
+    run_log_clear(&log);
+}
+
 void board_tests(void) {
     test_run("labels read from an object or a bare name", test_labels_read_from_an_object_or_a_bare_name);
     test_run("label colours read as six hex digits", test_label_colours_read_as_six_hex_digits);
@@ -966,4 +1063,10 @@ void board_tests(void) {
     test_run("stack copies are independent", test_stack_copies_are_independent);
     test_run("stack overviews list the top first", test_stack_overviews_list_the_top_first);
     test_run("only https urls with a host and no credentials are opened", test_only_https_urls_with_a_host_and_no_credentials_are_opened);
+    test_run("run profiles are read for the project, default first", test_run_profiles_are_read_for_the_project_default_first);
+    test_run("run profiles are empty when none or unlisted", test_run_profiles_are_empty_when_none_or_unlisted);
+    test_run("the run being prepared is the newest run session on the pull request", test_the_run_being_prepared_is_the_newest_run_session_on_the_pull_request);
+    test_run("a run already serving is found by its serve link", test_a_run_already_serving_is_found_by_its_serve_link);
+    test_run("the run log reads log lines past its cursor", test_the_run_log_reads_log_lines_past_its_cursor);
+    test_run("the run log keeps its latest lines", test_the_run_log_keeps_its_latest_lines);
 }

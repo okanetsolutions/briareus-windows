@@ -576,3 +576,89 @@ bool safe_web_url(const char *value) {
     for (const char *q = p; q < end; q++) if (*q == '@') return false;
     return true;
 }
+
+// MARK: - ▶ Run
+
+/// The array a list answer holds under `key`, or the answer itself when it is the array.
+static const Json *list_of(const Json *answer, const char *key) { return json_is_array(answer) ? answer : json_get(answer, key); }
+
+char **run_profiles_parse(const Json *projects, const char *repo, size_t *count) {
+    const Json *rows = list_of(projects, "projects");
+    char **out = NULL; size_t n = 0;
+    for (size_t i = 0; i < json_count(rows) && !out; i++) {
+        const Json *row = json_at(rows, i);
+        if (!str_eq(json_str(json_get(row, "repo")), repo)) continue;
+        const Json *names = json_get(row, "runProfiles");
+        out = xcalloc(json_count(names) + 1, sizeof *out);
+        for (size_t k = 0; k < json_count(names); k++) if (json_str_nonempty(json_at(names, k))) out[n++] = xstrdup(json_str(json_at(names, k)));
+    }
+    if (!out) out = xcalloc(1, sizeof *out);
+    *count = n;
+    return out;
+}
+char *run_session_preparing(const Json *sessions, int number) {
+    const Json *rows = list_of(sessions, "sessions");
+    const char *best = NULL, *best_at = NULL;
+    for (size_t i = 0; i < json_count(rows); i++) {
+        Session s; s.raw = (Json *)json_at(rows, i);
+        const char *title = json_str(json_get(s.raw, "title")), *at = json_str_or(json_get(s.raw, "createdAt"), "");
+        if (session_pull_number(&s) != number || !title || strncmp(title, "Run: #", 6) || !session_id(&s)) continue;
+        if (!best || strcmp(at, best_at) > 0) { best = session_id(&s); best_at = at; }
+    }
+    return best ? xstrdup(best) : NULL;
+}
+bool run_session_serving(const Json *sessions, int number, char **session_id_out, char **url_out) {
+    const Json *rows = list_of(sessions, "sessions");
+    for (size_t i = 0; i < json_count(rows); i++) {
+        Session s; s.raw = (Json *)json_at(rows, i);
+        const char *url = json_str(json_get(json_at(json_get(s.raw, "serveLinks"), 0), "url"));
+        if (session_pull_number(&s) != number || !safe_web_url(url) || !session_id(&s)) continue;
+        *session_id_out = xstrdup(session_id(&s)); *url_out = xstrdup(url);
+        return true;
+    }
+    return false;
+}
+
+size_t run_log_add(RunLog *log, const char *text, bool error) {
+    size_t added = 0;
+    for (const char *p = text; p && *p;) {
+        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
+        size_t len = n && p[n - 1] == '\r' ? n - 1 : n;
+        if (len) {
+            if (log->count == RUN_LOG_CAP) {
+                free(log->lines[0]);
+                memmove(log->lines, log->lines + 1, (RUN_LOG_CAP - 1) * sizeof *log->lines);
+                memmove(log->errors, log->errors + 1, (RUN_LOG_CAP - 1) * sizeof *log->errors);
+                log->count--;
+            }
+            log->lines = xrealloc(log->lines, (log->count + 1) * sizeof *log->lines);
+            log->errors = xrealloc(log->errors, (log->count + 1) * sizeof *log->errors);
+            log->lines[log->count] = xstrndup(p, len); log->errors[log->count] = error; log->count++; added++;
+        }
+        p = e ? e + 1 : p + n;
+    }
+    return added;
+}
+bool run_log_add_events(RunLog *log, const Json *events) {
+    size_t added = 0;
+    for (size_t i = 0; i < json_count(events); i++) {
+        const Json *e = json_at(events, i);
+        double seq;
+        if (json_num(json_get(e, "seq"), &seq)) { if (seq <= log->cursor) continue; log->cursor = seq; }
+        const char *kind = json_str(json_get(e, "kind")), *text = json_str(json_get(e, "text"));
+        if (str_eq(kind, "status")) {
+            const char *status = json_str(json_get(e, "status"));
+            if (status) { char *t = xstrfmt("\xE2\x80\xA2 %s", status); added += run_log_add(log, t, false); free(t); }
+        } else if (str_eq(kind, "cmd") && text) {
+            char *t = xstrfmt("$ %s", text); added += run_log_add(log, t, false); free(t);
+        } else if (text && (str_eq(kind, "info") || str_eq(kind, "git") || str_eq(kind, "setup") || str_eq(kind, "claude") || str_eq(kind, "stderr"))) {
+            added += run_log_add(log, text, str_eq(kind, "stderr"));
+        }
+    }
+    return added > 0;
+}
+void run_log_clear(RunLog *log) {
+    for (size_t i = 0; i < log->count; i++) free(log->lines[i]);
+    free(log->lines); free(log->errors);
+    memset(log, 0, sizeof *log);
+}

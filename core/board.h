@@ -156,4 +156,27 @@ size_t *stack_position_top_first(const StackPosition *stack);
 /// An https URL with a host and no credentials, or NULL.
 bool safe_web_url(const char *value);
 
+// MARK: - ▶ Run
+
+/// A project's run profiles, the default first, from what `projects` answers (the object or its array). A
+/// NULL-terminated array of new strings; empty when the project lists none or is not listed.
+char **run_profiles_parse(const Json *projects, const char *repo, size_t *count);
+/// The session a ▶ Run on pull request `number` is preparing while `serve_pull` waits: the newest of its sessions titled
+/// "Run: #…", from what `sessions` answers. A new string, or NULL.
+char *run_session_preparing(const Json *sessions, int number);
+/// A ▶ Run already serving pull request `number`: one of its sessions with a serve link. Sets new strings.
+bool run_session_serving(const Json *sessions, int number, char **session_id, char **url);
+
+/// The Run tab's log: the log lines of a session's transcript, one entry per line of text, the latest RUN_LOG_CAP.
+enum { RUN_LOG_CAP = 400 };
+typedef struct { char **lines; bool *errors; size_t count; double cursor; } RunLog;
+/// Adds `text`, one entry per line; how many lines it added.
+size_t run_log_add(RunLog *log, const char *text, bool error);
+/// Adds the log lines among transcript events past the cursor (`info`, `cmd` as `$ …`, `git`, `setup`, `claude`,
+/// `stderr` as errors, `status` as `• …`; the conversation's own kinds are skipped) and moves the cursor on. True
+/// when a line was added.
+bool run_log_add_events(RunLog *log, const Json *events);
+/// Empties the log and rewinds its cursor.
+void run_log_clear(RunLog *log);
+
 #endif

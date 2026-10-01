@@ -493,6 +493,19 @@ static void test_json_bodies_of_writes(void) {
     Json *sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "text")), "\xC2\xA1Hola \xF0\x9F\x91\x8B"); json_free(sent);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
+static void test_a_run_profile_switch_names_the_session_in_the_path(void) {
+    Stub stub = { 0 }; stub_json(&stub, 200, "{\"url\":\"https://8123.preview.example.com\",\"profile\":\"tenant-a\"}");
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    // The Run tab's profile dropdown: the session goes in the path, the profile in the body.
+    Json *r = call(c, "serve", "{\"sessionId\":\"run-1\",\"profile\":\"tenant-a\"}", &e);
+    CHECK_STR(stub.last_url, BASE "sessions/run-1/serve"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_body, "{\"profile\":\"tenant-a\"}");
+    CHECK_STR(json_str(json_get(r, "profile")), "tenant-a"); json_free(r);
+    // Without a profile the server serves the one it served last.
+    r = call(c, "serve", "{\"sessionId\":\"run-1\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "sessions/run-1/serve"); CHECK_STR(stub.last_body, "{}");
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
 static void test_the_set_flag_is_always_sent_true(void) {
     Stub stub = { 0 }; stub_json(&stub, 200, "{}");
     ApiClient *c = client(&stub);
@@ -895,6 +908,7 @@ static void test_retry_after_http_dates(void) {
 }
 
 void api_tests(void) {
+    test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);
     test_run("server address refuses everything else", test_server_address_refuses_everything_else);
     test_run("server address copy is independent", test_server_address_copy_is_independent);

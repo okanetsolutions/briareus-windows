@@ -2,6 +2,7 @@
 #include "dialogs.h"
 #include "screens.h"
 #include "str.h"
+#include "webview.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -189,6 +190,7 @@ static void board_start_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
 }
+static void board_open_run(PullsScreen *s, size_t index);
 static void board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input) {
     if (s->busy || s->uncertain || str_empty(branch)) return;
     s->busy = true; s->starting_number = number; set_string(&s->starting_id, action->id);
@@ -384,7 +386,8 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         // The rows may be replaced while the prompt is up, so what the start needs is copied first.
         int number = s->pulls[index].number; char *branch = xstrdup(s->pulls[index].branch ? s->pulls[index].branch : "");
         size_t an; BoardAction *actions = row_actions(s->catalog, &s->pulls[index], 0, &an);
-        if (k < an) {
+        if (k < an && str_eq(actions[k].id, "run")) board_open_run(s, index);
+        else if (k < an) {
             char *input = NULL;
             s->dialog_open = true;
             bool ok = action_prompt(&actions[k], number, &input);
@@ -432,12 +435,12 @@ Screen *pulls_screen_new(const Project *project) {
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
-    ACT_DELETE_RUN,
+    ACT_DELETE_RUN, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
-enum { TIMER_FILES_PAGE = 2 };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN };
-enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
+enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG };
+enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
 enum { CONV_COMMENTS, CONV_REVIEWS, CONV_REVIEW_COMMENTS, CONV_FEEDS };
@@ -461,6 +464,18 @@ typedef struct {
     ConvFeed conv[CONV_FEEDS];   // the Conversation tab
     char *error, *findings_error, *write_error, *merge_error;
     bool busy, uncertain, merging;
+    bool runs_read;     // the Sessions list was read once
+    // The Run tab: opening it serves the pull request (▶ Run) and shows it in an embedded browser laid over the tab's area
+    // (`web_rc`, in document coordinates). `run_session` is the session serving it, `run_profile` the run profile it
+    // serves, `run_want` the one picked in the tab, `run_asked` the one the request in flight asked for.
+    char *run_url, *run_session, *run_profile, *run_want, *run_asked, *serve_error;
+    bool run_busy, run_pending;   // pending: waits for the Sessions list, in case a Run already serves this pull request
+    char **profiles; size_t profile_count; bool profiles_read;   // the project's run profiles, the default first
+    Request *req_run, *req_profiles;
+    // The log of the Run under way, from its session's transcript: `log_session` is the session followed (found in the
+    // Sessions list while `serve_pull` prepares it).
+    char *log_session; RunLog log; Request *req_log;
+    WebView *web; RECT web_rc; bool shown;
     int tab;
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
     bool body_read;
@@ -494,6 +509,14 @@ static void rebuild_actions(PullScreen *s) {
     board_actions_free(s->actions, s->action_count); s->actions = NULL; s->action_count = 0;
     if (!is_open(s) || !json_str(json_get(s->pr, "headRef"))) return;
     s->actions = row_actions(s->catalog, board_row(s), json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), &s->action_count);
+    // ▶ Run is the Run tab here.
+    for (size_t i = 0; i < s->action_count; i++) {
+        if (!str_eq(s->actions[i].id, "run")) continue;
+        board_action_free(&s->actions[i]);
+        memmove(&s->actions[i], &s->actions[i + 1], (s->action_count - i - 1) * sizeof *s->actions);
+        s->action_count--;
+        break;
+    }
 }
 static void pull_finish_poll(PullScreen *s) {
     if (s->req_pull || s->req_findings) return;
@@ -605,6 +628,7 @@ static void actions_done(void *owner, Request *req) {
     rebuild_actions(s);
     pane_relayout(s->base.pane);
 }
+static void run_resume(PullScreen *s);
 static void sessions_done_pull(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok) return;
@@ -613,6 +637,8 @@ static void sessions_done_pull(void *owner, Request *req) {
     sessions_free(s->runs, s->run_count); s->runs = xcalloc(n, sizeof *s->runs); s->run_count = 0;
     for (size_t i = 0; i < n; i++) if (session_pull_number(&all[i]) == s->number) session_copy(&s->runs[s->run_count++], &all[i]);
     sessions_free(all, n);
+    s->runs_read = true;
+    if (s->run_pending) { s->run_pending = false; run_resume(s); }
     pane_relayout(s->base.pane);
 }
 static void pull_load(PullScreen *s) {
@@ -654,6 +680,11 @@ static void pull_destroy(Screen *base) {
     free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
     pull_files_free(s->files);
+    request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);
+    run_log_clear(&s->log); free(s->log_session);
+    webview_free(s->web);
+    free(s->run_url); free(s->run_session); free(s->run_profile); free(s->run_want); free(s->run_asked); free(s->serve_error);
+    str_array_free(s->profiles, s->profile_count);
     for (int k = 0; k < CONV_FEEDS; k++) { request_cancel(&s->conv[k].req); json_free(s->conv[k].items); json_free(s->conv[k].incoming); free(s->conv[k].error); }
     screen_release(base);
 }
@@ -948,6 +979,7 @@ static void paint_diffstat(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
         x += sq + px(2);
     }
 }
+static const char *run_shown_profile(PullScreen *s);
 static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
     bool loaded = !json_is_null(s->pr);
@@ -976,6 +1008,14 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); doc_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
     if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); doc_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
     if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); doc_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
+    if (store_supports("serve_pull") || s->run_url) {
+        // With run profiles, the tab names the one chosen and, once open, picks another.
+        bool on = s->tab == PR_TAB_RUN;
+        char *title = s->profile_count ? xstrfmt("Run \xC2\xB7 %s \xE2\x96\xBE", run_shown_profile(s)) : xstrdup("Run");
+        doc_tab(doc, &x, &y, c.ix, right, h, 0xE768, title, NULL, on, ACT_PR_TAB, PR_TAB_RUN);
+        free(title);
+        if (on && s->profile_count) { Item *it = doc_item(doc, (int)doc->count - 1); it->action = ACT_RUN_PROFILE; it->hand = true; }
+    }
     if (ds) { doc->y = y; doc_custom(doc, c.ix + c.iw - dsw, dsw, h, paint_diffstat, ds, free, 0, 0); }
     doc->y = y + h;
     doc_rule(doc, c.x, c.w);
@@ -1558,6 +1598,212 @@ static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     side_development(s, doc, c, &count);
 }
 
+/// The profile the tab shows as chosen: the one picked, else the one served, else the project's default.
+static const char *run_shown_profile(PullScreen *s) {
+    if (s->run_want) return s->run_want;
+    if (s->run_profile) return s->run_profile;
+    return s->profile_count ? s->profiles[0] : NULL;
+}
+/// The Run tab: the browser's area, down to the bottom of the pane, under a line saying what a restart is doing, with
+/// what is happening written in it until the page is up. The tab itself is the run profile dropdown.
+static void layout_run(PullScreen *s, Doc *doc, int w) {
+    RECT view = pane_content_rect(s->base.pane);
+    bool page = s->run_url && !s->run_busy && s->web && webview_ready(s->web);
+    if (page && s->serve_error) { doc_text(doc, px(4), w - px(8), s->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
+    int area = doc->y, h = (view.bottom - view.top) - area - px(12);
+    if (h < px(320)) h = px(320);
+    SetRect(&s->web_rc, 0, area, w, area + h);
+    if (page) { doc->y = area + h; return; }
+    const char *error = s->run_busy ? NULL : !s->run_url ? s->serve_error : s->web ? webview_error(s->web) : NULL;
+    char *text = error ? xstrdup(error)
+        : s->run_busy && s->run_url ? (s->run_asked ? xstrfmt("Restarting with profile %s\xE2\x80\xA6", s->run_asked) : xstrdup("Serving it again\xE2\x80\xA6"))
+        : s->run_url ? xstrdup("Starting the browser\xE2\x80\xA6")
+        : s->run_busy && s->run_session ? xstrdup("Serving it\xE2\x80\xA6")
+        : xstrdup("Preparing a workspace for this pull request and serving it with the project\xE2\x80\x99s run commands. This can take a few minutes\xE2\x80\xA6");
+    doc_text(doc, px(4), w - px(8), text, FONT_BODY, error ? theme.danger : theme.muted, DT_WORDBREAK);
+    free(text);
+    if (!s->run_url && s->serve_error && !s->run_busy) {
+        doc_space(doc, px(10));
+        doc_button(doc, px(4), 0, "\xE2\x96\xB6 Try again", BUTTON_BORDERED, ACT_RUN_RETRY, 0, true);
+    } else if (error && s->run_url) {
+        doc_space(doc, px(8));
+        int i = doc_text(doc, px(4), w - px(8), "Open in your browser instead \xE2\x86\x97", FONT_BODY, theme.accent, DT_SINGLELINE);
+        doc_item(doc, i)->action = ACT_WEB_BROWSER; doc_item(doc, i)->hand = true;
+    }
+    // The setup as it happens, its latest lines filling what is left of the area, as a terminal does.
+    if (s->log.count && (s->run_busy || !s->run_url)) {
+        doc_space(doc, px(12));
+        int line = px(17), room = area + h - doc->y - px(24);
+        size_t fit = room > line ? (size_t)(room / line) : 1, first = s->log.count > fit ? s->log.count - fit : 0;
+        int box = doc_box_begin(doc, px(4), w - px(8), px(10), theme.sunken, theme.line, px(6));
+        doc_item(doc, box)->hover_fill = false;
+        for (size_t i = first; i < s->log.count; i++)
+            doc_text(doc, px(16), w - px(32), s->log.lines[i], FONT_MONO_SMALL, s->log.errors[i] ? theme.danger : theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        doc_box_end(doc, box, px(10));
+    }
+    if (doc->y < area + h) doc->y = area + h;
+}
+static void log_follow(PullScreen *s, const char *session) {
+    if (str_eq(s->log_session, session)) return;
+    set_string(&s->log_session, session);
+    run_log_clear(&s->log);
+}
+static void log_events_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    if (!req->ok || !str_eq(json_str(json_get(req->args, "sessionId")), s->log_session)) return;
+    if (run_log_add_events(&s->log, json_get(req->result, "events")) && s->tab == PR_TAB_RUN && s->base.pane) pane_relayout(s->base.pane);
+}
+/// While `serve_pull` prepares the session, its id is not known yet: the newest ▶ Run session on this pull request is it.
+static void log_find_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    if (!req->ok || s->run_session) return;
+    char *id = run_session_preparing(req->result, s->number);
+    if (id) log_follow(s, id);
+    free(id);
+}
+static void run_log_tick(PullScreen *s) {
+    if (!s->run_busy) { if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_RUN_LOG); return; }
+    if (s->req_log) return;
+    if (s->run_session) log_follow(s, s->run_session);
+    if (s->log_session && store_supports("session")) {
+        Json *a = json_object(); json_set_str(a, "sessionId", s->log_session); json_set_num(a, "since", s->log.cursor);
+        store_call("session", a, 0, s, log_events_done, TAG_RUN_LOG, &s->req_log);
+    } else if (!s->run_session && store_supports("sessions")) {
+        Json *a = json_object(); json_set_str(a, "repo", s->project.repo);
+        store_call("sessions", a, 0, s, log_find_done, TAG_RUN_LOG, &s->req_log);
+    }
+}
+static void run_changed(PullScreen *s) { if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); } }
+static void web_changed(void *ctx) {
+    PullScreen *s = ctx;
+    if (s->base.pane && pane_top(s->base.pane) == &s->base) run_changed(s);
+}
+/// Shows the served address in the Run tab, starting the browser again when the address changed.
+static void show_run(PullScreen *s, const char *url) {
+    if (!str_eq(s->run_url, url)) { webview_free(s->web); s->web = NULL; set_string(&s->run_url, url); }
+    run_changed(s);
+}
+static void profiles_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    if (!req->ok) return;
+    s->profiles_read = true;
+    str_array_free(s->profiles, s->profile_count);
+    s->profiles = run_profiles_parse(req->result, s->project.repo, &s->profile_count);
+    run_changed(s);
+}
+static void run_start(PullScreen *s);
+static void run_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    s->run_busy = false;
+    bool switched = json_str(json_get(req->args, "sessionId")) != NULL;
+    char *asked = s->run_asked; s->run_asked = NULL;
+    if (!req->ok) {
+        request_error_into(&s->serve_error, req);
+        if (switched && (req->error.status == 404 || (req->error.message && strstr(req->error.message, "no live workspace")))) {
+            // The session closed or expired, and its page with it: the next try prepares a new one.
+            set_string(&s->run_session, NULL); set_string(&s->run_url, NULL);
+            webview_free(s->web); s->web = NULL;
+        } else if (switched) {
+            // A refused switch leaves the app serving what it served.
+            set_string(&s->run_want, s->run_profile);
+        }
+    } else {
+        const char *id = json_str(json_get(json_get(req->result, "session"), "id"));
+        if (id) set_string(&s->run_session, id);
+        set_string(&s->run_profile, json_str(json_get(req->result, "profile")));
+        const char *url = json_str(json_get(req->result, "url"));
+        if (safe_web_url(url)) {
+            bool same = str_eq(url, s->run_url);
+            show_run(s, url);
+            // The same address after a restart is a new app behind it.
+            if (same && s->web) webview_reload(s->web);
+        } else set_string(&s->serve_error, "The server did not say where it serves the pull request.");
+        // A profile picked while this request was out, or a new session served with the default.
+        if (s->run_want && s->run_session && !str_eq(s->run_want, asked) && !str_eq(s->run_want, s->run_profile)) { free(asked); run_start(s); return; }
+        if (store_supports("sessions")) { request_cancel(&s->req_sessions); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
+    }
+    free(asked);
+    run_changed(s);
+}
+/// Serves the pull request: the run's session again, with the picked profile, when there is one; else a new session,
+/// which the server serves with the project's default profile (switched afterwards when another was picked).
+static void run_start(PullScreen *s) {
+    if (s->run_busy) return;
+    s->run_busy = true; set_string(&s->serve_error, NULL);
+    Json *args = json_object();
+    const char *op = "serve_pull";
+    if (s->run_session && store_supports("serve")) {
+        op = "serve";
+        json_set_str(args, "sessionId", s->run_session);
+        if (s->run_want) json_set_str(args, "profile", s->run_want);
+        set_string(&s->run_asked, s->run_want);
+    } else { json_set_str(args, "repo", s->project.repo); json_set_num(args, "prNumber", s->number); }
+    store_call(op, args, 170000, s, run_done, TAG_RUN, &s->req_run);
+    if (s->run_asked) { char *t = xstrfmt("\xE2\x96\xB6 Switching to profile %s", s->run_asked); run_log_add(&s->log, t, false); free(t); }
+    if (s->base.pane) SetTimer(pane_hwnd(s->base.pane), TIMER_RUN_LOG, 1500, NULL);
+    run_changed(s);
+}
+/// A Run already serving this pull request (one of its sessions with serve links) is shown as it is.
+static bool run_adopt(PullScreen *s) {
+    Json *rows = json_array();
+    for (size_t i = 0; i < s->run_count; i++) json_array_push(rows, json_clone(s->runs[i].raw));
+    char *id = NULL, *url = NULL;
+    bool found = run_session_serving(rows, s->number, &id, &url);
+    json_free(rows);
+    if (!found) return false;
+    set_string(&s->run_session, id);
+    show_run(s, url);
+    free(id); free(url);
+    return true;
+}
+static void run_resume(PullScreen *s) { if (!s->run_url && !s->run_busy && !s->serve_error && !run_adopt(s)) run_start(s); }
+/// The Run tab was opened: reads the project's run profiles once, and serves the pull request unless it is served.
+static void profiles_load(PullScreen *s) {
+    if (!s->profiles_read && !s->req_profiles && store_supports("projects") && store_supports("serve_pull")) store_call("projects", json_object(), 0, s, profiles_done, TAG_PROFILES, &s->req_profiles);
+}
+static void run_open(PullScreen *s) {
+    s->tab = PR_TAB_RUN;
+    profiles_load(s);
+    // Until the Sessions list is read, a Run serving this pull request may be in it.
+    if (store_supports("sessions") && !s->runs_read) s->run_pending = true;
+    else run_resume(s);
+    run_changed(s);
+}
+static void run_pick_profile(PullScreen *s, POINT pt) {
+    if (!s->profile_count) return;
+    HMENU menu = CreatePopupMenu();
+    const char *shown = run_shown_profile(s);
+    for (size_t i = 0; i < s->profile_count; i++) {
+        char *label = i ? xstrdup(s->profiles[i]) : xstrfmt("%s (default)", s->profiles[i]);
+        wchar_t *wl = utf8_to_wide(label);
+        AppendMenuW(menu, MF_STRING | (str_eq(shown, s->profiles[i]) ? MF_CHECKED : 0), (UINT_PTR)(1 + i), wl);
+        free(wl); free(label);
+    }
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(menu);
+    if (chosen < 1 || (size_t)chosen > s->profile_count || str_eq(s->profiles[chosen - 1], shown)) return;
+    set_string(&s->run_want, s->profiles[chosen - 1]);
+    // While a request is out, its answer switches to the new pick.
+    if (!s->run_busy) run_start(s);
+    run_changed(s);
+}
+static void pull_place(Screen *base, const RECT *content, int scroll_y) {
+    PullScreen *s = (PullScreen *)base;
+    bool on = s->shown && s->tab == PR_TAB_RUN && s->run_url && !s->run_busy;
+    // The browser is a child of the pane, so it starts once the tab is first shown in one.
+    if (on && !s->web) s->web = webview_new(pane_hwnd(base->pane), s->run_url, web_changed, s);
+    if (!s->web) return;
+    if (on) {
+        RECT rc; GetClientRect(pane_hwnd(base->pane), &rc);
+        int m = (rc.right - rc.left - pane_content_width(base->pane)) / 2;
+        RECT r = { content->left + m + s->web_rc.left, content->top + s->web_rc.top - scroll_y, content->left + m + s->web_rc.right, content->top + s->web_rc.bottom - scroll_y };
+        RECT visible;
+        if (!IntersectRect(&visible, &r, content)) on = false;
+        else webview_set_bounds(s->web, &visible);
+    }
+    webview_show(s->web, on);
+}
+
 static void pull_layout(Screen *base, Doc *doc) {
     PullScreen *s = (PullScreen *)base;
     int w = doc->width;
@@ -1573,7 +1819,10 @@ static void pull_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(12));
     layout_tabs(s, doc, head);
     doc_space(doc, px(18));
-    if (s->tab == PR_TAB_FILES && !json_is_null(s->pr)) {
+    if (s->tab == PR_TAB_RUN) {
+        layout_run(s, doc, w);
+        return;
+    } else if (s->tab == PR_TAB_FILES && !json_is_null(s->pr)) {
         // The files take the whole width: GitHub's Files changed tab has no sidebar.
         layout_main(s, doc, col_make(0, w));
     } else if (w >= px(880)) {
@@ -1601,6 +1850,13 @@ static void pull_header(Screen *base, HeaderInfo *info) {
     PullScreen *s = (PullScreen *)base;
     snprintf(info->title, sizeof info->title, "Pull request");
     snprintf(info->subtitle, sizeof info->subtitle, "%s #%d", s->project.repo, s->number);
+    if (s->tab != PR_TAB_RUN || !s->run_url) return;
+    const char *url = s->web && webview_url(s->web) ? webview_url(s->web) : s->run_url;
+    snprintf(info->subtitle, sizeof info->subtitle, "%s #%d \xC2\xB7 %s", s->project.repo, s->number, url);
+    HeaderButton *r = &info->buttons[info->button_count++];
+    r->glyph = 0xE72C; r->action = ACT_WEB_RELOAD; r->enabled = s->web && webview_ready(s->web); r->tip = "Reload the page";
+    HeaderButton *o = &info->buttons[info->button_count++];
+    o->glyph = 0xE8A7; o->action = ACT_WEB_BROWSER; o->enabled = true; o->tip = "Open in your browser";
 }
 
 static void start_done(void *owner, Request *req) {
@@ -1679,11 +1935,16 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB:
+        if (arg == PR_TAB_RUN) { run_open(s); break; }
         s->tab = (int)arg;
         if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
         if (s->tab == PR_TAB_CONVERSATION) conv_load(s);
-        pane_relayout(base->pane);
+        pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
+    case ACT_WEB_RELOAD: if (s->web) webview_reload(s->web); break;
+    case ACT_RUN_PROFILE: run_pick_profile(s, pt); break;
+    case ACT_RUN_RETRY: run_start(s); break;
+    case ACT_WEB_BROWSER: open_web_url(s->web && webview_url(s->web) ? webview_url(s->web) : s->run_url); break;
     case ACT_CONV_URL: {
         const Json *feed = s->conv[arg >> 24].items;
         open_web_url(json_str(json_get(json_at(feed, (size_t)(arg & 0xFFFFFF)), "url")));
@@ -1770,18 +2031,27 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
 static void pull_timer(Screen *base, UINT id) {
     PullScreen *s = (PullScreen *)base;
     if (pull_files_timer(s->files, id)) return;
+    if (id == TIMER_RUN_LOG) { run_log_tick(s); return; }
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->merging && !s->deciding && !s->dialog_open;
         if (enabled) pull_load(s); else poller_finished(&s->poller, false, -1);
     }
 }
+static void profiles_load(PullScreen *s);
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
+    s->shown = shown;
+    if (s->web && !shown) webview_show(s->web, false);
+    if (shown) profiles_load(s);
+    if (shown && s->run_busy) SetTimer(pane_hwnd(base->pane), TIMER_RUN_LOG, 1500, NULL);
+    if (!shown) KillTimer(pane_hwnd(base->pane), TIMER_RUN_LOG);
     if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) conv_load(s); }
     else { poller_stop(&s->poller); pull_files_cancel(s->files); conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
+    // F5 on the Run tab reloads the page, as in a browser.
+    if (s->tab == PR_TAB_RUN && s->web) { webview_reload(s->web); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     request_cancel(&s->req_body); s->body_read = false;
@@ -1792,7 +2062,7 @@ static void pull_refresh(Screen *base) {
 static void pull_activated(Screen *base, bool active) { if (active) { PullScreen *s = (PullScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 30000); } }
 static const ScreenVTable pull_vt = {
     .destroy = pull_destroy, .layout = pull_layout, .header = pull_header, .action = pull_action, .timer = pull_timer,
-    .visible = pull_visible, .refresh = pull_refresh, .activated = pull_activated,
+    .visible = pull_visible, .refresh = pull_refresh, .activated = pull_activated, .place = pull_place,
 };
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary) {
     PullScreen *s = xcalloc(1, sizeof *s);
@@ -1803,6 +2073,15 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
     s->pr = json_null(); s->catalog = json_array(); s->findings = json_array();
     s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_FILES_PAGE);
     return &s->base;
+}
+
+static void board_open_run(PullsScreen *s, size_t index) {
+    const PullSummary *pull = &s->pulls[index];
+    StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
+    Screen *screen = pull_detail_screen_new(&s->project, pull->number, has_stack ? &stack : NULL, pull);
+    if (has_stack) stack_position_free(&stack);
+    run_open((PullScreen *)screen);
+    app_push_detail(screen);
 }
 
 // MARK: - Issue
