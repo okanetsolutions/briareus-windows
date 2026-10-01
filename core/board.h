@@ -114,6 +114,7 @@ typedef struct { char *label, *placeholder; bool required; } ActionInput;
 typedef struct { char *id, *label, *hint; bool has_input; ActionInput input; } BoardAction;
 void board_action_free(BoardAction *action);
 void board_action_copy(BoardAction *into, const BoardAction *from);
+/// The call that starts it: `serve_pull` for Run, `review` for Code review, and `action` (with the errand's id) for the rest.
 char *board_action_operation(const BoardAction *action);
 /// Run answers only once the workspace is prepared and serving, which takes longer than a request is given. 0 = default.
 int board_action_timeout_ms(const BoardAction *action);
@@ -121,7 +122,8 @@ int board_action_timeout_ms(const BoardAction *action);
 Json *board_action_arguments(const BoardAction *action, const char *repo, int number, const char *branch, const char *input);
 /// The board's errands, in the order the dashboard shows them.
 const BoardAction *board_actions_known(size_t *count);
-/// The errands worth offering on one pull request. `catalog` is what the server's `actions` lists; NULL for none.
+/// The errands worth offering on one pull request. `catalog` is what the server's `actions` lists; NULL or empty before it
+/// is known, when every errand this app knows is offered.
 BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count);
 void board_actions_free(BoardAction *actions, size_t count);
 

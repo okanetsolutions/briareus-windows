@@ -125,7 +125,7 @@ static void attachments_arrived(void *ctx, AttachFile *files, size_t count, char
     str_free(&refused);
     pane_footer_changed(s->base.pane);
 }
-static const char *attachments_unsupported(void) { return "This server does not take files with a message. Update Briareus to a version whose mobile API accepts uploads."; }
+static const char *attachments_unsupported(void) { return "This server does not take files with a message. Update Briareus to a version whose client API accepts uploads."; }
 /// A paste that holds files or an image: true when it was taken as attachments and the text, if any, is not to be pasted.
 static bool composer_take_clipboard(ConversationScreen *s) {
     if (!attach_clipboard_has_files()) return false;

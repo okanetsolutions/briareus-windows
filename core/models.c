@@ -45,14 +45,20 @@ void device_free(Device *d) {
 void device_copy(Device *into, const Device *from) {
     Json *j = device_json(from); device_parse(j, into); json_free(j);
 }
-bool device_can_manage(const Device *d) { return d && str_eq(d->permission, "manage"); }
+int permission_rank(const char *permission) {
+    if (str_eq(permission, "read")) return 0;
+    if (str_eq(permission, "manage")) return 1;
+    if (str_eq(permission, "admin")) return 2;
+    return -1;
+}
+bool device_can_manage(const Device *d) { return d && permission_rank(d->permission) >= 1; }
 time_t device_expiry(const Device *d) { return (time_t)(d->expires_at / 1000); }
 
 bool discovery_parse(const Json *value, Discovery *out) {
     memset(out, 0, sizeof *out);
     out->version = json_int_or(json_get(value, "version"), -1);
     if (out->version < 0) return false;
-    if (!device_parse(json_get(value, "device"), &out->device)) return false;
+    if (!device_parse(json_get(value, "client"), &out->device)) return false;
     out->transcribe = json_bool_tristate(json_get(value, "transcribe"));
     return true;
 }
@@ -60,64 +66,109 @@ void discovery_free(Discovery *d) { if (d) device_free(&d->device); }
 const char *discovery_voice_notes_off(int transcribe) {
     if (transcribe == 1) return NULL;
     if (transcribe == 0) return "Voice notes are off: the server needs OPENAI_TRANSCRIBE_API_KEY and OPENAI_TRANSCRIBE_MODEL, and a restart once they are set.";
-    return "This server cannot transcribe voice notes yet. Update Briareus on the server to a version with the mobile transcribe endpoint.";
+    return "This server cannot transcribe voice notes yet. Update Briareus on the server to a version whose client API transcribes.";
 }
 
-bool operations_parse(const Json *value, Operation **out, size_t *count) {
-    const Json *list = json_is_array(value) ? value : json_get(value, "operations");
-    if (!json_is_array(list)) return false;
-    size_t n = json_count(list), m = 0;
-    Operation *ops = xcalloc(n ? n : 1, sizeof *ops);
-    for (size_t i = 0; i < n; i++) {
-        const Json *entry = json_at(list, i);
-        const char *name = json_str(json_get(entry, "name"));
-        if (!name || json_bool_tristate(json_get(entry, "readOnly")) < 0) { operations_free(ops, m); return false; }
-        ops[m].name = xstrdup(name); ops[m].read_only = json_bool_is(json_get(entry, "readOnly"), true);
-        // The catalog carries each operation's JSON schema; a saved copy carries only the flag read from it.
-        const Json *props = json_get(json_get(entry, "inputSchema"), "properties");
-        ops[m].attachments = json_is_object(json_get(props, "attachments")) || json_bool_is(json_get(entry, "attachments"), true);
-        m++;
+static const char *const METHODS[] = { "GET", "POST", "PUT", "PATCH", "DELETE" };
+static void routes_push(Route **routes, size_t *count, const char *method, const char *path, const char *access) {
+    *routes = xrealloc(*routes, (*count + 1) * sizeof **routes);
+    Route *r = &(*routes)[(*count)++];
+    r->method = xstrdup(method); r->path = xstrdup(path); r->access = xstrdup(access);
+}
+bool routes_parse(const Json *value, Route **out, size_t *count) {
+    Route *routes = xcalloc(1, sizeof *routes); size_t n = 0;
+    if (json_is_array(value)) {
+        // A saved list.
+        for (size_t i = 0; i < json_count(value); i++) {
+            const Json *entry = json_at(value, i);
+            const char *method = json_str(json_get(entry, "method")), *path = json_str(json_get(entry, "path")), *access = json_str(json_get(entry, "access"));
+            if (!method || !path || !access) { routes_free(routes, n); return false; }
+            routes_push(&routes, &n, method, path, access);
+        }
+    } else {
+        // The OpenAPI document: paths, each with its operations by lower-case method.
+        const Json *paths = json_get(value, "paths");
+        if (!json_is_object(paths)) { free(routes); return false; }
+        for (size_t i = 0; i < json_count(paths); i++) {
+            const char *path = json_key(paths, i);
+            const Json *ops = json_get(paths, path);
+            for (size_t m = 0; m < sizeof METHODS / sizeof *METHODS; m++) {
+                char *lower = str_fold(METHODS[m]);
+                const Json *op = json_get(ops, lower);
+                free(lower);
+                if (!json_is_object(op)) continue;
+                const char *access = json_str(json_get(op, "x-briareus-access"));
+                // A route that says nothing about who may call it is the operator's.
+                routes_push(&routes, &n, METHODS[m], path, access ? access : "admin");
+            }
+        }
     }
-    *out = ops; *count = m;
+    *out = routes; *count = n;
     return true;
 }
-Json *operations_json(const Operation *ops, size_t count) {
+Json *routes_json(const Route *routes, size_t count) {
     Json *a = json_array();
     for (size_t i = 0; i < count; i++) {
-        Json *o = json_object(); json_set_str(o, "name", ops[i].name); json_set_bool(o, "readOnly", ops[i].read_only);
-        if (ops[i].attachments) json_set_bool(o, "attachments", true);
+        Json *o = json_object();
+        json_set_str(o, "method", routes[i].method); json_set_str(o, "path", routes[i].path); json_set_str(o, "access", routes[i].access);
         json_array_push(a, o);
     }
     return a;
 }
-void operations_free(Operation *ops, size_t count) {
-    if (!ops) return;
-    for (size_t i = 0; i < count; i++) free(ops[i].name);
-    free(ops);
+void routes_free(Route *routes, size_t count) {
+    if (!routes) return;
+    for (size_t i = 0; i < count; i++) { free(routes[i].method); free(routes[i].path); free(routes[i].access); }
+    free(routes);
 }
-Operation *operations_copy(const Operation *ops, size_t count) {
-    Operation *c = xcalloc(count ? count : 1, sizeof *c);
-    for (size_t i = 0; i < count; i++) { c[i].name = xstrdup(ops[i].name); c[i].read_only = ops[i].read_only; c[i].attachments = ops[i].attachments; }
+Route *routes_copy(const Route *routes, size_t count) {
+    Route *c = xcalloc(count ? count : 1, sizeof *c);
+    for (size_t i = 0; i < count; i++) { c[i].method = xstrdup(routes[i].method); c[i].path = xstrdup(routes[i].path); c[i].access = xstrdup(routes[i].access); }
     return c;
+}
+/// Segment by segment, a parameter standing for any one segment. Leading and trailing slashes do not count.
+static bool paths_match(const char *a, const char *b) {
+    while (*a == '/') a++;
+    while (*b == '/') b++;
+    for (;;) {
+        const char *ea = strchr(a, '/'), *eb = strchr(b, '/');
+        size_t la = ea ? (size_t)(ea - a) : strlen(a), lb = eb ? (size_t)(eb - b) : strlen(b);
+        bool param = (la && a[0] == '{') || (lb && b[0] == '{');
+        if (!param && (la != lb || strncmp(a, b, la) != 0)) return false;
+        if (param && (!la || !lb)) return false;
+        a += la; b += lb;
+        while (*a == '/') a++;
+        while (*b == '/') b++;
+        if (!*a || !*b) return !*a && !*b;
+    }
+}
+bool routes_allow(const Route *routes, size_t count, const char *method, const char *path, const char *permission) {
+    int rank = permission_rank(permission);
+    if (rank < 0) return false;
+    for (size_t i = 0; i < count; i++) {
+        if (!str_ieq(routes[i].method, method) || !paths_match(routes[i].path, path)) continue;
+        int needed = permission_rank(routes[i].access);
+        return needed >= 0 && rank >= needed;
+    }
+    return false;
 }
 
 bool connection_parse(const Json *value, Connection *out) {
     memset(out, 0, sizeof *out);
     if (!device_parse(json_get(value, "device"), &out->device)) return false;
-    if (!operations_parse(json_get(value, "operations"), &out->operations, &out->operation_count)) { device_free(&out->device); return false; }
+    if (!json_is_array(json_get(value, "routes")) || !routes_parse(json_get(value, "routes"), &out->routes, &out->route_count)) { device_free(&out->device); return false; }
     out->transcribe = json_bool_tristate(json_get(value, "transcribe"));
     return true;
 }
 Json *connection_json(const Connection *c) {
     Json *o = json_object();
     json_object_set(o, "device", device_json(&c->device));
-    json_object_set(o, "operations", operations_json(c->operations, c->operation_count));
+    json_object_set(o, "routes", routes_json(c->routes, c->route_count));
     if (c->transcribe >= 0) json_set_bool(o, "transcribe", c->transcribe == 1);
     return o;
 }
 void connection_free(Connection *c) {
     if (!c) return;
-    device_free(&c->device); operations_free(c->operations, c->operation_count);
+    device_free(&c->device); routes_free(c->routes, c->route_count);
     memset(c, 0, sizeof *c);
 }
 
@@ -374,7 +425,7 @@ static Json *runtime_choice_json(const RuntimeChoice *c) {
     return o;
 }
 Json *runtime_choice_arguments(const RuntimeChoice *c) {
-    Json *o = json_object(); json_set_num(o, "providerId", c->provider_id);
+    Json *o = json_object(); json_set_num(o, "provider", c->provider_id);
     if (!str_empty(c->model)) json_set_str(o, "model", c->model);
     if (!str_empty(c->effort)) json_set_str(o, "effort", c->effort);
     return o;

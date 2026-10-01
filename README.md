@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/okanetsolutions/briareus-windows/actions/workflows/ci.yml/badge.svg)](https://github.com/okanetsolutions/briareus-windows/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/okanetsolutions/briareus-windows)](https://github.com/okanetsolutions/briareus-windows/releases/latest) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), the dashboard for running coding agents against your projects, written in C11 with no third-party dependencies. It talks to the server's versioned mobile API (`/api/mobile/v1`) and works with any Briareus server you can reach over HTTPS. Requires Windows 10 version 1809 or later.
+A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), the dashboard for running coding agents against your projects, written in C11 with no third-party dependencies. It talks to the server's client API (`/api/v1`) with a per-device token and works with any Briareus server you can reach over HTTPS. Requires Windows 10 version 1809 or later.
 
 ## What it does
 
@@ -14,7 +14,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Selects text as a browser does: drag across messages, double-click a word, Ctrl+A for everything; Ctrl+C or the right-click menu copies it. The menu also copies the paragraph under the pointer.
 - Starts conversations on a chosen branch, provider, model and effort, or on the project default.
 - Sends follow-ups (Enter sends, Shift+Enter breaks a line), renames, stops, closes, reopens and deletes sessions.
-- Attaches files to a message as the dashboard's composer does: an image pasted into the message box goes as a PNG, and files copied in Explorer paste or drop into it. Each is stored on the server as it is attached, shows above the text with its size until sent, and the agent gets its path. On a server whose mobile API does not take uploads yet, the paste says so.
+- Attaches files to a message as the dashboard's composer does: an image pasted into the message box goes as a PNG, and files copied in Explorer paste or drop into it. Each is stored on the server as it is attached, shows above the text with its size until sent, and the agent gets its path. On a server whose API does not take uploads, the paste says so.
 - Turns the review loop on or off and completes the triage of held findings from inside a conversation.
 - Keeps a Findings screen, as the dashboard does: every review round waiting for a decision across the projects, grouped by pull request, with a count beside the projects. A round on your own pull request takes a verdict (fix, optional, dismiss) and a comment on each finding, saves them to the pull request, and completes into the fix session; a review of somebody else's takes replies on its findings' threads, deletes a finding from the review, and is taken off the queue. What a completion led to stays on the screen until dismissed.
 - Records voice notes with the microphone (AAC through Media Foundation, WAV as a fallback) and has the server transcribe them into the message box. On a server that cannot transcribe, the microphone says what the server is missing.
@@ -31,7 +31,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 **Connection**
 
 - Pairs with a per-device token stored in Windows Credential Manager (this device only), and revokes it remotely or forgets the local connection.
-- Hides write controls on a Read-only token. A capability catalog read from the server keeps operations it does not offer unavailable, so the app adapts to older and newer servers.
+- Hides write controls on a Read-only token. The server's own route catalog (`GET /api/v1/openapi.json`) is read at pairing and on every launch, and a control whose route the server lacks, or that the token's permission may not call, is kept unavailable, so the app adapts to older and newer servers.
 - Saves projects, conversations, transcripts and pull requests on the computer. A screen opens on what it last showed and then asks the server only for what changed; a saved transcript resumes from its last event, and F5 reads it again in full.
 - Pauses polling while the window is minimized or in the background, with exponential backoff and `Retry-After` after failures.
 - Opens filling the screen in the dashboard's own look: its dark palette, Segoe UI at its pixel sizes, Cascadia Code for code, its 268px sidebar with the ＋ New session strip, and its Welcome back composer with the project, branch, provider, model, effort and loop chips. Scales with the monitor's DPI.
@@ -52,22 +52,24 @@ There is nothing to install besides the compiler. The executable is statically l
 mingw32-make test
 ```
 
-The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`: origin validation, credential headers, operation bodies, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, errands, issue nesting, merge warnings and the saved-response cache. HTTP is stubbed through the client's pluggable transport.
+The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`: origin validation, credential headers, the route and arguments of every call, the route catalog and its permissions, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, errands, issue nesting, merge warnings and the saved-response cache. HTTP is stubbed through the client's pluggable transport.
 
 ## Project layout
 
 | Path | Contents |
 | --- | --- |
-| `core/` | The portable core: JSON, models, API client over WinHTTP, saved-response cache, board, diff and Markdown parsing, Credential Manager and registry access. No UI. |
+| `core/` | The portable core: JSON, models, the `/api/v1` client over WinHTTP (one table of the calls the app makes and their routes), saved-response cache, board, diff and Markdown parsing, Credential Manager and registry access. No UI. |
 | `app/` | The Win32 app: theme and drawing helpers, the item-based layout toolkit (`doc.c`), the screen stack container (`pane.c`), the connection store with UI-thread requests (`store.c`), the screens, the dialogs, voice notes and attachments (`attach.c`: the clipboard's image as PNG through Windows Imaging Component, dropped or pasted files read from disk). |
 | `tests/` | Core tests. |
 | `res/` | Icon, manifest, dialogs and version resources. |
 
 ## Pairing
 
-1. Sign in to the web dashboard and open **Settings → Mobile devices**.
-2. Create a token: give the device a name, choose the projects it may see, **Read only** or **Manage**, and an expiry.
-3. In the app, enter the public HTTPS server address (or its `/api/mobile/v1` URL) and the one-time token.
+1. Sign in to the web dashboard and open **Settings → Devices and clients**.
+2. Create a token: give the device a name, choose the projects it may see, **Read only** or **Manage**, and an expiry. An **Admin** token works too and is shown as such; it is the operator's own and is held to no project list.
+3. In the app, enter the public HTTPS server address (or its `/api/v1` URL) and the one-time token.
+
+Behind Cloudflare Access, the server's `/api/v1` and `/api/v1/*` paths need the Bypass application described in the server's [client API guide](https://github.com/nadinyamaui/briareus/blob/main/docs/api-v1.md#deploying-behind-cloudflare-access); the app refuses the login page it is otherwise redirected to.
 
 A revoked or expired token returns the app to pairing. Forgetting the connection removes local credentials and saved conversations only. It does not revoke the server token or stop running agents.
 

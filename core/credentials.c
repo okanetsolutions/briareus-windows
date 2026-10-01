@@ -39,7 +39,7 @@ bool credentials_save(const char *token, const char *origin) {
     // This device only: the token never roams with the account.
     cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
     cred.UserName = (LPWSTR)L"device";
-    cred.Comment = (LPWSTR)L"Briareus mobile API device token";
+    cred.Comment = (LPWSTR)L"Briareus client API token";
     BOOL ok = CredWriteW(&cred, 0);
     free(target);
     return ok != 0;
