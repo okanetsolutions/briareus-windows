@@ -461,6 +461,7 @@ static void layout_connection(FormScreen *s, Doc *doc, int x, int w) {
             field(s, doc, x, w, F_LOGIN_CODE, NULL);
             doc_button(doc, x, 0, "Finish", BUTTON_PROMINENT, ACT_FINISH, 0, !s->req_login && store_supports("provider_login_finish"));
             doc_space(doc, px(12));
+            return;   // the hint above the code says it already
         }
         note(doc, x, w, str_eq(s->binary, "claude")
             ? "The login happens in the browser: approve on claude.ai, then paste the code it shows back here."
@@ -649,7 +650,7 @@ static void status_done(void *owner, Request *req) {
         json_free(s->status); s->status = json_clone(json_get(req->result, "status"));
         set_string(&s->status_error, NULL);
         // A login that landed shows in the sidebar's own login tag.
-        if (json_bool_is(json_get(json_get(s->status, "auth"), "loggedIn"), true) && s->device_code) { set_string(&s->device_code, NULL); settings_providers_changed(); }
+        if (json_bool_is(json_get(json_get(s->status, "auth"), "loggedIn"), true) && s->device_code) { set_string(&s->device_code, NULL); settings_providers_changed(false); }
     }
     pane_relayout(s->base.pane);
 }
@@ -711,7 +712,7 @@ static void finish_done(void *owner, Request *req) {
     const char *dir = json_str(json_get(row, "loginDir"));
     if (dir) json_set_str(s->row, "loginDir", dir);
     load_status(s, false);
-    settings_providers_changed();
+    settings_providers_changed(false);
     const char *label = json_str_nonempty(json_get(row, "label"));
     char *message = xstrfmt("%s is logged in.", label ? label : "The provider");
     app_alert("Logged in", message);
@@ -789,7 +790,7 @@ static void save_done(void *owner, Request *req) {
     form_set_id(s, row_id(row));
     form_fill(s);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
-    settings_providers_changed();
+    settings_providers_changed(false);
     // A new provider's connection can be read now that it exists.
     if (was_new || !s->status) load_status(s, false);
 }
@@ -811,7 +812,7 @@ static void delete_done(void *owner, Request *req) {
     }
     s->dirty = false;
     app_clear_detail();
-    settings_providers_changed();
+    settings_providers_changed(true);
 }
 static void form_delete(FormScreen *s) {
     if (!s->id || s->req_save || s->req_delete) return;

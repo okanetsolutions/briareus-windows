@@ -66,8 +66,9 @@ void settings_projects_changed(int select_id);
 /// One provider's settings, the dashboard's provider form, as tabs. `row` is the server's Provider (NULL with `defaults`
 /// for a new one); `defaults` is what a new one starts from.
 Screen *provider_settings_screen_new(const Json *row, const Json *defaults);
-/// The settings sidebar reads the providers again, after one was saved, cloned, deleted or logged in.
-void settings_providers_changed(void);
+/// The settings sidebar reads the providers again, after one was saved, cloned, deleted or logged in; `open_first` opens
+/// the first one left once read (after a delete).
+void settings_providers_changed(bool open_first);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.

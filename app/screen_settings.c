@@ -44,7 +44,7 @@ typedef struct {
     char *error;
     Request *req, *req_order;
     Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
-    bool providers_loaded;
+    bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
     char *providers_error;
     Request *req_providers;
     RECT signout_rc;
@@ -157,13 +157,21 @@ static void providers_done(void *owner, Request *req) {
     json_object_set(s->providers, "list", json_clone(json_get(req->result, "providers")));
     json_object_set(s->providers, "defaults", json_clone(json_get(req->result, "defaults")));
     pane_relayout(s->base.pane);
+    // After a delete the first provider left opens in its place, as a project's delete opens the first project left.
+    if (!s->open_first_provider) return;
+    s->open_first_provider = false;
+    Screen *root = pane_root(app_detail_pane());
+    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (json_count(provider_rows(s))) settings_open_provider(s, 0);
+    else app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults")));
 }
 static void providers_load(SettingsScreen *s) {
     if (s->req_providers || !store_supports("settings_providers")) { s->providers_loaded = true; return; }
     store_call("settings_providers", json_object(), 0, s, providers_done, 0, &s->req_providers);
 }
-void settings_providers_changed(void) {
+void settings_providers_changed(bool open_first) {
     if (!g_settings) return;
+    g_settings->open_first_provider = open_first;
     request_cancel(&g_settings->req_providers);
     providers_load(g_settings);
 }
