@@ -404,10 +404,11 @@ Screen *pulls_screen_new(const Project *project) {
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
+    ACT_DELETE_RUN,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2 };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_DELETE_RUN };
 enum { PR_TAB_BODY, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS };
 
 typedef struct {
@@ -419,6 +420,7 @@ typedef struct {
     bool has_row; PullSummary row; bool row_read;
     Json *catalog;      // the server's `actions`
     Session *runs; size_t run_count;
+    char *deleting_run, *run_error;   // the conversation being deleted from the Sessions tab, and why the last one failed
     Json *findings;
     PullFiles *files;   // the Files changed tab
     char *error, *findings_error, *write_error, *merge_error;
@@ -429,7 +431,7 @@ typedef struct {
     char *deciding;
     int *open_findings; size_t open_finding_count;
     BoardAction *actions; size_t action_count;
-    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_prepare, *req_body;
+    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_prepare, *req_body, *req_delete_run;
     Poller poller;
     bool dialog_open;
     int prepared_head_differs;
@@ -573,6 +575,7 @@ static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
     request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare); request_cancel(&s->req_body);
+    request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -1128,9 +1131,61 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
+/// The trash button at the right of a session row: muted, red with a tint under the pointer, an ellipsis while deleting.
+static void paint_delete_run(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    bool deleting = it->data != NULL;
+    bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    if (hovered) fill_round_rect(hdc, rc, px(6), blend(theme.danger, theme.elevated, 0.14), blend(theme.danger, theme.elevated, 0.14));
+    RECT r = *rc;
+    if (deleting) draw_text(hdc, "\xE2\x80\xA6", &r, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    else draw_glyph(hdc, 0xE74D, rc, FONT_ICON_SMALL, hovered ? theme.danger : (it->action ? theme.muted : theme.line_strong));
+}
+
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
+    if (s->run_error) { doc_notice(doc, c.x, c.w, s->run_error); doc_space(doc, px(8)); }
     if (!s->run_count) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
-    for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
+    bool deletable = store_supports("delete");
+    int bw = px(28);
+    for (size_t i = 0; i < s->run_count; i++) {
+        int box = doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated, deletable ? bw + px(8) : 0);
+        if (deletable) {
+            // Laid after the row, so it is the topmost item there and takes the click instead of the row.
+            RECT row = doc_item(doc, box)->rc;
+            int mid = (row.top + row.bottom) / 2;
+            RECT br = { row.right - px(10) - bw, mid - bw / 2, row.right - px(10), mid + bw / 2 };
+            int di = doc_add(doc, &br, paint_delete_run);
+            Item *it = doc_item(doc, di);
+            bool mine = s->deleting_run && str_eq(s->deleting_run, session_id(&s->runs[i]));
+            it->data = mine ? (void *)1 : NULL;   // a marker only, never freed
+            if (!s->deleting_run) { it->action = ACT_DELETE_RUN; it->arg = (intptr_t)i; it->hand = true; }
+        }
+        doc_space(doc, px(6));
+    }
+}
+
+static void delete_run_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    const char *id = json_str(json_get(req->args, "sessionId"));
+    if (req->ok) {
+        set_string(&s->run_error, NULL);
+        // The sidebar drops the row now instead of at its next poll, and so does this list.
+        sessions_forget(s->project.repo, id);
+        for (size_t i = 0; i < s->run_count; i++) {
+            if (!str_eq(session_id(&s->runs[i]), id)) continue;
+            session_free(&s->runs[i]);
+            memmove(&s->runs[i], &s->runs[i + 1], (s->run_count - i - 1) * sizeof *s->runs);
+            s->run_count--;
+            break;
+        }
+    } else { char *t = request_error_text(req); set_string(&s->run_error, t); free(t); }
+    set_string(&s->deleting_run, NULL);
+    // A list read while the delete was in flight may still hold the row: read it again.
+    if (store_supports("sessions")) {
+        request_cancel(&s->req_sessions);
+        Json *a = json_object(); json_set_str(a, "repo", s->project.repo);
+        store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions);
+    }
+    pane_relayout(s->base.pane);
 }
 
 /// The main column: what the selected tab holds.
@@ -1500,6 +1555,24 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
+    case ACT_DELETE_RUN: {
+        if ((size_t)arg >= s->run_count || s->deleting_run || !store_supports("delete")) break;
+        char *id = xstrdup(session_id(&s->runs[arg]));
+        char *message = xstrfmt("\xE2\x80\x9C%s\xE2\x80\x9D", session_display_title(&s->runs[arg]));
+        s->dialog_open = true;
+        bool ok = app_confirm("Permanently delete this conversation and its transcript?", message, "Delete", true);
+        s->dialog_open = false;
+        free(message);
+        // The list may have been read again while the dialog was open: delete by id, not by row.
+        if (ok && !s->deleting_run) {
+            set_string(&s->deleting_run, id); set_string(&s->run_error, NULL);
+            Json *args = json_object(); json_set_str(args, "sessionId", id);
+            store_call("delete", args, 0, s, delete_run_done, TAG_DELETE_RUN, &s->req_delete_run);
+            pane_relayout(s->base.pane);
+        }
+        free(id);
+        break;
+    }
     default: pull_files_action(s->files, action, arg); break;
     }
 }

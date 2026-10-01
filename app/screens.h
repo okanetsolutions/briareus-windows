@@ -83,8 +83,9 @@ void poller_set_base(Poller *p, int base_ms);
 void set_string(char **slot, const char *value);
 /// "Status · model", as the rows word it.
 char *session_subtitle(const Session *session);
-/// A session row: status dot, title and subtitle, clickable. Advances the doc.
-void doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background);
+/// A session row: status dot, title and subtitle, clickable. `trailing` keeps that much room at the right for an item laid
+/// over the row (a delete button). Advances the doc; returns the row's box.
+int doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background, int trailing);
 /// A pull request's badges (conflicts, checks, stack, review, draft) as BadgeSpecs. Returns count.
 size_t pull_badges(const PullSummary *pull, const StackPosition *stack, BadgeSpec *out, size_t cap, char *stack_text, size_t stack_text_len);
 /// Adds label chips for GitHub labels. Returns nothing; advances when there are labels.

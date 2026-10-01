@@ -42,9 +42,9 @@ typedef struct { char *status; } DotData;
 static void dot_free(void *p) { DotData *d = p; free(d->status); free(d); }
 static void paint_dot(Doc *doc, Item *it, HDC hdc, const RECT *rc) { draw_status_dot(hdc, rc->left + px(4), (rc->top + rc->bottom) / 2, ((DotData *)it->data)->status); }
 
-void doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background) {
+int doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background, int trailing) {
     int box = doc_box_begin(doc, x, w, px(7), selected ? theme.raise : background, selected ? theme.raise : background, px(8));
-    int left = x + px(8), inner = w - px(16);
+    int left = x + px(8), inner = w - px(16) - trailing;
     int top = doc->y, lh = px(23);
     RECT dr = { left, top, left + px(8), top + lh };
     int di = doc_add(doc, &dr, paint_dot);
@@ -58,6 +58,7 @@ void doc_session_row(Doc *doc, int x, int w, const Session *session, int action,
     free(sub);
     doc_box_end(doc, box, px(7));
     doc_box_action(doc, box, action, arg);
+    return box;
 }
 
 COLORREF label_color(const PullLabel *label) {
