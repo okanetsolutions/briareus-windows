@@ -19,6 +19,7 @@ typedef struct {
     bool has_catalog; RuntimeCatalog catalog;
     bool has_runtime; RuntimeChoice runtime;   // the pick; none starts on the project default
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
+    bool local;   // work in the project's own checkout rather than a fresh worktree
     bool review_loop;
     Request *req_runtimes, *req_branches, *req_start, *req_projects;
     bool busy, uncertain;
@@ -33,6 +34,8 @@ typedef struct {
 } NewSessionScreen;
 
 static const Project *project(NewSessionScreen *s) { return s->count ? &s->projects[s->chosen < s->count ? s->chosen : 0] : NULL; }
+/// The branch chip's "no pick" row: a worktree branches off the default, the local checkout stays on what it has out.
+static char *no_branch_label(NewSessionScreen *s) { return s->local ? xstrdup("Current branch") : xstrfmt("New branch off %s", s->default_branch ? s->default_branch : "main"); }
 
 // MARK: - The composer's text
 
@@ -94,6 +97,7 @@ static void load_choices(NewSessionScreen *s) {
     if (s->has_runtime) { runtime_choice_free(&s->runtime); s->has_runtime = false; }
     str_array_free(s->branches, s->branch_count); s->branches = NULL; s->branch_count = 0;
     set_string(&s->default_branch, NULL); set_string(&s->branch, NULL);
+    if (!p || !p->has_local) s->local = false;
     if (!p) return;
     if (store_supports("runtimes")) {
         char *key = xstrfmt("runtimes:%s", p->repo);
@@ -129,8 +133,8 @@ static void start_done(void *owner, Request *req) {
     if (req->ok && session_parse(json_get(req->result, "session"), &started)) {
         set_composer_text(s, "");
         attach_list_sent(s->files, json_get(req->args, "attachments"));
-        // The loop the chip asked for that the server does not arm by default.
-        if (!s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
+        // The loop the chip asked for that the server does not arm by default. A local session never has one.
+        if (!s->local && !s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
             Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
             store_call("review_loop", a, 0, NULL, loop_done, 0, NULL);
         }
@@ -153,6 +157,7 @@ static void start(NewSessionScreen *s) {
     Json *ids = attach_list_ids(s->files);
     if (ids) json_object_set(args, "attachments", ids);
     if (s->branch) json_set_str(args, "branch", s->branch);
+    if (s->local) json_set_bool(args, "local", true);
     free(prompt);
     if (s->has_runtime) { Json *rt = runtime_choice_arguments(&s->runtime); json_object_merge(args, rt); json_free(rt); }
     s->busy = true; set_string(&s->error, NULL);
@@ -226,7 +231,8 @@ static void new_session_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(6));
     const Project *p = project(s);
     WelcomeData *d = xcalloc(1, sizeof *d);
-    d->before = xstrdup("Start a session in a fresh "); d->name = xstrdup(p ? project_title(p) : "project"); d->after = xstrdup(" checkout with its own database.");
+    if (s->local) { d->before = xstrdup("Start a session in "); d->name = xstrdup(p ? project_title(p) : "the project"); d->after = xstrdup("'s own local checkout and database."); }
+    else { d->before = xstrdup("Start a session in a fresh "); d->name = xstrdup(p ? project_title(p) : "project"); d->after = xstrdup(" checkout with its own database."); }
     int bw = text_width(doc->cv, d->before, FONT_BODY) + text_width(doc->cv, d->name, FONT_BODY) + text_width(doc->cv, d->after, FONT_BODY);
     doc_custom(doc, x, col, bw <= col ? px(24) : px(48), paint_welcome_line, d, welcome_free, 0, 0);
     doc_text(doc, x, col, "Pick a provider and model below, then describe what to build.", FONT_BODY, theme.muted, DT_CENTER | DT_WORDBREAK);
@@ -241,9 +247,9 @@ static char *chip_label(NewSessionScreen *s, int chip) {
     RuntimeChoice eff; bool has = effective_choice(s, &eff);
     char *out = NULL;
     switch (chip) {
-    case CHIP_WORKSPACE: out = xstrdup("\xE2\x8C\x97 Worktree"); break;
+    case CHIP_WORKSPACE: out = xstrdup(s->local ? "\xE2\x8C\x82 Local" : "\xE2\x8C\x97 Worktree"); break;
     case CHIP_PROJECT: out = xstrdup(p ? project_title(p) : "Project"); break;
-    case CHIP_BRANCH: out = s->branch ? xstrdup(s->branch) : xstrfmt("New branch off %s", s->default_branch ? s->default_branch : "main"); break;
+    case CHIP_BRANCH: out = s->branch ? xstrdup(s->branch) : no_branch_label(s); break;
     case CHIP_PROVIDER: {
         const RuntimeProvider *pr = has ? runtime_catalog_provider(&s->catalog, eff.provider_id) : NULL;
         out = xstrdup(pr ? pr->label : "Provider");
@@ -265,11 +271,11 @@ static bool chip_shown(NewSessionScreen *s, int chip) {
     case CHIP_PROVIDER: case CHIP_MODEL: return s->has_catalog && s->catalog.provider_count > 0;
     case CHIP_EFFORT: { RuntimeChoice eff; if (!effective_choice(s, &eff)) return false; size_t n = 0; runtime_catalog_efforts(&s->catalog, &eff, &n); runtime_choice_free(&eff); return n > 0; }
     case CHIP_BRANCH: return store_supports("branches");
-    case CHIP_LOOP: return store_supports("review_loop");
+    case CHIP_LOOP: return !s->local && store_supports("review_loop");   // the server arms no loop on the shared checkout
     default: return true;
     }
 }
-static bool chip_picker(int chip) { return chip != CHIP_LOOP && chip != CHIP_WORKSPACE; }
+static bool chip_picker(int chip) { return chip != CHIP_LOOP; }
 static int chip_width(Canvas *cv, const char *label, bool picker) {
     int w = px(6) * 2 + text_width(cv, label, FONT_CAPTION) + px(4);   // a glyph from a fallback font measures a touch narrow
     if (picker) w += px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
@@ -342,7 +348,7 @@ static void new_session_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
         s->chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && s->review_loop);
-        bool dim = c == CHIP_WORKSPACE || s->busy;
+        bool dim = s->busy;
         fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_label(s, c);
         bool picker = chip_picker(c);
@@ -408,6 +414,20 @@ static void pick_chip(NewSessionScreen *s, int chip) {
     const RECT *r = &s->chip_rc[chip];
     RuntimeChoice eff; bool has = effective_choice(s, &eff);
     switch (chip) {
+    case CHIP_WORKSPACE: {
+        const Project *p = project(s);
+        bool can = p && p->has_local;
+        HMENU m = CreatePopupMenu();
+        append(m, 1, "\xE2\x8C\x97 Worktree: a fresh clone and database", !s->local, true);
+        append(m, 2, can ? "\xE2\x8C\x82 Local: the project's own checkout" : "\xE2\x8C\x82 Local: no local checkout set in Settings", s->local, can);
+        int chosen = popup(s, m, r);
+        if (chosen >= 1 && (chosen == 2) != s->local) {
+            // "No branch picked" means something else in each mode, so the pick starts over.
+            s->local = chosen == 2; set_string(&s->branch, NULL);
+            pane_relayout(s->base.pane); pane_footer_changed(s->base.pane);
+        }
+        break;
+    }
     case CHIP_PROJECT: {
         HMENU m = CreatePopupMenu();
         for (size_t i = 0; i < s->count; i++) append(m, (UINT)i + 1, project_title(&s->projects[i]), i == s->chosen, true);
@@ -417,7 +437,7 @@ static void pick_chip(NewSessionScreen *s, int chip) {
     }
     case CHIP_BRANCH: {
         HMENU m = CreatePopupMenu();
-        char *first = xstrfmt("New branch off %s", s->default_branch ? s->default_branch : "main");
+        char *first = no_branch_label(s);
         append(m, 1, first, s->branch == NULL, true); free(first);
         if (s->branch_count) AppendMenuW(m, MF_SEPARATOR, 0, NULL);
         for (size_t i = 0; i < s->branch_count && i < 60; i++) append(m, (UINT)i + 2, s->branches[i], str_eq(s->branch, s->branches[i]), true);

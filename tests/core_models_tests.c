@@ -308,6 +308,12 @@ static void test_project_copy_is_independent(void) {
     Json *one = project_json(&c); CHECK_STR(json_str(json_get(one, "repo")), "o/b"); json_free(one);
     project_free(&c); project_free(&p); project_free(NULL); json_free(j);
     j = json_parsez("{\"label\":\"x\"}"); CHECK(!project_parse(j, &p)); CHECK(p.repo == NULL); json_free(j);
+    // A local checkout survives the copy and the saved list; anything but true is none.
+    j = json_parsez("{\"repo\":\"o/l\",\"hasLocal\":true}");
+    CHECK(project_parse(j, &p)); CHECK(p.has_local); project_copy(&c, &p); CHECK(c.has_local);
+    one = project_json(&c); Project back; CHECK(project_parse(one, &back)); CHECK(back.has_local); project_free(&back); json_free(one);
+    project_free(&c); project_free(&p); json_free(j);
+    j = json_parsez("{\"repo\":\"o/n\",\"hasLocal\":\"yes\"}"); CHECK(project_parse(j, &p)); CHECK(!p.has_local); project_free(&p); json_free(j);
 }
 
 // MARK: - Sessions
