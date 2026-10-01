@@ -208,7 +208,7 @@ static Json *send_request(ApiClient *c, const char *method, const char *url, con
         }
         if (status < 200 || status >= 300) {
             Json *payload = json ? json_parse(response, response_len) : NULL;
-            const char *message = json_str(json_get(payload, "error"));
+            const char *message = json_str_nonempty(json_get(payload, "error"));
             api_error_set(error, API_HTTP, status, message ? message : status_text(status), api_retry_after(retry, time(NULL)));
             json_free(payload);
         } else if (!json) {
@@ -432,7 +432,7 @@ char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *co
 }
 
 char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, ApiError *error) {
-    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the serverâs 25 MB limit for an attachment.", -1); return NULL; }
+    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the server\xE2\x80\x99s 25 MB limit for an attachment.", -1); return NULL; }
     char *encoded = url_encode(str_empty(name) ? "file" : name);
     char *url = xstrfmt("%suploads?name=%s", c->address.base_url, encoded);
     free(encoded);

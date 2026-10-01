@@ -239,9 +239,11 @@ const char *working_verb(int tick) { return verbs[((tick / 25) % 6 + 6) % 6]; }
 
 static void to_local(time_t when, SYSTEMTIME *out) {
     ULARGE_INTEGER u; u.QuadPart = (ULONGLONG)when * 10000000ULL + 116444736000000000ULL;
-    FILETIME ft, local; ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
-    FileTimeToLocalFileTime(&ft, &local);
-    FileTimeToSystemTime(&local, out);
+    FILETIME ft; ft.dwLowDateTime = u.LowPart; ft.dwHighDateTime = u.HighPart;
+    SYSTEMTIME utc; FileTimeToSystemTime(&ft, &utc);
+    // The offset of that date, not today's: daylight saving moves it.
+    DYNAMIC_TIME_ZONE_INFORMATION tz; GetDynamicTimeZoneInformation(&tz);
+    if (!SystemTimeToTzSpecificLocalTimeEx(&tz, &utc, out)) *out = utc;
 }
 static char *time_part(const SYSTEMTIME *st) {
     wchar_t buf[64];
@@ -287,8 +289,9 @@ char *format_date_abbrev(time_t when) {
 }
 char *format_clock(int seconds) { if (seconds < 0) seconds = 0; return xstrfmt("%d:%02d", seconds / 60, seconds % 60); }
 char *format_tokens(double n) {
-    if (n >= 1e9) return xstrfmt("%.1fB", n / 1e9);
-    if (n >= 1e6) return xstrfmt("%.1fM", n / 1e6);
+    // From where one decimal rounds up to 1000 of the smaller unit.
+    if (n >= 999.95e6) return xstrfmt("%.1fB", n / 1e9);
+    if (n >= 999.95e3) return xstrfmt("%.1fM", n / 1e6);
     if (n >= 1e3) return xstrfmt("%.1fk", n / 1e3);
     return xstrfmt("%d", (int)n);
 }

@@ -254,11 +254,16 @@ static bool is_url_start(const char *p) { return str_has_prefix(p, "https://") |
 
 static void parse_inline(Spans *out, const char *text, size_t len, unsigned flags);
 
-/// Finds the closing `marker` after `p` on the same span; NULL without one.
+/// Finds the closing `marker` after `p` on the same span; NULL without one. A single marker steps over a doubled span inside it.
 static const char *find_close(const char *p, const char *end, const char *marker) {
     size_t m = strlen(marker);
     for (const char *q = p; q + m <= end; q++) {
         if (*q == '\\') { q++; continue; }
+        if (m == 1 && q + 2 < end && q[1] == *marker && q[2] != *marker && !isspace((unsigned char)q[2])) {
+            const char doubled[3] = { *marker, *marker, 0 };
+            const char *inner = find_close(q + 2, end, doubled);
+            if (inner) { q = inner + 1; continue; }
+        }
         if (memcmp(q, marker, m) == 0 && q > p && !isspace((unsigned char)q[-1])) return q;
     }
     return NULL;
@@ -309,6 +314,14 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             }
             str_append(&plain, p, ticks); p += ticks; continue;
         }
+        if ((c == '*' || (c == '_' && !(p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_')))) && p + 3 < end && p[1] == c && p[2] == c && !isspace((unsigned char)p[3])) {
+            const char *close = find_close(p + 3, end, c == '*' ? "***" : "___");
+            if (close && close > p + 3) {
+                FLUSH();
+                parse_inline(out, p + 3, (size_t)(close - p - 3), flags | SPAN_BOLD | SPAN_ITALIC);
+                p = close + 3; continue;
+            }
+        }
         if ((c == '*' || c == '_') && p + 1 < end) {
             bool doubled = p[1] == c;
             const char *marker = doubled ? (c == '*' ? "**" : "__") : (c == '*' ? "*" : "_");
@@ -330,7 +343,9 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             const char *close = NULL; int depth = 0;
             for (const char *q = p; q < end; q++) { if (*q == '[') depth++; else if (*q == ']') { if (--depth == 0) { close = q; break; } } }
             if (close && close + 1 < end && close[1] == '(') {
-                const char *paren = memchr(close + 2, ')', (size_t)(end - close - 2));
+                // Parentheses inside the URL come in pairs, as in Wikipedia's links.
+                const char *paren = NULL; int parens = 0;
+                for (const char *q = close + 2; q < end && !paren; q++) { if (*q == '(') parens++; else if (*q == ')' && parens-- == 0) paren = q; }
                 if (paren) {
                     char *url = xstrndup(close + 2, (size_t)(paren - close - 2));
                     char *space = strchr(url, ' '); if (space) *space = 0;
@@ -344,6 +359,8 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
                         out->items[out->count].url = xstrdup(url);
                         out->count++;
                     }
+                    // An empty label shows the link itself.
+                    if (!label.count && *url) emit(out, flags | SPAN_LINK, url, strlen(url), url);
                     free(label.items); free(url);
                     p = paren + 1; continue;
                 }

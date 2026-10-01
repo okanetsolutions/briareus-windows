@@ -869,7 +869,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_FINDING: {
         const char *url = json_str(json_get(f, "url"));
         if (safe_web_url(url)) open_web_url(url);
-        else { char *pr = held_round_pr_url(ses, held), *files = xstrfmt("%s/files", pr); open_web_url(files); free(files); free(pr); }
+        else { char *pr = held_round_pr_url(ses, held); if (pr) { char *files = xstrfmt("%s/files", pr); open_web_url(files); free(files); } free(pr); }
         break;
     }
     case ACT_REPLIED_URL: { const Replied *rp = key ? replied_find(s, session_id(ses), key) : NULL; if (rp && rp->url) open_web_url(rp->url); break; }

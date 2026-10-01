@@ -81,7 +81,7 @@ void json_object_set(Json *object, const char *key, Json *value) {
 }
 
 void json_object_remove(Json *object, const char *key) {
-    if (!object || object->type != JSON_OBJECT) return;
+    if (!object || object->type != JSON_OBJECT || !key) return;
     size_t i = object_index(object, key);
     if (i == (size_t)-1) return;
     free(object->o.keys[i]); json_free(object->o.vals[i]);
@@ -240,7 +240,7 @@ static char *parse_string_raw(Parser *ps) {
                         if (!parse_hex4(ps, &low) || low < 0xDC00 || low > 0xDFFF) goto fail;
                         cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
                     } else cp = 0xFFFD;
-                } else if (cp >= 0xDC00 && cp <= 0xDFFF) cp = 0xFFFD;
+                } else if ((cp >= 0xDC00 && cp <= 0xDFFF) || cp == 0) cp = 0xFFFD;
                 append_utf8(&s, cp);
                 break;
             }
@@ -376,6 +376,7 @@ static void write_string(Str *out, const char *s) {
 }
 
 static void write_number(Str *out, double d) {
+    if (!isfinite(d)) { str_appendz(out, "null"); return; }
     if (d == floor(d) && fabs(d) < 1e15) { str_appendf(out, "%lld", (long long)d); return; }
     char buf[64];
     snprintf(buf, sizeof buf, "%.17g", d);

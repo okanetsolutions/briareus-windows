@@ -177,6 +177,16 @@ static void test_routes_round_trip_and_copy_deeply(void) {
     routes_free(copy, n);
     Route *none = routes_copy(NULL, 0); CHECK(none != NULL); routes_free(none, 0);
 }
+static void test_routes_allow_prefers_a_literal_segment_over_a_parameter(void) {
+    Route r[2] = { { "GET", "/sessions/{id}", "admin" }, { "GET", "/sessions/archived", "read" } };
+    CHECK(routes_allow(r, 2, "GET", "sessions/archived", "read"));
+    CHECK(!routes_allow(r, 2, "GET", "sessions/abc", "read"));
+    // The app's own parameter is closest to the server's.
+    CHECK(!routes_allow(r, 2, "GET", "sessions/{sessionId}", "read"));
+    Route swapped[2] = { r[1], r[0] };
+    CHECK(routes_allow(swapped, 2, "GET", "sessions/archived", "read"));
+    CHECK(!routes_allow(swapped, 2, "GET", "sessions/{sessionId}", "read"));
+}
 static void test_routes_allow_matches_parameters_on_either_side(void) {
     Json *j = json_parsez(OPENAPI);
     Route *r; size_t n; CHECK(routes_parse(j, &r, &n)); json_free(j);
@@ -429,6 +439,11 @@ static void test_held_round_url_reuses_the_conversations_own_link_only_for_its_p
     CHECK_OWNED_STR(held_round_pr_url(&s, held7), "https://github.com/o/r/pull/7"); session_free(&s);
     s = session_of("{\"id\":\"a\",\"status\":\"idle\"}");
     CHECK_OWNED_STR(held_round_pr_url(&s, held9), "https://github.com//pull/9"); session_free(&s);
+    // A round without a number has the conversation's own link, or none.
+    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"number\":7,\"url\":\"https://ghe.example/o/r/pull/7\"}}");
+    CHECK_OWNED_STR(held_round_pr_url(&s, none), "https://ghe.example/o/r/pull/7"); session_free(&s);
+    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\"}");
+    CHECK(held_round_pr_url(&s, none) == NULL); session_free(&s);
     CHECK_INT(held_round_pr_number(held7), 7); CHECK_INT(held_round_pr_number(none), 0); CHECK_INT(held_round_pr_number(NULL), 0);
     Json *odd = json_parsez("{\"prNumber\":0}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
     odd = json_parsez("{\"prNumber\":\"7\"}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
@@ -880,6 +895,7 @@ void models_tests(void) {
     test_run("routes read each operation of an OpenAPI document", test_routes_read_each_operation_of_an_openapi_document);
     test_run("routes reject what is neither OpenAPI nor a saved list", test_routes_reject_what_is_neither_openapi_nor_a_saved_list);
     test_run("routes round trip and copy deeply", test_routes_round_trip_and_copy_deeply);
+    test_run("routes allow prefers a literal segment over a parameter", test_routes_allow_prefers_a_literal_segment_over_a_parameter);
     test_run("routes allow matches parameters on either side", test_routes_allow_matches_parameters_on_either_side);
     test_run("routes allow needs the method and enough permission", test_routes_allow_needs_the_method_and_enough_permission);
     test_run("connection round trips with its transcription", test_connection_round_trips_with_its_transcription);

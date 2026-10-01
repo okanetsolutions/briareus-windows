@@ -160,6 +160,7 @@ static void test_tool_glyphs_follow_the_tool_name(void) {
     CHECK_INT(tool_glyph("tool", "view_image", false), 0xE8A5);
     CHECK_INT(tool_glyph("tool", "Edit", false), 0xE70F);
     CHECK_INT(tool_glyph("tool", "Write", false), 0xE70F);
+    CHECK_INT(tool_glyph("tool", "TodoWrite", false), 0xE9D5);
     CHECK_INT(tool_glyph("tool", "apply_patch", false), 0xE70F);
     CHECK_INT(tool_glyph("tool", "Grep", false), 0xE721);
     CHECK_INT(tool_glyph("tool", "Glob", false), 0xE721);
