@@ -150,19 +150,5 @@ Screen *pairing_screen_new(void) {
 
 // MARK: - Placeholder
 
-static void placeholder_destroy(Screen *base) { screen_release(base); }
-static void placeholder_layout(Screen *base, Doc *doc) {
-    (void)base;
-    RECT rc = pane_content_rect(base->pane);
-    int h = rc.bottom - rc.top;
-    int top = h / 2 - px(90); if (top < px(40)) top = px(40);
-    doc_space(doc, top);
-    doc_empty_state(doc, 0, doc->width, 0xE8F2, "No conversation selected", "Choose a conversation from the list to read it here.");
-}
-static void placeholder_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
-static const ScreenVTable placeholder_vt = { .destroy = placeholder_destroy, .layout = placeholder_layout, .header = placeholder_header };
-Screen *placeholder_screen_new(void) {
-    Screen *s = xcalloc(1, sizeof *s);
-    s->vt = &placeholder_vt; s->id = xstrdup("placeholder");
-    return s;
-}
+/// The dashboard opens on Welcome back and its composer; so does the empty right-hand side here.
+Screen *placeholder_screen_new(void) { return new_session_screen_new(NULL, NULL, 0); }

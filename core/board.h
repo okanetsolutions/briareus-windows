@@ -117,7 +117,7 @@ void board_action_copy(BoardAction *into, const BoardAction *from);
 char *board_action_operation(const BoardAction *action);
 /// Run answers only once the workspace is prepared and serving, which takes longer than a request is given. 0 = default.
 int board_action_timeout_ms(const BoardAction *action);
-/// Review and QA check the branch out themselves; the rest look the pull request up by number.
+/// Review checks the branch out itself; the rest look the pull request up by number.
 Json *board_action_arguments(const BoardAction *action, const char *repo, int number, const char *branch, const char *input);
 /// The board's errands, in the order the dashboard shows them.
 const BoardAction *board_actions_known(size_t *count);

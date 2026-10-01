@@ -17,14 +17,14 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Turns the review loop on or off and completes the triage of held findings from inside a conversation.
 - Keeps a Findings screen, as the dashboard does: every review round waiting for a decision across the projects, grouped by pull request, with a count beside the projects. A round on your own pull request takes a verdict (fix, optional, dismiss) and a comment on each finding, saves them to the pull request, and completes into the fix session; a review of somebody else's takes replies on its findings' threads, deletes a finding from the review, and is taken off the queue. What a completion led to stays on the screen until dismissed.
 - Records voice notes with the microphone (AAC through Media Foundation, WAV as a fallback) and has the server transcribe them into the message box. On a server that cannot transcribe, the microphone says what the server is missing.
-- Keeps the projects and conversations in a column on the left and the chosen conversation on the right, as the dashboard does. A window too narrow for both falls back to a single column with a back button.
+- Keeps the projects and conversations in a column on the left and the chosen conversation on the right, as the dashboard does: each project with its session count and a dot while one works, and inside it the conversations with their provider, branch, state and age; ☑ Select ticks several to close or delete at once. A window narrower than the dashboard's `lg` breakpoint falls back to a single column with a back button.
 
 **Project board**
 
 - Shows open pull requests as the dashboard does: labels, whether they conflict with their base, the state of their checks, author, assignees, reviewers, linked issues and stack position, narrowed by author, reviewer or label.
 - Opens a pull request on its description, file changes with diffs (wrapped or scrolled), checks, reviews, commits, the issues it closes, findings and the conversations already run on it.
 - Records fix, optional or dismiss decisions on findings, and merges when the server offers it, saying first what stands in the way.
-- Starts the board's errands from the buttons under each pull request, as the dashboard has them, or from the pull request itself: view on GitHub, run, code review, solve conflicts, fix failing checks, implement feedback, feedback in your own words, test sheet, QA, PR body and delete my comments. The one the pull request's state asks for is highlighted.
+- Starts the board's errands from the buttons under each pull request, as the dashboard has them, or from the pull request itself: view on GitHub, run, code review, solve conflicts, fix failing checks, implement feedback, feedback in your own words, PR body and delete my comments. The one the pull request's state asks for is highlighted.
 - Lists the repository's open issues, sub-issues nested under their epic, with the pull requests answering each, and starts a session on an issue.
 
 **Connection**
@@ -33,8 +33,8 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Hides write controls on a Read-only token. A capability catalog read from the server keeps operations it does not offer unavailable, so the app adapts to older and newer servers.
 - Saves projects, conversations, transcripts and pull requests on the computer. A screen opens on what it last showed and then asks the server only for what changed; a saved transcript resumes from its last event, and F5 reads it again in full.
 - Pauses polling while the window is minimized or in the background, with exponential backoff and `Retry-After` after failures.
-- Opens filling the screen, follows the system light or dark theme, including the title bar, and scales with the monitor's DPI. Reads in the dashboard's type: Segoe UI at its sizes, Cascadia Code for code.
-- A conversation's actions (its pull request and changes, review loop, rename, stop, close, reopen, delete) sit in its header. A wide window lays a pull request out in two columns.
+- Opens filling the screen in the dashboard's own look: its dark palette, Segoe UI at its pixel sizes, Cascadia Code for code, its 268px sidebar with the ＋ New session strip, and its Welcome back composer with the project, branch, provider, model, effort and loop chips. Scales with the monitor's DPI.
+- A conversation's actions (stop, close, reopen, delete, and ✎ to rename) sit in its header as the dashboard's buttons, the review loop as a chip above the composer, and its pull request, commits, reviews and findings in the 272px panel on the right, as on the dashboard. A wide window lays a pull request out in two columns.
 
 ## Build
 

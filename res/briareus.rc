@@ -64,8 +64,8 @@ BEGIN
 END
 
 1 VERSIONINFO
-FILEVERSION 1,3,0,0
-PRODUCTVERSION 1,3,0,0
+FILEVERSION APP_VERSION_COMMAS
+PRODUCTVERSION APP_VERSION_COMMAS
 FILEOS 0x40004L
 FILETYPE 0x1L
 BEGIN
@@ -75,11 +75,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Okanet Solutions"
             VALUE "FileDescription", "Briareus for Windows"
-            VALUE "FileVersion", "1.3.0.0"
+            VALUE "FileVersion", APP_VERSION_STRING
             VALUE "InternalName", "Briareus"
             VALUE "OriginalFilename", "Briareus.exe"
             VALUE "ProductName", "Briareus"
-            VALUE "ProductVersion", "1.3.0"
+            VALUE "ProductVersion", APP_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"

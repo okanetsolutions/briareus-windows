@@ -10,21 +10,26 @@
 #include <string.h>
 
 #define MAIN_CLASS L"BriareusMain"
-#define SIDEBAR_WIDTH 340
-#define NARROW_WIDTH 760
+// The dashboard's columns: a 268px sidebar, the main column, and a 272px pull request panel beside a conversation.
+// Below its `lg` breakpoint (64rem) the dashboard turns the columns into drawers; here that is one column at a time.
+#define SIDEBAR_WIDTH 268
+#define PANEL_WIDTH 272
+#define NARROW_WIDTH 1024
 
 static HWND g_main;
 typedef HRESULT (WINAPI *TaskDialogIndirectFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
 static TaskDialogIndirectFn g_task_dialog;
-static Pane *g_pairing, *g_sidebar, *g_detail;
+static Pane *g_pairing, *g_sidebar, *g_detail, *g_panel;
 static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
 
 HWND app_window(void) { return g_main; }
 Pane *app_sidebar_pane(void) { return g_sidebar; }
 Pane *app_detail_pane(void) { return g_detail; }
+Pane *app_panel_pane(void) { return g_panel; }
 
 static bool is_narrow(void) { RECT rc; GetClientRect(g_main, &rc); return rc.right - rc.left < px(NARROW_WIDTH); }
+static bool panel_shown(void) { return g_panel && pane_root(g_panel) != NULL; }
 
 static void back_to_sidebar(void *ctx) { (void)ctx; g_narrow_detail = false; PostMessageW(g_main, WM_SIZE, 0, 0); }
 
@@ -34,6 +39,7 @@ static void layout(void) {
         if (g_pairing) { pane_set_bounds(g_pairing, &rc); pane_show(g_pairing, true); }
         if (g_sidebar) pane_show(g_sidebar, false);
         if (g_detail) pane_show(g_detail, false);
+        if (g_panel) pane_show(g_panel, false);
         return;
     }
     if (g_pairing) pane_show(g_pairing, false);
@@ -44,12 +50,15 @@ static void layout(void) {
         pane_set_root_back(g_detail, true, back_to_sidebar, NULL);
         if (show_detail) { pane_set_bounds(g_detail, &rc); pane_show(g_detail, true); pane_show(g_sidebar, false); }
         else { pane_set_bounds(g_sidebar, &rc); pane_show(g_sidebar, true); pane_show(g_detail, false); }
+        if (g_panel) pane_show(g_panel, false);
     } else {
         pane_set_root_back(g_detail, false, NULL, NULL);
-        int sw = px(SIDEBAR_WIDTH);
-        RECT side = { rc.left, rc.top, rc.left + sw, rc.bottom }, main = { rc.left + sw, rc.top, rc.right, rc.bottom };
+        int sw = px(SIDEBAR_WIDTH), pw = panel_shown() ? px(PANEL_WIDTH) : 0;
+        RECT side = { rc.left, rc.top, rc.left + sw, rc.bottom }, main = { rc.left + sw, rc.top, rc.right - pw, rc.bottom };
+        RECT panel = { rc.right - pw, rc.top, rc.right, rc.bottom };
         pane_set_bounds(g_sidebar, &side); pane_set_bounds(g_detail, &main);
         pane_show(g_sidebar, true); pane_show(g_detail, true);
+        if (g_panel) { pane_set_bounds(g_panel, &panel); pane_show(g_panel, pw > 0); }
     }
 }
 
@@ -57,7 +66,17 @@ static void paint_divider(HDC hdc) {
     if (!g_connected_layout || is_narrow()) return;
     RECT rc; GetClientRect(g_main, &rc);
     int x = px(SIDEBAR_WIDTH);
-    draw_line(hdc, x, rc.top, x, rc.bottom, theme.border);
+    draw_line(hdc, x - 1, rc.top, x - 1, rc.bottom, theme.line);
+    if (panel_shown()) { int px_ = rc.right - px(PANEL_WIDTH); draw_line(hdc, px_, rc.top, px_, rc.bottom, theme.line); }
+}
+
+void app_set_panel(Screen *screen) {
+    if (!g_panel) { if (screen) screen->vt->destroy(screen); return; }
+    Screen *root = pane_root(g_panel);
+    if (root && screen && screen->id && str_eq(root->id, screen->id)) { screen->vt->destroy(screen); return; }
+    pane_set_root(g_panel, screen);
+    layout();
+    InvalidateRect(g_main, NULL, TRUE);
 }
 
 static void rebuild_for_connection(void) {
@@ -72,10 +91,11 @@ static void rebuild_for_connection(void) {
         if (g_pairing) pane_set_root(g_pairing, NULL);
         pane_set_root(g_sidebar, projects_screen_new());
         pane_set_root(g_detail, placeholder_screen_new());
+        pane_set_root(g_panel, NULL);
         pane_set_selected_id(g_sidebar, NULL);
         g_narrow_detail = false;
     } else {
-        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL);
+        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL);
         pane_set_root(g_pairing, pairing_screen_new());
     }
     layout();
@@ -86,18 +106,22 @@ void app_show_detail(Screen *screen) {
     if (root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1) {
         screen->vt->destroy(screen);
     } else {
+        pane_set_root(g_panel, NULL);
         pane_set_root(g_detail, screen);
     }
     pane_set_selected_id(g_sidebar, pane_root(g_detail) ? pane_root(g_detail)->id : NULL);
     g_narrow_detail = true;
     layout();
+    InvalidateRect(g_main, NULL, TRUE);
 }
 void app_push_detail(Screen *screen) { pane_push(g_detail, screen); g_narrow_detail = true; layout(); }
 void app_clear_detail(void) {
+    pane_set_root(g_panel, NULL);
     pane_set_root(g_detail, placeholder_screen_new());
     pane_set_selected_id(g_sidebar, NULL);
     g_narrow_detail = false;
     layout();
+    InvalidateRect(g_main, NULL, TRUE);
 }
 
 // MARK: - Dialog helpers
@@ -164,6 +188,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_pairing = pane_create(hwnd, false);
         g_sidebar = pane_create(hwnd, true);
         g_detail = pane_create(hwnd, false);
+        g_panel = pane_create(hwnd, true);
         store_init(hwnd);
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
@@ -174,7 +199,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }
         return 0;
     case WM_ACTIVATEAPP: set_active(wp != 0 && !IsIconic(hwnd)); return 0;
-    case WM_PAINT: { PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps); fill_rect(hdc, &ps.rcPaint, theme.background); paint_divider(hdc); EndPaint(hwnd, &ps); return 0; }
+    case WM_PAINT: { PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps); fill_rect(hdc, &ps.rcPaint, theme.canvas); paint_divider(hdc); EndPaint(hwnd, &ps); return 0; }
     case WM_ERASEBKGND: return 1;
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(360); return 0; }
     case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;
@@ -184,6 +209,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_pairing) { SendMessageW(pane_hwnd(g_pairing), WM_THEMECHANGED, 0, 0); pane_relayout(g_pairing); }
         if (g_sidebar) { SendMessageW(pane_hwnd(g_sidebar), WM_THEMECHANGED, 0, 0); pane_relayout(g_sidebar); }
         if (g_detail) { SendMessageW(pane_hwnd(g_detail), WM_THEMECHANGED, 0, 0); pane_relayout(g_detail); }
+        if (g_panel) { SendMessageW(pane_hwnd(g_panel), WM_THEMECHANGED, 0, 0); pane_relayout(g_panel); }
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     case WM_DPICHANGED: {
@@ -193,13 +219,14 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_pairing) pane_relayout(g_pairing);
         if (g_sidebar) pane_relayout(g_sidebar);
         if (g_detail) pane_relayout(g_detail);
+        if (g_panel) pane_relayout(g_panel);
         layout();
         return 0;
     }
     case WM_CLOSE: DestroyWindow(hwnd); return 0;
     case WM_DESTROY:
-        pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail);
-        g_pairing = g_sidebar = g_detail = NULL;
+        pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel);
+        g_pairing = g_sidebar = g_detail = g_panel = NULL;
         store_shutdown();
         PostQuitMessage(0);
         return 0;
@@ -227,13 +254,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP)); wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);
-    // Sized for two columns at the monitor's DPI.
-    HWND hwnd = CreateWindowExW(0, MAIN_CLASS, L"Briareus", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 780, NULL, NULL, instance, NULL);
+    // Sized for the dashboard's three columns at the monitor's DPI.
+    HWND hwnd = CreateWindowExW(0, MAIN_CLASS, L"Briareus", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1400, 900, NULL, NULL, instance, NULL);
     if (!hwnd) return 1;
     int dpi = GetDpiForWindow(hwnd);
     if (dpi != 96) {
         theme_set_dpi(dpi);
-        SetWindowPos(hwnd, NULL, 0, 0, MulDiv(1180, dpi, 96), MulDiv(780, dpi, 96), SWP_NOMOVE | SWP_NOZORDER);
+        SetWindowPos(hwnd, NULL, 0, 0, MulDiv(1400, dpi, 96), MulDiv(900, dpi, 96), SWP_NOMOVE | SWP_NOZORDER);
         if (g_pairing) pane_relayout(g_pairing);
         if (g_sidebar) pane_relayout(g_sidebar);
         if (g_detail) pane_relayout(g_detail);
