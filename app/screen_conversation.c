@@ -194,7 +194,7 @@ static void refresh_done(void *owner, Request *req) {
         free(key);
         poller_set_base(&s->poller, session_is_active(session(s)) ? 2000 : 7000);
         poller_finished(&s->poller, false, -1);
-        if (session_pull_number(session(s)) && pane_top(s->base.pane) == &s->base && !pane_root(app_panel_pane())) show_panel(s);
+        if (pane_top(s->base.pane) == &s->base) show_panel(s);
         if (session_is_active(session(s))) SetTimer(pane_hwnd(s->base.pane), TIMER_WORKING, 120, NULL); else KillTimer(pane_hwnd(s->base.pane), TIMER_WORKING);
     }
     pane_relayout(s->base.pane);
@@ -261,7 +261,8 @@ static void mutate_done(void *owner, Request *req) {
     }
     if (str_eq(name, "complete_findings")) { str_array_free(s->decisions, s->decision_count); s->decisions = NULL; s->decision_count = 0; set_string(&s->triage_note, NULL); }
     pane_header_changed(s->base.pane);
-    refresh(s, false);
+    // A Clear or a compaction hides lines already on screen, so the transcript is read again whole.
+    refresh(s, str_eq(name, "clear") || str_eq(name, "compact"));
 }
 static void mutate(ConversationScreen *s, const char *name, Json *extra) {
     if (s->busy || s->uncertain) { json_free(extra); return; }
@@ -1072,11 +1073,20 @@ static void conversation_timer(Screen *base, UINT id) {
         if (enabled && !s->loading) refresh(s, false); else poller_finished(&s->poller, false, -1);
     }
 }
+/// The column at the right: the session's pull request and context usage, while this conversation is the page itself
+/// (not one pushed over a pull request) and the session has any of them. An open panel takes the latest record.
 static void show_panel(ConversationScreen *s) {
-    int number = session_pull_number(session(s));
-    const char *repo = session_repo(session(s));
-    if (number && repo && store_supports("pull") && pane_root(s->base.pane) == &s->base) app_set_panel(pull_panel_screen_new(repo, number));
-    else app_set_panel(NULL);
+    if (pane_root(s->base.pane) == &s->base && session_panel_wanted(session(s))) {
+        app_set_panel(session_panel_screen_new(session(s)));
+        session_panel_update(session(s));
+    } else app_set_panel(NULL);
+}
+void conversation_session_op(const char *session_id_, const char *operation, Json *extra) {
+    Screen *top = pane_top(app_detail_pane());
+    char *id = xstrfmt("conversation:%s", session_id_);
+    bool ours = top && top->id && str_eq(top->id, id);
+    free(id);
+    if (ours) mutate((ConversationScreen *)top, operation, extra); else json_free(extra);
 }
 static void conversation_visible(Screen *base, bool shown) {
     ConversationScreen *s = (ConversationScreen *)base;
