@@ -534,6 +534,12 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_MOUSEWHEEL: {
+        // The wheel scrolls the pane under the cursor, not the one with the focus: a conversation's pane inside the pull
+        // request page, or the sidebar beside the detail.
+        POINT cur = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        HWND under = WindowFromPoint(cur);
+        while (under && under != hwnd) { wchar_t cls[40]; if (GetClassNameW(under, cls, 40) && wcscmp(cls, PANE_CLASS) == 0) break; under = GetParent(under); }
+        if (under && under != hwnd) return SendMessageW(under, msg, wp, lp);
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
         if (GetKeyState(VK_SHIFT) & 0x8000) {
             int max_x = p->doc.content_width - pane_content_width(p); if (max_x < 0) max_x = 0;

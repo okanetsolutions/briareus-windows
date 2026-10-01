@@ -9,15 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Offsets from the screen's action base: 1000 on its own, the host's base when laid out inside another screen.
 enum {
-    ACT_ANSWER, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
+    ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
     ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_FINDING_LINK,
-    ACT_MENU_ITEM = 100,   // plus a MENU_ id: the header's buttons
+    ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
-enum { TIMER_POLL, TIMER_WORKING, TIMER_VOICE };   // offsets from the timer base: 1 on its own
-#define A(s, act) ((s)->action_base + (act))
-#define T(s, timer) ((s)->timer_base + (timer))
+enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
 enum { ID_COMPOSER = 301 };
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
 enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY };
@@ -49,8 +46,7 @@ typedef struct {
     // footer hit rects
     RECT mic_rc, send_rc, discard_rc;
     bool at_bottom;
-    int action_base; UINT timer_base;
-    Screen *host; void (*gone)(Screen *host);   // the screen this one is laid out inside, told when the session was deleted
+    Screen *host; void (*gone)(Screen *host);   // the screen whose pane this one is inside, told when the session was deleted
 } ConversationScreen;
 
 static const Session *session(ConversationScreen *s) { return s->has_snapshot ? &s->snapshot : &s->initial; }
@@ -200,7 +196,7 @@ static void refresh_done(void *owner, Request *req) {
         poller_set_base(&s->poller, session_is_active(session(s)) ? 2000 : 7000);
         poller_finished(&s->poller, false, -1);
         if (!s->host && session_pull_number(session(s)) && pane_top(s->base.pane) == &s->base && !pane_root(app_panel_pane())) show_panel(s);
-        if (session_is_active(session(s))) SetTimer(pane_hwnd(s->base.pane), T(s, TIMER_WORKING), 120, NULL); else KillTimer(pane_hwnd(s->base.pane), T(s, TIMER_WORKING));
+        if (session_is_active(session(s))) SetTimer(pane_hwnd(s->base.pane), TIMER_WORKING, 120, NULL); else KillTimer(pane_hwnd(s->base.pane), TIMER_WORKING);
     }
     pane_relayout(s->base.pane);
     pane_header_changed(s->base.pane);
@@ -259,7 +255,7 @@ static void mutate_done(void *owner, Request *req) {
     if (str_eq(name, "delete")) {
         // The sidebar drops the row now instead of at its next poll; the transcript goes with it.
         sessions_forget(session_repo(&s->initial), session_id(&s->initial));
-        if (s->host) { s->gone(s->host); return; }   // the host destroys this screen
+        if (s->host) { s->gone(s->host); return; }   // the host empties its pane, which destroys this screen
         // Beside the list there is nothing to go back to: the right-hand side empties instead.
         Pane *pane = s->base.pane;
         if (pane_depth(pane) > 1) pane_pop(pane); else app_clear_detail();
@@ -313,7 +309,7 @@ static void voice_changed(void *ctx) {
     }
     char *error = voice_take_error(s->voice);
     if (error) { app_alert("Voice note", error); free(error); }
-    if (voice_state(s->voice) == VOICE_RECORDING) SetTimer(pane_hwnd(s->base.pane), T(s, TIMER_VOICE), 1000, NULL); else KillTimer(pane_hwnd(s->base.pane), T(s, TIMER_VOICE));
+    if (voice_state(s->voice) == VOICE_RECORDING) SetTimer(pane_hwnd(s->base.pane), TIMER_VOICE, 1000, NULL); else KillTimer(pane_hwnd(s->base.pane), TIMER_VOICE);
     pane_footer_changed(s->base.pane);
 }
 
@@ -505,7 +501,7 @@ static void layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Ev
             for (size_t i = 0; i < on; i++) {
                 const char *label = json_str(json_get(json_at(e->options, i), "label"));
                 if (!label) continue;
-                ButtonSpec b = { 0, label, BUTTON_BORDERED, A(s, ACT_ANSWER), (intptr_t)((e->seq << 8) | (int)i), true };
+                ButtonSpec b = { 0, label, BUTTON_BORDERED, ACT_ANSWER, (intptr_t)((e->seq << 8) | (int)i), true };
                 buttons[bn++] = b;
             }
             if (bn) doc_button_row(doc, ix, iw, buttons, bn);
@@ -540,7 +536,7 @@ static void layout_triage(ConversationScreen *s, Doc *doc, int x, int w, const J
         const char *ft = json_str(json_get(f, "title"));
         int ti = doc_text(doc, ix, iw, ft ? ft : "Finding", FONT_FOOTNOTE, theme.ink, DT_WORDBREAK);
         const char *url = json_str(json_get(f, "url"));
-        if (safe_web_url(url)) { doc_item(doc, ti)->action = A(s, ACT_FINDING_LINK); doc_item(doc, ti)->arg = (intptr_t)i; doc_item(doc, ti)->hand = true; }
+        if (safe_web_url(url)) { doc_item(doc, ti)->action = ACT_FINDING_LINK; doc_item(doc, ti)->arg = (intptr_t)i; doc_item(doc, ti)->hand = true; }
         Str meta; str_init(&meta);
         if (json_str(json_get(f, "file"))) { str_appendz(&meta, json_str(json_get(f, "file"))); double line; if (json_num(json_get(f, "line"), &line)) str_appendf(&meta, ":%d", (int)line); }
         if (meta.len) { doc_space(doc, px(3)); doc_text(doc, ix, iw, meta.data, FONT_MONO_CAPTION2, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS); }
@@ -553,7 +549,7 @@ static void layout_triage(ConversationScreen *s, Doc *doc, int x, int w, const J
             for (int k = 0; k < 3; k++) if (str_eq(decision, triage_options[k])) selected = k;
             if (selected == 0) fixes++;
             doc_space(doc, px(6));
-            doc_segments(doc, ix, iw, triage_titles, 3, selected, A(s, ACT_TRIAGE_DECISION), (intptr_t)(i * 4), !s->busy && !s->uncertain);
+            doc_segments(doc, ix, iw, triage_titles, 3, selected, ACT_TRIAGE_DECISION, (intptr_t)(i * 4), !s->busy && !s->uncertain);
         }
     }
     doc_space(doc, px(8)); doc_rule(doc, ix, iw); doc_space(doc, px(8));
@@ -561,11 +557,11 @@ static void layout_triage(ConversationScreen *s, Doc *doc, int x, int w, const J
         int nb = doc_box_begin(doc, ix, iw, px(3), theme.field, theme.line, px(4));
         doc_text(doc, ix + px(6), iw - px(12), str_empty(s->triage_note) ? "A note for the pull request and the fix session (optional)" : s->triage_note, FONT_CAPTION2, str_empty(s->triage_note) ? theme.muted : theme.ink, DT_WORDBREAK);
         doc_box_end(doc, nb, px(3));
-        doc_box_action(doc, nb, A(s, ACT_TRIAGE_NOTE), 0);
+        doc_box_action(doc, nb, ACT_TRIAGE_NOTE, 0);
         doc_space(doc, px(8));
     }
     char *complete = takes_verdicts ? (fixes ? xstrfmt("Complete \xC2\xB7 send %zu to be fixed", fixes) : xstrdup("Complete \xC2\xB7 nothing to fix, approve and close")) : xstrdup("Complete");
-    ButtonSpec b = { 0, complete, BUTTON_PROMINENT, A(s, ACT_TRIAGE_COMPLETE), (intptr_t)fixes, !s->busy && !s->uncertain };
+    ButtonSpec b = { 0, complete, BUTTON_PROMINENT, ACT_TRIAGE_COMPLETE, (intptr_t)fixes, !s->busy && !s->uncertain };
     doc_button_row(doc, ix, iw, &b, 1);
     free(complete);
     doc_box_end(doc, box, px(10));
@@ -607,7 +603,9 @@ static void complete_triage(ConversationScreen *s, size_t fixes) {
     mutate(s, "complete_findings", extra);
 }
 
-static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
+static void conversation_layout(Screen *base, Doc *doc) {
+    ConversationScreen *s = (ConversationScreen *)base;
+    int x = column_x(doc->width), w = column_w(doc->width);
     doc_space(doc, px(18));
     if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
     if (s->write_error) {
@@ -617,7 +615,7 @@ static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
         doc_space(doc, px(4));
         doc_text(doc, x + px(12), w - px(24), "The action may have completed. Check the latest conversation before trying again.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(8));
-        doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, A(s, ACT_REFRESH_OUTCOME), 0, !s->loading && !s->busy);
+        doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, ACT_REFRESH_OUTCOME, 0, !s->loading && !s->busy);
         doc_box_end(doc, box, px(10));
         doc_space(doc, px(12));
     }
@@ -638,7 +636,7 @@ static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
             doc_space(doc, px(8));
             int top = doc->y;
             int inner_x = open ? x + px(12) : x, inner_w = open ? w - px(12) : w;
-            doc_summary(doc, inner_x, inner_w, summary, open, A(s, ACT_TOOL_TOGGLE), e->seq);
+            doc_summary(doc, inner_x, inner_w, summary, open, ACT_TOOL_TOGGLE, e->seq);
             free(summary);
             if (open) {
                 for (size_t k = i; k < j; k++) {
@@ -664,7 +662,7 @@ static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
             doc_space(doc, px(8));
             int top = doc->y;
             int inner_x = open ? x + px(12) : x, inner_w = open ? w - px(12) : w;
-            doc_summary(doc, inner_x, inner_w, summary, open, A(s, ACT_TOOL_TOGGLE), e->seq);
+            doc_summary(doc, inner_x, inner_w, summary, open, ACT_TOOL_TOGGLE, e->seq);
             free(summary);
             if (open) {
                 for (size_t k = i; k < j; k++) layout_step(doc, inner_x, inner_w, &s->transcript.events[k]);
@@ -696,7 +694,7 @@ static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
         if (removable) {
             RECT rr = { x + w - px(60), doc->y, x + w, doc->y + lh };
             int ri = doc_text_at(doc, &rr, "Remove", FONT_CAPTION2, theme.danger, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-            doc_item(doc, ri)->action = A(s, ACT_DROP_QUEUED); doc_item(doc, ri)->arg = (intptr_t)q; doc_item(doc, ri)->hand = true;
+            doc_item(doc, ri)->action = ACT_DROP_QUEUED; doc_item(doc, ri)->arg = (intptr_t)q; doc_item(doc, ri)->hand = true;
         }
         doc->y += lh;
     }
@@ -711,17 +709,6 @@ static void layout_body(ConversationScreen *s, Doc *doc, int x, int w) {
     RECT anchor = { x, doc->y, x + w, doc->y + 1 };
     int ai = doc_add(doc, &anchor, NULL); doc_item(doc, ai)->id = 1;
     doc->y += 1;
-}
-static void conversation_layout(Screen *base, Doc *doc) {
-    ConversationScreen *s = (ConversationScreen *)base;
-    layout_body(s, doc, column_x(doc->width), column_w(doc->width));
-}
-void conversation_layout_in(Screen *base, Doc *doc, int x, int w) { layout_body((ConversationScreen *)base, doc, x, w); }
-const Session *conversation_session(Screen *base) { return session((ConversationScreen *)base); }
-void conversation_host(Screen *base, Screen *host, int action_base, UINT timer_base, void (*gone)(Screen *host)) {
-    ConversationScreen *s = (ConversationScreen *)base;
-    s->host = host; s->gone = gone; s->action_base = action_base; s->timer_base = timer_base;
-    base->pane = host->pane;
 }
 
 // MARK: - Header and menu
@@ -770,13 +757,13 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
     char *sub = status_line(ss);
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub);
     free(sub);
-    if (store_supports("rename")) info->title_action = A(s, ACT_MENU_ITEM + MENU_RENAME);
+    if (store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
     bool can = !s->busy && !s->uncertain;
     bool closed = str_eq(session_status(ss), "closed");
-    if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "\xE2\x8F\xB9 Stop", A(s, ACT_MENU_ITEM + MENU_STOP), can, false);
-    if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "\xE2\x9F\xB3 Reopen", A(s, ACT_MENU_ITEM + MENU_REOPEN), can, false);
-    if (store_supports("close") && !closed) header_button(info, 0xE8BB, "Close", A(s, ACT_MENU_ITEM + MENU_CLOSE), can, false);
-    if (store_supports("delete")) header_button(info, 0xE74D, "\xF0\x9F\x97\x91 Delete", A(s, ACT_MENU_ITEM + MENU_DELETE), can, true);
+    if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "\xE2\x8F\xB9 Stop", ACT_MENU_ITEM + MENU_STOP, can, false);
+    if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "\xE2\x9F\xB3 Reopen", ACT_MENU_ITEM + MENU_REOPEN, can, false);
+    if (store_supports("close") && !closed) header_button(info, 0xE8BB, "Close", ACT_MENU_ITEM + MENU_CLOSE, can, false);
+    if (store_supports("delete")) header_button(info, 0xE74D, "\xF0\x9F\x97\x91 Delete", ACT_MENU_ITEM + MENU_DELETE, can, true);
 }
 
 static void menu_choice(ConversationScreen *s, int chosen) {
@@ -806,7 +793,6 @@ static void menu_choice(ConversationScreen *s, int chosen) {
 
 static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
-    action -= s->action_base;
     if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_COPY) { menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
     case ACT_ANSWER: {
@@ -1073,19 +1059,19 @@ static void conversation_command(Screen *base, int id, int code, HWND control) {
 
 static void conversation_timer(Screen *base, UINT id) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (id == T(s, TIMER_WORKING)) {
+    if (id == TIMER_WORKING) {
         s->tick++;
         pane_repaint(base->pane);
         return;
     }
-    if (id == T(s, TIMER_VOICE)) { if (s->voice) voice_tick(s->voice); pane_footer_changed(base->pane); return; }
+    if (id == TIMER_VOICE) { if (s->voice) voice_tick(s->voice); pane_footer_changed(base->pane); return; }
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->renaming && !s->dialog_open;
         if (enabled && !s->loading) refresh(s, false); else poller_finished(&s->poller, false, -1);
     }
 }
 static void show_panel(ConversationScreen *s) {
-    if (s->host) return;
+    if (s->host) return;   // inside the pull request page already
     int number = session_pull_number(session(s));
     const char *repo = session_repo(session(s));
     if (number && repo && store_supports("pull") && pane_root(s->base.pane) == &s->base) app_set_panel(pull_panel_screen_new(repo, number));
@@ -1096,11 +1082,11 @@ static void conversation_visible(Screen *base, bool shown) {
     if (shown) {
         show_panel(s);
         pane_stick_to_bottom(base->pane, true); pane_show_bottom_button(base->pane, true);
-        poller_start(&s->poller, base->pane, T(s, TIMER_POLL), session_is_active(session(s)) ? 2000 : 7000);
-        if (session_is_active(session(s))) SetTimer(pane_hwnd(base->pane), T(s, TIMER_WORKING), 120, NULL);
+        poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(session(s)) ? 2000 : 7000);
+        if (session_is_active(session(s))) SetTimer(pane_hwnd(base->pane), TIMER_WORKING, 120, NULL);
         pane_scroll_to_bottom(base->pane);
     } else {
-        poller_stop(&s->poller); KillTimer(pane_hwnd(base->pane), T(s, TIMER_WORKING)); KillTimer(pane_hwnd(base->pane), T(s, TIMER_VOICE));
+        poller_stop(&s->poller); KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE);
         request_cancel(&s->req_refresh); s->loading = false;
         if (s->voice) voice_drop(s->voice);
         ShowWindow(s->composer, SW_HIDE);
@@ -1112,7 +1098,8 @@ static void conversation_activated(Screen *base, bool active) {
     ConversationScreen *s = (ConversationScreen *)base;
     // Recording cannot go on in the background: what was said until then is transcribed, as if stopped.
     if (!active && s->voice && voice_state(s->voice) == VOICE_RECORDING) voice_stop(s->voice);
-    if (active) poller_start(&s->poller, base->pane, T(s, TIMER_POLL), session_is_active(session(s)) ? 2000 : 7000);
+    // A pane hidden behind another tab of its host does not poll.
+    if (active && IsWindowVisible(pane_hwnd(base->pane))) poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(session(s)) ? 2000 : 7000);
 }
 static bool conversation_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     ConversationScreen *s = (ConversationScreen *)base;
@@ -1125,7 +1112,7 @@ static void conversation_destroy(Screen *base) {
     ConversationScreen *s = (ConversationScreen *)base;
     request_cancel(&s->req_refresh); request_cancel(&s->req_mutate);
     poller_stop(&s->poller);
-    if (base->pane) { KillTimer(pane_hwnd(base->pane), T(s, TIMER_WORKING)); KillTimer(pane_hwnd(base->pane), T(s, TIMER_VOICE)); }
+    if (base->pane) { KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE); }
     if (s->voice) voice_free(s->voice);
     attachments_clear(s);
     if (s->attacher) attacher_free(s->attacher);
@@ -1145,14 +1132,14 @@ static const ScreenVTable conversation_vt = {
     .scrolled = conversation_scrolled, .activated = conversation_activated,
 };
 
-Screen *conversation_screen_new(const Session *initial) {
+Screen *conversation_screen_in(const Session *initial, Pane *pane, Screen *host, void (*gone)(Screen *host)) {
     ConversationScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &conversation_vt; s->base.id = xstrfmt("conversation:%s", session_id(initial));
     session_copy(&s->initial, initial);
     transcript_init(&s->transcript);
     s->composer_lines = 1; s->at_bottom = true;
-    s->action_base = 1000; s->timer_base = 1;
-    HWND parent = pane_hwnd(app_detail_pane());
+    s->host = host; s->gone = gone;
+    HWND parent = pane_hwnd(pane);
     s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
     SendMessageW(s->composer, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
     SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply\x2026");
@@ -1162,3 +1149,5 @@ Screen *conversation_screen_new(const Session *initial) {
     if (store_can_transcribe()) s->voice = voice_new(voice_changed, s);
     return &s->base;
 }
+Screen *conversation_screen_new(const Session *initial) { return conversation_screen_in(initial, app_detail_pane(), NULL, NULL); }
+const Session *conversation_session(Screen *base) { return session((ConversationScreen *)base); }

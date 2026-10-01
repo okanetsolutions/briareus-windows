@@ -405,9 +405,8 @@ enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
-    ACT_CONV_BASE = 1300,    // the conversation under the Sessions tab, CONVERSATION_ACTIONS of them
 };
-enum { TIMER_FILES_PAGE = 2, TIMER_CONV_BASE = 10 };   // the conversation's CONVERSATION_TIMERS from TIMER_CONV_BASE up
+enum { TIMER_FILES_PAGE = 2 };
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE_PREPARE, TAG_MERGE, TAG_DECIDE, TAG_BODY };
 enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_SESSIONS, PR_TAB_FILES };
 
@@ -420,7 +419,9 @@ typedef struct {
     bool has_row; PullSummary row; bool row_read;
     Json *catalog;      // the server's `actions`
     Session *runs; size_t run_count;
-    Screen *conv;       // the conversation open under the Sessions tab, laid out inside this page
+    Pane *chat; Screen *conv;           // the conversation open under the Sessions tab, in a pane of its own inside this one
+    Session opening; bool has_opening;  // a conversation to open once the page is on a pane
+    RECT chat_rc; bool has_chat_rc;     // where the layout left room for the chat pane, in content coordinates
     Json *findings;
     PullFiles *files;   // the Files changed tab
     char *error, *findings_error, *write_error, *merge_error;
@@ -437,50 +438,58 @@ typedef struct {
     int prepared_head_differs;
 } PullScreen;
 
-/// The conversation when the Sessions tab shows it, on this screen's pane.
-static Screen *conv_shown(PullScreen *s) {
-    if (!s->conv || s->tab != PR_TAB_SESSIONS) return NULL;
-    s->conv->pane = s->base.pane;
-    return s->conv;
-}
+// MARK: The conversation under the Sessions tab
+// It lives in a pane of its own inside this one, placed where the layout leaves room under the session rows, so its
+// transcript scrolls within the page and the pull request stays in view around it.
+
 static bool on_top(PullScreen *s) { return s->base.pane && pane_top(s->base.pane) == &s->base; }
+static bool chat_shown(PullScreen *s) { return s->conv && s->tab == PR_TAB_SESSIONS; }
 /// The page's id follows the conversation it shows, so the sidebar highlights that session and does not reopen it.
-static void sync_id(PullScreen *s) {
-    char *id = s->conv ? xstrdup(s->conv->id) : xstrfmt("pull:%s#%d", s->project.repo, s->number);
+static void set_page_id(PullScreen *s, const char *session_id_or_null) {
+    char *id = session_id_or_null ? xstrfmt("conversation:%s", session_id_or_null) : xstrfmt("pull:%s#%d", s->project.repo, s->number);
     free(s->base.id); s->base.id = id;
     if (s->base.pane && pane_root(s->base.pane) == &s->base && s->base.pane == app_detail_pane()) pane_set_selected_id(app_sidebar_pane(), id);
 }
+/// Shows or hides the chat pane with its conversation, as the Sessions tab is chosen or left or the page itself is.
+static void chat_set_shown(PullScreen *s, bool shown) {
+    if (!s->conv) return;
+    pane_show(s->chat, shown);
+    if (s->conv->vt->visible) s->conv->vt->visible(s->conv, shown);
+}
 static void conv_drop(PullScreen *s) {
     if (!s->conv) return;
-    Screen *conv = s->conv;
-    conv->pane = s->base.pane;
-    if (on_top(s) && s->tab == PR_TAB_SESSIONS && conv->vt->visible) conv->vt->visible(conv, false);
     s->conv = NULL;
-    conv->vt->destroy(conv);
-    if (s->base.pane) { pane_stick_to_bottom(s->base.pane, false); pane_show_bottom_button(s->base.pane, false); }
+    pane_set_root(s->chat, NULL);   // destroys the conversation
+    pane_show(s->chat, false);
 }
-/// The session was deleted from inside the page: its row and transcript go, the list stays.
+/// The session was deleted from inside the page: its row and transcript go, the page stays on the remaining ones.
 static void conv_gone(Screen *host) {
     PullScreen *s = (PullScreen *)host;
     const char *id = s->conv ? session_id(conversation_session(s->conv)) : NULL;
     for (size_t i = 0; id && i < s->run_count; i++)
         if (str_eq(session_id(&s->runs[i]), id)) { session_free(&s->runs[i]); memmove(&s->runs[i], &s->runs[i + 1], (s->run_count - i - 1) * sizeof *s->runs); s->run_count--; break; }
     conv_drop(s);
-    sync_id(s);
-    if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_footer_changed(s->base.pane); }
+    set_page_id(s, NULL);
+    if (s->base.pane) pane_relayout(s->base.pane);
 }
 /// Opens a session under the Sessions tab, in place of the one there.
 static void conv_show(PullScreen *s, const Session *session) {
-    if (s->conv && str_eq(session_id(conversation_session(s->conv)), session_id(session))) { s->tab = PR_TAB_SESSIONS; }
-    else {
-        conv_drop(s);
-        s->conv = conversation_screen_new(session);
-        conversation_host(s->conv, &s->base, ACT_CONV_BASE, TIMER_CONV_BASE, conv_gone);
-        s->tab = PR_TAB_SESSIONS;
+    s->tab = PR_TAB_SESSIONS;
+    if (!s->base.pane) {
+        // Not on a pane yet (opened from the sidebar or a board): the pane comes with the first `visible`.
+        if (s->has_opening) session_free(&s->opening);
+        session_copy(&s->opening, session); s->has_opening = true;
+        set_page_id(s, session_id(session));
+        return;
     }
-    sync_id(s);
-    if (on_top(s)) { Screen *conv = conv_shown(s); if (conv->vt->visible) conv->vt->visible(conv, true); }
-    if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_footer_changed(s->base.pane); }
+    if (!s->chat) s->chat = pane_create(pane_hwnd(s->base.pane), false);
+    if (!s->conv || !str_eq(session_id(conversation_session(s->conv)), session_id(session))) {
+        s->conv = conversation_screen_in(session, s->chat, &s->base, conv_gone);
+        pane_set_root(s->chat, s->conv);   // shows it: polling, the composer, the view at the latest message
+    } else if (s->conv->vt->visible) s->conv->vt->visible(s->conv, true);
+    pane_show(s->chat, on_top(s));
+    set_page_id(s, session_id(session));
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 
 static const PullSummary *board_row(PullScreen *s) { return s->row_read ? (s->has_row ? &s->row : NULL) : (s->has_row ? &s->row : (s->has_summary ? &s->summary : NULL)); }
@@ -621,7 +630,8 @@ static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
     request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_prepare); request_cancel(&s->req_body);
-    conv_drop(s);
+    conv_drop(s); if (s->chat) pane_destroy(s->chat);
+    if (s->has_opening) session_free(&s->opening);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -1171,7 +1181,8 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
 }
 
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
-    const Session *open = s->conv ? conversation_session(s->conv) : NULL;
+    s->has_chat_rc = false;
+    const Session *open = s->conv ? conversation_session(s->conv) : s->has_opening ? &s->opening : NULL;
     bool listed = false;
     for (size_t i = 0; i < s->run_count; i++) {
         bool selected = open && str_eq(session_id(&s->runs[i]), session_id(open));
@@ -1181,7 +1192,18 @@ static void layout_runs(PullScreen *s, Doc *doc, Col c) {
     // A session opened before the list was read is listed from what it knows of itself.
     if (open && !listed) { doc_session_row(doc, c.x, c.w, open, 0, 0, true, theme.elevated); doc_space(doc, px(6)); }
     if (!s->run_count && !open) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
-    if (s->conv) { doc_space(doc, px(4)); doc_rule(doc, c.x, c.w); conversation_layout_in(s->conv, doc, c.x, c.w); }
+    if (!s->conv) return;
+    // The chat takes what is left of the view under the rows, in a frame; its pane is placed over the frame's inside.
+    doc_space(doc, px(4));
+    RECT content = pane_content_rect(s->base.pane);
+    int h = (content.bottom - content.top) - doc->y - px(16);
+    if (h < px(360)) h = px(360);
+    int box = doc_box_begin(doc, c.x, c.w, 0, theme.canvas, theme.line, px(10));
+    doc_item(doc, box)->hover_fill = false;
+    RECT inside = { c.x + 1, doc->y + 1, c.x + c.w - 1, doc->y + h - 1 };
+    s->chat_rc = inside; s->has_chat_rc = true;
+    doc->y += h;
+    doc_box_end(doc, box, 0);
 }
 
 /// The main column: what the selected tab holds.
@@ -1354,8 +1376,6 @@ static void pull_layout(Screen *base, Doc *doc) {
 
 static void pull_header(Screen *base, HeaderInfo *info) {
     PullScreen *s = (PullScreen *)base;
-    Screen *conv = conv_shown(s);
-    if (conv) { conv->vt->header(conv, info); return; }
     snprintf(info->title, sizeof info->title, "Pull request");
     snprintf(info->subtitle, sizeof info->subtitle, "%s #%d", s->project.repo, s->number);
 }
@@ -1478,8 +1498,8 @@ static void decide(PullScreen *s, const char *key, const char *decision) {
 
 static void pull_refresh(Screen *base);
 static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)pt;
     PullScreen *s = (PullScreen *)base;
-    if (action >= ACT_CONV_BASE && action < ACT_CONV_BASE + CONVERSATION_ACTIONS) { Screen *conv = conv_shown(s); if (conv) conv->vt->action(conv, action, arg, pt); return; }
     switch (action) {
     case ACT_OPEN_URL: {
         const char *url = json_str(json_get(s->pr, "url"));
@@ -1490,13 +1510,11 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB: {
         if ((int)arg == s->tab) break;
-        Screen *was = conv_shown(s);
-        if (was && on_top(s) && was->vt->visible) { was->vt->visible(was, false); pane_stick_to_bottom(base->pane, false); pane_show_bottom_button(base->pane, false); }
+        bool was = chat_shown(s);
         s->tab = (int)arg;
         if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
-        Screen *now = conv_shown(s);
-        if (now && on_top(s) && now->vt->visible) now->vt->visible(now, true);
-        pane_relayout(base->pane); pane_header_changed(base->pane); pane_footer_changed(base->pane);
+        if (was != chat_shown(s)) chat_set_shown(s, chat_shown(s));
+        pane_relayout(base->pane);
         break;
     }
     case ACT_FINDING_TOGGLE: {
@@ -1561,7 +1579,6 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
 }
 static void pull_timer(Screen *base, UINT id) {
     PullScreen *s = (PullScreen *)base;
-    if (id >= TIMER_CONV_BASE && id < TIMER_CONV_BASE + CONVERSATION_TIMERS) { Screen *conv = conv_shown(s); if (conv) conv->vt->timer(conv, id); return; }
     if (pull_files_timer(s->files, id)) return;
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->merging && !s->deciding && !s->dialog_open;
@@ -1570,18 +1587,26 @@ static void pull_timer(Screen *base, UINT id) {
 }
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
-    Screen *conv = conv_shown(s);
-    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); sync_id(s); }
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); }
     else { poller_stop(&s->poller); pull_files_cancel(s->files); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
-    if (conv && conv->vt->visible) conv->vt->visible(conv, shown);
+    if (shown && s->has_opening) { Session opening = s->opening; s->has_opening = false; conv_show(s, &opening); session_free(&opening); }
+    else if (chat_shown(s)) chat_set_shown(s, shown);
+    if (shown) set_page_id(s, s->conv ? session_id(conversation_session(s->conv)) : NULL);
 }
-// The composer is the page's footer while a conversation is shown.
-static int pull_footer_height(Screen *base, int width) { Screen *conv = conv_shown((PullScreen *)base); return conv ? conv->vt->footer_height(conv, width) : 0; }
-static void pull_footer_layout(Screen *base, const RECT *rc) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_layout(conv, rc); }
-static void pull_footer_paint(Screen *base, HDC hdc, const RECT *rc) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_paint(conv, hdc, rc); }
-static void pull_footer_click(Screen *base, POINT pt) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->footer_click(conv, pt); }
-static void pull_command(Screen *base, int id, int code, HWND control) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->command(conv, id, code, control); }
-static void pull_scrolled(Screen *base, bool at_bottom) { Screen *conv = conv_shown((PullScreen *)base); if (conv) conv->vt->scrolled(conv, at_bottom); }
+/// Moves the chat pane over the room the layout left for it, clipped to the view as the page scrolls.
+static void pull_place(Screen *base, const RECT *content, int scroll_y) {
+    PullScreen *s = (PullScreen *)base;
+    if (!s->chat) return;
+    if (!chat_shown(s) || !s->has_chat_rc) { pane_show(s->chat, false); return; }
+    RECT client; GetClientRect(pane_hwnd(base->pane), &client);
+    int margin = (client.right - client.left - pane_content_width(base->pane)) / 2;
+    RECT r = { margin + s->chat_rc.left, content->top + s->chat_rc.top - scroll_y, margin + s->chat_rc.right, content->top + s->chat_rc.bottom - scroll_y };
+    if (r.top < content->top) r.top = content->top;
+    if (r.bottom > content->bottom) r.bottom = content->bottom;
+    if (r.bottom - r.top < px(40)) { pane_show(s->chat, false); return; }
+    pane_set_bounds(s->chat, &r);
+    pane_show(s->chat, true);
+}
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
     // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
@@ -1589,21 +1614,13 @@ static void pull_refresh(Screen *base) {
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_pull); pull_load(s);
     if (pull_files_started(s->files)) pull_files_refresh(s->files);
-    Screen *conv = conv_shown(s);
-    if (conv) conv->vt->refresh(conv);
+    if (chat_shown(s) && s->conv->vt->refresh) s->conv->vt->refresh(s->conv);
     pane_relayout(base->pane);
 }
-static void pull_activated(Screen *base, bool active) {
-    PullScreen *s = (PullScreen *)base;
-    if (active) poller_start(&s->poller, base->pane, TIMER_POLL, 30000);
-    Screen *conv = conv_shown(s);
-    if (conv) conv->vt->activated(conv, active);
-}
+static void pull_activated(Screen *base, bool active) { if (active) { PullScreen *s = (PullScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 30000); } }
 static const ScreenVTable pull_vt = {
     .destroy = pull_destroy, .layout = pull_layout, .header = pull_header, .action = pull_action, .timer = pull_timer,
-    .visible = pull_visible, .refresh = pull_refresh, .activated = pull_activated,
-    .footer_height = pull_footer_height, .footer_layout = pull_footer_layout, .footer_paint = pull_footer_paint, .footer_click = pull_footer_click,
-    .command = pull_command, .scrolled = pull_scrolled,
+    .visible = pull_visible, .refresh = pull_refresh, .activated = pull_activated, .place = pull_place,
 };
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary) {
     PullScreen *s = xcalloc(1, sizeof *s);

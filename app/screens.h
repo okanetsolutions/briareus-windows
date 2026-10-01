@@ -20,14 +20,10 @@ void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
 /// A session as the user opens it: inside its pull request's page when it has one, on its own otherwise.
 Screen *session_screen_new(const Session *session);
-/// A conversation laid out inside another screen, as the pull request page's Sessions tab: its items use CONVERSATION_ACTIONS
-/// actions from `action_base` up and CONVERSATION_TIMERS timer ids from `timer_base` up, on the host's pane. The host forwards
-/// the pane's calls (header, action, timer, footer, command, visible, scrolled, activated, refresh) and destroys it; `gone` is
-/// called instead when the session was deleted from inside, and the host destroys it then.
-enum { CONVERSATION_ACTIONS = 128, CONVERSATION_TIMERS = 3 };
-void conversation_host(Screen *conversation, Screen *host, int action_base, UINT timer_base, void (*gone)(Screen *host));
-/// The transcript laid out in a column of the host's document.
-void conversation_layout_in(Screen *conversation, Doc *doc, int x, int w);
+/// A conversation for a pane of its own inside another screen, as the pull request page's Sessions tab: the composer is a
+/// child of that pane, no pull request panel opens beside it, and when the session is deleted from inside `gone` is called
+/// on the host, which empties the pane, instead of the conversation leaving a pane of the app's.
+Screen *conversation_screen_in(const Session *session, Pane *pane, Screen *host, void (*gone)(Screen *host));
 const Session *conversation_session(Screen *conversation);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
