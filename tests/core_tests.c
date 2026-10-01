@@ -155,6 +155,11 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     args = json_object(); json_set_str(args, "sessionId", "../token");
     result = api_call(c, "session", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/..%2Ftoken");
+    // A filter picked more than once repeats its parameter.
+    args = json_object(); json_set_str(args, "period", "all");
+    { Json *picks = json_array(); json_array_push(picks, json_string("p:1")); json_array_push(picks, json_string("r:o/r")); json_object_set(args, "project", picks); }
+    result = api_call(c, "usage_all", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/usage/all?period=all&project=p%3A1&project=r%3Ao%2Fr");
     // The session list has no project parameter: the project is kept back and the answer cut down to it.
     stub.body = "{\"sessions\":[{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\"},{\"id\":\"b\",\"status\":\"idle\",\"repo\":\"o/other\"}]}";
     args = json_object(); json_set_str(args, "repo", "o/r");

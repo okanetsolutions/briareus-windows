@@ -36,6 +36,7 @@ GpStatus WINAPI GdipFillPath(GpGraphics *graphics, GpBrush *brush, GpPath *path)
 GpStatus WINAPI GdipFillRectangle(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
 GpStatus WINAPI GdipFillEllipse(GpGraphics *graphics, GpBrush *brush, float x, float y, float width, float height);
 GpStatus WINAPI GdipDrawEllipse(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height);
+GpStatus WINAPI GdipDrawArc(GpGraphics *graphics, GpPen *pen, float x, float y, float width, float height, float start, float sweep);
 
 Palette theme;
 static HFONT fonts[FONT_COUNT];
@@ -229,6 +230,16 @@ void stroke_circle(HDC hdc, int cx, int cy, int radius, COLORREF color, int widt
     GdipCreatePen1(argb(color), (float)width, UnitPixel, &pen);
     float inset = width / 2.0f;
     GdipDrawEllipse(g, pen, cx - radius + inset, cy - radius + inset, radius * 2 + 1 - width, radius * 2 + 1 - width);
+    GdipDeletePen(pen);
+    GdipDeleteGraphics(g);
+}
+void stroke_arc(HDC hdc, int cx, int cy, int radius, COLORREF color, int width, double start, double sweep) {
+    if (sweep <= 0) return;
+    GpGraphics *g = smooth_graphics(hdc);
+    if (!g) return;
+    GpPen *pen = NULL;
+    GdipCreatePen1(argb(color), (float)width, UnitPixel, &pen);
+    GdipDrawArc(g, pen, (float)(cx - radius), (float)(cy - radius), (float)(radius * 2), (float)(radius * 2), (float)start, (float)sweep);
     GdipDeletePen(pen);
     GdipDeleteGraphics(g);
 }

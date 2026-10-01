@@ -45,6 +45,8 @@ Screen *pull_panel_screen_new(const char *repo, int number);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
 /// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
 Screen *findings_screen_new(void);
+/// What every project spent over a window, as the dashboard's 📊 home pane.
+Screen *dashboard_screen_new(void);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.

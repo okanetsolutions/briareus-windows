@@ -269,6 +269,7 @@ static const ApiRoute ROUTES[] = {
     { "branches", "GET", "branches" },
     { "runtimes", "GET", "runtimes" },
     { "usage", "GET", "usage" },
+    { "usage_all", "GET", "usage/all" },                   // every project's spend; a filter given as an array repeats
     { "actions", "GET", "actions" },
     { "action", "POST", "actions" },                       // an errand on a pull request, named in `action`
     // Pull requests
@@ -367,12 +368,18 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
     if (reads) {
         char sep = '?';
         for (size_t i = 0; i < json_count(rest); i++) {
-            char *value = url_value(json_get(rest, json_key(rest, i)), false);
-            if (!value) continue;
+            // An array is a repeatable parameter: `project=a&project=b`.
+            const Json *arg = json_get(rest, json_key(rest, i));
+            size_t n = json_is_array(arg) ? json_count(arg) : 1;
             char *key = url_encode(json_key(rest, i));
-            str_appendf(&path, "%c%s=%s", sep, key, value);
-            sep = '&';
-            free(key); free(value);
+            for (size_t k = 0; k < n; k++) {
+                char *value = url_value(json_is_array(arg) ? json_at(arg, k) : arg, false);
+                if (!value) continue;
+                str_appendf(&path, "%c%s=%s", sep, key, value);
+                sep = '&';
+                free(value);
+            }
+            free(key);
         }
         result = request(c, path.data, route->method, NULL, timeout_ms, error);
     } else {

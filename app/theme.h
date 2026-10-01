@@ -47,6 +47,8 @@ void fill_rect(HDC hdc, const RECT *rc, COLORREF color);
 void fill_round_rect(HDC hdc, const RECT *rc, int radius, COLORREF fill, COLORREF border);
 void fill_circle(HDC hdc, int cx, int cy, int radius, COLORREF fill);
 void stroke_circle(HDC hdc, int cx, int cy, int radius, COLORREF color, int width);
+/// An arc of a ring centred on the stroke: degrees clockwise from three o'clock, as GDI+ measures them.
+void stroke_arc(HDC hdc, int cx, int cy, int radius, COLORREF color, int width, double start, double sweep);
 void draw_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color);
 void draw_dashed_line(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color);
 /// Draws UTF-8 text; DT_ flags as for DrawText. Returns the height drawn.
