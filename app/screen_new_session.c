@@ -131,7 +131,7 @@ static void start_done(void *owner, Request *req) {
         session_free(&started);
         return;
     }
-    char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+    char *text = request_error_or_unexpected(req);
     set_string(&s->error, text); free(text);
     if (!req->ok && !api_error_is_refusal(&req->error)) s->uncertain = true;
     pane_footer_changed(s->base.pane);
@@ -366,7 +366,6 @@ static void new_session_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
 
 // MARK: - Menus
 
-static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static int popup(NewSessionScreen *s, HMENU menu, const RECT *anchor) {
     POINT pt = { anchor->left, anchor->bottom + px(4) };
     ClientToScreen(pane_hwnd(s->base.pane), &pt);
@@ -437,7 +436,7 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         for (size_t i = 0; i < n; i++) append(m, (UINT)i + 1, efforts[i], str_eq(eff.effort, efforts[i]), true);
         int chosen = popup(s, m, r);
         if (chosen >= 1 && (size_t)chosen - 1 < n) {
-            RuntimeChoice c = { eff.provider_id, eff.model ? xstrdup(eff.model) : NULL, xstrdup(efforts[chosen - 1]) };
+            RuntimeChoice c = { eff.provider_id, xstrdup(eff.model), xstrdup(efforts[chosen - 1]) };
             if (s->has_runtime) runtime_choice_free(&s->runtime);
             s->runtime = c; s->has_runtime = true;
         }
@@ -450,15 +449,15 @@ static void pick_chip(NewSessionScreen *s, int chip) {
 }
 static void new_session_footer_click(Screen *base, POINT pt) {
     NewSessionScreen *s = (NewSessionScreen *)base;
-    for (int c = 0; c < CHIP_COUNT; c++) if (!IsRectEmpty(&s->chip_rc[c]) && in_rect(&s->chip_rc[c], pt)) { pick_chip(s, c); return; }
-    if (in_rect(&s->send_rc, pt)) { start(s); return; }
-    if (in_rect(&s->mic_rc, pt) && s->voice) {
+    for (int c = 0; c < CHIP_COUNT; c++) if (!IsRectEmpty(&s->chip_rc[c]) && PtInRect(&s->chip_rc[c], pt)) { pick_chip(s, c); return; }
+    if (PtInRect(&s->send_rc, pt)) { start(s); return; }
+    if (PtInRect(&s->mic_rc, pt) && s->voice) {
         VoiceState vs = voice_state(s->voice);
         if (vs == VOICE_RECORDING) voice_stop(s->voice); else if (vs == VOICE_IDLE) voice_record(s->voice);
         pane_footer_changed(base->pane);
         return;
     }
-    if (in_rect(&s->box_rc, pt)) SetFocus(s->composer);
+    if (PtInRect(&s->box_rc, pt)) SetFocus(s->composer);
 }
 static void new_session_command(Screen *base, int id, int code, HWND control) {
     NewSessionScreen *s = (NewSessionScreen *)base;
@@ -518,7 +517,7 @@ static const ScreenVTable new_session_vt = {
 Screen *new_session_screen_new(const Project *project_, const Project *projects, size_t count) {
     NewSessionScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &new_session_vt; s->base.id = xstrdup("new-session");
-    s->projects = xcalloc(count ? count : 1, sizeof *s->projects);
+    s->projects = xcalloc(count, sizeof *s->projects);
     for (size_t i = 0; i < count; i++) { project_copy(&s->projects[i], &projects[i]); if (project_ && str_eq(projects[i].repo, project_->repo)) s->chosen = i; }
     s->count = count;
     if (project_ && !count) { s->projects = xrealloc(s->projects, sizeof *s->projects); project_copy(&s->projects[0], project_); s->count = 1; }

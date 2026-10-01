@@ -6,6 +6,12 @@
 #include <stddef.h>
 #include <time.h>
 
+/// Defines `T *name(const Json *array, size_t *count)`: reads each element with `bool parse(const Json *, T *)` and keeps
+/// the ones that read. Prefix with `static` for a private one.
+#define DEFINE_LIST_PARSE(T, name, parse)     T *name(const Json *array, size_t *count) {         size_t n = json_count(array), m = 0;         T *out = xcalloc(n, sizeof *out);         for (size_t i = 0; i < n; i++) if (parse(json_at(array, i), &out[m])) m++;         *count = m;         return out;     }
+/// Defines `void name(T *items, size_t count)`: frees each item with `free_one(T *)`, then the array. NULL is fine.
+#define DEFINE_LIST_FREE(T, name, free_one)     void name(T *items, size_t count) { if (!items) return; for (size_t i = 0; i < count; i++) free_one(&items[i]); free(items); }
+
 // MARK: - Connection
 
 /// The token's own record (`client` in what `GET /` answers): this device's token.

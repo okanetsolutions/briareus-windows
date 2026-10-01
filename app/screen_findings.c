@@ -248,7 +248,7 @@ static void rebuild(FindingsScreen *s) {
 
 /// Rounds by the pull request they were left on, in the queue's oldest-first order.
 static size_t build_groups(FindingsScreen *s, Group **out) {
-    Group *groups = xcalloc(s->round_count ? s->round_count : 1, sizeof *groups);
+    Group *groups = xcalloc(s->round_count, sizeof *groups);
     size_t n = 0;
     for (size_t i = 0; i < s->round_count; i++) {
         const char *repo = session_repo(round_session(s, i));
@@ -292,7 +292,7 @@ static void sessions_done(void *owner, Request *req) {
             s->incoming = xrealloc(s->incoming, (s->incoming_count + 1) * sizeof *s->incoming);
             session_copy(&s->incoming[s->incoming_count++], &s->all[i]);
         }
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         set_string(&s->error, text); free(text);
         s->cycle_failed = true; s->retry_after = req->error.retry_after;
     }
@@ -308,7 +308,7 @@ static void projects_done(void *owner, Request *req) {
         store_call("sessions", json_object(), 0, s, sessions_done, TAG_SESSIONS, &s->req_sessions);
         return;
     }
-    char *text = request_error_text(req); set_string(&s->error, text); free(text);
+    request_error_into(&s->error, req);
     s->cycle_failed = true; s->projects_failed = true; s->retry_after = req->error.retry_after;
     cycle_end(s);
 }
@@ -571,16 +571,6 @@ static void delete_finding(FindingsScreen *s, size_t r, size_t finding) {
 
 // MARK: - Layout
 
-static const char *severity_label(const char *severity, COLORREF *color) {
-    char *f = str_fold(severity);
-    const char *label;
-    if (str_eq(f, "critical")) { label = "CRIT"; *color = theme.danger; }
-    else if (str_eq(f, "high")) { label = "HIGH"; *color = theme.danger; }
-    else if (str_eq(f, "low")) { label = "LOW"; *color = theme.secondary; }
-    else { label = "MED"; *color = theme.warning; }
-    free(f);
-    return label;
-}
 static void clickable(Doc *doc, int item, int action, intptr_t arg) { doc_item(doc, item)->action = action; doc_item(doc, item)->arg = arg; doc_item(doc, item)->hand = true; }
 
 static void layout_outcome(FindingsScreen *s, Doc *doc, int x, int w, size_t i) {
@@ -617,7 +607,7 @@ static void layout_finding(FindingsScreen *s, Doc *doc, int fx, int fw, size_t r
     doc_rule(doc, fx, fw);
     doc_space(doc, px(8));
     COLORREF sev_color;
-    BadgeSpec sev = { 0, severity_label(json_str(json_get(f, "severity")), &sev_color), 0, false };
+    BadgeSpec sev = { 0, finding_severity_label(json_str(json_get(f, "severity")), &sev_color), 0, false };
     sev.color = sev_color;
     int chip_w = doc_badges_width(doc, &sev, 1);
     int top = doc->y;
@@ -647,11 +637,10 @@ static void layout_finding(FindingsScreen *s, Doc *doc, int fx, int fw, size_t r
     if (!store_can_manage() || !key) return;
     if (mine) {
         if (!store_supports("complete_findings")) return;
-        static const char *const titles[] = { "Fix", "Optional", "Dismiss" };
         const char *decision = decision_of(s, sid, round, f);
-        int selected = str_eq(decision, "fix") ? 0 : str_eq(decision, "optional") ? 1 : str_eq(decision, "dismissed") ? 2 : -1;
+        int selected = finding_decision_index(decision);
         doc_space(doc, px(4));
-        doc_segments(doc, fx, fw, titles, 3, selected, ACT_VERDICT, arg * 4, !busy);
+        doc_segments(doc, fx, fw, finding_decision_titles, FINDING_DECISION_COUNT, selected, ACT_VERDICT, arg * 4, !busy);
         doc_space(doc, px(4));
         const char *reason = reason_of(s, sid, round, f);
         const char *placeholder = "Comment (saved to the pull request)";
@@ -886,10 +875,9 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_REPLIED_URL: { const Replied *rp = key ? replied_find(s, session_id(ses), key) : NULL; if (rp && rp->url) open_web_url(rp->url); break; }
     case ACT_SAVED_URL: { const Card *c = card_find(s, session_id(ses)); if (c && c->saved_url) open_web_url(c->saved_url); break; }
     case ACT_VERDICT: {
-        static const char *const options[] = { "fix", "optional", "dismissed" };
-        if (!key || segment < 0 || segment > 2) break;
+        if (!key || segment < 0 || segment >= FINDING_DECISION_COUNT) break;
         Draft *d = draft_get(s, session_id(ses), round, key);
-        set_string(&d->decision, str_eq(d->decision, options[segment]) ? NULL : options[segment]);   // the same pick twice clears it
+        set_string(&d->decision, str_eq(d->decision, finding_decision_ids[segment]) ? NULL : finding_decision_ids[segment]);   // the same pick twice clears it
         card_forget_saved(s, session_id(ses));
         pane_relayout(base->pane);
         break;

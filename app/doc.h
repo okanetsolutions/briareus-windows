@@ -52,6 +52,8 @@ void doc_free(Doc *doc);
 void doc_begin(Doc *doc, Canvas *cv, int width);
 void doc_end(Doc *doc);
 Item *doc_item(Doc *doc, int index);
+/// True when `it` is the item under the mouse.
+bool doc_item_hovered(const Doc *doc, const Item *it);
 int doc_height(const Doc *doc);
 
 /// Adds an item at an explicit rectangle without moving the cursor.

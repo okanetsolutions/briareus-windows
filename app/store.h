@@ -73,6 +73,10 @@ Request *store_upload(const char *name, void *bytes, size_t len, void *owner, Re
 void request_cancel(Request **slot);
 /// The user-facing text of a failed request.
 char *request_error_text(const Request *req);
+/// Replaces the string in `slot` with the request's error text.
+void request_error_into(char **slot, const Request *req);
+/// The error text, or "unexpected response" for a request that succeeded with an answer the caller could not read.
+char *request_error_or_unexpected(const Request *req);
 
 /// Any work on a thread with a UI-thread completion.
 typedef void (*AsyncWork)(void *ctx);

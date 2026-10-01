@@ -26,6 +26,8 @@ Json *json_null(void);
 Json *json_bool(bool value);
 Json *json_number(double value);
 Json *json_string(const char *value);
+/// A string, or null when `value` is NULL.
+Json *json_string_or_null(const char *value);
 Json *json_array(void);
 Json *json_object(void);
 Json *json_clone(const Json *value);
@@ -52,6 +54,12 @@ bool json_is_array(const Json *value);
 const char *json_str(const Json *value);
 /// The string when it is not empty, or NULL.
 const char *json_str_nonempty(const Json *value);
+/// The string, or `fallback` for anything else.
+const char *json_str_or(const Json *value, const char *fallback);
+/// A new copy of the string, or NULL for anything else.
+char *json_dup_str(const Json *value);
+/// New copies of the strings in an array, skipping anything that is not one; `*count` receives the number.
+char **json_dup_strings(const Json *array, size_t *count);
 /// True with the number in `*out` when the value is one.
 bool json_num(const Json *value, double *out);
 double json_num_or(const Json *value, double fallback);

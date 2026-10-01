@@ -26,7 +26,24 @@ bool poller_fired(Poller *p, UINT id) {
 }
 void poller_set_base(Poller *p, int base_ms) { p->base_ms = base_ms; }
 
-void set_string(char **slot, const char *value) { free(*slot); *slot = value ? xstrdup(value) : NULL; }
+void set_string(char **slot, const char *value) { free(*slot); *slot = xstrdup(value); }
+
+const char *finding_severity_label(const char *severity, COLORREF *color) {
+    char *f = str_fold(severity);
+    const char *label;
+    if (str_eq(f, "critical")) { label = "CRIT"; *color = theme.danger; }
+    else if (str_eq(f, "high")) { label = "HIGH"; *color = theme.danger; }
+    else if (str_eq(f, "low")) { label = "LOW"; *color = theme.muted; }
+    else { label = "MED"; *color = theme.warn; }
+    free(f);
+    return label;
+}
+const char *const finding_decision_ids[FINDING_DECISION_COUNT] = { "fix", "optional", "dismissed" };
+const char *const finding_decision_titles[FINDING_DECISION_COUNT] = { "Fix", "Optional", "Dismiss" };
+int finding_decision_index(const char *decision) {
+    for (int k = 0; k < FINDING_DECISION_COUNT; k++) if (str_eq(decision, finding_decision_ids[k])) return k;
+    return -1;
+}
 
 // MARK: - Rows
 
@@ -284,7 +301,7 @@ static int tabnav_width(Canvas *cv, const TabnavData *d) {
 }
 static void paint_tabnav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     TabnavData *d = it->data;
-    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = doc_item_hovered(doc, it);
     COLORREF ink = d->active || hovered ? theme.ink : theme.muted;
     if (hovered && !d->active) { RECT h = { rc->left + px(2), rc->top + px(5), rc->right - px(2), rc->bottom - px(7) }; fill_round_rect(cv, &h, px(6), theme.raise, theme.raise); }
     int x = rc->left + px(12);
@@ -302,7 +319,7 @@ static void paint_tabnav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     if (d->active) { RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right - px(4), rc->bottom }; fill_round_rect(cv, &u, px(1), theme.accent, theme.accent); }
 }
 void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg) {
-    TabnavData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->title = xstrdup(title); d->count = count ? xstrdup(count) : NULL; d->active = active;
+    TabnavData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->title = xstrdup(title); d->count = xstrdup(count); d->active = active;
     int w = tabnav_width(doc->cv, d);
     if (*x > left && *x + w > right) { *x = left; *y += h; }
     doc->y = *y;

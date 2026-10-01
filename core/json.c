@@ -11,6 +11,7 @@ Json *json_null(void) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_NULL; re
 Json *json_bool(bool value) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_BOOL; j->b = value; return j; }
 Json *json_number(double value) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_NUMBER; j->n = value; return j; }
 Json *json_string(const char *value) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_STRING; j->s = xstrdup(value ? value : ""); return j; }
+Json *json_string_or_null(const char *value) { return value ? json_string(value) : json_null(); }
 Json *json_array(void) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_ARRAY; return j; }
 Json *json_object(void) { Json *j = xcalloc(1, sizeof *j); j->type = JSON_OBJECT; return j; }
 
@@ -119,6 +120,15 @@ bool json_is_object(const Json *value) { return value && value->type == JSON_OBJ
 bool json_is_array(const Json *value) { return value && value->type == JSON_ARRAY; }
 const char *json_str(const Json *value) { return value && value->type == JSON_STRING ? value->s : NULL; }
 const char *json_str_nonempty(const Json *value) { const char *s = json_str(value); return s && *s ? s : NULL; }
+const char *json_str_or(const Json *value, const char *fallback) { const char *s = json_str(value); return s ? s : fallback; }
+char *json_dup_str(const Json *value) { return xstrdup(json_str(value)); }
+char **json_dup_strings(const Json *array, size_t *count) {
+    size_t n = json_count(array), m = 0;
+    char **out = xmalloc(n * sizeof *out);
+    for (size_t i = 0; i < n; i++) { const char *s = json_str(json_at(array, i)); if (s) out[m++] = xstrdup(s); }
+    *count = m;
+    return out;
+}
 bool json_num(const Json *value, double *out) {
     if (!value || value->type != JSON_NUMBER) return false;
     if (out) *out = value->n;

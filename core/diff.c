@@ -36,7 +36,7 @@ DiffLine *diff_parse(const char *patch, size_t *count) {
         p = end + 1;
     }
     if (raw_count && raw[raw_count - 1][0] == 0) { free(raw[--raw_count]); }
-    DiffLine *lines = xcalloc(raw_count ? raw_count : 1, sizeof *lines);
+    DiffLine *lines = xcalloc(raw_count, sizeof *lines);
     int old_line = 0, new_line = 0;
     for (size_t i = 0; i < raw_count; i++) {
         const char *line = raw[i];

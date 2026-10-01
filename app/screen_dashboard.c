@@ -210,7 +210,7 @@ static void usage_done(void *owner, Request *req) {
         if (!any_pick(s)) { char *key = xstrfmt("usage:%s", PERIODS[g_period].id); cache_store(g_store.cache, s->data, key); free(key); }
         set_string(&s->error, NULL);
     } else {
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         set_string(&s->error, text); free(text);
     }
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
@@ -271,7 +271,7 @@ static void bar_free(void *p) { BarData *d = p; free(d->tip); free(d); }
 static void title_free(void *p) { ChartTitle *d = p; free(d->title); free(d); }
 static void paint_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     BarData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered) fill_rect(cv, rc, blend(theme.ink, theme.raise, 0.04));
     if (d->value <= 0 || d->max <= 0) return;
     int full = rc->bottom - rc->top, h = (int)(d->value / d->max * full + 0.5);
@@ -434,7 +434,7 @@ typedef struct {
 static void row_free(void *p) { RowData *d = p; for (int i = 0; i < d->n; i++) free(d->cell[i]); free(d->sub); free(d); }
 static void paint_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RowData *d = it->data;
-    bool hovered = it->action && doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = it->action && doc_item_hovered(doc, it);
     if (d->on || hovered) fill_rect(cv, rc, d->on ? theme.sunken : blend(theme.sunken, theme.raise, 0.6));
     if (!d->head) draw_line(cv, rc->left, rc->top, rc->right, rc->top, theme.line);
     int line = font_height(cv, d->font[0]);

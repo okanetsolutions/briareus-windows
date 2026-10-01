@@ -27,6 +27,7 @@ void doc_begin(Doc *doc, Canvas *cv, int width) {
 }
 void doc_end(Doc *doc) { doc->cv = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
+bool doc_item_hovered(const Doc *doc, const Item *it) { return doc->hover >= 0 && &doc->items[doc->hover] == it; }
 int doc_height(const Doc *doc) { return doc->y; }
 
 int doc_add(Doc *doc, const RECT *rc, ItemPaint paint) {
@@ -320,7 +321,7 @@ int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color,
 
 static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     COLORREF fill = it->fill, border = it->border;
-    bool hovered = it->action && it->hover_fill && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = it->action && it->hover_fill && doc_item_hovered(doc, it);
     if (hovered) { if (it->border != it->fill) border = theme.accent_dim; else fill = theme.raise; }
     if (it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it) fill = blend(theme.ink, fill, 0.06);
     fill_round_rect(cv, rc, it->radius, fill, border);
@@ -398,7 +399,7 @@ int doc_notice_box(Doc *doc, int x, int w, const char *message) {
 typedef struct { ButtonStyle style; bool enabled, compact; wchar_t glyph; } ButtonData;
 static void paint_button(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ButtonData *d = it->data;
-    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it && d->enabled;
+    bool hovered = doc_item_hovered(doc, it) && d->enabled;
     bool pressed = doc->pressed >= 0 && &doc->items[doc->pressed] == it && d->enabled;
     COLORREF fill, border, text;
     switch (d->style) {
@@ -616,7 +617,7 @@ static void paint_code_header(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT l = { rc->left + px(12), rc->top, rc->right - px(40), rc->bottom };
     draw_text(cv, d->language ? d->language : "code", &l, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT g = { rc->right - px(34), rc->top, rc->right - px(6), rc->bottom };
-    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered) fill_round_rect(cv, &g, px(6), blend(theme.text, theme.code, 0.06), blend(theme.text, theme.code, 0.06));
     draw_glyph(cv, d->copied ? 0xE73E : 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
     draw_line(cv, rc->left, rc->bottom - 1, rc->right, rc->bottom - 1, theme.border);
@@ -766,7 +767,7 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
             int header_h = font_height(doc->cv, FONT_MONO_CAPTION2) + px(12);
             RECT hr = { x, doc->y, x + w, doc->y + header_h };
             int header = doc_add(doc, &hr, paint_code_header);
-            CodeData *d = xcalloc(1, sizeof *d); d->language = b->language ? xstrdup(b->language) : NULL; d->code = xstrdup(b->text);
+            CodeData *d = xcalloc(1, sizeof *d); d->language = xstrdup(b->language); d->code = xstrdup(b->text);
             Item *hi = &doc->items[header];
             hi->data = d; hi->free_data = code_free; hi->action = ACTION_COPY_CODE; hi->arg = (intptr_t)d->code; hi->hand = true;
             doc->y += header_h;

@@ -28,7 +28,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
     *count = 0;
     if (!store_can_manage()) return NULL;
     size_t n; BoardAction *offered = board_actions_offered(catalog, pull, failed_checks, &n);
-    BoardAction *out = xcalloc(n ? n : 1, sizeof *out);
+    BoardAction *out = xcalloc(n, sizeof *out);
     for (size_t i = 0; i < n; i++) {
         char *op = board_action_operation(&offered[i]);
         if (store_supports(op)) board_action_copy(&out[(*count)++], &offered[i]);
@@ -70,7 +70,7 @@ typedef struct {
 static BoardFilter *current_filter(PullsScreen *s) { return s->tab == 0 ? &s->pull_filter : &s->issue_filter; }
 static BoardRow *rows_of(PullsScreen *s, size_t *count) {
     size_t n = s->tab == 0 ? s->pull_count : s->issue_count;
-    BoardRow *rows = xcalloc(n ? n : 1, sizeof *rows);
+    BoardRow *rows = xcalloc(n, sizeof *rows);
     for (size_t i = 0; i < n; i++) rows[i] = s->tab == 0 ? pull_board_row(&s->pulls[i]) : issue_board_row(&s->issues[i]);
     *count = n;
     return rows;
@@ -112,7 +112,7 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     // A saved board may be out of date about who has something open, so the server's first answer
     // opens the board again, unless the pickers were touched meanwhile.
     if (s->has_opening) {
-        size_t n; BoardRow *rows = xcalloc(s->pull_count ? s->pull_count : 1, sizeof *rows);
+        size_t n; BoardRow *rows = xcalloc(s->pull_count, sizeof *rows);
         for (n = 0; n < s->pull_count; n++) rows[n] = pull_board_row(&s->pulls[n]);
         BoardFilter filter; board_filter_opening(&filter, json_str(json_get(result, "author")), rows, n);
         free(rows);
@@ -130,7 +130,7 @@ static void pulls_done(void *owner, Request *req) {
     if (!req->ok) {
         // A server from before `fresh` refuses the argument it does not know.
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { pulls_load(s, false); return; }
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         s->loaded = true;
     } else {
         pulls_show(s, req->result, false);
@@ -183,7 +183,7 @@ static void board_start_done(void *owner, Request *req) {
         // The list stays shown; the new session joins the runs counted on its pull request.
         if (store_supports("sessions")) { request_cancel(&s->req_runs); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
     } else {
-        char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
+        request_error_into(&s->write_error, req);
         // A refusal is definite; anything else may have started the session.
         if (!api_error_is_refusal(&req->error)) s->uncertain = true;
     }
@@ -214,7 +214,7 @@ typedef struct { char *label; bool active; } TabData;
 static void tab_free(void *p) { TabData *d = p; free(d->label); free(d); }
 static void paint_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     TabData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     RECT t = *rc;
     draw_text(cv, d->label, &t, FONT_FOOTNOTE, d->active || hovered ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (d->active) { RECT u = { rc->left, rc->bottom - px(2), rc->right, rc->bottom }; fill_rect(cv, &u, theme.accent); }
@@ -295,8 +295,8 @@ static void pulls_layout(Screen *base, Doc *doc) {
             doc_notice(doc, px(12), w - px(24), refused);
             doc_box_end(doc, box, px(10));
         } else {
-            IssueSummary *visible = xcalloc(s->issue_count ? s->issue_count : 1, sizeof *visible);
-            size_t *map = xcalloc(s->issue_count ? s->issue_count : 1, sizeof *map);
+            IssueSummary *visible = xcalloc(s->issue_count, sizeof *visible);
+            size_t *map = xcalloc(s->issue_count, sizeof *map);
             size_t vn = 0;
             for (size_t i = 0; i < s->issue_count; i++) if (board_filter_passes(filter, &rows[i], -1)) { visible[vn] = s->issues[i]; map[vn] = i; vn++; }
             size_t nn; IssueRow *nested = issues_nested(visible, vn, s->project.repo, &nn);
@@ -505,7 +505,7 @@ static void pull_finish_poll(PullScreen *s) {
 static void findings_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (req->ok) { json_free(s->findings); s->findings = json_clone(json_get(req->result, "findings")); set_string(&s->findings_error, NULL); }
-    else { char *t = request_error_text(req); set_string(&s->findings_error, t); free(t); }
+    else { request_error_into(&s->findings_error, req); }
     pull_finish_poll(s);
 }
 static void body_done(void *owner, Request *req) {
@@ -528,7 +528,7 @@ static void conv_done(void *owner, Request *req) {
     if (k == CONV_FEEDS) return;
     ConvFeed *f = &s->conv[k];
     if (!req->ok) {
-        char *t = request_error_text(req); set_string(&f->error, t); free(t);
+        request_error_into(&f->error, req);
         json_free(f->incoming); f->incoming = NULL; f->read = true;
         pane_relayout(s->base.pane);
         return;
@@ -558,7 +558,7 @@ static void conv_cancel(PullScreen *s) { for (int k = 0; k < CONV_FEEDS; k++) re
 
 static void pull_done(void *owner, Request *req) {
     PullScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pull_finish_poll(s); return; }
+    if (!req->ok) { request_error_into(&s->error, req); pull_finish_poll(s); return; }
     json_free(s->pr); s->pr = json_clone(json_get(req->result, "pr"));
     set_string(&s->error, NULL);
     // The description is its own read, once per visit and on refresh.
@@ -610,7 +610,7 @@ static void sessions_done_pull(void *owner, Request *req) {
     if (!req->ok) return;
     Session *all; size_t n;
     if (!sessions_parse(req->result, &all, &n)) return;
-    sessions_free(s->runs, s->run_count); s->runs = xcalloc(n ? n : 1, sizeof *s->runs); s->run_count = 0;
+    sessions_free(s->runs, s->run_count); s->runs = xcalloc(n, sizeof *s->runs); s->run_count = 0;
     for (size_t i = 0; i < n; i++) if (session_pull_number(&all[i]) == s->number) session_copy(&s->runs[s->run_count++], &all[i]);
     sessions_free(all, n);
     pane_relayout(s->base.pane);
@@ -714,7 +714,7 @@ static int doc_pill(Doc *doc, int x, int y, const char *text, COLORREF color) {
 /// GitHub's stack button beside the state: the stack glyph and `2/3` in a bordered pill, pressed while the overview is open.
 static void paint_stack_pill(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     PillData *d = it->data;
-    bool open = it->arg != 0, hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool open = it->arg != 0, hovered = doc_item_hovered(doc, it);
     COLORREF fill = open ? blend(theme.accent, theme.canvas, 0.18) : hovered ? theme.raise : theme.canvas;
     fill_round_rect(cv, rc, (rc->bottom - rc->top) / 2, fill, open ? theme.accent : theme.line);
     RECT g = { rc->left + px(10), rc->top, rc->left + px(10) + px(16), rc->bottom }; draw_glyph(cv, 0xE81E, &g, FONT_ICON_SMALL, theme.accent);
@@ -735,7 +735,7 @@ typedef struct { char *title, *sub; bool current; } StackRowData;
 static void stack_row_free(void *p) { StackRowData *d = p; free(d->title); free(d->sub); free(d); }
 static void paint_stack_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StackRowData *d = it->data;
-    bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = it->action && doc_item_hovered(doc, it);
     if (hovered || d->current) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(cv, &h, px(6), d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas, d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas); }
     if (d->current) { RECT bar = { rc->left, rc->top + px(6), rc->left + px(3), rc->bottom - px(6) }; fill_round_rect(cv, &bar, px(1), theme.accent, theme.accent); }
     int x = rc->left + px(10);
@@ -782,7 +782,7 @@ static void layout_stack_overview(PullScreen *s, Doc *doc, Col c) {
     free(order);
     if (!s->stack.chain_count) doc_text(doc, ix + px(4), iw - px(4), "The board did not list the stack's pull requests.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
     StackBaseData *b = xcalloc(1, sizeof *b);
-    b->base = s->stack.base ? xstrdup(s->stack.base) : NULL;
+    b->base = xstrdup(s->stack.base);
     doc_custom(doc, ix, iw, px(30), paint_stack_base, b, stack_base_free, 0, 0);
     doc_space(doc, px(4));
     doc_text(doc, ix + px(4), iw - px(4), s->stack.partial ? "Only part of this stack is on the board; it may be longer. Merge from the bottom up." : "Merge from the bottom up.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
@@ -1056,7 +1056,7 @@ static void layout_description(PullScreen *s, Doc *doc, Col c) {
     const char *author = pull_author(s);
     const PullSummary *row = board_row(s);
     CommentHeadData *h = xcalloc(1, sizeof *h);
-    h->author = author ? xstrdup(author) : NULL;
+    h->author = xstrdup(author);
     if (row && row->has_updated) { char *rel = format_relative(row->updated_at); h->when = xstrfmt("%s \xC2\xB7 updated %s", author ? "commented" : "Description", rel); free(rel); }
     else h->when = xstrdup(author ? "commented" : "Description");
     int ix, iw, box = comment_begin(doc, c, h, 0, 0, &ix, &iw);
@@ -1362,7 +1362,7 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
 /// The trash button at the right of a session row: muted, red with a tint under the pointer, an ellipsis while deleting.
 static void paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool deleting = it->data != NULL;
-    bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    bool hovered = it->action && doc_item_hovered(doc, it);
     if (hovered) fill_round_rect(cv, rc, px(6), blend(theme.danger, theme.elevated, 0.14), blend(theme.danger, theme.elevated, 0.14));
     RECT r = *rc;
     if (deleting) draw_text(cv, "\xE2\x80\xA6", &r, FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1405,7 +1405,7 @@ static void delete_run_done(void *owner, Request *req) {
             s->run_count--;
             break;
         }
-    } else { char *t = request_error_text(req); set_string(&s->run_error, t); free(t); }
+    } else { request_error_into(&s->run_error, req); }
     set_string(&s->deleting_run, NULL);
     // A list read while the delete was in flight may still hold the row: read it again.
     if (store_supports("sessions")) {
@@ -1611,7 +1611,7 @@ static void start_done(void *owner, Request *req) {
         // The pull request stays shown; the new session joins its runs.
         if (store_supports("sessions")) { request_cancel(&s->req_sessions); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
     } else {
-        char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
+        request_error_into(&s->write_error, req);
         // A refusal is definite; anything else may have started the session.
         if (!api_error_is_refusal(&req->error)) s->uncertain = true;
     }
@@ -1653,7 +1653,7 @@ static void decide_done(void *owner, Request *req) {
     PullScreen *s = owner;
     set_string(&s->deciding, NULL);
     if (req->ok) { json_free(s->findings); s->findings = json_clone(json_get(req->result, "findings")); set_string(&s->findings_error, NULL); }
-    else { char *t = request_error_text(req); set_string(&s->findings_error, t); free(t); }
+    else { request_error_into(&s->findings_error, req); }
     pane_relayout(s->base.pane);
 }
 static void decide(PullScreen *s, const char *key, const char *decision) {
@@ -1661,7 +1661,7 @@ static void decide(PullScreen *s, const char *key, const char *decision) {
     set_string(&s->deciding, key);
     Json *args = json_object();
     json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number); json_set_str(args, "key", key);
-    json_object_set(args, "decision", decision ? json_string(decision) : json_null());
+    json_object_set(args, "decision", json_string_or_null(decision));
     store_call("finding_decision", args, 0, s, decide_done, TAG_DECIDE, &s->req_decide);
     pane_relayout(s->base.pane);
 }
@@ -1892,7 +1892,7 @@ static void issue_start_done(void *owner, Request *req) {
         Session started;
         if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
     } else {
-        char *t = request_error_text(req); set_string(&s->write_error, t); free(t);
+        request_error_into(&s->write_error, req);
         if (!api_error_is_refusal(&req->error)) s->uncertain = true;
     }
     pane_relayout(s->base.pane);

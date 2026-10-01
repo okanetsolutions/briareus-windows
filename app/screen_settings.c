@@ -71,7 +71,7 @@ typedef struct {
 static SettingsScreen *g_settings;
 
 static void paint_back(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     RECT t = { rc->left + px(6), rc->top, rc->right, rc->bottom };
     draw_text(cv, "\xE2\x86\x90 Back to sessions", &t, FONT_CAPTION, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
@@ -80,7 +80,7 @@ typedef struct { char *label, *repo; bool enabled, db, selected; } ProjectRowDat
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->label); free(d->repo); free(d); }
 static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
     // `.dot.idle` for a project sessions can start on, the plain grey dot for one switched off.
@@ -104,7 +104,7 @@ typedef struct { char *label, *binary; bool active, login, endpoint, selected, u
 static void provider_row_free(void *p) { ProviderRowData *d = p; free(d->label); free(d->binary); free(d); }
 static void paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProviderRowData *d = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     COLORREF background = hovered || d->selected ? theme.raise : theme.sidebar;
     if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
@@ -138,7 +138,7 @@ static void settings_load(SettingsScreen *s);
 static void settings_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
     s->loaded = true;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->error, NULL);
     json_free(s->projects);
     s->projects = json_object();
@@ -155,7 +155,7 @@ static void settings_done(void *owner, Request *req) {
 static void ssh_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
     s->ssh_loaded = true;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->ssh_error, t); free(t); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->ssh_error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->ssh_error, NULL);
     json_free(s->ssh);
     s->ssh = json_object();
@@ -174,7 +174,7 @@ static void projects_load(SettingsScreen *s) {
 static void providers_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
     s->providers_loaded = true;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->providers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->providers_error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->providers_error, NULL);
     json_free(s->providers);
     s->providers = json_object();
@@ -207,7 +207,7 @@ static void servers_open_row(SettingsScreen *s, size_t index) {
 static void servers_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
     s->servers_loaded = true;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->servers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_error_into(&s->servers_error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->servers_error, NULL);
     json_free(s->servers);
     s->servers = json_object();
@@ -261,7 +261,7 @@ static void ssh_open_row(SettingsScreen *s, size_t index) {
 
 static void order_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
-    if (!req->ok) { char *t = request_error_text(req); set_string(&s->error, t); free(t); }
+    if (!req->ok) { request_error_into(&s->error, req); }
     else if (json_is_array(json_get(req->result, "projects"))) {
         json_object_set(s->projects, "list", json_clone(json_get(req->result, "projects")));
         set_string(&s->error, NULL);
@@ -674,7 +674,7 @@ static bool field_enabled(FormScreen *s, int f) { return f != F_DB_RESTORE || s-
 
 static void pick_clear(RuntimePick *p) { free(p->model); free(p->effort); memset(p, 0, sizeof *p); }
 static void pick_set(RuntimePick *p, int provider_id, const char *model, const char *effort) {
-    char *m = model ? xstrdup(model) : NULL, *e = effort ? xstrdup(effort) : NULL;
+    char *m = xstrdup(model), *e = xstrdup(effort);
     pick_clear(p);
     p->provider_id = provider_id; p->model = m; p->effort = e;
 }
@@ -887,7 +887,7 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
 static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
@@ -908,7 +908,7 @@ typedef struct { char *text; bool enabled; } SelectData;
 static void select_free(void *p) { SelectData *d = p; free(d->text); free(d); }
 static void paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SelectData *d = it->data;
-    bool hovered = d->enabled && doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = d->enabled && doc_item_hovered(doc, it);
     fill_round_rect(cv, rc, px(6), d->enabled ? theme.raise : blend(theme.raise, theme.canvas, 0.5), hovered ? theme.accent_dim : theme.line);
     RECT t = { rc->left + px(12), rc->top, rc->right - px(28), rc->bottom };
     draw_text(cv, d->text, &t, FONT_FOOTNOTE, d->enabled ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -1209,7 +1209,7 @@ static void save_done(void *owner, Request *req) {
     FormScreen *s = owner;
     const Json *row = req->ok ? json_get(req->result, "project") : NULL;
     if (!json_is_object(row)) {
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         set_string(&s->error, text); free(text);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
@@ -1240,7 +1240,7 @@ static void form_save(FormScreen *s) {
 static void delete_done(void *owner, Request *req) {
     FormScreen *s = owner;
     if (!req->ok) {
-        char *text = request_error_text(req); set_string(&s->error, text); free(text);
+        request_error_into(&s->error, req);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
         return;
     }
@@ -1514,7 +1514,7 @@ static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
 }
 static void paint_ssh_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SshForm *s = it->data;
-    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    bool hovered = doc_item_hovered(doc, it);
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
     RECT b = { rc->left, top, rc->left + size, top + size };
     fill_round_rect(cv, &b, px(3), s->enabled ? theme.accent : theme.field, s->enabled ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
@@ -1723,7 +1723,7 @@ static void ssh_save_done(void *owner, Request *req) {
     SshForm *s = owner;
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
     if (!json_is_object(row)) {
-        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        char *text = request_error_or_unexpected(req);
         ssh_show_error(s, text);
         return;
     }

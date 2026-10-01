@@ -7,35 +7,15 @@
 
 /// Logins and label names are compared folded: GitHub hands the same person back in either case.
 static bool fold_eq(const char *a, const char *b) { return str_ieq(a ? a : "", b ? b : ""); }
-static char *dup_str(const Json *v) { const char *s = json_str(v); return s ? xstrdup(s) : NULL; }
-static char **names(const Json *value, size_t *count) {
-    size_t n = json_count(value), m = 0;
-    char **out = xmalloc((n ? n : 1) * sizeof *out);
-    for (size_t i = 0; i < n; i++) { const char *s = json_str(json_at(value, i)); if (s) out[m++] = xstrdup(s); }
-    *count = m;
-    return out;
-}
-static PullLabel *labels_parse(const Json *value, size_t *count) {
-    size_t n = json_count(value), m = 0;
-    PullLabel *out = xcalloc(n ? n : 1, sizeof *out);
-    for (size_t i = 0; i < n; i++) if (pull_label_parse(json_at(value, i), &out[m])) m++;
-    *count = m;
-    return out;
-}
-static void labels_free(PullLabel *labels, size_t count) { for (size_t i = 0; i < count; i++) pull_label_free(&labels[i]); free(labels); }
+static DEFINE_LIST_PARSE(PullLabel, labels_parse, pull_label_parse)
+static DEFINE_LIST_FREE(PullLabel, labels_free, pull_label_free)
 static PullLabel *labels_copy(const PullLabel *labels, size_t count) {
-    PullLabel *out = xcalloc(count ? count : 1, sizeof *out);
-    for (size_t i = 0; i < count; i++) { out[i].name = xstrdup(labels[i].name); out[i].color = labels[i].color ? xstrdup(labels[i].color) : NULL; }
+    PullLabel *out = xcalloc(count, sizeof *out);
+    for (size_t i = 0; i < count; i++) { out[i].name = xstrdup(labels[i].name); out[i].color = xstrdup(labels[i].color); }
     return out;
 }
-static BoardLink *links_parse(const Json *value, size_t *count) {
-    size_t n = json_count(value), m = 0;
-    BoardLink *out = xcalloc(n ? n : 1, sizeof *out);
-    for (size_t i = 0; i < n; i++) if (board_link_parse(json_at(value, i), &out[m])) m++;
-    *count = m;
-    return out;
-}
-static void links_free(BoardLink *links, size_t count) { for (size_t i = 0; i < count; i++) board_link_free(&links[i]); free(links); }
+static DEFINE_LIST_PARSE(BoardLink, links_parse, board_link_parse)
+static DEFINE_LIST_FREE(BoardLink, links_free, board_link_free)
 
 // MARK: - Labels and links
 
@@ -44,7 +24,7 @@ bool pull_label_parse(const Json *value, PullLabel *out) {
     const char *name = json_str(json_get(value, "name"));
     if (!name) name = json_str(value);
     if (str_empty(name)) return false;
-    out->name = xstrdup(name); out->color = dup_str(json_get(value, "color"));
+    out->name = xstrdup(name); out->color = json_dup_str(json_get(value, "color"));
     return true;
 }
 void pull_label_free(PullLabel *l) { if (!l) return; free(l->name); free(l->color); memset(l, 0, sizeof *l); }
@@ -67,9 +47,9 @@ bool board_link_parse(const Json *value, BoardLink *out) {
     out->number = (int)number;
     const char *title = json_str(json_get(value, "title"));
     out->title = title ? xstrdup(title) : xstrfmt("#%d", out->number);
-    out->url = dup_str(json_get(value, "url")); out->repo = dup_str(json_get(value, "repo"));
+    out->url = json_dup_str(json_get(value, "url")); out->repo = json_dup_str(json_get(value, "repo"));
     out->draft = json_bool_is(json_get(value, "draft"), true);
-    out->state = dup_str(json_get(value, "state")); out->state_reason = dup_str(json_get(value, "stateReason"));
+    out->state = json_dup_str(json_get(value, "state")); out->state_reason = json_dup_str(json_get(value, "stateReason"));
     out->labels = labels_parse(json_get(value, "labels"), &out->label_count);
     return true;
 }
@@ -81,8 +61,8 @@ void board_link_free(BoardLink *l) {
 void board_link_copy(BoardLink *into, const BoardLink *from) {
     memset(into, 0, sizeof *into);
     into->number = from->number; into->title = xstrdup(from->title);
-    into->url = from->url ? xstrdup(from->url) : NULL; into->repo = from->repo ? xstrdup(from->repo) : NULL;
-    into->draft = from->draft; into->state = from->state ? xstrdup(from->state) : NULL; into->state_reason = from->state_reason ? xstrdup(from->state_reason) : NULL;
+    into->url = xstrdup(from->url); into->repo = xstrdup(from->repo);
+    into->draft = from->draft; into->state = xstrdup(from->state); into->state_reason = xstrdup(from->state_reason);
     into->labels = labels_copy(from->labels, from->label_count); into->label_count = from->label_count;
 }
 bool board_link_is_foreign(const BoardLink *l, const char *repo) { return l->repo ? !fold_eq(l->repo, repo) : false; }
@@ -100,31 +80,29 @@ bool pull_summary_parse(const Json *value, PullSummary *out) {
     out->number = (int)number; out->raw = json_clone(value);
     const char *title = json_str(json_get(value, "title"));
     out->title = title ? xstrdup(title) : xstrfmt("Pull request #%d", out->number);
-    out->url = dup_str(json_get(value, "url"));
-    out->branch = xstrdup(json_str(json_get(value, "branch")) ? json_str(json_get(value, "branch")) : "");
-    out->base_branch = xstrdup(json_str(json_get(value, "baseBranch")) ? json_str(json_get(value, "baseBranch")) : "");
+    out->url = json_dup_str(json_get(value, "url"));
+    out->branch = xstrdup(json_str_or(json_get(value, "branch"), ""));
+    out->base_branch = xstrdup(json_str_or(json_get(value, "baseBranch"), ""));
     out->draft = json_bool_is(json_get(value, "draft"), true);
-    out->author = dup_str(json_get(value, "author"));
-    out->assignees = names(json_get(value, "assignees"), &out->assignee_count);
+    out->author = json_dup_str(json_get(value, "author"));
+    out->assignees = json_dup_strings(json_get(value, "assignees"), &out->assignee_count);
     const Json *reviewers = json_get(value, "reviewers");
     size_t rn = json_count(reviewers);
-    out->reviewers = xcalloc(rn ? rn : 1, sizeof *out->reviewers);
+    out->reviewers = xcalloc(rn, sizeof *out->reviewers);
     for (size_t i = 0; i < rn; i++) {
         const Json *r = json_at(reviewers, i);
         const char *user = json_str(json_get(r, "user"));
         if (!user) continue;
-        const char *state = json_str(json_get(r, "state"));
         out->reviewers[out->reviewer_count].user = xstrdup(user);
-        out->reviewers[out->reviewer_count].state = xstrdup(state ? state : "");
+        out->reviewers[out->reviewer_count].state = xstrdup(json_str_or(json_get(r, "state"), ""));
         out->reviewer_count++;
     }
     out->labels = labels_parse(json_get(value, "labels"), &out->label_count);
     out->issues = links_parse(json_get(value, "issues"), &out->issue_count);
-    const char *mergeable = json_str(json_get(value, "mergeable"));
-    out->mergeable = xstrdup(mergeable ? mergeable : "unknown");
-    out->checks = dup_str(json_get(value, "checks"));
-    out->review_decision = dup_str(json_get(value, "reviewDecision"));
-    out->recommended = dup_str(json_get(value, "recommended"));
+    out->mergeable = xstrdup(json_str_or(json_get(value, "mergeable"), "unknown"));
+    out->checks = json_dup_str(json_get(value, "checks"));
+    out->review_decision = json_dup_str(json_get(value, "reviewDecision"));
+    out->recommended = json_dup_str(json_get(value, "recommended"));
     out->has_updated = board_date_parse(json_str(json_get(value, "updatedAt")), &out->updated_at);
     return true;
 }
@@ -148,14 +126,8 @@ bool pull_conflicting(const PullSummary *p) { return str_eq(p->mergeable, "confl
 bool pull_has_conflicts(const PullSummary *p) { return pull_conflicting(p) || carries(p->labels, p->label_count, "has-conflicts"); }
 bool pull_checks_failed(const PullSummary *p) { return str_eq(p->checks, "failure") || str_eq(p->checks, "error"); }
 bool pull_awaits_feedback(const PullSummary *p) { return carries(p->labels, p->label_count, "feedback-given"); }
-PullSummary *pull_summaries_parse(const Json *array, size_t *count) {
-    size_t n = json_count(array), m = 0;
-    PullSummary *out = xcalloc(n ? n : 1, sizeof *out);
-    for (size_t i = 0; i < n; i++) if (pull_summary_parse(json_at(array, i), &out[m])) m++;
-    *count = m;
-    return out;
-}
-void pull_summaries_free(PullSummary *pulls, size_t count) { if (!pulls) return; for (size_t i = 0; i < count; i++) pull_summary_free(&pulls[i]); free(pulls); }
+DEFINE_LIST_PARSE(PullSummary, pull_summaries_parse, pull_summary_parse)
+DEFINE_LIST_FREE(PullSummary, pull_summaries_free, pull_summary_free)
 
 // MARK: - Issues
 
@@ -166,11 +138,11 @@ bool issue_summary_parse(const Json *value, IssueSummary *out) {
     out->number = (int)number;
     const char *title = json_str(json_get(value, "title"));
     out->title = title ? xstrdup(title) : xstrfmt("Issue #%d", out->number);
-    out->url = dup_str(json_get(value, "url")); out->author = dup_str(json_get(value, "author"));
-    out->assignees = names(json_get(value, "assignees"), &out->assignee_count);
+    out->url = json_dup_str(json_get(value, "url")); out->author = json_dup_str(json_get(value, "author"));
+    out->assignees = json_dup_strings(json_get(value, "assignees"), &out->assignee_count);
     out->labels = labels_parse(json_get(value, "labels"), &out->label_count);
     out->comments = json_int_or(json_get(value, "comments"), 0);
-    out->milestone = dup_str(json_get(value, "milestone"));
+    out->milestone = json_dup_str(json_get(value, "milestone"));
     out->has_updated = board_date_parse(json_str(json_get(value, "updatedAt")), &out->updated_at);
     out->has_parent = board_link_parse(json_get(value, "parent"), &out->parent);
     out->sub_issues = json_int_or(json_get(json_get(value, "subIssues"), "total"), 0);
@@ -187,14 +159,8 @@ void issue_summary_free(IssueSummary *i) {
     memset(i, 0, sizeof *i);
 }
 bool issue_is_epic(const IssueSummary *i) { return i->sub_issues > 0; }
-IssueSummary *issue_summaries_parse(const Json *array, size_t *count) {
-    size_t n = json_count(array), m = 0;
-    IssueSummary *out = xcalloc(n ? n : 1, sizeof *out);
-    for (size_t i = 0; i < n; i++) if (issue_summary_parse(json_at(array, i), &out[m])) m++;
-    *count = m;
-    return out;
-}
-void issue_summaries_free(IssueSummary *issues, size_t count) { if (!issues) return; for (size_t i = 0; i < count; i++) issue_summary_free(&issues[i]); free(issues); }
+DEFINE_LIST_PARSE(IssueSummary, issue_summaries_parse, issue_summary_parse)
+DEFINE_LIST_FREE(IssueSummary, issue_summaries_free, issue_summary_free)
 
 typedef struct { const IssueSummary *issues; size_t count; const char *repo; IssueRow *rows; size_t row_count; bool *drawn; } Nest;
 static int parent_of(const Nest *n, const IssueSummary *issue) {
@@ -209,7 +175,7 @@ static void draw(Nest *n, size_t index, int depth) {
     for (size_t i = 0; i < n->count; i++) if (parent_of(n, &n->issues[i]) == n->issues[index].number) draw(n, i, depth + 1);
 }
 IssueRow *issues_nested(const IssueSummary *issues, size_t count, const char *repo, size_t *row_count) {
-    Nest n = { issues, count, repo, xcalloc(count ? count : 1, sizeof(IssueRow)), 0, xcalloc(count ? count : 1, sizeof(bool)) };
+    Nest n = { issues, count, repo, xcalloc(count, sizeof(IssueRow)), 0, xcalloc(count, sizeof(bool)) };
     for (size_t i = 0; i < count; i++) if (parent_of(&n, &issues[i]) == 0) draw(&n, i, 0);
     for (size_t i = 0; i < count; i++) draw(&n, i, 0);
     free(n.drawn);
@@ -373,7 +339,7 @@ Json *board_action_arguments(const BoardAction *a, const char *repo, int number,
 BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count) {
     // What the server lists, by id, in its order.
     size_t served_count = json_count(catalog);
-    BoardAction *served = xcalloc(served_count ? served_count : 1, sizeof *served);
+    BoardAction *served = xcalloc(served_count, sizeof *served);
     size_t sn = 0;
     for (size_t i = 0; i < served_count; i++) {
         const Json *entry = json_at(catalog, i);
@@ -384,12 +350,11 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
         BoardAction *a = &served[k];
         memset(a, 0, sizeof *a);
         a->id = xstrdup(id); a->label = xstrdup(label);
-        const char *hint = json_str(json_get(entry, "hint")); a->hint = xstrdup(hint ? hint : "");
+        a->hint = xstrdup(json_str_or(json_get(entry, "hint"), ""));
         const char *input_label = json_str(json_get(json_get(entry, "input"), "label"));
         if (input_label) {
             a->has_input = true; a->input.label = xstrdup(input_label);
-            const char *placeholder = json_str(json_get(json_get(entry, "input"), "placeholder"));
-            a->input.placeholder = xstrdup(placeholder ? placeholder : "");
+            a->input.placeholder = xstrdup(json_str_or(json_get(json_get(entry, "input"), "placeholder"), ""));
             a->input.required = json_bool_is(json_get(json_get(entry, "input"), "required"), true);
         }
     }
@@ -432,7 +397,7 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
     *count = n;
     return out;
 }
-void board_actions_free(BoardAction *actions, size_t count) { if (!actions) return; for (size_t i = 0; i < count; i++) board_action_free(&actions[i]); free(actions); }
+DEFINE_LIST_FREE(BoardAction, board_actions_free, board_action_free)
 
 // MARK: - Merge
 
@@ -496,7 +461,7 @@ const char *review_status_text(ReviewStatus s) {
 
 static void chain_parse(const Json *chain, StackPosition *out) {
     size_t n = json_count(chain);
-    out->chain = xcalloc(n ? n : 1, sizeof *out->chain);
+    out->chain = xcalloc(n, sizeof *out->chain);
     for (size_t i = 0; i < n; i++) {
         const Json *item = json_at(chain, i);
         double number;
@@ -507,7 +472,7 @@ static void chain_parse(const Json *chain, StackPosition *out) {
         s->title = title ? xstrdup(title) : xstrfmt("Pull request #%d", s->number);
         const char *branch = json_str_nonempty(json_get(item, "branch"));
         if (!branch) branch = json_str_nonempty(json_get(item, "headRef"));
-        s->branch = branch ? xstrdup(branch) : NULL;
+        s->branch = xstrdup(branch);
         s->depth = json_int_or(json_get(item, "depth"), 1);
         s->draft = json_bool_is(json_get(item, "draft"), true);
     }
@@ -524,7 +489,7 @@ bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *
     char *id;
     double numeric;
     if (json_num(json_get(value, "id"), &numeric)) id = xstrfmt("%d", (int)numeric);
-    else id = xstrdup(json_str(json_get(value, "id")) ? json_str(json_get(value, "id")) : "");
+    else id = xstrdup(json_str_or(json_get(value, "id"), ""));
     chain_parse(json_get(stacks, id), out);
     free(id);
     return true;
@@ -532,7 +497,7 @@ bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *
 bool stack_position_restore(const Json *value, StackPosition *out) {
     if (!stack_header_parse(value, out)) return false;
     const char *base = json_str_nonempty(json_get(value, "base"));
-    out->base = base ? xstrdup(base) : NULL;
+    out->base = xstrdup(base);
     chain_parse(json_get(value, "chain"), out);
     return true;
 }
@@ -560,12 +525,12 @@ void stack_position_free(StackPosition *s) {
 void stack_position_copy(StackPosition *into, const StackPosition *from) {
     memset(into, 0, sizeof *into);
     into->position = from->position; into->total = from->total; into->partial = from->partial;
-    into->base = from->base ? xstrdup(from->base) : NULL;
-    into->chain = xcalloc(from->chain_count ? from->chain_count : 1, sizeof *into->chain);
+    into->base = xstrdup(from->base);
+    into->chain = xcalloc(from->chain_count, sizeof *into->chain);
     for (size_t i = 0; i < from->chain_count; i++) {
         into->chain[i] = from->chain[i];
         into->chain[i].title = xstrdup(from->chain[i].title);
-        into->chain[i].branch = from->chain[i].branch ? xstrdup(from->chain[i].branch) : NULL;
+        into->chain[i].branch = xstrdup(from->chain[i].branch);
     }
     into->chain_count = from->chain_count;
 }
@@ -592,7 +557,7 @@ void stack_position_branches(StackPosition *s, const PullSummary *rows, size_t c
     if (row && !str_empty(row->base_branch)) { free(s->base); s->base = xstrdup(row->base_branch); }
 }
 size_t *stack_position_top_first(const StackPosition *s) {
-    size_t *order = xcalloc(s->chain_count ? s->chain_count : 1, sizeof *order);
+    size_t *order = xcalloc(s->chain_count, sizeof *order);
     for (size_t i = 0; i < s->chain_count; i++) order[i] = i;
     // Insertion sort by depth, deepest first; items of one depth keep the server's order.
     for (size_t i = 1; i < s->chain_count; i++) {
