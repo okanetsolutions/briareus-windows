@@ -62,6 +62,17 @@ Screen *settings_screen_new(void);
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);
 /// The settings sidebar reads the projects again, after one was saved, cloned or deleted; `select_id` > 0 is highlighted.
 void settings_projects_changed(int select_id);
+/// One server of the database pool, the dashboard's database server form. `row` is the server's DbServer (NULL with
+/// `defaults` for a new one).
+Screen *db_server_settings_screen_new(const Json *row, const Json *defaults);
+/// The settings sidebar reads the database pool again, after a server was saved or deleted; `open_first` opens the first
+/// server left once it is read, unless another settings form is up.
+void settings_db_servers_changed(bool open_first);
+/// What the settings sidebar last read, for the forms; NULL when it is not up.
+const Json *settings_project_rows(void);
+const Json *settings_db_server_rows(void);
+/// The servers in the pool, which is how many sessions with a database may be open at once.
+size_t settings_pool_capacity(void);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.

@@ -316,6 +316,12 @@ static const ApiRoute ROUTES[] = {
     { "update_project", "PUT", "settings/projects/{id}" },
     { "delete_project", "DELETE", "settings/projects/{id}" },
     { "order_projects", "PUT", "settings/projects/order" },
+    // The database pool: the servers sessions claim one at a time, and a probe of one as its form holds it.
+    { "settings_db_servers", "GET", "settings/db-servers" },
+    { "create_db_server", "POST", "settings/db-servers" },
+    { "update_db_server", "PUT", "settings/db-servers/{id}" },
+    { "delete_db_server", "DELETE", "settings/db-servers/{id}" },
+    { "test_db_server", "POST", "settings/db-servers/test" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
