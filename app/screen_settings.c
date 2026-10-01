@@ -1,6 +1,7 @@
 // Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects
-// with ＋ New) and a project's form, its sections and fields laid out as the dashboard's, saved through
-// /settings/projects. Those routes need an Admin token; any other token gets a sentence saying so.
+// and the providers, each with ＋ New) and a project's form, its sections and fields laid out as the dashboard's, saved
+// through /settings/projects. The provider form is screen_provider_settings.c. Those routes need an Admin token; any other
+// token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -16,7 +17,8 @@ static void sign_out(void) {
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static int row_id(const Json *row) { return json_int_or(json_get(row, "id"), 0); }
 static char *form_id(int id) { return id > 0 ? xstrfmt("settings-project:%d", id) : xstrdup("settings-project:new"); }
-static bool is_form_id(const char *id) { return id && str_has_prefix(id, "settings-project:"); }
+/// A settings form in the detail pane: a project's or a provider's.
+static bool is_form_id(const char *id) { return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:")); }
 
 /// Why the settings cannot be shown here, as a new string; NULL when they can.
 static char *settings_unavailable(void) {
@@ -31,7 +33,7 @@ static char *settings_unavailable(void) {
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT };
+enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -41,6 +43,10 @@ typedef struct {
     bool loaded;
     char *error;
     Request *req, *req_order;
+    Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
+    bool providers_loaded;
+    char *providers_error;
+    Request *req_providers;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -85,11 +91,39 @@ static void paint_project_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     draw_text(hdc, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+typedef struct { char *label, *binary; bool active, login, endpoint, selected, unsaved; } ProviderRowData;
+static void provider_row_free(void *p) { ProviderRowData *d = p; free(d->label); free(d->binary); free(d); }
+static void paint_provider_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    ProviderRowData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    COLORREF background = hovered || d->selected ? theme.raise : theme.sidebar;
+    if (hovered || d->selected) fill_round_rect(hdc, rc, px(6), theme.raise, theme.raise);
+    int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
+    draw_status_dot(hdc, x + px(3), top + lh / 2, d->active ? "idle" : "");
+    RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
+    draw_text(hdc, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The dashboard's badges: the CLI it runs, and what sets it apart.
+    const char *tags[] = { d->binary, d->active || d->unsaved ? NULL : "inactive", d->login ? "own login" : NULL, d->endpoint ? "custom endpoint" : NULL };
+    int bx = x, y2 = top + lh, right = rc->right - px(8);
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) {
+        if (str_empty(tags[i])) continue;
+        int bw = text_width(hdc, tags[i], FONT_CAPTION2) + px(12) + 2;
+        if (bx + bw > right) break;
+        int h; draw_chip(hdc, bx, y2 + px(1), tags[i], theme.muted, background, &h);
+        bx += bw + px(6);
+    }
+}
+
 static void settings_open_row(SettingsScreen *s, size_t index) {
     const Json *row = json_at(json_get(s->projects, "list"), index);
     if (json_is_object(row)) app_show_detail(project_settings_screen_new(row, json_get(s->projects, "defaults")));
 }
 static const Json *settings_rows(SettingsScreen *s) { return json_get(s->projects, "list"); }
+static const Json *provider_rows(SettingsScreen *s) { return json_get(s->providers, "list"); }
+static void settings_open_provider(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(provider_rows(s), index);
+    if (json_is_object(row)) app_show_detail(provider_settings_screen_new(row, json_get(s->providers, "defaults")));
+}
 
 static void settings_load(SettingsScreen *s);
 static void settings_done(void *owner, Request *req) {
@@ -112,6 +146,26 @@ static void settings_done(void *owner, Request *req) {
 static void settings_load(SettingsScreen *s) {
     if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
     store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
+}
+static void providers_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->providers_loaded = true;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->providers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    set_string(&s->providers_error, NULL);
+    json_free(s->providers);
+    s->providers = json_object();
+    json_object_set(s->providers, "list", json_clone(json_get(req->result, "providers")));
+    json_object_set(s->providers, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+}
+static void providers_load(SettingsScreen *s) {
+    if (s->req_providers || !store_supports("settings_providers")) { s->providers_loaded = true; return; }
+    store_call("settings_providers", json_object(), 0, s, providers_done, 0, &s->req_providers);
+}
+void settings_providers_changed(void) {
+    if (!g_settings) return;
+    request_cancel(&g_settings->req_providers);
+    providers_load(g_settings);
 }
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
@@ -147,10 +201,27 @@ static void settings_move(SettingsScreen *s, size_t index, int delta) {
 static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
-    request_cancel(&s->req); request_cancel(&s->req_order);
+    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers);
     json_free(s->projects); free(s->error);
+    json_free(s->providers); free(s->providers_error);
     screen_release(base);
 }
+/// A section's summary: its title, and its ＋ New when `new_action` is set.
+static void section_title(Doc *doc, int w, const char *title, int new_action) {
+    int y = doc->y, h = px(20);
+    RECT tr = { px(8), y, w - px(60), y + h };
+    doc_text_at(doc, &tr, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if (new_action) {
+        int nw = text_width(doc->hdc, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
+        RECT nr = { w - px(4) - nw, y, w - px(4), y + h };
+        Item *it = doc_item(doc, doc_text_at(doc, &nr, "\xEF\xBC\x8B New", FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE));
+        it->action = new_action; it->hand = true;
+    }
+    doc->y = y + h;
+    doc_space(doc, px(4));
+}
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void settings_layout(Screen *base, Doc *doc) {
     SettingsScreen *s = (SettingsScreen *)base;
     int w = doc->width;
@@ -161,20 +232,44 @@ static void settings_layout(Screen *base, Doc *doc) {
     NavData *nav = xcalloc(1, sizeof *nav); nav->text = "Devices and clients"; nav->selected = str_eq(selected, "connection");
     doc_custom(doc, 0, w, px(36), paint_nav, nav, free, ACT_DEVICES, 0);
     doc_space(doc, px(16));
-    // The section's summary: `Projects` and its ＋ New.
-    int y = doc->y, h = px(20);
-    RECT title = { px(8), y, w - px(60), y + h };
-    doc_text_at(doc, &title, "Projects", FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     char *why = settings_unavailable();
-    if (!why) {
-        int nw = text_width(doc->hdc, "\xEF\xBC\x8B New", FONT_CAPTION) + px(8);
-        RECT nr = { w - px(4) - nw, y, w - px(4), y + h };
-        Item *it = doc_item(doc, doc_text_at(doc, &nr, "\xEF\xBC\x8B New", FONT_CAPTION, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE));
-        it->action = ACT_NEW_PROJECT; it->hand = true;
-    }
-    doc->y = y + h;
-    doc_space(doc, px(4));
+    section_title(doc, w, "Projects", why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(8)); return; }
+    layout_projects(s, doc, w, selected);
+    // The providers sessions start on, below the projects as on the dashboard; a server without the routes shows none.
+    if (!store_supports("settings_providers")) return;
+    doc_space(doc, px(8));
+    section_title(doc, w, "Providers", store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
+    layout_providers(s, doc, w, selected);
+}
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    if (s->providers_error) { doc_notice(doc, px(8), w - px(16), s->providers_error); doc_space(doc, px(8)); }
+    const Json *rows = provider_rows(s);
+    int h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        const char *label = json_str_nonempty(json_get(row, "label")), *binary = json_str(json_get(row, "binary"));
+        d->label = label ? xstrdup(label) : xstrfmt("Provider #%d", row_id(row));
+        d->binary = xstrdup(binary ? binary : "");
+        d->active = !json_bool_is(json_get(row, "active"), false);
+        d->login = json_bool_is(json_get(row, "hasLogin"), true);
+        d->endpoint = json_str_nonempty(json_get(row, "baseUrl")) != NULL;
+        char *id = xstrfmt("settings-provider:%d", row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, ACT_OPEN_PROVIDER, (intptr_t)i);
+    }
+    if (str_eq(selected, "settings-provider:new")) {
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New provider"); d->binary = xstrdup("not saved yet"); d->unsaved = true; d->selected = true;
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, 0, 0);
+    }
+    if (s->providers_loaded && !json_count(rows) && !s->providers_error) doc_text(doc, px(8), w - px(16), "No providers yet. Add one so sessions can be started.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->providers_loaded) doc_loading(doc, 0, w, "Loading providers\xE2\x80\xA6");
+    doc_space(doc, px(8));
+}
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     const Json *rows = settings_rows(s);
     for (size_t i = 0; i < json_count(rows); i++) {
@@ -237,6 +332,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_DEVICES: app_show_detail(connection_screen_new()); break;
     case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
     case ACT_OPEN_PROJECT: settings_open_row(s, (size_t)arg); break;
+    case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
+    case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -254,8 +351,13 @@ static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (shown && !s->loaded && !s->req) settings_load(s);
+    if (shown && !s->providers_loaded && !s->req_providers) providers_load(s);
 }
-static void settings_refresh(Screen *base) { SettingsScreen *s = (SettingsScreen *)base; request_cancel(&s->req); settings_load(s); }
+static void settings_refresh(Screen *base) {
+    SettingsScreen *s = (SettingsScreen *)base;
+    request_cancel(&s->req); settings_load(s);
+    request_cancel(&s->req_providers); providers_load(s);
+}
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     (void)ctrl; (void)shift;
     // Backspace and Escape leave Settings as ← Back to sessions does, so a form with changes is asked first.
@@ -272,6 +374,7 @@ Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
     s->projects = json_object();
+    s->providers = json_object();
     g_settings = s;
     return &s->base;
 }

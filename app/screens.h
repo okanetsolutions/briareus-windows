@@ -55,13 +55,19 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
-/// The sidebar's ⚙ Settings, as the dashboard's settings page: Devices and clients, and the projects with ＋ New.
+/// The sidebar's ⚙ Settings, as the dashboard's settings page: Devices and clients, and the projects and the providers,
+/// each with ＋ New.
 Screen *settings_screen_new(void);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);
 /// The settings sidebar reads the projects again, after one was saved, cloned or deleted; `select_id` > 0 is highlighted.
 void settings_projects_changed(int select_id);
+/// One provider's settings, the dashboard's provider form, as tabs. `row` is the server's Provider (NULL with `defaults`
+/// for a new one); `defaults` is what a new one starts from.
+Screen *provider_settings_screen_new(const Json *row, const Json *defaults);
+/// The settings sidebar reads the providers again, after one was saved, cloned, deleted or logged in.
+void settings_providers_changed(void);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.
