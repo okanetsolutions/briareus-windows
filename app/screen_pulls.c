@@ -967,7 +967,7 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->hdc, ds); right -= dsw + px(16); }
     char count[24];
     const PullSummary *row = board_row(s);
-    if (s->run_count) { snprintf(count, sizeof count, "%zu", s->run_count); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
+    if (s->run_count || s->conv || s->has_opening) { snprintf(count, sizeof count, "%zu", s->run_count ? s->run_count : 1); add_pr_tab(doc, &x, &y, c.ix, right, h, 0xE8F2, "Sessions", count, s->tab == PR_TAB_SESSIONS, ACT_PR_TAB, PR_TAB_SESSIONS); }
     double comments;
     bool has_comments = row && json_num(json_get(row->raw, "comments"), &comments);
     if (has_comments) snprintf(count, sizeof count, "%d", (int)comments);
