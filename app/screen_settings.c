@@ -343,17 +343,17 @@ static const RuntimeDef RUNTIMES[R_COUNT] = {
 typedef struct { int provider_id; char *model, *effort; } RuntimePick;   // provider 0: the row's `none`
 
 /// The dashboard's sections, as tabs along the top of the form, the way the pull request page lays out its own.
-enum { T_PROJECT, T_SETUP, T_DATABASE, T_REVIEW, T_ORCHESTRATOR, T_ENV, T_RUN, T_COUNT };
+enum { T_PROJECT, T_DATABASE, T_REVIEW, T_ORCHESTRATOR, T_ENV, T_RUN, T_COUNT };
 static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
-    [T_PROJECT] = { "Project", 0xE8B7 }, [T_SETUP] = { "Setup", 0xE90F }, [T_DATABASE] = { "Database", 0xE1D3 },
+    [T_PROJECT] = { "Project", 0xE8B7 }, [T_DATABASE] = { "Database", 0xE1D3 },
     [T_REVIEW] = { "Code review", 0xE721 }, [T_ORCHESTRATOR] = { "Orchestrator", 0xE716 }, [T_ENV] = { "Checkout .env", 0xE8D7 },
     [T_RUN] = { "Run", 0xE768 },
 };
 /// The open tab stays open from one project to the next, so comparing a setting across projects is one click each.
 static int g_tab;
 static int field_tab(int f) {
-    if (f <= F_LOCAL_DIR) return T_PROJECT;
-    if (f <= F_PHP) return T_SETUP;
+    // The project and how a checkout of it is set up, on one tab.
+    if (f <= F_PHP) return T_PROJECT;
     if (f <= F_DB_RESTORE) return T_DATABASE;
     if (f <= F_FEEDBACK_STEPS) return T_REVIEW;
     if (f <= F_IS_SELF) return T_ORCHESTRATOR;
@@ -702,10 +702,11 @@ static void form_layout(Screen *base, Doc *doc) {
         field(s, doc, x + half + gap, col - half - gap, F_LABEL);
         if (doc->y < left_bottom) doc->y = left_bottom;
         field(s, doc, x, col, F_LOCAL_DIR);
+        field(s, doc, x, col, F_SETUP);
+        field(s, doc, x, col, F_PHP);
         note(doc, x, col, "This project's own prompt wording is edited under Prompts on the web dashboard; saving here keeps it as it is.");
         break;
     }
-    case T_SETUP: field(s, doc, x, col, F_SETUP); field(s, doc, x, col, F_PHP); break;
     case T_DATABASE:
         field(s, doc, x, col, F_DB_NAME); field(s, doc, x, col, F_DB_EXT);
         check(s, doc, x, col, F_DB_POOL); field(s, doc, x, col, F_DB_RESTORE);
