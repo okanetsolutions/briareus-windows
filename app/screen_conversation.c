@@ -1101,6 +1101,8 @@ static void conversation_visible(Screen *base, bool shown) {
         request_cancel(&s->req_refresh); s->loading = false;
         if (s->voice) voice_drop(s->voice);
         ShowWindow(s->composer, SW_HIDE);
+        // A pull request pushed over the conversation fills the window; the column returns with the conversation.
+        app_set_panel(NULL);
     }
 }
 static void conversation_refresh(Screen *base) { ConversationScreen *s = (ConversationScreen *)base; refresh(s, true); }
