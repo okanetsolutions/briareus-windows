@@ -941,42 +941,6 @@ static void layout_checks(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
-/// `.merge-status`: what the checks add up to, opening the Checks tab.
-typedef struct { wchar_t glyph; COLORREF color; char *title, *detail; } StatusData;
-static void status_free(void *p) { StatusData *d = p; free(d->title); free(d->detail); free(d); }
-static void paint_status(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
-    (void)doc;
-    StatusData *d = it->data;
-    int r = px(16);
-    fill_circle(hdc, rc->left + r, rc->top + (rc->bottom - rc->top) / 2, r, blend(d->color, theme.raise, 0.2));
-    RECT g = { rc->left, rc->top, rc->left + 2 * r, rc->bottom }; draw_glyph(hdc, d->glyph, &g, FONT_ICON_SMALL, d->color);
-    int x = rc->left + 2 * r + px(12), mid = (rc->top + rc->bottom) / 2;
-    RECT t = { x, rc->top, rc->right - px(24), mid }; draw_text(hdc, d->title, &t, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
-    RECT dt = { x, mid + px(2), rc->right - px(24), rc->bottom }; draw_text(hdc, d->detail, &dt, FONT_CAPTION, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-    RECT ch = { rc->right - px(16), rc->top, rc->right, rc->bottom }; draw_glyph(hdc, 0xE76C, &ch, FONT_ICON_SMALL, theme.tertiary);
-}
-static void layout_check_summary(PullScreen *s, Doc *doc, Col c) {
-    const Json *checks = json_get(s->pr, "checks");
-    int passed = json_int_or(json_get(checks, "passed"), 0), failed = json_int_or(json_get(checks, "failed"), 0), pending = json_int_or(json_get(checks, "pending"), 0);
-    if (!passed && !failed && !pending) return;
-    doc_space(doc, px(16));
-    StatusData *d = xcalloc(1, sizeof *d);
-    if (failed) { d->glyph = 0xEA39; d->color = theme.danger; d->title = xstrdup("Some checks were not successful"); }
-    else if (pending) { d->glyph = 0xE823; d->color = theme.warning; d->title = xstrdup("Some checks haven\xE2\x80\x99t completed yet"); }
-    else { d->glyph = 0xE930; d->color = theme.success; d->title = xstrdup("All checks have passed"); }
-    Str detail; str_init(&detail);
-    if (passed) str_appendf(&detail, "%d successful", passed);
-    if (failed) str_appendf(&detail, "%s%d failing", detail.len ? ", " : "", failed);
-    if (pending) str_appendf(&detail, "%s%d in progress", detail.len ? ", " : "", pending);
-    str_appendf(&detail, " check%s", passed + failed + pending == 1 ? "" : "s");
-    d->detail = str_detach(&detail);
-    int box = col_box(doc, c);
-    doc_box_action(doc, box, ACT_PR_TAB, PR_TAB_CHECKS);
-    doc_item(doc, box)->hover_fill = true;
-    doc_custom(doc, c.ix, c.iw, px(40), paint_status, d, status_free, 0, 0);
-    doc_box_end(doc, box, px(12));
-}
-
 static void layout_commit_list(PullScreen *s, Doc *doc, Col c) {
     const Json *commits = json_get(s->pr, "commitList");
     int box = col_box(doc, c);
@@ -1078,7 +1042,6 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     case PR_TAB_SESSIONS: layout_runs(s, doc, c); break;
     default:
         layout_description(s, doc, c);
-        layout_check_summary(s, doc, c);
         layout_actions(s, doc, c);
         break;
     }
