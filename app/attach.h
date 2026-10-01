@@ -22,6 +22,8 @@ bool attach_clipboard_has_text(void);
 bool attacher_from_clipboard(Attacher *a, HWND owner);
 /// Starts reading the files of a drop. Takes the handle.
 void attacher_from_drop(Attacher *a, HDROP drop);
+/// Starts reading files by path, as the 📎 button's dialog names them. Copies the paths.
+void attacher_from_paths(Attacher *a, const wchar_t *const *paths, size_t count);
 void attach_files_free(AttachFile *files, size_t count);
 
 /// "12 KB" or "1.3 MB", as a new string.

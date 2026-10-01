@@ -165,6 +165,18 @@ static void test_attachments_need_uploads_messages_and_writing(void) {
     CHECK(!store_supports_attachments());
     store_reset();
 }
+static void test_a_first_prompt_takes_files_where_sessions_start(void) {
+    // Starting a session is POST /sessions, which ROUTES lacks.
+    store_fake("manage", ROUTES, 5);
+    CHECK(!store_supports_attachments_on("start_session"));
+    Route starts[] = { ROUTES[0], { "POST", "/sessions", "manage" }, ROUTES[2] };
+    store_fake("manage", starts, 3);
+    CHECK(store_supports_attachments_on("start_session"));
+    CHECK(!store_supports_attachments());
+    store_fake("read", starts, 3);
+    CHECK(!store_supports_attachments_on("start_session"));
+    store_reset();
+}
 
 // MARK: - Requests refused before they leave
 
@@ -313,6 +325,7 @@ void app_store_tests(void) {
     test_run("the preview token needs a manage token on a server that has it", test_the_preview_token_needs_a_manage_token_on_a_server_that_has_it);
     test_run("a route the server lacks is not supported", test_a_route_the_server_lacks_is_not_supported);
     test_run("attachments need uploads, messages and writing", test_attachments_need_uploads_messages_and_writing);
+    test_run("a first prompt takes files where sessions start", test_a_first_prompt_takes_files_where_sessions_start);
     test_run("a call without a connection is refused", test_a_call_without_a_connection_is_refused);
     test_run("a call the token cannot make never reaches the network", test_a_call_the_token_cannot_make_never_reaches_the_network);
     test_run("transcription and uploads are refused with their own words", test_transcription_and_uploads_are_refused_with_their_own_words);

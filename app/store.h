@@ -36,6 +36,8 @@ bool store_can_transcribe(void);
 bool store_supports(const char *call);
 /// Files can go with a message: the server takes uploads and messages, and this token may write.
 bool store_supports_attachments(void);
+/// The same for the call the files go with: `message`, or `start_session` for a session's first prompt.
+bool store_supports_attachments_on(const char *call);
 /// A device that paired before opens on what it saved; the server confirms the token meanwhile.
 void store_restore(void);
 void store_connect(const char *server, const char *token);
