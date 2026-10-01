@@ -1,4 +1,4 @@
-// The core tests, ported from the iOS app's CoreTests: networking rules, transcript, board and cache behaviour.
+// The core tests: networking rules against /api/v1, transcript, board and cache behaviour.
 #include "api.h"
 #include "board.h"
 #include "cache.h"
@@ -71,9 +71,12 @@ static ApiClient *client(Stub *stub) {
 
 static void test_normalizes_origin_and_api_path(void) {
     ServerAddress a;
-    CHECK(server_address_parse(" https://EXAMPLE.com:443/api/mobile/v1/ ", &a));
+    CHECK(server_address_parse(" https://EXAMPLE.com:443/api/v1/ ", &a));
     CHECK_STR(a.origin, "https://example.com");
-    CHECK_STR(a.base_url, "https://example.com/api/mobile/v1/");
+    CHECK_STR(a.base_url, "https://example.com/api/v1/");
+    server_address_free(&a);
+    CHECK(server_address_parse("https://example.com/api/v1", &a));
+    CHECK_STR(a.base_url, "https://example.com/api/v1/");
     server_address_free(&a);
     CHECK(server_address_parse("https://example.com:8443", &a));
     CHECK_STR(a.origin, "https://example.com:8443");
@@ -81,7 +84,7 @@ static void test_normalizes_origin_and_api_path(void) {
 }
 static void test_rejects_unsafe_or_ambiguous_addresses(void) {
     const char *bad[] = { "http://example.com", "https://user:pass@example.com", "https://example.com?token=x", "https://example.com/#x",
-                          "https://example.com/api/dev", "file:///secret", "example.com", "https://", "https://example.com:0", "https://example.com:99999" };
+                          "https://example.com/api/dev", "https://example.com/api/mobile/v1", "file:///secret", "example.com", "https://", "https://example.com:0", "https://example.com:99999" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { ServerAddress a; bool ok = server_address_parse(bad[i], &a); if (ok) { printf("  accepted %s\n", bad[i]); server_address_free(&a); } CHECK(!ok); }
 }
 static void test_rejects_invalid_tokens(void) {
@@ -96,36 +99,102 @@ static void test_rejects_invalid_tokens(void) {
     api_error_clear(&e); server_address_free(&a);
     free(long_token); free(newline);
 }
-static void test_operation_uses_exact_mobile_path_and_json_body(void) {
+static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json";
     stub.body = "{\"session\":{\"id\":\"abc\",\"status\":\"running\",\"extra\":42},\"events\":[]}";
     ApiClient *c = client(&stub);
-    Json *args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_num(args, "since", 7);
     ApiError e; api_error_init(&e);
-    Json *result = api_operation(c, "session", args, 0, &e);
+    char *bearer = xstrfmt("Bearer %s", TOKEN);
+    // A read: the path parameter comes out of the arguments and the rest go in the query, with no body.
+    Json *args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_num(args, "since", 7);
+    Json *result = api_call(c, "session", args, 0, &e);
     CHECK(result != NULL);
-    CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/operations/session");
-    CHECK_STR(stub.last_method, "POST");
-    char *bearer = xstrfmt("Bearer %s", TOKEN); CHECK_STR(stub.last_authorization, bearer); free(bearer);
-    CHECK_STR(stub.last_accept, "application/json");
-    CHECK_STR(stub.last_content_type, "application/json");
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/abc?since=7"); CHECK_STR(stub.last_method, "GET");
+    CHECK(stub.last_body == NULL); CHECK(stub.last_content_type == NULL);
+    CHECK_STR(stub.last_authorization, bearer); CHECK_STR(stub.last_accept, "application/json");
+    CHECK_STR(json_str(json_get(json_get(result, "session"), "status")), "running"); CHECK(json_count(json_get(result, "events")) == 0);
+    json_free(result); json_free(args);
+    // A write: the path parameter is taken out of the JSON body, which carries the rest.
+    args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_str(args, "text", "hi"); Json *ids = json_array(); json_array_push(ids, json_string("f1")); json_object_set(args, "attachments", ids);
+    result = api_call(c, "message", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/abc/messages"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_content_type, "application/json");
     Json *sent = json_parsez(stub.last_body);
-    CHECK(json_num_or(json_get(sent, "since"), 0) == 7); CHECK_STR(json_str(json_get(sent, "sessionId")), "abc");
+    CHECK_STR(json_str(json_get(sent, "text")), "hi"); CHECK(json_is_null(json_get(sent, "sessionId"))); CHECK(json_count(json_get(sent, "attachments")) == 1);
     json_free(sent);
-    CHECK_STR(json_str(json_get(json_get(result, "session"), "status")), "running");
-    CHECK(json_count(json_get(result, "events")) == 0);
-    json_free(result); json_free(args); api_client_release(c); stub_reset(&stub);
+    // Two path parameters, and a DELETE.
+    args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_num(args, "index", 2);
+    result = api_call(c, "drop_message", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/abc/queue/2"); CHECK_STR(stub.last_method, "DELETE"); CHECK(stub.last_body == NULL);
+    // A pull request read pins its revision in the query; the project goes there too, encoded.
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "pr", 12); json_set_num(args, "page", 2); json_set_str(args, "headSha", "h1"); json_set_str(args, "baseSha", "b1");
+    result = api_call(c, "pull_files", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/files?repo=o%2Fr&page=2&headSha=h1&baseSha=b1");
+    // Run takes its number from the errand's `prNumber`; the project stays in the body.
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "prNumber", 12);
+    result = api_call(c, "serve_pull", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/pulls/12/serve"); sent = json_parsez(stub.last_body);
+    CHECK_STR(json_str(json_get(sent, "repo")), "o/r"); CHECK(json_is_null(json_get(sent, "prNumber"))); json_free(sent);
+    // Code review is a session start with the `review` flag set here.
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_num(args, "prNumber", 12); json_set_str(args, "branch", "docs");
+    result = api_call(c, "review", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions"); sent = json_parsez(stub.last_body);
+    CHECK(json_bool_is(json_get(sent, "review"), true)); CHECK_STR(json_str(json_get(sent, "branch")), "docs"); CHECK(json_num_or(json_get(sent, "prNumber"), 0) == 12); json_free(sent);
+    // An errand names itself; a call without arguments still sends a JSON object.
+    args = json_object(); json_set_str(args, "repo", "o/r"); json_set_str(args, "action", "solve-conflicts"); json_set_num(args, "prNumber", 12);
+    result = api_call(c, "action", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/actions"); sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "action")), "solve-conflicts"); json_free(sent);
+    result = api_call(c, "projects", NULL, 0, &e); CHECK(result != NULL); json_free(result);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/projects"); CHECK(stub.last_body == NULL);
+    args = json_object(); json_set_str(args, "sessionId", "abc");
+    result = api_call(c, "cancel", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/abc/cancel"); CHECK_STR(stub.last_body, "{}");
+    // A path argument is encoded, so it cannot reach another route.
+    args = json_object(); json_set_str(args, "sessionId", "../token");
+    result = api_call(c, "session", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions/..%2Ftoken");
+    // The session list has no project parameter: the project is kept back and the answer cut down to it.
+    stub.body = "{\"sessions\":[{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\"},{\"id\":\"b\",\"status\":\"idle\",\"repo\":\"o/other\"}]}";
+    args = json_object(); json_set_str(args, "repo", "o/r");
+    result = api_call(c, "sessions", args, 0, &e); CHECK(result != NULL);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/sessions");
+    CHECK(json_count(json_get(result, "sessions")) == 1); CHECK_STR(json_str(json_get(json_at(json_get(result, "sessions"), 0), "id")), "a");
+    json_free(result); json_free(args);
+    result = api_call(c, "sessions", NULL, 0, &e); CHECK(result != NULL); CHECK(json_count(json_get(result, "sessions")) == 2); json_free(result);
+    // What the table does not know, or a path argument that is missing, never leaves the client.
+    int calls = stub.calls;
+    CHECK(api_call(c, "../projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 400);
+    args = json_object(); json_set_str(args, "text", "hi");
+    CHECK(api_call(c, "message", args, 0, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 400); CHECK_STR(e.message, "Missing argument: sessionId");
+    json_free(args);
+    args = json_object(); json_set_str(args, "sessionId", "");
+    CHECK(api_call(c, "session", args, 0, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 400);
+    json_free(args);
+    CHECK(stub.calls == calls);
+    // Every call the board and the screens make is in the table.
+    const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "findings",
+                            "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
+                            "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe" };
+    for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
+    CHECK(api_route("operations") == NULL);
+    free(bearer); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_discovery_validates_version_and_milliseconds(void) {
     Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json; charset=utf-8";
-    stub.body = "{\"version\":1,\"device\":{\"id\":\"d\",\"label\":\"iPhone\",\"repos\":[\"a/b\"],\"permission\":\"read\",\"expiresAt\":1000000}}";
+    stub.body = "{\"version\":1,\"client\":{\"id\":\"d\",\"label\":\"Laptop\",\"repos\":[\"a/b\"],\"permission\":\"read\",\"expiresAt\":1000000}}";
     ApiClient *c = client(&stub);
     Discovery d; ApiError e; api_error_init(&e);
     CHECK(api_discovery(c, &d, &e));
     CHECK(!device_can_manage(&d.device)); CHECK(device_expiry(&d.device) == 1000); CHECK(d.transcribe == -1);
-    CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/"); CHECK_STR(stub.last_method, "GET");
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/"); CHECK_STR(stub.last_method, "GET");
     discovery_free(&d);
-    stub.body = "{\"version\":2,\"device\":{\"id\":\"d\",\"label\":\"Phone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}}";
+    // An admin token writes too; one with a permission this app does not know does nothing.
+    stub.body = "{\"version\":1,\"client\":{\"id\":\"d\",\"label\":\"Web\",\"repos\":[],\"permission\":\"admin\",\"expiresAt\":0}}";
+    CHECK(api_discovery(c, &d, &e)); CHECK(device_can_manage(&d.device)); discovery_free(&d);
+    CHECK(permission_rank("read") == 0 && permission_rank("manage") == 1 && permission_rank("admin") == 2 && permission_rank("owner") < 0);
+    // The mobile API's shape is not this API's.
+    stub.body = "{\"version\":1,\"device\":{\"id\":\"d\",\"label\":\"Phone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}}";
+    CHECK(!api_discovery(c, &d, &e)); CHECK(e.kind == API_NON_JSON);
+    stub.body = "{\"version\":2,\"client\":{\"id\":\"d\",\"label\":\"Phone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}}";
     CHECK(!api_discovery(c, &d, &e)); CHECK(e.kind == API_INCOMPATIBLE_VERSION);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
@@ -134,20 +203,22 @@ static void test_redirect_and_html_are_not_accepted(void) {
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
     stub.status = 302;
-    CHECK(api_operation(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_REDIRECTED);
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_REDIRECTED);
     stub.status = 200;
-    CHECK(api_operation(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_NON_JSON);
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_NON_JSON);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_errors_keep_status_and_retry_after_without_retrying_write(void) {
     Stub stub = { 0 }; stub.status = 429; stub.content_type = "application/json"; stub.retry_after = "90"; stub.body = "{\"error\":\"Wait\"}";
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
-    CHECK(api_operation(c, "message", NULL, 0, &e) == NULL);
+    Json *args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_str(args, "text", "hi");
+    CHECK(api_call(c, "message", args, 0, &e) == NULL);
     CHECK(e.kind == API_HTTP && e.status == 429); CHECK_STR(e.message, "Wait"); CHECK(e.retry_after == 90);
     CHECK(stub.calls == 1);
+    json_free(args);
     stub.status = 401; stub.retry_after = NULL; stub.body = "{\"error\":\"Expired\"}";
-    CHECK(api_operation(c, "projects", NULL, 0, &e) == NULL); CHECK(api_error_unauthorized(&e));
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(api_error_unauthorized(&e));
     char *text = api_error_description(&e); CHECK(strstr(text, "expired or was revoked") != NULL); free(text);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
@@ -155,7 +226,7 @@ static void test_timeout_does_not_retry_write(void) {
     Stub stub = { 0 }; stub.fail = true; stub.fail_message = "The request timed out.";
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
-    CHECK(api_operation(c, "start_session", NULL, 0, &e) == NULL); CHECK(e.kind == API_NETWORK); CHECK_STR(e.message, "The request timed out.");
+    CHECK(api_call(c, "start_session", NULL, 0, &e) == NULL); CHECK(e.kind == API_NETWORK); CHECK_STR(e.message, "The request timed out.");
     CHECK(stub.calls == 1);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
@@ -164,17 +235,17 @@ static void test_voice_note_is_posted_as_recorded_and_answered_with_its_text(voi
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
     unsigned char audio[] = { 0, 1, 2, 255 };
-    char *text = api_transcribe(c, audio, sizeof audio, "audio/mp4", "es-ES", &e);
+    char *text = api_transcribe(c, audio, sizeof audio, "audio/mp4", &e);
     CHECK_STR(text, "hola mundo"); free(text);
-    CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/transcribe?lang=es-ES");
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/transcribe");
     CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_content_type, "audio/mp4");
     CHECK(stub.last_body_len == 4 && memcmp(stub.last_body, audio, 4) == 0);
     stub.status = 502; stub.body = "{\"error\":\"OpenAI answered 400\"}";
-    CHECK(api_transcribe(c, audio, 1, NULL, NULL, &e) == NULL);
-    CHECK(strstr(stub.last_url, "?") == NULL);
+    CHECK(api_transcribe(c, audio, 1, NULL, &e) == NULL);
+    CHECK_STR(stub.last_content_type, "audio/mp4");
     CHECK(e.kind == API_HTTP && e.status == 502); CHECK_STR(e.message, "OpenAI answered 400");
     stub.status = 200; stub.body = "{\"ok\":true}";
-    CHECK(api_transcribe(c, audio, 1, NULL, NULL, &e) == NULL); CHECK(e.kind == API_NON_JSON);
+    CHECK(api_transcribe(c, audio, 1, NULL, &e) == NULL); CHECK(e.kind == API_NON_JSON);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_attachment_is_posted_raw_and_answered_with_its_id(void) {
@@ -184,7 +255,7 @@ static void test_attachment_is_posted_raw_and_answered_with_its_id(void) {
     unsigned char png[] = { 0x89, 'P', 'N', 'G' };
     char *id = api_upload(c, "pasted image #1.png", png, sizeof png, &e);
     CHECK_STR(id, "1a2b3c4d"); free(id);
-    CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/uploads?name=pasted%20image%20%231.png");
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/uploads?name=pasted%20image%20%231.png");
     CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_content_type, "application/octet-stream");
     CHECK(stub.last_body_len == 4 && memcmp(stub.last_body, png, 4) == 0);
     // A file whose own type is JSON must not reach the server's JSON parser either.
@@ -202,30 +273,63 @@ static void test_attachment_is_posted_raw_and_answered_with_its_id(void) {
     free(big);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
-static void test_operations_say_whether_a_message_takes_attachments(void) {
-    Json *j = json_parsez("{\"operations\":["
-        "{\"name\":\"message\",\"readOnly\":false,\"inputSchema\":{\"type\":\"object\",\"properties\":{\"sessionId\":{\"type\":\"string\"},\"text\":{\"type\":\"string\"},\"attachments\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}},"
-        "{\"name\":\"rename\",\"readOnly\":false,\"inputSchema\":{\"type\":\"object\",\"properties\":{\"sessionId\":{\"type\":\"string\"},\"title\":{\"type\":\"string\"}}}},"
-        "{\"name\":\"projects\",\"readOnly\":true}]}");
-    Operation *ops = NULL; size_t n = 0;
-    CHECK(operations_parse(j, &ops, &n)); CHECK(n == 3);
-    CHECK(ops[0].attachments); CHECK(!ops[1].attachments); CHECK(!ops[2].attachments);
-    // The flag survives the saved connection, whose copy of the catalog has no schemas.
-    Json *saved = operations_json(ops, n);
-    CHECK(json_bool_is(json_get(json_at(saved, 0), "attachments"), true)); CHECK(json_is_null(json_get(json_at(saved, 1), "attachments")));
-    Operation *again = NULL; size_t m = 0;
-    CHECK(operations_parse(saved, &again, &m)); CHECK(m == 3); CHECK(again[0].attachments); CHECK(!again[1].attachments);
-    Operation *copy = operations_copy(again, m); CHECK(copy[0].attachments); CHECK(!copy[1].attachments);
-    operations_free(copy, m); operations_free(again, m); operations_free(ops, n); json_free(saved); json_free(j);
+static void test_catalog_reads_routes_and_who_may_call_them_from_openapi(void) {
+    Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json";
+    stub.body = "{\"openapi\":\"3.1.0\",\"paths\":{"
+        "\"/\":{\"get\":{\"operationId\":\"clientGet\",\"x-briareus-access\":\"read\"}},"
+        "\"/projects\":{\"get\":{\"x-briareus-access\":\"read\",\"x-briareus-scope\":\"any\"}},"
+        "\"/sessions\":{\"get\":{\"x-briareus-access\":\"read\"},\"post\":{\"x-briareus-access\":\"manage\"}},"
+        "\"/sessions/{id}\":{\"get\":{\"x-briareus-access\":\"read\"},\"patch\":{\"x-briareus-access\":\"manage\"},\"delete\":{\"x-briareus-access\":\"manage\"}},"
+        "\"/sessions/{id}/messages\":{\"post\":{\"x-briareus-access\":\"manage\"}},"
+        "\"/pulls/{number}/files\":{\"get\":{\"x-briareus-access\":\"read\"}},"
+        "\"/uploads\":{\"post\":{\"x-briareus-access\":\"manage\"}},"
+        "\"/settings/devices\":{\"get\":{\"x-briareus-access\":\"admin\"},\"post\":{}}"
+        "},\"components\":{}}";
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    Route *routes = NULL; size_t n = 0;
+    CHECK(api_catalog(c, &routes, &n, &e)); CHECK(n == 12);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/openapi.json"); CHECK_STR(stub.last_method, "GET");
+    // The app's own paths name their parameters after its arguments; the server's are matched segment by segment.
+    CHECK(routes_allow(routes, n, "GET", "sessions/{sessionId}", "read"));
+    CHECK(routes_allow(routes, n, "GET", "pulls/{pr}/files", "read"));
+    CHECK(!routes_allow(routes, n, "GET", "pulls/{pr}", "read"));
+    CHECK(!routes_allow(routes, n, "POST", "sessions/{sessionId}/messages", "read"));
+    CHECK(routes_allow(routes, n, "POST", "sessions/{sessionId}/messages", "manage"));
+    CHECK(routes_allow(routes, n, "DELETE", "sessions/{sessionId}", "admin"));
+    CHECK(!routes_allow(routes, n, "GET", "settings/devices", "manage")); CHECK(routes_allow(routes, n, "GET", "settings/devices", "admin"));
+    // An operation that says nothing about access is the operator's; a permission this app does not know may do nothing.
+    CHECK(!routes_allow(routes, n, "POST", "settings/devices", "manage")); CHECK(routes_allow(routes, n, "POST", "settings/devices", "admin"));
+    CHECK(!routes_allow(routes, n, "GET", "projects", "owner"));
+    CHECK(!routes_allow(routes, n, "POST", "sessions/{sessionId}/cancel", "admin"));
+    CHECK(!routes_allow(routes, n, "GET", "sessions/{sessionId}/messages", "admin"));
+    // The table's routes are checked against the catalog by method and path.
+    const ApiRoute *message = api_route("message"), *upload = api_route("upload"), *cancel = api_route("cancel");
+    CHECK(routes_allow(routes, n, message->method, message->path, "manage") && routes_allow(routes, n, upload->method, upload->path, "manage"));
+    CHECK(!routes_allow(routes, n, cancel->method, cancel->path, "manage"));
+    // A saved copy reads back the same.
+    Json *saved = routes_json(routes, n);
+    Route *again = NULL; size_t m = 0;
+    CHECK(routes_parse(saved, &again, &m)); CHECK(m == n);
+    CHECK(routes_allow(again, m, "POST", "sessions/{sessionId}/messages", "manage")); CHECK(!routes_allow(again, m, "POST", "sessions/{sessionId}/messages", "read"));
+    Route *copy = routes_copy(again, m); CHECK(routes_allow(copy, m, "GET", "/", "read")); routes_free(copy, m);
+    routes_free(again, m); json_free(saved); routes_free(routes, n);
+    // Not an OpenAPI document.
+    stub.body = "{\"operations\":[{\"name\":\"projects\",\"readOnly\":true}]}";
+    CHECK(!api_catalog(c, &routes, &n, &e)); CHECK(e.kind == API_NON_JSON);
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_discovery_says_whether_the_server_transcribes(void) {
-    const char *device = "\"device\":{\"id\":\"d\",\"label\":\"iPhone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}";
-    char *a = xstrfmt("{\"version\":1,%s}", device), *b = xstrfmt("{\"version\":1,%s,\"transcribe\":true}", device), *s = xstrfmt("{%s,\"operations\":[]}", device);
+    const char *device = "{\"id\":\"d\",\"label\":\"Laptop\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0}";
+    char *a = xstrfmt("{\"version\":1,\"client\":%s}", device), *b = xstrfmt("{\"version\":1,\"client\":%s,\"transcribe\":true}", device), *s = xstrfmt("{\"device\":%s,\"routes\":[]}", device);
     Json *ja = json_parsez(a), *jb = json_parsez(b), *js = json_parsez(s);
     Discovery d;
     CHECK(discovery_parse(ja, &d)); CHECK(d.transcribe == -1); discovery_free(&d);
     CHECK(discovery_parse(jb, &d)); CHECK(d.transcribe == 1); discovery_free(&d);
     Connection saved; CHECK(connection_parse(js, &saved)); CHECK(saved.transcribe == -1); connection_free(&saved);
+    // A connection saved by the mobile API's client is paired again rather than read.
+    Json *old = json_parsez("{\"device\":{\"id\":\"d\",\"label\":\"Phone\",\"repos\":[],\"permission\":\"manage\",\"expiresAt\":0},\"operations\":[]}");
+    CHECK(!connection_parse(old, &saved)); json_free(old);
     CHECK(discovery_voice_notes_off(1) == NULL);
     CHECK(strstr(discovery_voice_notes_off(0), "OPENAI_TRANSCRIBE_API_KEY") != NULL);
     CHECK(strstr(discovery_voice_notes_off(-1), "Update Briareus") != NULL);
@@ -236,24 +340,17 @@ static void test_revoke_uses_delete_token(void) {
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
     CHECK(api_revoke(c, &e));
-    CHECK_STR(stub.last_method, "DELETE"); CHECK_STR(stub.last_url, "https://example.com/api/mobile/v1/token");
+    CHECK_STR(stub.last_method, "DELETE"); CHECK_STR(stub.last_url, "https://example.com/api/v1/token");
     api_client_release(c); stub_reset(&stub);
 }
 static void test_oversized_write_never_leaves_client(void) {
     Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json"; stub.body = "{}";
     ApiClient *c = client(&stub);
     char *big = xmalloc(1048577); memset(big, 'x', 1048576); big[1048576] = 0;
-    Json *args = json_object(); json_set_str(args, "text", big);
+    Json *args = json_object(); json_set_str(args, "sessionId", "abc"); json_set_str(args, "text", big);
     ApiError e; api_error_init(&e);
-    CHECK(api_operation(c, "message", args, 0, &e) == NULL); CHECK(e.kind == API_OVERSIZED_REQUEST); CHECK(stub.calls == 0);
+    CHECK(api_call(c, "message", args, 0, &e) == NULL); CHECK(e.kind == API_OVERSIZED_REQUEST); CHECK(stub.calls == 0);
     free(big); json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
-}
-static void test_rejects_operation_path_traversal(void) {
-    Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json"; stub.body = "{}";
-    ApiClient *c = client(&stub);
-    ApiError e; api_error_init(&e);
-    CHECK(api_operation(c, "../projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP && e.status == 400); CHECK(stub.calls == 0);
-    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_retry_after_http_date(void) {
     CHECK(api_retry_after("Thu, 01 Jan 1970 00:02:00 GMT", 0) == 120);
@@ -387,7 +484,7 @@ static void test_runtime_catalog_resolves_choices_per_model(void) {
     CHECK(runtime_catalog_first_available(&c, &ch)); CHECK(ch.provider_id == 2); runtime_choice_free(&ch);
     char *label = runtime_catalog_label(&c, &c.def); CHECK_STR(label, "Claude \xC2\xB7 opus"); free(label);
     Json *args = runtime_choice_arguments(&c.def);
-    CHECK(json_num_or(json_get(args, "providerId"), 0) == 2); CHECK_STR(json_str(json_get(args, "model")), "opus"); CHECK_STR(json_str(json_get(args, "effort")), "high");
+    CHECK(json_num_or(json_get(args, "provider"), 0) == 2); CHECK(json_is_null(json_get(args, "providerId"))); CHECK_STR(json_str(json_get(args, "model")), "opus"); CHECK_STR(json_str(json_get(args, "effort")), "high");
     json_free(args);
     RuntimeChoice bare = { 3, NULL, NULL }; args = runtime_choice_arguments(&bare); CHECK(json_count(args) == 1); json_free(args);
     Json *round = runtime_catalog_json(&c); RuntimeCatalog again; CHECK(runtime_catalog_parse(round, &again)); CHECK(again.provider_count == 2); runtime_catalog_free(&again); json_free(round);
@@ -607,24 +704,31 @@ static void test_board_offers_the_errands_a_pull_request_is_in_a_state_for(void)
                                 "{\"id\":\"label-pull\",\"label\":\"Label it\",\"icon\":\"x\",\"hint\":\"Tag it\",\"input\":null},{\"label\":\"No id\"},"
                                 "{\"id\":\"qa\",\"label\":\"QA\"},{\"id\":\"test-sheet\",\"label\":\"Test sheet\"},{\"id\":\"test-run\",\"label\":\"Run test sheet\"}]");
     a = board_actions_offered(catalog, &pulls[2], 0, &an);
-    CHECK(an > 0); if (an) { CHECK_STR(a[an - 1].id, "label-pull"); char *op = board_action_operation(&a[an - 1]); CHECK_STR(op, "label_pull"); free(op); }
+    CHECK(an > 0); if (an) { CHECK_STR(a[an - 1].id, "label-pull"); char *op = board_action_operation(&a[an - 1]); CHECK_STR(op, "action"); free(op); }
     CHECK(!has_id(a, an, "qa") && !has_id(a, an, "test-sheet") && !has_id(a, an, "test-run"));
+    // Run and Review are always there; an errand the server does not list is not offered.
+    CHECK(has_id(a, an, "run") && has_id(a, an, "review") && has_id(a, an, "custom-feedback"));
+    CHECK(!has_id(a, an, "pr-body-summary") && !has_id(a, an, "delete-self-comments"));
     const BoardAction *feedback = NULL; for (size_t i = 0; i < an; i++) if (str_eq(a[i].id, "custom-feedback")) feedback = &a[i];
     CHECK(feedback && feedback->has_input); if (feedback) CHECK_STR(feedback->input.label, "Tell it");
     if (feedback) {
         Json *args = board_action_arguments(feedback, "o/r", 9, "docs", " Use 404 \n");
-        CHECK(json_count(args) == 3); CHECK_STR(json_str(json_get(args, "repo")), "o/r"); CHECK(json_num_or(json_get(args, "prNumber"), 0) == 9); CHECK_STR(json_str(json_get(args, "input")), "Use 404");
+        CHECK(json_count(args) == 4); CHECK_STR(json_str(json_get(args, "repo")), "o/r"); CHECK(json_num_or(json_get(args, "prNumber"), 0) == 9); CHECK_STR(json_str(json_get(args, "input")), "Use 404");
+        CHECK_STR(json_str(json_get(args, "action")), "custom-feedback");
         json_free(args);
     }
     board_actions_free(a, an); json_free(catalog);
     size_t kn; const BoardAction *known = board_actions_known(&kn);
     const BoardAction *run = NULL, *solve = NULL, *review = NULL;
     for (size_t i = 0; i < kn; i++) { if (str_eq(known[i].id, "run")) run = &known[i]; if (str_eq(known[i].id, "solve-conflicts")) solve = &known[i]; if (str_eq(known[i].id, "review")) review = &known[i]; }
+    Json *args;
     char *op = board_action_operation(run); CHECK_STR(op, "serve_pull"); free(op);
-    op = board_action_operation(solve); CHECK_STR(op, "solve_conflicts"); free(op);
+    op = board_action_operation(solve); CHECK_STR(op, "action"); free(op);
+    op = board_action_operation(review); CHECK_STR(op, "review"); free(op);
+    args = board_action_arguments(solve, "o/r", 9, "docs", NULL); CHECK(json_count(args) == 3); CHECK_STR(json_str(json_get(args, "action")), "solve-conflicts"); json_free(args);
     CHECK(board_action_timeout_ms(run) == 170000 && board_action_timeout_ms(review) == 0);
-    Json *args = board_action_arguments(review, "o/r", 9, "docs", "ignored");
-    CHECK(json_count(args) == 3); CHECK_STR(json_str(json_get(args, "branch")), "docs"); json_free(args);
+    args = board_action_arguments(review, "o/r", 9, "docs", "ignored");
+    CHECK(json_count(args) == 3); CHECK_STR(json_str(json_get(args, "branch")), "docs"); CHECK(json_is_null(json_get(args, "action"))); json_free(args);
     args = board_action_arguments(run, "o/r", 9, "docs", NULL); CHECK(json_count(args) == 2); json_free(args);
     pull_summaries_free(pulls, n); json_free(b);
 }
@@ -701,18 +805,17 @@ int main(void) {
         { "normalizes origin and API path", test_normalizes_origin_and_api_path },
         { "rejects unsafe or ambiguous addresses", test_rejects_unsafe_or_ambiguous_addresses },
         { "rejects invalid tokens", test_rejects_invalid_tokens },
-        { "operation uses exact mobile path and JSON body", test_operation_uses_exact_mobile_path_and_json_body },
+        { "calls take their route and arguments from the table", test_calls_take_their_route_and_arguments_from_the_table },
         { "discovery validates version and milliseconds", test_discovery_validates_version_and_milliseconds },
         { "redirect and HTML are not accepted", test_redirect_and_html_are_not_accepted },
         { "errors keep status and Retry-After without retrying a write", test_errors_keep_status_and_retry_after_without_retrying_write },
         { "timeout does not retry a write", test_timeout_does_not_retry_write },
         { "voice note is posted as recorded and answered with its text", test_voice_note_is_posted_as_recorded_and_answered_with_its_text },
         { "attachment is posted raw and answered with its id", test_attachment_is_posted_raw_and_answered_with_its_id },
-        { "operations say whether a message takes attachments", test_operations_say_whether_a_message_takes_attachments },
+        { "catalog reads routes and who may call them from OpenAPI", test_catalog_reads_routes_and_who_may_call_them_from_openapi },
         { "discovery says whether the server transcribes", test_discovery_says_whether_the_server_transcribes },
         { "revoke uses DELETE token", test_revoke_uses_delete_token },
         { "oversized write never leaves the client", test_oversized_write_never_leaves_client },
-        { "rejects operation path traversal", test_rejects_operation_path_traversal },
         { "Retry-After HTTP date", test_retry_after_http_date },
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },
         { "session reads review loop and held triage", test_session_reads_review_loop_and_held_triage },

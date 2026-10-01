@@ -1,4 +1,4 @@
-// The connection: one device token, the server's capability catalog, the saved-response cache, and requests answered on the UI thread.
+// The connection: one token, the server's route catalog, the saved-response cache, and requests answered on the UI thread.
 #ifndef BRIAREUS_STORE_H
 #define BRIAREUS_STORE_H
 #include "api.h"
@@ -14,7 +14,7 @@
 typedef struct {
     ApiClient *client;                 // NULL until paired
     bool has_device; Device device;
-    Operation *operations; size_t operation_count;
+    Route *routes; size_t route_count;   // what the server lists in its OpenAPI document
     int transcribes;                   // -1 from a server that predates voice notes
     bool connecting;
     char *connection_error;
@@ -32,8 +32,9 @@ bool store_connected(void);
 bool store_can_manage(void);
 /// The microphone shows for any device allowed to write the message a note becomes.
 bool store_can_transcribe(void);
-bool store_supports(const char *operation);
-/// Files can go with a message: the server's `message` operation lists `attachments`, and this device may write.
+/// Whether the server has the route a call is made on and this token may call it.
+bool store_supports(const char *call);
+/// Files can go with a message: the server takes uploads and messages, and this token may write.
 bool store_supports_attachments(void);
 /// A device that paired before opens on what it saved; the server confirms the token meanwhile.
 void store_restore(void);
@@ -50,7 +51,7 @@ void store_invalidate_credentials(const ApiError *error);
 typedef struct Request Request;
 typedef void (*RequestDone)(void *owner, Request *req);
 struct Request {
-    char *operation;
+    char *operation;                                   // the call's name, as api_route knows it
     Json *args;
     int timeout_ms;
     void *audio; size_t audio_len; char *audio_type;   // for a transcription
@@ -64,8 +65,8 @@ struct Request {
     ApiClient *client;
 };
 
-/// Runs an operation on a worker thread; `done` is called on the UI thread unless the request is cancelled first.
-/// A device that cannot perform the operation gets a 403 without a network call. Takes ownership of `args`.
+/// Makes a call (api_call) on a worker thread; `done` is called on the UI thread unless the request is cancelled first.
+/// A token that cannot make the call gets a 403 without a network call. Takes ownership of `args`.
 Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot);
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot);
 /// Stores a file on the server for the next message; the answer's `text` is the id to send. Takes ownership of `bytes`.

@@ -56,7 +56,7 @@ static void connection_layout(Screen *base, Doc *doc) {
         row_gap(doc, w);
         doc_labeled(doc, ix, iw, "Device", d->label, theme.secondary);
         row_gap(doc, w);
-        doc_labeled(doc, ix, iw, "Access", device_can_manage(d) ? "Manage" : "Read only", theme.secondary);
+        doc_labeled(doc, ix, iw, "Access", str_eq(d->permission, "admin") ? "Admin" : device_can_manage(d) ? "Manage" : "Read only", theme.secondary);
         row_gap(doc, w);
         char *expires = format_date_abbrev(device_expiry(d));
         doc_labeled(doc, ix, iw, "Expires", expires, theme.secondary);

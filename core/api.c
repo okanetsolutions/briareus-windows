@@ -43,16 +43,16 @@ bool api_error_is_refusal(const ApiError *e) { return e && e->kind == API_HTTP &
 char *api_error_description(const ApiError *e) {
     switch (e->kind) {
     case API_OK: return xstrdup("");
-    case API_INVALID_ADDRESS: return xstrdup("Enter an HTTPS server address, optionally ending in /api/mobile/v1, without credentials or query parameters.");
-    case API_INVALID_TOKEN: return xstrdup("Paste the complete device token from Settings \xE2\x86\x92 Mobile devices.");
-    case API_REDIRECTED: return xstrdup("The server redirected this request. Check the Cloudflare Access exception for /api/mobile/v1 and /api/mobile/v1/*.");
-    case API_NON_JSON: return xstrdup("The server returned an unexpected response. Check that the mobile API is deployed and reachable through Cloudflare Access.");
-    case API_INCOMPATIBLE_VERSION: return xstrdup("This server uses an unsupported mobile API version.");
+    case API_INVALID_ADDRESS: return xstrdup("Enter an HTTPS server address, optionally ending in /api/v1, without credentials or query parameters.");
+    case API_INVALID_TOKEN: return xstrdup("Paste the complete token from Settings \xE2\x86\x92 Devices and clients.");
+    case API_REDIRECTED: return xstrdup("The server redirected this request. Check the Cloudflare Access exception for /api/v1 and /api/v1/*.");
+    case API_NON_JSON: return xstrdup("The server returned an unexpected response. Check that the client API is deployed and reachable through Cloudflare Access.");
+    case API_INCOMPATIBLE_VERSION: return xstrdup("This server uses an unsupported client API version.");
     case API_OVERSIZED_REQUEST: return xstrdup("This message exceeds the server\xE2\x80\x99s 1 MiB request limit. Shorten it before sending.");
     case API_NETWORK: return xstrdup(e->message ? e->message : "The server could not be reached.");
     case API_CANCELLED: return xstrdup("Cancelled.");
     case API_HTTP:
-        if (e->status == 401) return xstrdup("This device token has expired or was revoked. Reconnect with a new token.");
+        if (e->status == 401) return xstrdup("This token has expired or was revoked. Reconnect with a new token.");
         if (e->status == 403) return xstrfmt("Access denied: %s", e->message ? e->message : "");
         if (e->status == 429) return xstrdup("The server is rate limiting requests. Updates will resume after a delay.");
         return xstrfmt("%s (HTTP %d)", e->message ? e->message : "Request failed", e->status);
@@ -114,11 +114,11 @@ bool server_address_parse(const char *input, ServerAddress *out) {
         if (!(isalnum(c) || c == '-' || c == '.' || c == '[' || c == ']' || c == ':' || c == '_')) { free(host); goto done; }
         *h = (char)tolower(c);
     }
-    if (!(str_eq(path, "") || str_eq(path, "/") || str_eq(path, "/api/mobile/v1") || str_eq(path, "/api/mobile/v1/"))) { free(host); goto done; }
+    if (!(str_eq(path, "") || str_eq(path, "/") || str_eq(path, "/api/v1") || str_eq(path, "/api/v1/"))) { free(host); goto done; }
     if (port == 443) port = 0;
     out->host = host; out->port = port;
     out->origin = port ? xstrfmt("https://%s:%d", host, port) : xstrfmt("https://%s", host);
-    out->base_url = xstrfmt("%s/api/mobile/v1/", out->origin);
+    out->base_url = xstrfmt("%s/api/v1/", out->origin);
     ok = true;
 done:
     free(trimmed);
@@ -243,10 +243,10 @@ bool api_discovery(ApiClient *c, Discovery *out, ApiError *error) {
     if (out->version != 1) { discovery_free(out); api_error_set(error, API_INCOMPATIBLE_VERSION, 0, NULL, -1); return false; }
     return true;
 }
-bool api_operations(ApiClient *c, Operation **ops, size_t *count, ApiError *error) {
-    Json *j = request(c, "operations", "GET", NULL, 0, error);
+bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
+    Json *j = request(c, "openapi.json", "GET", NULL, 0, error);
     if (!j) return false;
-    bool ok = operations_parse(j, ops, count);
+    bool ok = routes_parse(j, routes, count);
     json_free(j);
     if (!ok) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return ok;
@@ -257,18 +257,59 @@ bool api_revoke(ApiClient *c, ApiError *error) {
     json_free(j);
     return true;
 }
-static bool operation_name_valid(const char *name) {
-    if (!name || !(name[0] >= 'a' && name[0] <= 'z')) return false;
-    for (const char *p = name + 1; *p; p++) if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) return false;
-    return true;
-}
-Json *api_operation(ApiClient *c, const char *name, const Json *arguments, int timeout_ms, ApiError *error) {
-    if (!operation_name_valid(name)) { api_error_set(error, API_HTTP, 400, "Invalid operation", -1); return NULL; }
-    char *path = xstrfmt("operations/%s", name);
-    Json *empty = arguments ? NULL : json_object();
-    Json *result = request(c, path, "POST", arguments ? arguments : empty, timeout_ms, error);
-    json_free(empty); free(path);
-    return result;
+
+// MARK: - Calls
+
+// Every call the app makes, on the /api/v1 route that answers it. The names are the app's own; the paths are the server's,
+// with each parameter named after the argument that fills it. A route without a `{}` sends every argument in the query
+// (GET, DELETE) or the body (the rest).
+static const ApiRoute ROUTES[] = {
+    // Projects
+    { "projects", "GET", "projects" },
+    { "branches", "GET", "branches" },
+    { "runtimes", "GET", "runtimes" },
+    { "usage", "GET", "usage" },
+    { "actions", "GET", "actions" },
+    { "action", "POST", "actions" },                       // an errand on a pull request, named in `action`
+    // Pull requests
+    { "pulls", "GET", "pulls" },
+    { "pull", "GET", "pulls/{pr}" },
+    { "pull_description", "GET", "pulls/{pr}/description" },
+    { "pull_files", "GET", "pulls/{pr}/files" },
+    { "findings", "GET", "pulls/{pr}/findings" },
+    { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
+    { "merge_pull", "POST", "pulls/{pr}/merge" },
+    { "serve_pull", "POST", "pulls/{prNumber}/serve" },
+    // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
+    { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
+    { "start_session", "POST", "sessions" },
+    { "review", "POST", "sessions", "review" },
+    { "qa", "POST", "sessions", "qa" },
+    { "session", "GET", "sessions/{sessionId}" },
+    { "rename", "PATCH", "sessions/{sessionId}" },
+    { "delete", "DELETE", "sessions/{sessionId}" },
+    { "message", "POST", "sessions/{sessionId}/messages" },
+    { "drop_message", "DELETE", "sessions/{sessionId}/queue/{index}" },
+    { "cancel", "POST", "sessions/{sessionId}/cancel" },
+    { "close", "POST", "sessions/{sessionId}/close" },
+    { "reopen", "POST", "sessions/{sessionId}/reopen" },
+    { "serve", "POST", "sessions/{sessionId}/serve" },
+    { "compact", "POST", "sessions/{sessionId}/compact" },
+    { "clear", "POST", "sessions/{sessionId}/clear" },
+    { "review_loop", "POST", "sessions/{sessionId}/review-loop" },
+    { "qa_loop", "POST", "sessions/{sessionId}/qa-loop" },
+    { "link_pr", "POST", "sessions/{sessionId}/link-pr" },
+    { "complete_findings", "POST", "sessions/{sessionId}/findings/triage" },
+    { "save_findings", "POST", "sessions/{sessionId}/findings/save" },
+    { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
+    { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.
+    { "upload", "POST", "uploads" },
+    { "transcribe", "POST", "transcribe" },
+};
+const ApiRoute *api_route(const char *name) {
+    for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
+    return NULL;
 }
 
 static char *url_encode(const char *s) {
@@ -279,10 +320,75 @@ static char *url_encode(const char *s) {
     }
     return str_detach(&out);
 }
-char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *content_type, const char *language, ApiError *error) {
-    char *url;
-    if (!str_empty(language)) { char *lang = url_encode(language); url = xstrfmt("%stranscribe?lang=%s", c->address.base_url, lang); free(lang); }
-    else url = xstrfmt("%stranscribe", c->address.base_url);
+/// A string or number as it goes in a URL, or NULL for anything else (and for an empty string in a path).
+static char *url_value(const Json *v, bool in_path) {
+    const char *s = json_str(v);
+    if (s) return in_path && !*s ? NULL : url_encode(s);
+    double n;
+    if (json_num(v, &n) && isfinite(n)) {
+        if (n == floor(n) && fabs(n) < 1e15) return xstrfmt("%.0f", n);
+        return in_path ? NULL : xstrfmt("%.17g", n);
+    }
+    if (!in_path && json_bool_tristate(v) >= 0) return xstrdup(json_bool_tristate(v) ? "1" : "0");
+    return NULL;
+}
+Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeout_ms, ApiError *error) {
+    const ApiRoute *route = api_route(name);
+    if (!route) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return NULL; }
+    Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
+    Str path; str_init(&path);
+    for (const char *p = route->path; *p;) {
+        if (*p != '{') { str_appendc(&path, *p++); continue; }
+        const char *end = strchr(p, '}');
+        char *arg = xstrndup(p + 1, (size_t)(end - p - 1));
+        char *value = url_value(json_get(rest, arg), true);
+        if (!value) {
+            char *why = xstrfmt("Missing argument: %s", arg);
+            api_error_set(error, API_HTTP, 400, why, -1);
+            free(why); free(arg); str_free(&path); json_free(rest);
+            return NULL;
+        }
+        str_appendz(&path, value);
+        json_object_remove(rest, arg);
+        free(value); free(arg);
+        p = end + 1;
+    }
+    char *kept = NULL;
+    if (route->filter) {
+        const char *f = json_str(json_get(rest, route->filter));
+        if (f) kept = xstrdup(f);
+        json_object_remove(rest, route->filter);
+    }
+    bool reads = str_eq(route->method, "GET") || str_eq(route->method, "DELETE");
+    Json *result;
+    if (reads) {
+        char sep = '?';
+        for (size_t i = 0; i < json_count(rest); i++) {
+            char *value = url_value(json_get(rest, json_key(rest, i)), false);
+            if (!value) continue;
+            char *key = url_encode(json_key(rest, i));
+            str_appendf(&path, "%c%s=%s", sep, key, value);
+            sep = '&';
+            free(key); free(value);
+        }
+        result = request(c, path.data, route->method, NULL, timeout_ms, error);
+    } else {
+        if (route->set) json_set_bool(rest, route->set, true);
+        result = request(c, path.data, route->method, rest, timeout_ms, error);
+    }
+    if (result && kept && route->list) {
+        const Json *rows = json_get(result, route->list);
+        Json *mine = json_array();
+        for (size_t i = 0; i < json_count(rows); i++)
+            if (str_eq(json_str(json_get(json_at(rows, i), route->filter)), kept)) json_array_push(mine, json_clone(json_at(rows, i)));
+        json_object_set(result, route->list, mine);
+    }
+    free(kept); str_free(&path); json_free(rest);
+    return result;
+}
+
+char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *content_type, ApiError *error) {
+    char *url = xstrfmt("%stranscribe", c->address.base_url);
     // The server allows the transcription two minutes.
     Json *j = send_request(c, "POST", url, content_type ? content_type : "audio/mp4", audio, len, 150000, error);
     free(url);

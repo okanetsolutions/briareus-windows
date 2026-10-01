@@ -34,7 +34,6 @@ typedef struct {
     bool loaded, doc_stale, cycle_failed, projects_failed;
     char *error;
     Request *req_projects, *req_sessions, *req_write;
-    size_t reading;                             // the project whose conversations are being read
     double retry_after;
     Poller poller;
     Draft *drafts; size_t draft_count;
@@ -267,39 +266,37 @@ static void groups_free(Group *groups, size_t n) { for (size_t i = 0; i < n; i++
 // MARK: - Reading
 
 static void cycle_end(FindingsScreen *s);
-static void read_next(FindingsScreen *s);
 
 static void sessions_done(void *owner, Request *req) {
     FindingsScreen *s = owner;
-    const Project *p = s->reading < s->project_count ? &s->projects[s->reading] : NULL;
-    if (req->ok && p) {
-        Session *items; size_t n;
-        if (sessions_parse(req->result, &items, &n)) {
-            char *key = xstrfmt("sessions:%s", p->repo);
-            Json *list = sessions_json(items, n);
+    Session *items; size_t n;
+    if (req->ok && sessions_parse(req->result, &items, &n)) {
+        // One list for every project; each project's own rows are saved under its key.
+        for (size_t p = 0; p < s->project_count; p++) {
+            const char *repo = s->projects[p].repo;
+            Json *list = json_array();
+            for (size_t i = 0; i < n; i++) {
+                if (!str_eq(session_repo(&items[i]), repo)) continue;
+                json_array_push(list, json_clone(items[i].raw));
+                s->incoming = xrealloc(s->incoming, (s->incoming_count + 1) * sizeof *s->incoming);
+                session_copy(&s->incoming[s->incoming_count++], &items[i]);
+            }
+            char *key = xstrfmt("sessions:%s", repo);
             cache_store(g_store.cache, list, key);
             json_free(list); free(key);
-            s->incoming = xrealloc(s->incoming, (s->incoming_count + n + 1) * sizeof *s->incoming);
-            for (size_t i = 0; i < n; i++) session_copy(&s->incoming[s->incoming_count++], &items[i]);
-            sessions_free(items, n);
         }
-    } else if (p) {
-        // One project's refusal keeps what it showed before rather than emptying its cards mid-edit.
+        sessions_free(items, n);
+    } else {
+        // A refusal keeps what was shown before rather than emptying the cards mid-edit.
         for (size_t i = 0; i < s->all_count; i++) {
-            if (!str_eq(session_repo(&s->all[i]), p->repo)) continue;
             s->incoming = xrealloc(s->incoming, (s->incoming_count + 1) * sizeof *s->incoming);
             session_copy(&s->incoming[s->incoming_count++], &s->all[i]);
         }
-        if (!s->cycle_failed) { char *text = request_error_text(req); set_string(&s->error, text); free(text); }
+        char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
+        set_string(&s->error, text); free(text);
         s->cycle_failed = true; s->retry_after = req->error.retry_after;
     }
-    s->reading++;
-    read_next(s);
-}
-static void read_next(FindingsScreen *s) {
-    if (s->reading >= s->project_count) { cycle_end(s); return; }
-    Json *args = json_object(); json_set_str(args, "repo", s->projects[s->reading].repo);
-    store_call("sessions", args, 0, s, sessions_done, TAG_SESSIONS, &s->req_sessions);
+    cycle_end(s);
 }
 static void projects_done(void *owner, Request *req) {
     FindingsScreen *s = owner;
@@ -308,8 +305,7 @@ static void projects_done(void *owner, Request *req) {
         projects_free(s->projects, s->project_count);
         s->projects = items; s->project_count = n;
         Json *list = projects_json(items, n); cache_store(g_store.cache, list, "projects"); json_free(list);
-        s->reading = 0;
-        read_next(s);
+        store_call("sessions", json_object(), 0, s, sessions_done, TAG_SESSIONS, &s->req_sessions);
         return;
     }
     char *text = request_error_text(req); set_string(&s->error, text); free(text);

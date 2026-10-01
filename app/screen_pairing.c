@@ -92,7 +92,7 @@ static void pairing_layout(Screen *base, Doc *doc) {
     doc->y += row_h;
     doc_box_end(doc, box, 0);
     doc_space(doc, px(8));
-    doc_text(doc, x + px(4), col - px(8), "Create a token on the web dashboard under Settings \xE2\x86\x92 Mobile devices.", FONT_FOOTNOTE, theme.secondary, DT_LEFT | DT_WORDBREAK);
+    doc_text(doc, x + px(4), col - px(8), "Create a token on the web dashboard under Settings \xE2\x86\x92 Devices and clients, with Manage or Read-only access.", FONT_FOOTNOTE, theme.secondary, DT_LEFT | DT_WORDBREAK);
     doc_space(doc, px(24));
     bool enabled = can_connect(s);
     doc_button(doc, x, col, g_store.connecting ? "Connecting\xE2\x80\xA6" : "Connect", BUTTON_PROMINENT, ACT_CONNECT, 0, enabled);
@@ -130,7 +130,7 @@ static void pairing_ensure_controls(PairingScreen *s) {
     SendMessageW(s->server, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
     SendMessageW(s->token, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
     SendMessageW(s->server, EM_SETCUEBANNER, TRUE, (LPARAM)L"https://briareus.example.com");
-    SendMessageW(s->token, EM_SETCUEBANNER, TRUE, (LPARAM)L"Device token");
+    SendMessageW(s->token, EM_SETCUEBANNER, TRUE, (LPARAM)L"Token");
     wchar_t *server = utf8_to_wide(g_store.server ? g_store.server : "");
     SetWindowTextW(s->server, server); free(server);
     SetWindowSubclass(s->server, edit_proc, ID_SERVER, (DWORD_PTR)s);

@@ -1,4 +1,4 @@
-// What the mobile API answers with, read into the shapes the screens use. Unknown fields ride along in `raw`.
+// What the client API answers with, read into the shapes the screens use. Unknown fields ride along in `raw`.
 #ifndef BRIAREUS_MODELS_H
 #define BRIAREUS_MODELS_H
 #include "json.h"
@@ -8,17 +8,21 @@
 
 // MARK: - Connection
 
+/// The token's own record (`client` in what `GET /` answers): this device's token.
 typedef struct {
-    char *id, *label, *permission;
-    char **repos; size_t repo_count;
+    char *id, *label, *permission;   // permission: read, manage or admin
+    char **repos; size_t repo_count;  // empty for an admin token, which is held to no project list
     double expires_at;   // milliseconds since 1970
 } Device;
 bool device_parse(const Json *value, Device *out);
 Json *device_json(const Device *device);
 void device_free(Device *device);
 void device_copy(Device *into, const Device *from);
+/// A manage or admin token may write.
 bool device_can_manage(const Device *device);
 time_t device_expiry(const Device *device);
+/// read 0, manage 1, admin 2; -1 for a permission this app does not know, which may do nothing.
+int permission_rank(const char *permission);
 
 /// -1 when the server left transcription out (a server from before voice notes), else 0 or 1.
 typedef struct { int version; Device device; int transcribe; } Discovery;
@@ -27,15 +31,18 @@ void discovery_free(Discovery *discovery);
 /// What the server's owner has to do before voice notes work, or NULL when they do.
 const char *discovery_voice_notes_off(int transcribe);
 
-/// `attachments` is set when the operation's input schema lists an `attachments` argument: the ids of uploaded files.
-typedef struct { char *name; bool read_only; bool attachments; } Operation;
-bool operations_parse(const Json *value, Operation **out, size_t *count);
-Json *operations_json(const Operation *ops, size_t count);
-void operations_free(Operation *ops, size_t count);
-Operation *operations_copy(const Operation *ops, size_t count);
+/// One route the server lists: its method, its path with `{...}` for each parameter, and the least permission that may call it.
+typedef struct { char *method, *path, *access; } Route;
+/// Reads the server's OpenAPI document (`paths`, with `x-briareus-access` on each operation) or a saved list of routes.
+bool routes_parse(const Json *openapi_or_saved, Route **out, size_t *count);
+Json *routes_json(const Route *routes, size_t count);
+void routes_free(Route *routes, size_t count);
+Route *routes_copy(const Route *routes, size_t count);
+/// Whether the server has `method path` (a `{...}` segment on either side matches any) and `permission` ranks high enough.
+bool routes_allow(const Route *routes, size_t count, const char *method, const char *path, const char *permission);
 
 /// What pairing learned about this device, saved so the next launch opens without asking again first.
-typedef struct { Device device; Operation *operations; size_t operation_count; int transcribe; } Connection;
+typedef struct { Device device; Route *routes; size_t route_count; int transcribe; } Connection;
 bool connection_parse(const Json *value, Connection *out);
 Json *connection_json(const Connection *connection);
 void connection_free(Connection *connection);
@@ -129,7 +136,7 @@ Json *transcript_json(const Transcript *t);
 
 typedef struct { char *id, *label; char **efforts; size_t effort_count; char *default_effort; } RuntimeModel;
 typedef struct { int id; char *label; int available; RuntimeModel *models; size_t model_count; char *default_model; } RuntimeProvider;
-/// What `start_session` is asked to run on. The server may still fall back to a default model or effort.
+/// What a start is asked to run on (`provider`, `model`, `effort`). The server may still fall back to a default model or effort.
 typedef struct { int provider_id; char *model; char *effort; } RuntimeChoice;
 typedef struct { bool has_default; RuntimeChoice def; RuntimeProvider *providers; size_t provider_count; } RuntimeCatalog;
 
@@ -149,7 +156,7 @@ const RuntimeModel *runtime_catalog_model(const RuntimeCatalog *catalog, const R
 const char *const *runtime_catalog_efforts(const RuntimeCatalog *catalog, const RuntimeChoice *choice, size_t *count);
 /// A provider's model with that model's own default effort, since efforts differ between models. False for an unknown provider.
 bool runtime_catalog_choice(const RuntimeCatalog *catalog, int provider_id, const char *model, RuntimeChoice *out);
-/// Used when the project has no default runtime and `start_session` therefore needs a provider.
+/// Used when the project has no default runtime and a start therefore needs a provider.
 bool runtime_catalog_first_available(const RuntimeCatalog *catalog, RuntimeChoice *out);
 /// "Provider · Model", as a new string.
 char *runtime_catalog_label(const RuntimeCatalog *catalog, const RuntimeChoice *choice);

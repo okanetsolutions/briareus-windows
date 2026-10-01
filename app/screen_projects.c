@@ -246,7 +246,6 @@ typedef struct {
     bool loaded;
     char *error;
     Request *req, *req_sessions;
-    size_t reading;            // the project whose conversations are being counted
     Poller poller;
     FooterRects footer;
 } ProjectsScreen;
@@ -278,26 +277,25 @@ static void projects_show(ProjectsScreen *s, const Json *value) {
     s->projects = items; s->count = n; s->loaded = true;
     projects_count(s);
 }
-static void count_next(ProjectsScreen *s);
 static void count_done(void *owner, Request *req) {
     ProjectsScreen *s = owner;
-    if (req->ok && s->reading < s->count) {
+    if (req->ok) {
+        // One list for every project the token can see; each project's own rows are saved under its key.
         Session *items; size_t n;
         if (sessions_parse(req->result, &items, &n)) {
-            char *key = xstrfmt("sessions:%s", s->projects[s->reading].repo);
-            Json *list = sessions_json(items, n);
-            cache_store(g_store.cache, list, key);
-            json_free(list); free(key);
+            for (size_t p = 0; p < s->count; p++) {
+                Json *list = json_array();
+                for (size_t k = 0; k < n; k++) if (str_eq(session_repo(&items[k]), s->projects[p].repo)) json_array_push(list, json_clone(items[k].raw));
+                char *key = xstrfmt("sessions:%s", s->projects[p].repo);
+                cache_store(g_store.cache, list, key);
+                json_free(list); free(key);
+            }
             sessions_free(items, n);
         }
     }
-    s->reading++;
-    count_next(s);
-}
-static void count_next(ProjectsScreen *s) {
-    if (s->reading >= s->count) { projects_count(s); poller_finished(&s->poller, false, -1); pane_relayout(s->base.pane); return; }
-    Json *args = json_object(); json_set_str(args, "repo", s->projects[s->reading].repo);
-    store_call("sessions", args, 0, s, count_done, 0, &s->req_sessions);
+    projects_count(s);
+    poller_finished(&s->poller, !req->ok, req->error.retry_after);
+    pane_relayout(s->base.pane);
 }
 static void projects_done(void *owner, Request *req) {
     ProjectsScreen *s = owner;
@@ -309,7 +307,7 @@ static void projects_done(void *owner, Request *req) {
         json_free(list);
         pane_relayout(s->base.pane);
         // Every project's conversations, for the counts and the dots.
-        if (store_supports("sessions")) { s->reading = 0; count_next(s); return; }
+        if (store_supports("sessions")) { store_call("sessions", json_object(), 0, s, count_done, 0, &s->req_sessions); return; }
     } else {
         char *text = request_error_text(req); set_string(&s->error, text); free(text);
         s->loaded = true;

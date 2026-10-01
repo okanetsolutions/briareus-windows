@@ -16,21 +16,21 @@ static void set_error_from(const ApiError *e) { char *t = api_error_description(
 static void drop_client(void) {
     if (g_store.client) { api_client_release(g_store.client); g_store.client = NULL; }
     if (g_store.has_device) { device_free(&g_store.device); g_store.has_device = false; }
-    operations_free(g_store.operations, g_store.operation_count); g_store.operations = NULL; g_store.operation_count = 0;
+    routes_free(g_store.routes, g_store.route_count); g_store.routes = NULL; g_store.route_count = 0;
     g_store.transcribes = -1;
 }
 
-static void adopt(const Device *device, const Operation *ops, size_t count, int transcribe) {
+static void adopt(const Device *device, const Route *routes, size_t count, int transcribe) {
     if (g_store.has_device) device_free(&g_store.device);
     device_copy(&g_store.device, device); g_store.has_device = true;
-    operations_free(g_store.operations, g_store.operation_count);
-    g_store.operations = operations_copy(ops, count); g_store.operation_count = count;
+    routes_free(g_store.routes, g_store.route_count);
+    g_store.routes = routes_copy(routes, count); g_store.route_count = count;
     g_store.transcribes = transcribe;
 }
 
-static void save_connection(const Device *device, const Operation *ops, size_t count, int transcribe) {
+static void save_connection(const Device *device, const Route *routes, size_t count, int transcribe) {
     Connection c; memset(&c, 0, sizeof c);
-    device_copy(&c.device, device); c.operations = operations_copy(ops, count); c.operation_count = count; c.transcribe = transcribe;
+    device_copy(&c.device, device); c.routes = routes_copy(routes, count); c.route_count = count; c.transcribe = transcribe;
     Json *j = connection_json(&c);
     cache_store(g_store.cache, j, "connection");
     json_free(j); connection_free(&c);
@@ -56,17 +56,12 @@ void store_shutdown(void) {
 bool store_connected(void) { return g_store.client != NULL; }
 bool store_can_manage(void) { return g_store.has_device && device_can_manage(&g_store.device); }
 bool store_can_transcribe(void) { return store_can_manage(); }
-bool store_supports(const char *operation) {
-    for (size_t i = 0; i < g_store.operation_count; i++)
-        if (str_eq(g_store.operations[i].name, operation) && (g_store.operations[i].read_only || store_can_manage())) return true;
-    return false;
+bool store_supports(const char *call) {
+    const ApiRoute *route = api_route(call);
+    if (!route || !g_store.has_device) return false;
+    return routes_allow(g_store.routes, g_store.route_count, route->method, route->path, g_store.device.permission);
 }
-bool store_supports_attachments(void) {
-    if (!store_can_manage()) return false;
-    for (size_t i = 0; i < g_store.operation_count; i++)
-        if (str_eq(g_store.operations[i].name, "message")) return g_store.operations[i].attachments;
-    return false;
-}
+bool store_supports_attachments(void) { return store_can_manage() && store_supports("upload") && store_supports("message"); }
 
 // MARK: - Async
 
@@ -88,7 +83,7 @@ void async_run(AsyncWork work, AsyncWork done, void *ctx) {
 typedef struct {
     ApiClient *client; ServerAddress address; char *token;
     Discovery discovery; bool has_discovery;
-    Operation *ops; size_t op_count; bool has_ops;
+    Route *routes; size_t route_count; bool has_routes;
     ApiError error; bool ok;
     bool verifying;             // a saved connection being confirmed rather than a new pairing
     Connection saved; bool has_saved;
@@ -99,13 +94,13 @@ static void pair_work(void *p) {
     api_error_init(&j->error);
     if (!api_discovery(j->client, &j->discovery, &j->error)) return;
     j->has_discovery = true;
-    if (!api_operations(j->client, &j->ops, &j->op_count, &j->error)) return;
-    j->has_ops = true; j->ok = true;
+    if (!api_catalog(j->client, &j->routes, &j->route_count, &j->error)) return;
+    j->has_routes = true; j->ok = true;
 }
 static void pair_free(PairJob *j) {
     api_client_release(j->client); server_address_free(&j->address); free(j->token);
     if (j->has_discovery) discovery_free(&j->discovery);
-    if (j->has_ops) operations_free(j->ops, j->op_count);
+    if (j->has_routes) routes_free(j->routes, j->route_count);
     if (j->has_saved) connection_free(&j->saved);
     api_error_clear(&j->error); free(j);
 }
@@ -125,8 +120,8 @@ static void pair_done(void *p) {
             if (j->ok) {
                 // Saved screens may hold projects this device can no longer read.
                 if (!str_eq(j->discovery.device.id, j->saved.device.id) || !same_repos(&j->discovery.device, &j->saved.device)) cache_remove_all(g_store.cache);
-                adopt(&j->discovery.device, j->ops, j->op_count, j->discovery.transcribe);
-                save_connection(&j->discovery.device, j->ops, j->op_count, j->discovery.transcribe);
+                adopt(&j->discovery.device, j->routes, j->route_count, j->discovery.transcribe);
+                save_connection(&j->discovery.device, j->routes, j->route_count, j->discovery.transcribe);
                 notify();
             } else if (api_error_unauthorized(&j->error)) {
                 store_invalidate_credentials(&j->error);
@@ -149,9 +144,9 @@ static void pair_done(void *p) {
     if (!had || !str_eq(previous.device.id, j->discovery.device.id)) cache_remove_all(g_store.cache);
     if (had) connection_free(&previous);
     json_free(saved);
-    save_connection(&j->discovery.device, j->ops, j->op_count, j->discovery.transcribe);
+    save_connection(&j->discovery.device, j->routes, j->route_count, j->discovery.transcribe);
     drop_client();
-    adopt(&j->discovery.device, j->ops, j->op_count, j->discovery.transcribe);
+    adopt(&j->discovery.device, j->routes, j->route_count, j->discovery.transcribe);
     g_store.client = api_client_retain(j->client);
     set_error(NULL);
     notify();
@@ -188,7 +183,7 @@ void store_restore(void) {
         ApiError e; api_error_init(&e);
         ApiClient *client = api_client_new(&address, token, &e);
         if (!client) { set_error_from(&e); api_error_clear(&e); connection_free(&saved); free(token); server_address_free(&address); notify(); return; }
-        adopt(&saved.device, saved.operations, saved.operation_count, saved.transcribe);
+        adopt(&saved.device, saved.routes, saved.route_count, saved.transcribe);
         g_store.client = client;
         notify();
         PairJob *j = xcalloc(1, sizeof *j);
@@ -253,7 +248,7 @@ static void voice_check_done(void *p) {
     if (g_store.client != j->client) { if (j->done) j->done(j->ctx, NULL); }
     else if (j->ok) {
         g_store.transcribes = j->discovery.transcribe;
-        save_connection(&j->discovery.device, g_store.operations, g_store.operation_count, j->discovery.transcribe);
+        save_connection(&j->discovery.device, g_store.routes, g_store.route_count, j->discovery.transcribe);
         if (j->done) j->done(j->ctx, discovery_voice_notes_off(g_store.transcribes));
     } else if (api_error_unauthorized(&j->error)) {
         store_invalidate_credentials(&j->error);
@@ -285,13 +280,13 @@ static void request_free(Request *r) {
 static DWORD WINAPI request_thread(LPVOID p) {
     Request *r = p;
     if (r->audio) {
-        r->text = api_transcribe(r->client, r->audio, r->audio_len, r->audio_type, NULL, &r->error);
+        r->text = api_transcribe(r->client, r->audio, r->audio_len, r->audio_type, &r->error);
         r->ok = r->text != NULL;
     } else if (r->file) {
         r->text = api_upload(r->client, r->file_name, r->file, r->file_len, &r->error);
         r->ok = r->text != NULL;
     } else {
-        r->result = api_operation(r->client, r->operation, r->args, r->timeout_ms, &r->error);
+        r->result = api_call(r->client, r->operation, r->args, r->timeout_ms, &r->error);
         r->ok = r->result != NULL;
     }
     PostMessageW(g_store.hwnd, WM_APP_REQUEST_DONE, 0, (LPARAM)r);
@@ -315,7 +310,7 @@ static void request_start(Request *r) {
 Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);
     r->operation = xstrdup(operation); r->args = args; r->timeout_ms = timeout_ms;
-    if (!g_store.client || !store_supports(operation)) { request_refuse(r, "This device cannot perform that action."); return r; }
+    if (!g_store.client || !store_supports(operation)) { request_refuse(r, "This token cannot perform that action."); return r; }
     request_start(r);
     return r;
 }
@@ -323,7 +318,7 @@ Request *store_transcribe(const void *audio, size_t len, const char *content_typ
     Request *r = request_new(owner, done, tag, slot);
     r->audio = xmalloc(len ? len : 1); memcpy(r->audio, audio, len); r->audio_len = len;
     r->audio_type = xstrdup(content_type ? content_type : "audio/mp4");
-    if (!g_store.client || !store_can_transcribe()) { request_refuse(r, "This device cannot transcribe voice notes."); return r; }
+    if (!g_store.client || !store_can_transcribe()) { request_refuse(r, "This token cannot transcribe voice notes."); return r; }
     request_start(r);
     return r;
 }
