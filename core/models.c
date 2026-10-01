@@ -118,30 +118,37 @@ Route *routes_copy(const Route *routes, size_t count) {
     return c;
 }
 /// Segment by segment, a parameter standing for any one segment. Leading and trailing slashes do not count.
-static bool paths_match(const char *a, const char *b) {
+/// -1 when the paths differ, else how many segments are a parameter on one side only.
+static int paths_match(const char *a, const char *b) {
+    int loose = 0;
     while (*a == '/') a++;
     while (*b == '/') b++;
     for (;;) {
         const char *ea = strchr(a, '/'), *eb = strchr(b, '/');
         size_t la = ea ? (size_t)(ea - a) : strlen(a), lb = eb ? (size_t)(eb - b) : strlen(b);
-        bool param = (la && a[0] == '{') || (lb && b[0] == '{');
-        if (!param && (la != lb || strncmp(a, b, la) != 0)) return false;
-        if (param && (!la || !lb)) return false;
+        bool pa = la && a[0] == '{', pb = lb && b[0] == '{';
+        if (!pa && !pb && (la != lb || strncmp(a, b, la) != 0)) return -1;
+        if ((pa || pb) && (!la || !lb)) return -1;
+        if (pa != pb) loose++;
         a += la; b += lb;
         while (*a == '/') a++;
         while (*b == '/') b++;
-        if (!*a || !*b) return !*a && !*b;
+        if (!*a || !*b) return !*a && !*b ? loose : -1;
     }
 }
 bool routes_allow(const Route *routes, size_t count, const char *method, const char *path, const char *permission) {
     int rank = permission_rank(permission);
     if (rank < 0) return false;
+    // The closest route speaks for the path, as a server's router picks a literal segment over a parameter.
+    const Route *best = NULL; int best_loose = 0;
     for (size_t i = 0; i < count; i++) {
-        if (!str_ieq(routes[i].method, method) || !paths_match(routes[i].path, path)) continue;
-        int needed = permission_rank(routes[i].access);
-        return needed >= 0 && rank >= needed;
+        if (!str_ieq(routes[i].method, method)) continue;
+        int loose = paths_match(routes[i].path, path);
+        if (loose >= 0 && (!best || loose < best_loose)) { best = &routes[i]; best_loose = loose; }
     }
-    return false;
+    if (!best) return false;
+    int needed = permission_rank(best->access);
+    return needed >= 0 && rank >= needed;
 }
 
 bool connection_parse(const Json *value, Connection *out) {
