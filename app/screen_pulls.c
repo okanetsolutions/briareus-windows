@@ -860,6 +860,28 @@ static void paint_comment_head(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
     RECT t = { x, rc->top, rc->right - px(16), rc->bottom };
     draw_text(hdc, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
+/// What GitHub shows of a description: without HTML comments and raw HTML lines (bots' badges and footers), code blocks kept whole.
+static char *visible_markdown(const char *body) {
+    Str bare; str_init(&bare);
+    for (const char *p = body; *p;) {
+        if (str_has_prefix(p, "<!--")) { const char *end = strstr(p + 4, "-->"); if (!end) break; p = end + 3; continue; }
+        str_appendf(&bare, "%c", *p++);
+    }
+    Str out; str_init(&out);
+    bool fenced = false;
+    for (const char *p = bare.data ? bare.data : ""; *p;) {
+        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
+        char *line = xstrndup(p, n), *t = str_trim(line);
+        if (str_has_prefix(t, "```")) fenced = !fenced;
+        if (fenced || str_has_prefix(t, "```") || *t != '<') str_appendf(&out, "%s\n", line);
+        free(t); free(line);
+        p = e ? e + 1 : p + n;
+    }
+    str_free(&bare);
+    char *result = str_trim(out.data ? out.data : "");
+    str_free(&out);
+    return result;
+}
 /// The opening comment: the pull request's description as GitHub shows it, read from the server's file list when `pull` leaves it out.
 static void layout_description(PullScreen *s, Doc *doc, Col c) {
     const char *body = json_str(json_get(s->pr, "body"));
@@ -887,7 +909,7 @@ static void layout_description(PullScreen *s, Doc *doc, Col c) {
     int ix = x + px(16), iw = w - px(32);
     if (loading) doc_text(doc, ix, iw, "Loading the description\xE2\x80\xA6", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
     else {
-        char *trimmed = str_trim(body);
+        char *trimmed = visible_markdown(body);
         if (*trimmed) doc_markdown(doc, ix, iw, trimmed, FONT_CALLOUT);
         else doc_text(doc, ix, iw, "No description provided.", FONT_CALLOUT_ITALIC, theme.secondary, DT_WORDBREAK);
         free(trimmed);
