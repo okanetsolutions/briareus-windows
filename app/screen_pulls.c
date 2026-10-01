@@ -134,6 +134,7 @@ static void runs_done(void *owner, Request *req) {
     pane_relayout(s->base.pane);
 }
 static size_t runs_on(PullsScreen *s, int number) { size_t n = 0; for (size_t i = 0; i < s->run_count; i++) if (session_pull_number(&s->runs[i]) == number) n++; return n; }
+static bool run_active_on(PullsScreen *s, int number) { for (size_t i = 0; i < s->run_count; i++) if (session_pull_number(&s->runs[i]) == number && session_is_active(&s->runs[i])) return true; return false; }
 static void pulls_load(PullsScreen *s, bool fresh) {
     if (!s->loaded) {
         char *key = xstrfmt("pulls:%s", s->project.repo);
@@ -254,7 +255,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
             size_t runs = runs_on(s, pull->number);
             char *runs_text = runs ? xstrfmt("%zu run%s \xE2\x80\xBA", runs, runs == 1 ? "" : "s") : NULL;
             if (runs_text) { ButtonSpec b = { 0, runs_text, BUTTON_PLAIN, ACT_RUNS, (intptr_t)i, true }; buttons[bn++] = b; }
-            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, ACT_OPEN_PULL, (intptr_t)i, buttons, bn);
+            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, ACT_OPEN_PULL, (intptr_t)i, buttons, bn, run_active_on(s, pull->number));
             free(runs_text); str_array_free(labels, an); free(buttons); board_actions_free(actions, an);
             if (has_stack) stack_position_free(&stack);
             doc_space(doc, px(8));

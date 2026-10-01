@@ -76,7 +76,7 @@ char *people(char **logins, size_t count, size_t limit);
 /// The linked issue or pull request row under a board row.
 void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg);
 /// The row of a pull request on the board.
-void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count);
+void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running);
 /// The row of an issue on the board.
 void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg);
 /// A GitHub label's colour for the chips, or the secondary colour.
