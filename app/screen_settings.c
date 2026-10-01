@@ -1,6 +1,6 @@
 // Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects,
-// the providers, the database pool and the SSH servers, each with ＋ New) and a project's or an SSH server's form, its
-// sections as tabs, saved through /settings/projects and /settings/ssh/servers. The provider form is
+// the providers, the database pool and the SSH servers, each with ＋ New) and a project's form, its sections as tabs, or an
+// SSH server's on one tab, saved through /settings/projects and /settings/ssh/servers. The provider form is
 // screen_provider_settings.c and a database server's screen_db_servers.c. Those routes need an Admin token; any other token
 // gets a sentence saying so.
 #include "screens.h"
@@ -85,8 +85,7 @@ static void paint_nav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->text, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-/// A row of the sidebar: a project, or an SSH server under its project. `chip` is a tag after the second line, or NULL.
-typedef struct { char *label, *repo; const char *chip; bool enabled, selected; } ProjectRowData;
+typedef struct { char *label, *repo; bool enabled, db, selected; } ProjectRowData;
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->label); free(d->repo); free(d); }
 static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
@@ -98,12 +97,12 @@ static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
     draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     int y2 = top + lh, right = rc->right - px(8);
-    if (d->chip) {
-        // `rounded border border-line px-1 text-[11px]`: the database pool's tag, or an SSH server's that runs unasked.
-        int h; int bw = text_width(cv, d->chip, FONT_CAPTION2) + px(12) + 2;
+    if (d->db) {
+        // `rounded border border-line px-1 text-[11px]`: the database pool's tag.
+        int h; int bw = text_width(cv, "db", FONT_CAPTION2) + px(12) + 2;
         int rw = text_width(cv, d->repo, FONT_CAPTION);
         int bx = x + (rw < right - x - bw - px(8) ? rw : right - x - bw - px(8)) + px(8);
-        draw_chip(cv, bx, y2 + (px(18) - h) / 2, d->chip, theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
+        draw_chip(cv, bx, y2 + (px(18) - h) / 2, "db", theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
         right = bx - px(8);
     }
     RECT r = { x, y2, right, y2 + px(18) };
@@ -323,8 +322,7 @@ static void section_title(Doc *doc, int w, const char *title, const char *note, 
     doc->y = y + h;
     doc_space(doc, px(4));
 }
-/// The SSH servers under the projects, as the web's settings sidebar lists them: label and project, and a tag on one whose
-/// commands run without approval.
+/// The SSH servers under the projects, as the web's settings sidebar lists them: each with its dot, label and project.
 static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     doc_space(doc, px(8));
     char *why = ssh_unavailable();
@@ -339,7 +337,6 @@ static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected)
         const char *label = json_str_nonempty(json_get(row, "label")), *repo = json_str(json_get(row, "repo"));
         d->label = xstrdup(label ? label : json_str_nonempty(json_get(row, "host")) ? json_str(json_get(row, "host")) : "SSH server");
         d->repo = xstrdup(repo ? repo : "");
-        d->chip = str_eq(json_str(json_get(row, "permissionMode")), "allow") ? "unasked" : NULL;
         d->enabled = !json_bool_is(json_get(row, "enabled"), false);
         char *id = ssh_form_id(ssh_row_id(row));
         d->selected = str_eq(selected, id);
@@ -455,7 +452,7 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         d->repo = xstrdup(repo ? repo : "");
         d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
         d->enabled = !json_bool_is(json_get(row, "enabled"), false);
-        d->chip = json_bool_is(json_get(row, "dbPoolEnabled"), true) ? "db" : NULL;
+        d->db = json_bool_is(json_get(row, "dbPoolEnabled"), true);
         char *id = form_id(row_id(row));
         d->selected = str_eq(selected, id);
         free(id);
@@ -1406,18 +1403,11 @@ static const FieldDef SSH_FIELDS[S_COUNT] = {
 enum { SP_REPO, SP_MODE, SP_COUNT };
 static const char *const SSH_PICK_KEYS[SP_COUNT] = { "repo", "permissionMode" };
 
-/// The form's tabs, as the project form has its own: what the server is, how it is reached, and what it may run unasked.
-enum { ST_SERVER, ST_CONNECTION, ST_PERMISSIONS, ST_COUNT };
-static const struct { const char *title; wchar_t glyph; } SSH_TABS[ST_COUNT] = {
-    [ST_SERVER] = { "Server", 0xE968 }, [ST_CONNECTION] = { "Connection", 0xE703 }, [ST_PERMISSIONS] = { "Permissions", 0xE72E },
-};
-/// The open tab stays open from one server to the next, as the project form's does.
-static int g_ssh_tab;
-static int ssh_field_tab(int f) { return f == S_LABEL ? ST_SERVER : ST_CONNECTION; }
-static int ssh_pick_tab(int p) { return p == SP_REPO ? ST_SERVER : ST_PERMISSIONS; }
+/// The form's cells, two to a row: what the server is, how it is reached, and what it may run unasked.
+enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_NONE };
 static const char *mode_title(const char *mode) { return str_eq(mode, "allow") ? "Don\xE2\x80\x99t ask anything" : "Ask for all commands"; }
 
-enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TAB, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS };
+enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS };
 enum { ID_SSH_FIELD = 2100 };
 
 typedef struct {
@@ -1462,8 +1452,8 @@ static void ssh_fill(SshForm *s) {
     s->dirty = false;
 }
 
-/// The body a save sends; NULL with `*why` and the tab at fault when a field cannot be sent as it is.
-static Json *ssh_body(SshForm *s, char **why, int *tab) {
+/// The body a save sends; NULL with `*why` when a field cannot be sent as it is.
+static Json *ssh_body(SshForm *s, char **why) {
     Json *body = json_is_object(s->row) ? json_clone(s->row) : json_object();
     json_object_remove(body, "id");
     for (int f = 0; f < S_COUNT; f++) {
@@ -1473,7 +1463,7 @@ static Json *ssh_body(SshForm *s, char **why, int *tab) {
         if (SSH_FIELDS[f].kind == K_NUMBER) {
             char *end; long port = strtol(t, &end, 10);
             if (!*t || *end || port < 1 || port > 65535) {
-                *why = xstrdup("Enter a port from 1 to 65535."); *tab = ssh_field_tab(f);
+                *why = xstrdup("Enter a port from 1 to 65535.");
                 free(t); json_free(body);
                 return NULL;
             }
@@ -1484,27 +1474,20 @@ static Json *ssh_body(SshForm *s, char **why, int *tab) {
     for (int p = 0; p < SP_COUNT; p++) json_set_str(body, SSH_PICK_KEYS[p], s->picks[p] ? s->picks[p] : "");
     json_set_bool(body, "enabled", s->enabled);
     const char *missing = NULL;
-    if (str_empty(json_str(json_get(body, "repo")))) { missing = "Choose the project whose sessions may use this server."; *tab = ST_SERVER; }
-    else if (str_empty(json_str(json_get(body, "host")))) { missing = "Enter the host: a hostname or an IP address."; *tab = ST_CONNECTION; }
-    else if (str_empty(json_str(json_get(body, "username")))) { missing = "Enter the username to connect as."; *tab = ST_CONNECTION; }
+    if (str_empty(json_str(json_get(body, "repo")))) missing = "Choose the project whose sessions may use this server.";
+    else if (str_empty(json_str(json_get(body, "host")))) missing = "Enter the host: a hostname or an IP address.";
+    else if (str_empty(json_str(json_get(body, "username")))) missing = "Enter the username to connect as.";
     if (missing) { *why = xstrdup(missing); json_free(body); return NULL; }
     return body;
 }
-/// The tab holding the field a server's refusal names, or -1 to stay on the open one.
-static int ssh_error_tab(const char *message) {
-    if (!message) return -1;
-    if (strstr(message, "project")) return ST_SERVER;
-    if (strstr(message, "permission mode")) return ST_PERMISSIONS;
-    if (strstr(message, "host") || strstr(message, "username") || strstr(message, "port") || strstr(message, "private key")) return ST_CONNECTION;
-    return -1;
-}
 
-static bool ssh_tab_changed(SshForm *s, int t) {
-    if (t == ST_SERVER && s->enabled != ssh_saved_enabled(s->row)) return true;
+/// Whether the form holds a change not saved yet, for the dot after the tab's title.
+static bool ssh_form_changed(SshForm *s) {
+    if (s->enabled != ssh_saved_enabled(s->row)) return true;
     for (int p = 0; p < SP_COUNT; p++)
-        if (ssh_pick_tab(p) == t && !str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
+        if (!str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
     for (int f = 0; f < S_COUNT; f++) {
-        if (ssh_field_tab(f) != t || !s->edits[f]) continue;
+        if (!s->edits[f]) continue;
         char *now = edit_text(s->edits[f]), *saved = ssh_field_text(s->row, f);
         bool differs = !str_eq(now, saved);
         free(now); free(saved);
@@ -1515,7 +1498,7 @@ static bool ssh_tab_changed(SshForm *s, int t) {
 static void ssh_changed(SshForm *s) {
     if (s->filling) return;
     if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
-    bool changed = ssh_tab_changed(s, g_ssh_tab);
+    bool changed = ssh_form_changed(s);
     if (changed != s->tab_dot) { s->tab_dot = changed; pane_relayout(s->base.pane); }
 }
 
@@ -1567,6 +1550,26 @@ static void ssh_select(SshForm *s, Doc *doc, int x, int w, int p, const char *la
     if (hint) { doc_space(doc, px(6)); doc_text(doc, x, w, hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
     doc_space(doc, px(14));
 }
+static void ssh_cell(SshForm *s, Doc *doc, int x, int w, int cell) {
+    switch (cell) {
+    case C_LABEL: ssh_field(s, doc, x, w, S_LABEL); break;
+    case C_REPO: ssh_select(s, doc, x, w, SP_REPO, "Project", "Only this project's sessions see the server, through their SSH tool."); break;
+    case C_HOST: ssh_field(s, doc, x, w, S_HOST); break;
+    case C_PORT: ssh_field(s, doc, x, w, S_PORT); break;
+    case C_USER: ssh_field(s, doc, x, w, S_USER); break;
+    case C_KEY: ssh_field(s, doc, x, w, S_KEY); break;
+    case C_MODE: ssh_select(s, doc, x, w, SP_MODE, "Permission mode", "Ask shows the exact command in the dashboard for approval. Don't ask anything sends every command immediately."); break;
+    }
+}
+/// Two cells side by side, each half the width, as the web's `.field-row`; the row is as tall as its taller cell.
+static void ssh_row(SshForm *s, Doc *doc, int x, int col, int left, int right) {
+    int gap = px(14), half = (col - gap) / 2, top = doc->y;
+    ssh_cell(s, doc, x, half, left);
+    int bottom = doc->y;
+    doc->y = top;
+    ssh_cell(s, doc, x + half + gap, col - half - gap, right);
+    if (doc->y < bottom) doc->y = bottom;
+}
 
 static void ssh_layout(Screen *base, Doc *doc) {
     SshForm *s = (SshForm *)base;
@@ -1575,44 +1578,22 @@ static void ssh_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(8));
     char *why = ssh_unavailable();
     if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
+    // One tab, drawn as the other settings forms draw theirs, with the dot when something is not saved yet.
     int h = px(42), tx = x, ty = doc->y;
-    for (int t = 0; t < ST_COUNT; t++) {
-        bool changed = s->dirty && ssh_tab_changed(s, t);
-        if (t == g_ssh_tab) s->tab_dot = changed;
-        char *title = changed ? xstrfmt("%s \xE2\x80\xA2", SSH_TABS[t].title) : xstrdup(SSH_TABS[t].title);
-        doc_tab(doc, &tx, &ty, x, x + col, h, SSH_TABS[t].glyph, title, NULL, t == g_ssh_tab, ACT_SSH_TAB, t);
-        free(title);
-    }
+    s->tab_dot = s->dirty && ssh_form_changed(s);
+    doc_tab(doc, &tx, &ty, x, x + col, h, 0xE968, s->tab_dot ? "SSH server \xE2\x80\xA2" : "SSH server", NULL, true, 0, 0);
     doc->y = ty + h;
     doc_rule(doc, x, col);
     doc_space(doc, px(18));
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
-    switch (g_ssh_tab) {
-    case ST_SERVER: {
-        int i = doc_custom(doc, x, col, px(26), paint_ssh_check, s, NULL, ACT_SSH_TOGGLE, 0);
-        doc_item(doc, i)->hand = true;
-        doc_space(doc, px(10));
-        ssh_field(s, doc, x, col, S_LABEL);
-        ssh_select(s, doc, x, col, SP_REPO, "Project", "Only this project's sessions see the server, through their SSH tool.");
-        break;
-    }
-    case ST_CONNECTION: {
-        // Host and port side by side, the port a narrow box, as the web's `.field-row`.
-        int gap = px(14), narrow = px(120), top = doc->y;
-        ssh_field(s, doc, x, col - narrow - gap, S_HOST);
-        int left_bottom = doc->y;
-        doc->y = top;
-        ssh_field(s, doc, x + col - narrow, narrow, S_PORT);
-        if (doc->y < left_bottom) doc->y = left_bottom;
-        ssh_field(s, doc, x, col, S_USER);
-        ssh_field(s, doc, x, col, S_KEY);
-        note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
-        break;
-    }
-    case ST_PERMISSIONS:
-        ssh_select(s, doc, x, col, SP_MODE, "Permission mode", "Ask shows the exact command in the dashboard for approval. Don't ask anything sends every command immediately.");
-        break;
-    }
+    int i = doc_custom(doc, x, col, px(26), paint_ssh_check, s, NULL, ACT_SSH_TOGGLE, 0);
+    doc_item(doc, i)->hand = true;
+    doc_space(doc, px(10));
+    ssh_row(s, doc, x, col, C_LABEL, C_REPO);
+    ssh_row(s, doc, x, col, C_HOST, C_PORT);
+    ssh_row(s, doc, x, col, C_USER, C_KEY);
+    ssh_row(s, doc, x, col, C_MODE, C_NONE);
+    note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
     doc_space(doc, px(40));
 }
 
@@ -1742,9 +1723,8 @@ static void ssh_pick(SshForm *s, int p, POINT pt) {
 
 // MARK: Saving, cloning, deleting
 
-static void ssh_show_error(SshForm *s, char *text, int tab) {
+static void ssh_show_error(SshForm *s, char *text) {
     set_string(&s->error, text); free(text);
-    if (tab >= 0) g_ssh_tab = tab;
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
 }
 static void ssh_save_done(void *owner, Request *req) {
@@ -1752,7 +1732,7 @@ static void ssh_save_done(void *owner, Request *req) {
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
     if (!json_is_object(row)) {
         char *text = req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
-        ssh_show_error(s, text, ssh_error_tab(text));
+        ssh_show_error(s, text);
         return;
     }
     // The server's word on what was saved: an empty label is now user@host:port, and a new server has an id.
@@ -1767,16 +1747,16 @@ static void ssh_save_done(void *owner, Request *req) {
 }
 static void ssh_save(SshForm *s) {
     if (s->req_save || s->req_delete || !store_supports(s->id ? "update_ssh_server" : "create_ssh_server")) return;
-    char *why = NULL; int tab = g_ssh_tab;
-    Json *body = ssh_body(s, &why, &tab);
-    if (!body) { ssh_show_error(s, why, tab); return; }
+    char *why = NULL;
+    Json *body = ssh_body(s, &why);
+    if (!body) { ssh_show_error(s, why); return; }
     if (s->id) json_set_num(body, "id", s->id);
     store_call(s->id ? "update_ssh_server" : "create_ssh_server", body, 0, s, ssh_save_done, 0, &s->req_save);
     pane_header_changed(s->base.pane);
 }
 static void ssh_delete_done(void *owner, Request *req) {
     SshForm *s = owner;
-    if (!req->ok) { ssh_show_error(s, request_error_text(req), -1); return; }
+    if (!req->ok) { ssh_show_error(s, request_error_text(req)); return; }
     s->dirty = false;
     app_clear_detail();
     settings_ssh_changed();
@@ -1793,15 +1773,14 @@ static void ssh_delete(SshForm *s) {
     pane_header_changed(s->base.pane);
 }
 static void ssh_clone(SshForm *s) {
-    char *why = NULL; int tab = g_ssh_tab;
-    Json *copy = ssh_body(s, &why, &tab);
-    if (!copy) { ssh_show_error(s, why, tab); return; }
+    char *why = NULL;
+    Json *copy = ssh_body(s, &why);
+    if (!copy) { ssh_show_error(s, why); return; }
     // The copy carries what the form holds now, saved or not, without the label that named this one.
     json_set_str(copy, "label", "");
     s->dirty = false;
     Screen *clone = ssh_settings_screen_new(copy, NULL);
     ((SshForm *)clone)->focus_first = S_LABEL;
-    g_ssh_tab = ST_SERVER;
     json_free(copy);
     app_show_detail(clone);
 }
@@ -1822,12 +1801,6 @@ static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_SSH_SAVE: ssh_save(s); break;
     case ACT_SSH_CLONE: ssh_clone(s); break;
     case ACT_SSH_DELETE: ssh_delete(s); break;
-    case ACT_SSH_TAB:
-        if (arg < 0 || arg >= ST_COUNT) break;
-        if (s->focused >= 0) SetFocus(pane_hwnd(base->pane));
-        g_ssh_tab = (int)arg;
-        pane_relayout(base->pane); pane_scroll_to_top(base->pane);
-        break;
     case ACT_SSH_TOGGLE: s->enabled = !s->enabled; ssh_changed(s); pane_relayout(base->pane); break;
     case ACT_SSH_PICK: if (arg >= 0 && arg < SP_COUNT) ssh_pick(s, (int)arg, pt); break;
     case ACT_SSH_FOCUS: if (arg >= 0 && arg < S_COUNT && s->edits[arg]) SetFocus(s->edits[arg]); break;
@@ -1893,7 +1866,7 @@ static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults) {
             if (first) json_set_str(s->row, "repo", first);
         }
         if (!json_get(s->row, "port")) json_set_num(s->row, "port", 22);
-        if (!row) { s->focus_first = S_LABEL; g_ssh_tab = ST_SERVER; }
+        if (!row) s->focus_first = S_LABEL;
     }
     ssh_fill(s);
     return &s->base;
