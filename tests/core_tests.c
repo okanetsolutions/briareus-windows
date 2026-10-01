@@ -393,14 +393,6 @@ static void test_discovery_says_whether_the_server_transcribes(void) {
     CHECK(strstr(discovery_voice_notes_off(-1), "Update Briareus") != NULL);
     json_free(ja); json_free(jb); json_free(js); free(a); free(b); free(s);
 }
-static void test_revoke_uses_delete_token(void) {
-    Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json"; stub.body = "{\"ok\":true}";
-    ApiClient *c = client(&stub);
-    ApiError e; api_error_init(&e);
-    CHECK(api_revoke(c, &e));
-    CHECK_STR(stub.last_method, "DELETE"); CHECK_STR(stub.last_url, "https://example.com/api/v1/token");
-    api_client_release(c); stub_reset(&stub);
-}
 static void test_oversized_write_never_leaves_client(void) {
     Stub stub = { 0 }; stub.status = 200; stub.content_type = "application/json"; stub.body = "{}";
     ApiClient *c = client(&stub);
@@ -872,7 +864,6 @@ int main(void) {
         { "attachment is posted raw and answered with its id", test_attachment_is_posted_raw_and_answered_with_its_id },
         { "catalog reads routes and who may call them from OpenAPI", test_catalog_reads_routes_and_who_may_call_them_from_openapi },
         { "discovery says whether the server transcribes", test_discovery_says_whether_the_server_transcribes },
-        { "revoke uses DELETE token", test_revoke_uses_delete_token },
         { "oversized write never leaves the client", test_oversized_write_never_leaves_client },
         { "Retry-After HTTP date", test_retry_after_http_date },
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },

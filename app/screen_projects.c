@@ -84,7 +84,7 @@ static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, b
 }
 static bool in_rect(const RECT *r, POINT pt) { return pt.x >= r->left && pt.x < r->right && pt.y >= r->top && pt.y < r->bottom; }
 static void sign_out(void) {
-    if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. The token itself is revoked from Connection.", "Sign out", true)) return;
+    if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. Revoke the token itself in web Settings.", "Sign out", true)) return;
     store_forget();
 }
 /// The strip's own actions, the same on both screens. True when handled.
