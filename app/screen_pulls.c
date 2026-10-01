@@ -1087,29 +1087,6 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
-static void layout_actions(PullScreen *s, Doc *doc, Col c) {
-    if (!s->action_count) return;
-    const PullSummary *row = board_row(s);
-    doc_section(doc, c.x, c.w, s->busy ? "Actions \xC2\xB7 starting\xE2\x80\xA6" : "Actions");
-    int box = col_box(doc, c);
-    // The errands as the board's buttons: the one the pull request's state asks for is filled.
-    ButtonSpec *buttons = xcalloc(s->action_count, sizeof *buttons);
-    char **labels = xcalloc(s->action_count, sizeof *labels);
-    bool enabled = !s->busy && !s->uncertain;
-    for (size_t i = 0; i < s->action_count; i++) {
-        const BoardAction *a = &s->actions[i];
-        bool suggested = row && str_eq(row->recommended, a->id);
-        labels[i] = xstrfmt("%s %s", action_icon(a->id), a->label);
-        ButtonSpec b = { 0, labels[i], suggested ? BUTTON_PROMINENT : str_eq(a->id, "delete-self-comments") ? BUTTON_DESTRUCTIVE : BUTTON_BORDERED, ACT_START_ACTION, (intptr_t)i, enabled };
-        buttons[i] = b;
-    }
-    doc_button_row(doc, c.ix, c.iw, buttons, s->action_count);
-    str_array_free(labels, s->action_count); free(buttons);
-    doc_space(doc, px(8));
-    doc_text(doc, c.ix, c.iw, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-    doc_box_end(doc, box, px(12));
-}
-
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
     if (!s->run_count) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
     for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
@@ -1130,7 +1107,6 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     case PR_TAB_SESSIONS: layout_runs(s, doc, c); break;
     default:
         layout_description(s, doc, c);
-        layout_actions(s, doc, c);
         break;
     }
 }
@@ -1141,6 +1117,23 @@ static void side_heading(Doc *doc, Col c, int *count, const char *title) {
     doc_space(doc, px(14));
     doc_text(doc, c.x, c.w, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(8));
+}
+/// The errands as the sidebar's first item: one full-width button per action, the one the pull request's state asks for filled.
+static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
+    if (!s->action_count) return;
+    const PullSummary *row = board_row(s);
+    side_heading(doc, c, count, s->busy ? "Actions \xC2\xB7 starting\xE2\x80\xA6" : "Actions");
+    bool enabled = !s->busy && !s->uncertain;
+    for (size_t i = 0; i < s->action_count; i++) {
+        const BoardAction *a = &s->actions[i];
+        bool suggested = row && str_eq(row->recommended, a->id);
+        char *label = xstrfmt("%s %s", action_icon(a->id), a->label);
+        if (i) doc_space(doc, px(6));
+        doc_button(doc, c.x, c.w, label, suggested ? BUTTON_PROMINENT : str_eq(a->id, "delete-self-comments") ? BUTTON_DESTRUCTIVE : BUTTON_BORDERED, ACT_START_ACTION, (intptr_t)i, enabled);
+        free(label);
+    }
+    doc_space(doc, px(8));
+    doc_text(doc, c.x, c.w, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
 }
 static void side_reviewer(Doc *doc, Col c, const char *user, const BadgeSpec *badge, const char *state) {
     int y = doc->y;
@@ -1220,6 +1213,7 @@ static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
 /// The sidebar: only what the server reports; GitHub's projects and notifications are not part of it.
 static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     int count = 0;
+    side_actions(s, doc, c, &count);
     side_reviewers(s, doc, c, &count);
     side_assignees(s, doc, c, &count);
     side_labels(s, doc, c, &count);
