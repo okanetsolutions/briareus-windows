@@ -1807,7 +1807,7 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
 
 // MARK: - Issue
 
-enum { ACT_ISSUE_OPEN = 1200, ACT_ISSUE_PARENT, ACT_ISSUE_PULL, ACT_ISSUE_START, ACT_ISSUE_CHECKED, ACT_ISSUE_SUB, ACT_ISSUE_RUN, ACT_ISSUE_COPY, ACT_ISSUE_REFRESH };
+enum { ACT_ISSUE_OPEN = 1200, ACT_ISSUE_PARENT, ACT_ISSUE_PULL, ACT_ISSUE_START, ACT_ISSUE_CHECKED, ACT_ISSUE_SUB, ACT_ISSUE_RUN, ACT_ISSUE_COPY, ACT_ISSUE_REFRESH, ACT_ISSUE_CLOSE };
 
 // The API has no read of one issue, so the screen is the board's row kept fresh: the board is read again on a timer
 // and the row, the epic's open sub-issues and the closing pull requests' own rows are taken from it.
@@ -1821,13 +1821,16 @@ typedef struct {
     Session *runs; size_t run_count;   // the conversations started on this issue or on a pull request closing it
     bool busy, uncertain;
     char *write_error;
-    Request *req, *req_board, *req_runs;
+    bool closing, closed;           // closed: this screen closed it; the board no longer lists it
+    char *closed_reason;            // completed or not_planned, as the server answered
+    Request *req, *req_board, *req_runs, *req_close;
     Poller poller;
 } IssueScreen;
 
 static void issue_destroy(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_board); request_cancel(&s->req_runs); poller_stop(&s->poller);
+    request_cancel(&s->req); request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_close); poller_stop(&s->poller);
+    free(s->closed_reason);
     issue_summaries_free(s->board_issues, s->board_issue_count); pull_summaries_free(s->board_pulls, s->board_pull_count);
     sessions_free(s->runs, s->run_count);
     project_free(&s->project); issue_summary_free(&s->issue); free(s->write_error); free(s->load_error);
@@ -1934,7 +1937,14 @@ static void issue_layout(Screen *base, Doc *doc) {
         doc_space(doc, px(10));
     }
     if (s->load_error) { doc_notice(doc, 0, w, s->load_error); doc_space(doc, px(10)); }
-    if (s->gone) {
+    if (s->closed) {
+        int b = section_box(doc, w);
+        doc_label(doc, ix, iw, 0xE73E, str_eq(s->closed_reason, "not_planned") ? "Closed as not planned" : "Closed as completed", FONT_CALLOUT, theme.success);
+        doc_space(doc, px(4));
+        doc_text(doc, ix, iw, "It has left the board. Reopen it on GitHub if it was closed by mistake.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_box_end(doc, b, px(12));
+        doc_space(doc, px(10));
+    } else if (s->gone) {
         int b = section_box(doc, w);
         doc_label(doc, ix, iw, 0xE946, "This issue is no longer on the board", FONT_CALLOUT, theme.text);
         doc_space(doc, px(4));
@@ -2042,7 +2052,7 @@ static void issue_layout(Screen *base, Doc *doc) {
             free(t); free(c);
         }
     }
-    if (store_supports("start_session")) {
+    if (store_supports("start_session") && !s->closed) {
         doc_space(doc, px(14));
         box = section_box(doc, w);
         if (issue_is_epic(issue)) {
@@ -2055,6 +2065,16 @@ static void issue_layout(Screen *base, Doc *doc) {
                                                     : "The session reads the issue, implements it on a branch of its own and opens a pull request closing it. It runs a paid agent on this project\xE2\x80\x99s configured model.",
                      FONT_CAPTION, theme.secondary, DT_WORDBREAK);
         }
+        doc_box_end(doc, box, px(12));
+    }
+    if (store_supports("close_issue") && !s->closed) {
+        doc_space(doc, px(14));
+        box = section_box(doc, w);
+        doc_button(doc, ix, 0, s->closing ? "Closing\xE2\x80\xA6" : "Close issue \xE2\x96\xBE", BUTTON_BORDERED, ACT_ISSUE_CLOSE, 0, !s->closing);
+        doc_space(doc, px(8));
+        doc_text(doc, ix, iw, issue->pull_count ? "Closes it on GitHub now. The pull requests answering it stay open; merging one later will not close it again."
+                                                : "Closes it on GitHub, as completed or as not planned, with a comment first if you write one.",
+                 FONT_CAPTION, theme.secondary, DT_WORDBREAK);
         doc_box_end(doc, box, px(12));
     }
     doc_space(doc, px(16));
@@ -2080,6 +2100,58 @@ static void issue_start_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
 }
+static void issue_close_done(void *owner, Request *req) {
+    IssueScreen *s = owner;
+    s->closing = false;
+    if (req->ok) {
+        s->closed = true; s->gone = false;
+        const char *reason = json_str(json_get(json_get(req->result, "issue"), "stateReason"));
+        set_string(&s->closed_reason, reason ? reason : json_str(json_get(req->args, "reason")));
+        set_string(&s->write_error, NULL);
+        // The board drops it; reading it again keeps the epic's counts and its siblings true.
+        issue_load(s, true);
+    } else request_error_into(&s->write_error, req);   // closing twice only restates the reason, so trying again is safe
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+}
+/// The ▾ menu: why it is closed, and whether a comment goes first. Then a confirmation naming what stays open.
+static void issue_close(IssueScreen *s, POINT pt) {
+    if (s->closing || s->closed) return;
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, L"Close as completed");
+    AppendMenuW(menu, MF_STRING, 2, L"Close as not planned");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 3, L"Close as completed with a comment\x2026");
+    AppendMenuW(menu, MF_STRING, 4, L"Close as not planned with a comment\x2026");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(menu);
+    if (chosen < 1) return;
+    bool not_planned = chosen == 2 || chosen == 4;
+    char *comment = NULL;
+    if (chosen >= 3) {
+        char *caption = xstrfmt("Comment on #%d before closing it", s->issue.number);
+        comment = dialog_text(app_window(), caption, "Comment", "Next", "");
+        free(caption);
+        if (!comment) return;
+        if (str_empty(comment)) { free(comment); comment = NULL; }
+    }
+    int open = s->issue.sub_issues - s->issue.sub_issues_done;
+    Str why; str_init(&why);
+    if (open > 0) str_appendf(&why, "%d of its sub-issues %s still open and stay%s open. ", open, open == 1 ? "is" : "are", open == 1 ? "s" : "");
+    if (issue_run_active(s)) str_appendz(&why, "A session is still working on it; closing does not stop it. ");
+    if (comment) str_appendz(&why, "Your comment is posted first.");
+    char *title = xstrfmt("Close issue #%d as %s?", s->issue.number, not_planned ? "not planned" : "completed");
+    bool ok = app_confirm(title, why.len ? why.data : NULL, "Close issue", false);
+    free(title); str_free(&why);
+    if (!ok || s->closed) { free(comment); return; }
+    s->closing = true; set_string(&s->write_error, NULL);
+    Json *args = json_object();
+    json_set_num(args, "issue", s->issue.number); json_set_str(args, "repo", s->project.repo);
+    json_set_str(args, "reason", not_planned ? "not_planned" : "completed");
+    if (comment) json_set_str(args, "comment", comment);
+    free(comment);
+    store_call("close_issue", args, 0, s, issue_close_done, 0, &s->req_close);
+    pane_relayout(s->base.pane);
+}
 static void issue_refresh(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
     request_cancel(&s->req_runs);
@@ -2087,12 +2159,12 @@ static void issue_refresh(Screen *base) {
     pane_relayout(base->pane); pane_header_changed(base->pane);
 }
 static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
-    (void)pt;
     IssueScreen *s = (IssueScreen *)base;
     switch (action) {
     case ACT_ISSUE_OPEN: open_web_url(s->issue.url); break;
     case ACT_ISSUE_COPY: if (safe_web_url(s->issue.url)) copy_to_clipboard(pane_hwnd(base->pane), s->issue.url); break;
     case ACT_ISSUE_REFRESH: issue_refresh(base); break;
+    case ACT_ISSUE_CLOSE: issue_close(s, pt); break;
     case ACT_ISSUE_PARENT: {
         const IssueSummary *parent = issue_parent_row(s);
         if (parent) app_push_detail(issue_detail_screen_new(&s->project, parent));
