@@ -57,15 +57,29 @@ Screen *dashboard_screen_new(void);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool and the SSH
 /// servers, each with ＋ New.
 Screen *settings_screen_new(void);
-/// The sidebar's 🖥 Servers: the SSH servers registered in Settings, in a folder per project, each opening an SSH (or
-/// SFTP) session from this PC in the detail pane.
-Screen *servers_sidebar_new(void);
-/// The open SSH and SFTP sessions as tabs over a terminal.
-Screen *servers_screen_new(void);
-/// The Servers sidebar reads the servers again, after one was saved or deleted.
+/// A project's SSH sessions tab, laid out inside its board: the project's SSH servers down the left, its open sessions as
+/// tabs over a terminal on the right. Its items use `PROJECT_SSH_ACTIONS` actions from `action_base` up.
+typedef struct ProjectSsh ProjectSsh;
+enum { PROJECT_SSH_ACTIONS = 8 };
+ProjectSsh *project_ssh_new(const char *repo, Screen *host, int action_base);
+void project_ssh_free(ProjectSsh *p);
+/// Whether this token may read the SSH servers (an Admin token, on a server that lists them).
+bool project_ssh_offered(void);
+/// How many sessions are open on a project's servers.
+size_t project_ssh_session_count(const char *repo);
+/// Reads the servers once; the refresh reads them again.
+void project_ssh_load(ProjectSsh *p);
+void project_ssh_refresh(ProjectSsh *p);
+/// Lays the tab out from `doc->y` down to the bottom of the pane.
+void project_ssh_layout(ProjectSsh *p, Doc *doc, int w);
+/// The open session's line under the title, and its Reconnect and Close.
+void project_ssh_header(ProjectSsh *p, HeaderInfo *info);
+/// Shows the open session's terminal over its area, or hides the project's terminals when `shown` is false.
+void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool shown);
+/// True when the action was the tab's.
+bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt);
+/// The SSH sessions tabs read the servers again, after one was saved or deleted.
 void servers_ssh_changed(void);
-/// One SSH server's settings form. `row` is the server's SshServer (NULL with `defaults` for a new one).
-Screen *ssh_server_settings_screen_new(const Json *row, const Json *defaults);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);

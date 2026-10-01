@@ -1,4 +1,4 @@
-// Terminal sessions: ssh.exe or sftp.exe in a pseudoconsole (ConPTY), a reader thread per session that hands what it
+// Terminal sessions: ssh.exe in a pseudoconsole (ConPTY), a reader thread per session that hands what it
 // prints to the UI thread through a message-only window, and a child window per session that paints the emulator's grid
 // (core/vt.c) in a monospace font and turns keys, the mouse and the clipboard into what the program reads.
 #include "terminal.h"
@@ -11,7 +11,7 @@
 #include <string.h>
 #include <windowsx.h>
 
-enum { SCROLLBACK = 5000, READ_CHUNK = 65536, PAD = 6, MAX_LISTENERS = 4, RUN_MAX = 512 };
+enum { SCROLLBACK = 5000, READ_CHUNK = 65536, PAD = 6, MAX_LISTENERS = 16, RUN_MAX = 512 };
 enum { WM_TERM_DATA = WM_APP + 41, WM_TERM_EXIT, WM_TERM_EOF };
 enum { TIMER_NUDGE = 1, NUDGE_MS = 250 };
 enum { MENU_COPY = 1, MENU_PASTE, MENU_SELECT_ALL, MENU_CLEAR };
@@ -29,8 +29,7 @@ typedef struct { long long line; int col; } Mark;
 
 struct Term {
     int id, spawn;                 // the session, and the run of its program the pseudoconsole's events belong to
-    TermKind kind;
-    char *key, *label, *user, *host, *target;
+    char *key, *group, *label, *user, *host, *target;
     int port;
     HWND hwnd;
     Vt *vt;
@@ -151,11 +150,9 @@ char *term_target_problem(const TermTarget *target) {
     return NULL;
 }
 
-wchar_t *term_command_line(TermKind kind, const wchar_t *client, const TermTarget *target) {
+wchar_t *term_command_line(const wchar_t *client, const TermTarget *target) {
     char *exe = wide_to_utf8(client);
-    char *line = kind == TERM_SFTP
-        ? xstrfmt("\"%s\" -P %d -- %s@%s", exe, target->port, target->user, target->host)
-        : xstrfmt("\"%s\" -p %d -l %s -- %s", exe, target->port, target->user, target->host);
+    char *line = xstrfmt("\"%s\" -p %d -l %s -- %s", exe, target->port, target->user, target->host);
     wchar_t *w = utf8_to_wide(line);
     free(exe); free(line);
     return w;
@@ -182,11 +179,11 @@ static bool find_git_client(const wchar_t *name, wchar_t *out, DWORD n) {
     out[n - 1] = 0;
     return file_exists(out);
 }
-/// The full path of ssh.exe or sftp.exe. Git for Windows' OpenSSH comes first: Windows' own (9.5) stalls in a pseudoconsole
+/// The full path of ssh.exe. Git for Windows' OpenSSH comes first: Windows' own (9.5) stalls in a pseudoconsole
 /// on recent Windows builds, its output and its exit waiting for a key, while Git's streams. Both read ~/.ssh. Then
 /// Windows' OpenSSH Client, then whatever PATH finds.
-static bool find_client(TermKind kind, wchar_t *out, DWORD n) {
-    const wchar_t *name = kind == TERM_SFTP ? L"sftp.exe" : L"ssh.exe";
+static bool find_client(wchar_t *out, DWORD n) {
+    const wchar_t *name = L"ssh.exe";
     if (find_git_client(name, out, n)) return true;
     wchar_t dir[MAX_PATH];
     UINT len = GetSystemDirectoryW(dir, MAX_PATH);
@@ -323,11 +320,11 @@ static void size_cells(Term *t, int *cols, int *rows) {
 static bool spawn(Term *t, char **error) {
     if (!conpty_available()) { *error = xstrdup("This version of Windows has no pseudoconsole (ConPTY); Windows 10 1809 or later is needed."); return false; }
     wchar_t client[MAX_PATH];
-    if (!find_client(t->kind, client, MAX_PATH)) {
-        *error = xstrfmt("%s was not found. Install Git for Windows, or the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", t->kind == TERM_SFTP ? "sftp.exe" : "ssh.exe");
+    if (!find_client(client, MAX_PATH)) {
+        *error = xstrfmt("%s was not found. Install Git for Windows, or the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", "ssh.exe");
         return false;
     }
-    TermTarget target = { t->key, t->label, t->user, t->host, t->port };
+    TermTarget target = { t->key, t->group, t->label, t->user, t->host, t->port };
     char *problem = term_target_problem(&target);
     if (problem) { *error = problem; return false; }
 
@@ -355,10 +352,10 @@ static bool spawn(Term *t, char **error) {
     PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
     bool ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size)
            && UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, pc, sizeof pc, NULL, NULL);
-    // SFTP's get and put work in the Downloads folder; ssh starts in the profile.
+    // ssh starts in the profile, where ~/.ssh is.
     wchar_t *dir = NULL;
-    if (FAILED(SHGetKnownFolderPath(t->kind == TERM_SFTP ? &FOLDERID_Downloads : &FOLDERID_Profile, 0, NULL, &dir))) dir = NULL;
-    wchar_t *cmd = term_command_line(t->kind, client, &target);
+    if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &dir))) dir = NULL;
+    wchar_t *cmd = term_command_line(client, &target);
     DWORD create_error = 0;
     if (ok) {
         ok = CreateProcessW(client, cmd, NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, dir, &si.StartupInfo, &pi);
@@ -371,7 +368,7 @@ static bool spawn(Term *t, char **error) {
     if (!ok) {
         p_close_pc(pc);
         CloseHandle(in_write); CloseHandle(out_read);
-        *error = xstrfmt("Could not start %s (error %lu).", t->kind == TERM_SFTP ? "sftp.exe" : "ssh.exe", (unsigned long)create_error);
+        *error = xstrfmt("Could not start %s (error %lu).", "ssh.exe", (unsigned long)create_error);
         return false;
     }
     CloseHandle(pi.hThread);
@@ -598,10 +595,14 @@ static bool key_down(Term *t, WPARAM vk, bool alt) {
     if (ctrl && !shift && vk == 'C' && t->has_sel) { copy_selection(t); selection_clear(t); eat_char(t->hwnd); return true; }
     if (shift && vk == VK_INSERT) { paste(t); return true; }
     if (ctrl && vk == VK_INSERT) { copy_selection(t); return true; }
-    if (ctrl && vk == VK_TAB && g_count > 1) {
+    if (ctrl && vk == VK_TAB) {
+        // The next (or previous) tab of the same project.
         size_t i = 0;
         while (i < g_count && g_terms[i] != t) i++;
-        term_set_active(g_terms[(i + (shift ? g_count - 1 : 1)) % g_count]);
+        for (size_t step = 1; step < g_count; step++) {
+            Term *next = g_terms[(i + (shift ? g_count - step : step)) % g_count];
+            if (str_eq(next->group, t->group)) { term_set_active(next); break; }
+        }
         eat_char(t->hwnd);
         return true;
     }
@@ -818,15 +819,15 @@ bool term_is_window(HWND hwnd) {
 
 // MARK: - Sessions
 
-Term *term_open(HWND parent, TermKind kind, const TermTarget *target, char **error) {
+Term *term_open(HWND parent, const TermTarget *target, char **error) {
     char *problem = term_target_problem(target);
     if (problem) { *error = problem; return NULL; }
     register_classes();
     fonts_update();
     Term *t = xcalloc(1, sizeof *t);
     t->id = g_next_id++;
-    t->kind = kind;
     t->key = xstrdup(target->key ? target->key : "");
+    t->group = xstrdup(target->group ? target->group : "");
     t->label = xstrdup(!str_empty(target->label) ? target->label : target->host);
     t->user = xstrdup(target->user); t->host = xstrdup(target->host); t->port = target->port;
     t->target = xstrfmt("%s@%s:%d", t->user, t->host, t->port);
@@ -840,7 +841,7 @@ Term *term_open(HWND parent, TermKind kind, const TermTarget *target, char **err
     if (!spawn(t, error)) {
         DestroyWindow(t->hwnd);
         vt_free(t->vt);
-        free(t->key); free(t->label); free(t->user); free(t->host); free(t->target);
+        free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
         free(t);
         return NULL;
     }
@@ -882,7 +883,7 @@ void term_close(Term *t) {
     stop(t);
     DestroyWindow(t->hwnd);
     vt_free(t->vt);
-    free(t->key); free(t->label); free(t->user); free(t->host); free(t->target);
+    free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
     free(t);
     notify();
 }
@@ -892,7 +893,7 @@ void term_shutdown(void) {
         Term *t = g_terms[--g_count];
         stop(t);
         vt_free(t->vt);
-        free(t->key); free(t->label); free(t->user); free(t->host); free(t->target);
+        free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
         free(t);
     }
     g_active = NULL;
@@ -900,8 +901,8 @@ void term_shutdown(void) {
 
 size_t term_count(void) { return g_count; }
 Term *term_at(size_t index) { return index < g_count ? g_terms[index] : NULL; }
-Term *term_find(const char *key, TermKind kind) {
-    for (size_t i = 0; i < g_count; i++) if (g_terms[i]->kind == kind && str_eq(g_terms[i]->key, key)) return g_terms[i];
+Term *term_find(const char *key) {
+    for (size_t i = 0; i < g_count; i++) if (str_eq(g_terms[i]->key, key)) return g_terms[i];
     return NULL;
 }
 size_t term_count_for(const char *key) {
@@ -915,15 +916,15 @@ void term_set_active(Term *t) {
     g_active = t;
     notify();
 }
-TermKind term_kind(const Term *t) { return t->kind; }
+const char *term_group(const Term *t) { return t->group; }
 const char *term_key(const Term *t) { return t->key; }
 const char *term_label(const Term *t) { return t->label; }
 const char *term_target(const Term *t) { return t->target; }
-void term_get_target(const Term *t, TermTarget *out) { out->key = t->key; out->label = t->label; out->user = t->user; out->host = t->host; out->port = t->port; }
+void term_get_target(const Term *t, TermTarget *out) { out->key = t->key; out->group = t->group; out->label = t->label; out->user = t->user; out->host = t->host; out->port = t->port; }
 const char *term_title(const Term *t) {
     // Until the remote shell names the window, ConPTY titles it with the client's path.
     const char *title = vt_title(t->vt);
-    return title && (str_has_suffix(title, "ssh.exe") || str_has_suffix(title, "sftp.exe")) ? NULL : title;
+    return title && str_has_suffix(title, "ssh.exe") ? NULL : title;
 }
 bool term_running(const Term *t) { return t->running; }
 HWND term_hwnd(const Term *t) { return t->hwnd; }

@@ -254,9 +254,10 @@ static void settings_ssh_changed(void) {
     ssh_load(g_settings);
 }
 static const Json *ssh_rows(SettingsScreen *s) { return json_get(s->ssh, "list"); }
+static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults);
 static void ssh_open_row(SettingsScreen *s, size_t index) {
     const Json *row = json_at(ssh_rows(s), index);
-    if (json_is_object(row)) app_show_detail(ssh_server_settings_screen_new(row, json_get(s->ssh, "defaults")));
+    if (json_is_object(row)) app_show_detail(ssh_settings_screen_new(row, json_get(s->ssh, "defaults")));
 }
 
 static void order_done(void *owner, Request *req) {
@@ -496,7 +497,7 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
     case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
     case ACT_OPEN_SERVER: servers_open_row(s, (size_t)arg); break;
-    case ACT_NEW_SSH: app_show_detail(ssh_server_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
+    case ACT_NEW_SSH: app_show_detail(ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
     case ACT_OPEN_SSH: ssh_open_row(s, (size_t)arg); break;
     }
 }
@@ -1771,7 +1772,7 @@ static void ssh_clone(SshForm *s) {
     // The copy carries what the form holds now, saved or not, without the label that named this one.
     json_set_str(copy, "label", "");
     s->dirty = false;
-    Screen *clone = ssh_server_settings_screen_new(copy, NULL);
+    Screen *clone = ssh_settings_screen_new(copy, NULL);
     ((SshForm *)clone)->focus_first = S_LABEL;
     json_free(copy);
     app_show_detail(clone);
@@ -1844,7 +1845,7 @@ static const ScreenVTable ssh_vt = {
     .destroy = ssh_destroy, .layout = ssh_layout, .header = ssh_header, .action = ssh_action, .place = ssh_place,
     .visible = ssh_visible, .command = ssh_command, .key = ssh_key, .can_leave = ssh_can_leave,
 };
-Screen *ssh_server_settings_screen_new(const Json *row, const Json *defaults) {
+static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults) {
     SshForm *s = xcalloc(1, sizeof *s);
     s->base.vt = &ssh_vt;
     s->focused = -1; s->focus_first = -1;

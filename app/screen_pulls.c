@@ -42,6 +42,8 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 // MARK: - Board
 
 enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
+enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH };
 enum { TIMER_POLL = 1 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -51,7 +53,9 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // 0 pulls, 1 issues
+    int tab;   // TAB_PULLS, TAB_ISSUES or TAB_SSH
+    ProjectSsh *ssh;   // the SSH sessions tab
+    bool shown;
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
     BoardFilter pull_filter, issue_filter;
@@ -122,7 +126,7 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
         if (saved) { board_filter_copy(&s->opening, &filter); } else { s->has_opening = false; board_filter_init(&s->opening); }
         board_filter_free(&filter);
     }
-    if (!s->issue_count && !json_is_set(json_get(result, "issuesError"))) s->tab = 0;
+    if (s->tab == TAB_ISSUES && !s->issue_count && !json_is_set(json_get(result, "issuesError"))) s->tab = TAB_PULLS;
     s->loaded = true;
 }
 static void pulls_load(PullsScreen *s, bool fresh);
@@ -206,6 +210,7 @@ static void pulls_destroy(Screen *base) {
     request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); poller_stop(&s->poller);
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
+    project_ssh_free(s->ssh);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
@@ -237,9 +242,14 @@ static void doc_tabs(Doc *doc, int w, const char *const *labels, size_t count, i
 static void pulls_layout(Screen *base, Doc *doc) {
     PullsScreen *s = (PullsScreen *)base;
     int w = doc->width;
-    const char *tabs[2] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    doc_tabs(doc, w, tabs, 2, s->tab);
+    // SSH sessions only for a token that may read the servers; its count is the sessions open on them.
+    size_t open = project_ssh_session_count(s->project.repo);
+    char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
+    const char *tabs[3] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues", ssh_label };
+    doc_tabs(doc, w, tabs, project_ssh_offered() ? 3 : 2, s->tab);
+    free(ssh_label);
     doc_space(doc, px(14));
+    if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->error) { doc_notice(doc, 0, w, s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, 0, w, s->write_error);
@@ -326,6 +336,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     str_free(&sub);
+    if (s->tab == TAB_SSH) {
+        project_ssh_header(s->ssh, info);
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
+        return;
+    }
     // The pickers, as the dashboard's selects, and ⟳.
     {
         BoardFilter *f = current_filter(s);
@@ -364,13 +379,14 @@ static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
 static void pulls_refresh(Screen *base);
 static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
+    if (project_ssh_action(s->ssh, action, arg, pt)) return;
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
-    case ACT_TAB: s->tab = arg == 1 ? 1 : 0; pane_relayout(base->pane); pane_header_changed(base->pane); break;
+    case ACT_TAB: s->tab = arg == TAB_ISSUES || (arg == TAB_SSH && project_ssh_offered()) ? (int)arg : TAB_PULLS; pane_relayout(base->pane); pane_header_changed(base->pane); break;
     case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
@@ -404,13 +420,20 @@ static void pulls_timer(Screen *base, UINT id) {
     PullsScreen *s = (PullsScreen *)base;
     if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
 }
+static void pulls_place(Screen *base, const RECT *content, int scroll_y) {
+    PullsScreen *s = (PullsScreen *)base;
+    project_ssh_place(s->ssh, content, scroll_y, s->shown && s->tab == TAB_SSH);
+}
 static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
+    s->shown = shown;
+    if (!shown) project_ssh_place(s->ssh, NULL, 0, false);
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); }
 }
 static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
+    if (s->tab == TAB_SSH) { project_ssh_refresh(s->ssh); pane_relayout(base->pane); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     pulls_load(s, true);
@@ -418,7 +441,7 @@ static void pulls_refresh(Screen *base) {
 static void pulls_activated(Screen *base, bool active) { if (active) pulls_visible(base, true); }
 static const ScreenVTable pulls_vt = {
     .destroy = pulls_destroy, .layout = pulls_layout, .header = pulls_header, .action = pulls_action, .timer = pulls_timer,
-    .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated,
+    .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated, .place = pulls_place,
 };
 Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);
@@ -427,6 +450,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->board = json_null(); s->catalog = json_array();
     board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening);
     s->has_opening = !filters_restore(s);
+    s->ssh = project_ssh_new(project->repo, &s->base, ACT_SSH_BASE);
     return &s->base;
 }
 

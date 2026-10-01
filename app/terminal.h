@@ -1,4 +1,4 @@
-// The Servers tab's sessions: this PC's OpenSSH client (ssh.exe, or sftp.exe for file transfer) run in a Windows
+// The SSH sessions tab's sessions: this PC's OpenSSH client (ssh.exe) run in a Windows
 // pseudoconsole and drawn by a terminal window of the app's own. Sessions outlive the screens that show them, as
 // SecureCRT's tabs do, until they are closed or the app quits.
 #ifndef BRIAREUS_TERMINAL_H
@@ -7,20 +7,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-typedef enum { TERM_SSH, TERM_SFTP } TermKind;
 typedef struct Term Term;
 
-/// What a session connects to. `key` names the registered server, so a second click finds its open session.
-typedef struct { const char *key, *label, *user, *host; int port; } TermTarget;
+/// What a session connects to. `key` names the registered server, so a second click finds its open session; `group` is
+/// the project it belongs to, whose tab lists it.
+typedef struct { const char *key, *group, *label, *user, *host; int port; } TermTarget;
 
 /// Why a target cannot be handed to ssh as it is (an empty or option-like host or user, a port out of range); NULL when
 /// it can. The caller frees it.
 char *term_target_problem(const TermTarget *target);
-/// The command line a session runs, for `client` (the full path of ssh.exe or sftp.exe). The caller frees it.
-wchar_t *term_command_line(TermKind kind, const wchar_t *client, const TermTarget *target);
+/// The command line a session runs, for `client` (the full path of ssh.exe). The caller frees it.
+wchar_t *term_command_line(const wchar_t *client, const TermTarget *target);
 /// Starts a session in a terminal window, a hidden child of `parent`, and makes it the active one; NULL with `*error`
 /// when the client could not start.
-Term *term_open(HWND parent, TermKind kind, const TermTarget *target, char **error);
+Term *term_open(HWND parent, const TermTarget *target, char **error);
 /// Ends the session's program and frees it.
 void term_close(Term *t);
 /// Starts the program again in the same window, after it ended.
@@ -28,14 +28,14 @@ bool term_reconnect(Term *t, char **error);
 
 size_t term_count(void);
 Term *term_at(size_t index);
-/// The session for a server and kind, or NULL.
-Term *term_find(const char *key, TermKind kind);
+/// The first session open to a server, or NULL.
+Term *term_find(const char *key);
 /// How many sessions are open to a server.
 size_t term_count_for(const char *key);
 Term *term_active(void);
 void term_set_active(Term *t);
 
-TermKind term_kind(const Term *t);
+const char *term_group(const Term *t);
 const char *term_key(const Term *t);
 const char *term_label(const Term *t);
 /// user@host:port
