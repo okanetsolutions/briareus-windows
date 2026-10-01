@@ -82,8 +82,33 @@ void project_ssh_header(ProjectSsh *p, HeaderInfo *info);
 void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool shown);
 /// True when the action was the tab's.
 bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt);
-/// The SSH sessions tabs read the servers again, after one was saved or deleted.
+/// The SSH and SFTP sessions tabs read the servers again, after one was saved or deleted.
 void servers_ssh_changed(void);
+/// A project's SFTP sessions tab, laid out inside its board: the project's SSH servers down the left, its open SFTP
+/// sessions as tabs over the server's file tree on the right, with upload and download. Its items use
+/// `PROJECT_SFTP_ACTIONS` actions from `action_base` up.
+typedef struct ProjectSftp ProjectSftp;
+enum { PROJECT_SFTP_ACTIONS = 16 };
+ProjectSftp *project_sftp_new(const char *repo, Screen *host, int action_base);
+void project_sftp_free(ProjectSftp *p);
+/// Whether this token may read the SSH servers the sessions connect to.
+bool project_sftp_offered(void);
+/// How many SFTP sessions are open on a project's servers.
+size_t project_sftp_session_count(const char *repo);
+void project_sftp_load(ProjectSftp *p);
+/// Reads the servers, and the folder on show, again.
+void project_sftp_refresh(ProjectSftp *p);
+/// Lays the tab out from `doc->y` down.
+void project_sftp_layout(ProjectSftp *p, Doc *doc, int w);
+/// The open session's line under the title, and its Upload, Download, New folder, Home, Reconnect and Close.
+void project_sftp_header(ProjectSftp *p, HeaderInfo *info);
+/// The tab on show takes files dropped from Explorer; hidden, it stops.
+void project_sftp_place(ProjectSftp *p, const RECT *content, int scroll_y, bool shown);
+/// True when the action was the tab's.
+bool project_sftp_action(ProjectSftp *p, int action, intptr_t arg, POINT pt);
+/// A right click: a file's or folder's menu. True when the item was the tab's.
+bool project_sftp_context(ProjectSftp *p, int action, intptr_t arg, POINT pt);
+void servers_sftp_changed(void);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);

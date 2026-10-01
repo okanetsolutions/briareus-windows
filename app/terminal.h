@@ -18,6 +18,9 @@ typedef struct { const char *key, *group, *label, *user, *host; int port; } Term
 char *term_target_problem(const TermTarget *target);
 /// The command line a session runs, for `client` (the full path of ssh.exe). The caller frees it.
 wchar_t *term_command_line(const wchar_t *client, const TermTarget *target);
+/// The full path of one of OpenSSH's programs (ssh.exe, sftp.exe): Git for Windows' first, then Windows' OpenSSH Client,
+/// then PATH; false when none is installed.
+bool term_find_program(const wchar_t *name, wchar_t *out, DWORD n);
 /// Starts a session in a terminal window, a hidden child of `parent`, and makes it the active one; NULL with `*error`
 /// when the client could not start.
 Term *term_open(HWND parent, const TermTarget *target, char **error);

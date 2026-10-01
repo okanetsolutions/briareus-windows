@@ -94,6 +94,7 @@ void project_ssh_refresh(ProjectSsh *p) {
 }
 void servers_ssh_changed(void) {
     for (int i = 0; i < MAX_INSTANCES; i++) if (g_instances[i] && (g_instances[i]->loaded || g_instances[i]->req)) project_ssh_refresh(g_instances[i]);
+    servers_sftp_changed();
 }
 
 // MARK: - Connecting
