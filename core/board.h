@@ -134,14 +134,22 @@ ReviewStatus review_status(const char *decision, const Json *reviews);
 ReviewStatus review_status_of_reviewers(const char *decision, const Reviewer *reviewers, size_t count);
 const char *review_status_text(ReviewStatus status);
 
-/// Where a pull request sits in a stack of branches built on each other, 1 being the bottom.
-typedef struct { int number; char *title; int depth; bool draft; } StackItem;
-typedef struct { int position, total; bool partial; StackItem *chain; size_t chain_count; } StackPosition;
+/// Where a pull request sits in a stack of branches built on each other, 1 being the bottom. `branch` and `base` (the
+/// branch the bottom merges into) are NULL until the board's rows fill them in.
+typedef struct { int number; char *title, *branch; int depth; bool draft; } StackItem;
+typedef struct { int position, total; bool partial; char *base; StackItem *chain; size_t chain_count; } StackPosition;
 bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *out);
 void stack_position_free(StackPosition *stack);
 void stack_position_copy(StackPosition *into, const StackPosition *from);
 /// "2/3" or "2/3+"; `number` 0 asks for the stack's own position.
 char *stack_position_label(const StackPosition *stack, int number);
+/// Each item's branch, and the branch the bottom one merges into, from the rows the board lists them on.
+void stack_position_branches(StackPosition *stack, const PullSummary *rows, size_t count);
+/// The stack as one object, chain and branches included, so a saved pull request opens with its overview.
+Json *stack_position_json(const StackPosition *stack);
+bool stack_position_restore(const Json *value, StackPosition *out);
+/// The chain top first, as GitHub's stack popover lists it: the index of the item at each row.
+size_t *stack_position_top_first(const StackPosition *stack);
 
 /// An https URL with a host and no credentials, or NULL.
 bool safe_web_url(const char *value);

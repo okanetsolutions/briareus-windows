@@ -487,17 +487,7 @@ const char *review_status_text(ReviewStatus s) {
 
 // MARK: - Stacks
 
-bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *out) {
-    memset(out, 0, sizeof *out);
-    double position, total;
-    if (!json_num(json_get(value, "position"), &position) || !json_num(json_get(value, "total"), &total)) return false;
-    out->position = (int)position; out->total = (int)total; out->partial = json_bool_is(json_get(value, "partial"), true);
-    char *id;
-    double numeric;
-    if (json_num(json_get(value, "id"), &numeric)) id = xstrfmt("%d", (int)numeric);
-    else id = xstrdup(json_str(json_get(value, "id")) ? json_str(json_get(value, "id")) : "");
-    const Json *chain = json_get(stacks, id);
-    free(id);
+static void chain_parse(const Json *chain, StackPosition *out) {
     size_t n = json_count(chain);
     out->chain = xcalloc(n ? n : 1, sizeof *out->chain);
     for (size_t i = 0; i < n; i++) {
@@ -508,27 +498,102 @@ bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *
         s->number = (int)number;
         const char *title = json_str(json_get(item, "title"));
         s->title = title ? xstrdup(title) : xstrfmt("Pull request #%d", s->number);
+        const char *branch = json_str_nonempty(json_get(item, "branch"));
+        if (!branch) branch = json_str_nonempty(json_get(item, "headRef"));
+        s->branch = branch ? xstrdup(branch) : NULL;
         s->depth = json_int_or(json_get(item, "depth"), 1);
         s->draft = json_bool_is(json_get(item, "draft"), true);
     }
+}
+static bool stack_header_parse(const Json *value, StackPosition *out) {
+    memset(out, 0, sizeof *out);
+    double position, total;
+    if (!json_num(json_get(value, "position"), &position) || !json_num(json_get(value, "total"), &total)) return false;
+    out->position = (int)position; out->total = (int)total; out->partial = json_bool_is(json_get(value, "partial"), true);
     return true;
+}
+bool stack_position_parse(const Json *value, const Json *stacks, StackPosition *out) {
+    if (!stack_header_parse(value, out)) return false;
+    char *id;
+    double numeric;
+    if (json_num(json_get(value, "id"), &numeric)) id = xstrfmt("%d", (int)numeric);
+    else id = xstrdup(json_str(json_get(value, "id")) ? json_str(json_get(value, "id")) : "");
+    chain_parse(json_get(stacks, id), out);
+    free(id);
+    return true;
+}
+bool stack_position_restore(const Json *value, StackPosition *out) {
+    if (!stack_header_parse(value, out)) return false;
+    const char *base = json_str_nonempty(json_get(value, "base"));
+    out->base = base ? xstrdup(base) : NULL;
+    chain_parse(json_get(value, "chain"), out);
+    return true;
+}
+Json *stack_position_json(const StackPosition *s) {
+    Json *value = json_object();
+    json_set_num(value, "position", s->position); json_set_num(value, "total", s->total); json_set_bool(value, "partial", s->partial);
+    if (s->base) json_set_str(value, "base", s->base);
+    Json *chain = json_array();
+    for (size_t i = 0; i < s->chain_count; i++) {
+        const StackItem *item = &s->chain[i];
+        Json *o = json_object();
+        json_set_num(o, "number", item->number); json_set_str(o, "title", item->title); json_set_num(o, "depth", item->depth);
+        if (item->branch) json_set_str(o, "branch", item->branch);
+        if (item->draft) json_set_bool(o, "draft", true);
+        json_array_push(chain, o);
+    }
+    json_object_set(value, "chain", chain);
+    return value;
 }
 void stack_position_free(StackPosition *s) {
     if (!s) return;
-    for (size_t i = 0; i < s->chain_count; i++) free(s->chain[i].title);
-    free(s->chain); memset(s, 0, sizeof *s);
+    for (size_t i = 0; i < s->chain_count; i++) { free(s->chain[i].title); free(s->chain[i].branch); }
+    free(s->chain); free(s->base); memset(s, 0, sizeof *s);
 }
 void stack_position_copy(StackPosition *into, const StackPosition *from) {
     memset(into, 0, sizeof *into);
     into->position = from->position; into->total = from->total; into->partial = from->partial;
+    into->base = from->base ? xstrdup(from->base) : NULL;
     into->chain = xcalloc(from->chain_count ? from->chain_count : 1, sizeof *into->chain);
-    for (size_t i = 0; i < from->chain_count; i++) { into->chain[i] = from->chain[i]; into->chain[i].title = xstrdup(from->chain[i].title); }
+    for (size_t i = 0; i < from->chain_count; i++) {
+        into->chain[i] = from->chain[i];
+        into->chain[i].title = xstrdup(from->chain[i].title);
+        into->chain[i].branch = from->chain[i].branch ? xstrdup(from->chain[i].branch) : NULL;
+    }
     into->chain_count = from->chain_count;
 }
 char *stack_position_label(const StackPosition *s, int number) {
     int depth = s->position;
     for (size_t i = 0; i < s->chain_count; i++) if (number && s->chain[i].number == number) { depth = s->chain[i].depth; break; }
     return xstrfmt("%d/%d%s", depth, s->total, s->partial ? "+" : "");
+}
+static const PullSummary *row_numbered(const PullSummary *rows, size_t count, int number) {
+    for (size_t i = 0; i < count; i++) if (rows[i].number == number) return &rows[i];
+    return NULL;
+}
+void stack_position_branches(StackPosition *s, const PullSummary *rows, size_t count) {
+    const StackItem *bottom = NULL;
+    for (size_t i = 0; i < s->chain_count; i++) {
+        StackItem *item = &s->chain[i];
+        const PullSummary *row = row_numbered(rows, count, item->number);
+        if (row && !item->branch && !str_empty(row->branch)) item->branch = xstrdup(row->branch);
+        if (!bottom || item->depth < bottom->depth) bottom = item;
+    }
+    // A chain only partly visible may not reach the bottom, whose base is then unknown.
+    if (!bottom || (s->partial && bottom->depth > 1)) return;
+    const PullSummary *row = row_numbered(rows, count, bottom->number);
+    if (row && !str_empty(row->base_branch)) { free(s->base); s->base = xstrdup(row->base_branch); }
+}
+size_t *stack_position_top_first(const StackPosition *s) {
+    size_t *order = xcalloc(s->chain_count ? s->chain_count : 1, sizeof *order);
+    for (size_t i = 0; i < s->chain_count; i++) order[i] = i;
+    // Insertion sort by depth, deepest first; items of one depth keep the server's order.
+    for (size_t i = 1; i < s->chain_count; i++) {
+        size_t v = order[i], k = i;
+        while (k > 0 && s->chain[order[k - 1]].depth < s->chain[v].depth) { order[k] = order[k - 1]; k--; }
+        order[k] = v;
+    }
+    return order;
 }
 
 bool safe_web_url(const char *value) {

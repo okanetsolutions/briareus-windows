@@ -668,6 +668,21 @@ static void test_review_status_and_stacks(void) {
     CHECK(sp.chain_count == 2 && sp.chain[1].draft);
     char *label = stack_position_label(&sp, 0); CHECK_STR(label, "2/2"); free(label);
     label = stack_position_label(&sp, 1); CHECK_STR(label, "1/2"); free(label);
+    // The board's rows lend each item its branch and the bottom its base; the saved form keeps them, and the overview lists the top first.
+    Json *rows = json_parsez("[{\"number\":1,\"branch\":\"feature/base\",\"baseBranch\":\"master\"},{\"number\":2,\"branch\":\"feature/top\",\"baseBranch\":\"feature/base\"}]");
+    size_t rn; PullSummary *rs = pull_summaries_parse(rows, &rn); CHECK(rn == 2);
+    stack_position_branches(&sp, rs, rn);
+    CHECK_STR(sp.chain[0].branch, "feature/base"); CHECK_STR(sp.chain[1].branch, "feature/top"); CHECK_STR(sp.base, "master");
+    size_t *order = stack_position_top_first(&sp); CHECK(order[0] == 1 && order[1] == 0); free(order);
+    Json *saved = stack_position_json(&sp);
+    StackPosition back; CHECK(stack_position_restore(saved, &back));
+    CHECK(back.position == 2 && back.total == 2 && back.chain_count == 2 && back.chain[1].draft);
+    CHECK_STR(back.base, "master"); CHECK_STR(back.chain[1].branch, "feature/top"); CHECK_STR(back.chain[0].title, "Base");
+    stack_position_free(&back); json_free(saved);
+    // A partial chain whose bottom is out of view has no known base.
+    sp.partial = true; free(sp.base); sp.base = NULL; sp.chain[0].depth = 2; sp.chain[1].depth = 3;
+    stack_position_branches(&sp, rs, rn); CHECK(sp.base == NULL);
+    pull_summaries_free(rs, rn); json_free(rows);
     stack_position_free(&sp); json_free(stacks); json_free(value);
     CHECK(safe_web_url("https://github.com/o/r/pull/1") && !safe_web_url("http://github.com") && !safe_web_url("https://user@evil.example") && !safe_web_url("https://"));
 }

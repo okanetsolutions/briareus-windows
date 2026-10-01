@@ -402,7 +402,7 @@ Screen *pulls_screen_new(const Project *project) {
 // MARK: - Pull request
 
 enum {
-    ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
+    ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
@@ -413,7 +413,7 @@ enum { PR_TAB_CONVERSATION, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_T
 typedef struct {
     Screen base;
     Project project; int number;
-    bool has_stack; StackPosition stack;
+    bool has_stack; StackPosition stack; bool stack_open;   // the overview under the title, as GitHub's stack popover
     bool has_summary; PullSummary summary;
     Json *pr;
     bool has_row; PullSummary row; bool row_read;
@@ -446,6 +446,7 @@ static void save_pull(PullScreen *s) {
     json_object_set(saved, "findings", json_clone(s->findings));
     const PullSummary *row = board_row(s);
     json_object_set(saved, "row", row ? json_clone(row->raw) : json_null());
+    json_object_set(saved, "stack", s->has_stack ? stack_position_json(&s->stack) : json_null());
     if (s->body) json_set_str(saved, "body", s->body);
     if (s->body_author) json_set_str(saved, "bodyAuthor", s->body_author);
     char *key = xstrfmt("pull:%s#%d", s->project.repo, s->number);
@@ -504,14 +505,21 @@ static void rows_done(void *owner, Request *req) {
     // A pull request the board no longer lists has been merged or closed, and its row went with it.
     if (s->has_row) pull_summary_free(&s->row);
     s->has_row = false;
-    const Json *pulls = json_get(req->result, "pulls");
-    for (size_t i = 0; i < json_count(pulls); i++) {
-        PullSummary p;
-        if (pull_summary_parse(json_at(pulls, i), &p)) {
-            if (p.number == s->number) { s->row = p; s->has_row = true; break; }
-            pull_summary_free(&p);
-        }
+    size_t count;
+    PullSummary *rows = pull_summaries_parse(json_get(req->result, "pulls"), &count);
+    for (size_t i = 0; i < count; i++) {
+        if (rows[i].number != s->number) continue;
+        pull_summary_copy(&s->row, &rows[i]); s->has_row = true;
+        // Its place in a stack, with the branches of the rows it is built on; a row no longer stacked drops the overview.
+        StackPosition stack;
+        bool stacked = stack_position_parse(json_get(rows[i].raw, "stack"), json_get(req->result, "stacks"), &stack);
+        if (stacked) stack_position_branches(&stack, rows, count);
+        if (s->has_stack) stack_position_free(&s->stack);
+        s->has_stack = stacked;
+        if (stacked) s->stack = stack;
+        break;
     }
+    pull_summaries_free(rows, count);
     s->row_read = true;
     rebuild_actions(s);
     pane_relayout(s->base.pane);
@@ -544,6 +552,7 @@ static void pull_load(PullScreen *s) {
             if (!s->body && json_str(json_get(saved, "body"))) set_string(&s->body, json_str(json_get(saved, "body")));
             if (!s->body_author && json_str(json_get(saved, "bodyAuthor"))) set_string(&s->body_author, json_str(json_get(saved, "bodyAuthor")));
             if (!s->has_row) { PullSummary row; if (pull_summary_parse(json_get(saved, "row"), &row)) { s->row = row; s->has_row = true; } }
+            if (!s->has_stack) s->has_stack = stack_position_restore(json_get(saved, "stack"), &s->stack);
             json_free(saved);
         }
         free(key);
@@ -625,6 +634,83 @@ static int doc_pill(Doc *doc, int x, int y, const char *text, COLORREF color) {
     int i = doc_add(doc, &rc, paint_pill);
     doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = pill_free;
     return w;
+}
+/// GitHub's stack button beside the state: the stack glyph and `2/3` in a bordered pill, pressed while the overview is open.
+static void paint_stack_pill(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    PillData *d = it->data;
+    bool open = it->arg != 0, hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    COLORREF fill = open ? blend(theme.accent, theme.canvas, 0.18) : hovered ? theme.raise : theme.canvas;
+    fill_round_rect(hdc, rc, (rc->bottom - rc->top) / 2, fill, open ? theme.accent : theme.line);
+    RECT g = { rc->left + px(10), rc->top, rc->left + px(10) + px(16), rc->bottom }; draw_glyph(hdc, 0xE81E, &g, FONT_ICON_SMALL, theme.accent);
+    RECT t = { g.right + px(4), rc->top, rc->right - px(10), rc->bottom };
+    draw_text(hdc, d->text, &t, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+static int doc_stack_pill(Doc *doc, int x, int y, const char *text, bool open) {
+    PillData *d = xcalloc(1, sizeof *d); d->text = xstrdup(text); d->color = theme.accent;
+    int w = px(10) * 2 + px(16) + px(4) + text_width(doc->hdc, text, FONT_FOOTNOTE_SEMIBOLD) + 2, h = px(26);
+    RECT rc = { x, y, x + w, y + h };
+    int i = doc_add(doc, &rc, paint_stack_pill);
+    Item *it = doc_item(doc, i);
+    it->data = d; it->free_data = pill_free; it->action = ACT_STACK_TOGGLE; it->arg = open; it->hand = true;
+    return w;
+}
+/// One pull request of the overview: the pull request glyph, its title, and `#number · branch` under it, as GitHub's popover rows.
+typedef struct { char *title, *sub; bool current; } StackRowData;
+static void stack_row_free(void *p) { StackRowData *d = p; free(d->title); free(d->sub); free(d); }
+static void paint_stack_row(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    StackRowData *d = it->data;
+    bool hovered = it->action && doc->hover >= 0 && &doc->items[doc->hover] == it;
+    if (hovered || d->current) { RECT h = { rc->left, rc->top, rc->right, rc->bottom }; fill_round_rect(hdc, &h, px(6), d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas, d->current ? blend(theme.accent, theme.raise, 0.10) : theme.canvas); }
+    if (d->current) { RECT bar = { rc->left, rc->top + px(6), rc->left + px(3), rc->bottom - px(6) }; fill_round_rect(hdc, &bar, px(1), theme.accent, theme.accent); }
+    int x = rc->left + px(10);
+    RECT g = { x, rc->top, x + px(18), rc->top + px(22) }; draw_glyph(hdc, 0xE81E, &g, FONT_ICON_SMALL, d->current ? theme.ink : theme.accent); x += px(18) + px(8);
+    RECT t = { x, rc->top + px(2), rc->right - px(8), rc->top + px(22) };
+    draw_text(hdc, d->title, &t, FONT_FOOTNOTE_SEMIBOLD, d->current ? theme.ink : hovered ? theme.accent : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The rail of the stack: a thin line under the glyph joining the rows.
+    draw_line(hdc, rc->left + px(10) + px(9), rc->top + px(22), rc->left + px(10) + px(9), rc->bottom, theme.line);
+    RECT u = { x, rc->top + px(22), rc->right - px(8), rc->bottom - px(2) };
+    draw_text(hdc, d->sub, &u, FONT_MONO_CAPTION2, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+/// The base the bottom merges into, as GitHub closes its popover: a hollow dot and the branch in a chip.
+typedef struct { char *base; } StackBaseData;
+static void stack_base_free(void *p) { StackBaseData *d = p; free(d->base); free(d); }
+static void paint_stack_base(Doc *doc, Item *it, HDC hdc, const RECT *rc) {
+    (void)doc;
+    StackBaseData *d = it->data;
+    int cx = rc->left + px(10) + px(9), cy = rc->top + (rc->bottom - rc->top) / 2;
+    draw_line(hdc, cx, rc->top, cx, cy - px(5), theme.line);
+    stroke_circle(hdc, cx, cy, px(4), theme.muted, 1);
+    int x = rc->left + px(10) + px(18) + px(8);
+    if (d->base) { int h; draw_chip(hdc, x, cy - px(10), d->base, theme.accent, theme.raise, &h); }
+    else { RECT t = { x, rc->top, rc->right - px(8), rc->bottom }; draw_text(hdc, "base branch not on the board", &t, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); }
+}
+/// GitHub's stack popover, laid out under the title: the stack top first, this pull request marked, and the base branch at the bottom.
+static void layout_stack_overview(PullScreen *s, Doc *doc, Col c) {
+    int w = c.iw < px(520) ? c.iw : px(520);
+    int box = doc_box_begin(doc, c.ix, w, px(10), theme.raise, theme.line, px(10));
+    int ix = c.ix + px(12), iw = w - px(24);
+    char *label = stack_position_label(&s->stack, s->number);
+    char *title = xstrfmt("Stack \xC2\xB7 %s", label);
+    doc_text(doc, ix + px(4), iw - px(4), title, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
+    free(title); free(label);
+    doc_space(doc, px(6)); doc_rule(doc, ix, iw); doc_space(doc, px(6));
+    size_t *order = stack_position_top_first(&s->stack);
+    for (size_t k = 0; k < s->stack.chain_count; k++) {
+        const StackItem *item = &s->stack.chain[order[k]];
+        StackRowData *d = xcalloc(1, sizeof *d);
+        d->current = item->number == s->number;
+        d->title = xstrdup(item->title);
+        d->sub = xstrfmt("#%d%s%s%s", item->number, item->branch ? " \xC2\xB7 " : "", item->branch ? item->branch : "", item->draft ? " \xC2\xB7 draft" : "");
+        doc_custom(doc, ix, iw, px(44), paint_stack_row, d, stack_row_free, d->current ? 0 : ACT_STACK_ITEM, item->number);
+    }
+    free(order);
+    if (!s->stack.chain_count) doc_text(doc, ix + px(4), iw - px(4), "The board did not list the stack's pull requests.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    StackBaseData *b = xcalloc(1, sizeof *b);
+    b->base = s->stack.base ? xstrdup(s->stack.base) : NULL;
+    doc_custom(doc, ix, iw, px(30), paint_stack_base, b, stack_base_free, 0, 0);
+    doc_space(doc, px(4));
+    doc_text(doc, ix + px(4), iw - px(4), s->stack.partial ? "Only part of this stack is on the board; it may be longer. Merge from the bottom up." : "Merge from the bottom up.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    doc_box_end(doc, box, px(10));
 }
 /// Text that wraps a word at a time and mixes fonts, colours and branch chips: the title with its muted number, and the line under it.
 typedef struct { char *text; FontId font; COLORREF color; bool chip; int x, y, w; } FlowRun;
@@ -725,6 +811,7 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     COLORREF state_color = str_eq(state, "merged") ? theme.accent : str_eq(state, "closed") ? theme.danger : draft ? theme.muted : theme.ok;
     int y = doc->y;
     int pw = doc_pill(doc, c.ix, y, state_text, state_color);
+    if (s->has_stack) { char *label = stack_position_label(&s->stack, s->number); pw += px(8) + doc_stack_pill(doc, c.ix + pw + px(8), y, label, s->stack_open); free(label); }
     const char *head = json_str(json_get(s->pr, "headRef")), *base_ref = json_str(json_get(s->pr, "baseRef"));
     if (!head && row && *row->branch) head = row->branch;
     if (!base_ref && row && *row->base_branch) base_ref = row->base_branch;
@@ -748,6 +835,7 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     if (row && row->has_updated) { char *rel = format_relative(row->updated_at); char *u = xstrfmt("\xC2\xB7 updated %s", rel); flow_add(f, u, FONT_FOOTNOTE, theme.muted, false); free(u); free(rel); }
     if (f->count) doc_flow(doc, c.ix + pw + px(10), c.iw - pw - px(10), 0, f); else flow_free(f);
     if (doc->y < y + px(26)) doc->y = y + px(26);
+    if (s->has_stack && s->stack_open) { doc_space(doc, px(10)); layout_stack_overview(s, doc, c); }
     if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->merge_error); }
 }
 
@@ -1033,29 +1121,6 @@ static void layout_findings(PullScreen *s, Doc *doc, Col c) {
     doc_box_end(doc, box, px(12));
 }
 
-static void layout_actions(PullScreen *s, Doc *doc, Col c) {
-    if (!s->action_count) return;
-    const PullSummary *row = board_row(s);
-    doc_section(doc, c.x, c.w, s->busy ? "Actions \xC2\xB7 starting\xE2\x80\xA6" : "Actions");
-    int box = col_box(doc, c);
-    // The errands as the board's buttons: the one the pull request's state asks for is filled.
-    ButtonSpec *buttons = xcalloc(s->action_count, sizeof *buttons);
-    char **labels = xcalloc(s->action_count, sizeof *labels);
-    bool enabled = !s->busy && !s->uncertain;
-    for (size_t i = 0; i < s->action_count; i++) {
-        const BoardAction *a = &s->actions[i];
-        bool suggested = row && str_eq(row->recommended, a->id);
-        labels[i] = xstrfmt("%s %s", action_icon(a->id), a->label);
-        ButtonSpec b = { 0, labels[i], suggested ? BUTTON_PROMINENT : str_eq(a->id, "delete-self-comments") ? BUTTON_DESTRUCTIVE : BUTTON_BORDERED, ACT_START_ACTION, (intptr_t)i, enabled };
-        buttons[i] = b;
-    }
-    doc_button_row(doc, c.ix, c.iw, buttons, s->action_count);
-    str_array_free(labels, s->action_count); free(buttons);
-    doc_space(doc, px(8));
-    doc_text(doc, c.ix, c.iw, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-    doc_box_end(doc, box, px(12));
-}
-
 static void layout_runs(PullScreen *s, Doc *doc, Col c) {
     if (!s->run_count) { doc_text(doc, c.x, c.w, "No conversations on this pull request", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); return; }
     for (size_t i = 0; i < s->run_count; i++) { doc_session_row(doc, c.x, c.w, &s->runs[i], ACT_OPEN_RUN, (intptr_t)i, false, theme.elevated); doc_space(doc, px(6)); }
@@ -1076,7 +1141,6 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     case PR_TAB_SESSIONS: layout_runs(s, doc, c); break;
     default:
         layout_description(s, doc, c);
-        layout_actions(s, doc, c);
         break;
     }
 }
@@ -1087,6 +1151,23 @@ static void side_heading(Doc *doc, Col c, int *count, const char *title) {
     doc_space(doc, px(14));
     doc_text(doc, c.x, c.w, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(8));
+}
+/// The errands as the sidebar's first item: one full-width button per action, the one the pull request's state asks for filled.
+static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
+    if (!s->action_count) return;
+    const PullSummary *row = board_row(s);
+    side_heading(doc, c, count, s->busy ? "Actions \xC2\xB7 starting\xE2\x80\xA6" : "Actions");
+    bool enabled = !s->busy && !s->uncertain;
+    for (size_t i = 0; i < s->action_count; i++) {
+        const BoardAction *a = &s->actions[i];
+        bool suggested = row && str_eq(row->recommended, a->id);
+        char *label = xstrfmt("%s %s", action_icon(a->id), a->label);
+        if (i) doc_space(doc, px(6));
+        doc_button(doc, c.x, c.w, label, suggested ? BUTTON_PROMINENT : str_eq(a->id, "delete-self-comments") ? BUTTON_DESTRUCTIVE : BUTTON_BORDERED, ACT_START_ACTION, (intptr_t)i, enabled);
+        free(label);
+    }
+    doc_space(doc, px(8));
+    doc_text(doc, c.x, c.w, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
 }
 static void side_reviewer(Doc *doc, Col c, const char *user, const BadgeSpec *badge, const char *state) {
     int y = doc->y;
@@ -1144,24 +1225,6 @@ static void side_labels(PullScreen *s, Doc *doc, Col c, int *count) {
     if (row->label_count) doc_label_chips(doc, c.x, c.w, row->labels, row->label_count, theme.canvas);
     else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
 }
-static void side_stack(PullScreen *s, Doc *doc, Col c, int *count) {
-    if (!s->has_stack) return;
-    char *label = stack_position_label(&s->stack, s->number);
-    char *title = xstrfmt("Stack \xC2\xB7 %s", label);
-    side_heading(doc, c, count, title); free(title); free(label);
-    for (size_t i = 0; i < s->stack.chain_count; i++) {
-        const StackItem *item = &s->stack.chain[i];
-        if (i) doc_space(doc, px(8));
-        int indent = (item->depth > 1 ? item->depth - 1 : 0) * px(10);
-        bool this_pr = item->number == s->number;
-        int ti = doc_text(doc, c.x + indent, c.w - indent, item->title, this_pr ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, this_pr ? theme.ink : theme.accent, DT_WORDBREAK | DT_END_ELLIPSIS | DT_EDITCONTROL);
-        if (!this_pr) { doc_item(doc, ti)->action = ACT_STACK_ITEM; doc_item(doc, ti)->arg = item->number; doc_item(doc, ti)->hand = true; }
-        char *sub = xstrfmt("#%d%s%s", item->number, item->draft ? " \xC2\xB7 draft" : "", this_pr ? " \xC2\xB7 this pull request" : "");
-        doc_space(doc, px(2)); doc_text(doc, c.x + indent, c.w - indent, sub, FONT_MONO_CAPTION2, theme.secondary, DT_SINGLELINE); free(sub);
-    }
-    doc_space(doc, px(8));
-    doc_text(doc, c.x, c.w, s->stack.partial ? "Bottom first. Only part of this stack is visible; it may be longer." : "Bottom first. Merge from the bottom up.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-}
 static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
     const PullSummary *row = board_row(s);
     const BoardLink *issues = row && row->issue_count ? row->issues : NULL; size_t issue_count = row ? row->issue_count : 0;
@@ -1184,11 +1247,11 @@ static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
 /// The sidebar: only what the server reports; GitHub's projects and notifications are not part of it.
 static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     int count = 0;
+    side_actions(s, doc, c, &count);
     side_reviewers(s, doc, c, &count);
     side_assignees(s, doc, c, &count);
     side_labels(s, doc, c, &count);
     side_milestone(s, doc, c, &count);
-    side_stack(s, doc, c, &count);
     side_development(s, doc, c, &count);
 }
 
@@ -1359,6 +1422,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
+    case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB: s->tab = (int)arg; if (s->tab == PR_TAB_FILES) pull_files_load(s->files); pane_relayout(base->pane); break;
     case ACT_FINDING_TOGGLE: {
         bool open = finding_open(s, (int)arg);
