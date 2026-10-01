@@ -353,11 +353,14 @@ void pull_files_layout(PullFiles *f, Doc *doc, int x, int w) {
         int tree_w = w * 28 / 100, gap = px(16);
         if (tree_w < px(220)) tree_w = px(220);
         if (tree_w > px(320)) tree_w = px(320);
+        int tree_first = (int)doc->count;
         layout_tree(f, doc, x, tree_w);
-        int tree_bottom = doc->y;
+        int tree_last = (int)doc->count, tree_bottom = doc->y;
         doc->y = top;
         layout_diff(f, doc, x + tree_w + gap, w - tree_w - gap);
         if (doc->y < tree_bottom) doc->y = tree_bottom;
+        // The tree follows the scroll down the diff, as GitHub's file tree does.
+        doc_sticky(doc, tree_first, tree_last, doc->y);
     } else {
         layout_tree(f, doc, x, w);
         doc_space(doc, px(12));

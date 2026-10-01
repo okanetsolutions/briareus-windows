@@ -42,6 +42,8 @@ struct Doc {
     int pressed;
     DocPos sel_anchor, sel_focus;   // the text selection's ends, in either order; item -1 when there is none
     bool selecting;                 // the mouse is dragging the selection
+    int sticky_first, sticky_last;  // items that follow the scroll, as CSS `position: sticky`; none when equal
+    int sticky_limit, sticky_shift; // the content y they stop at, and how far they are moved now
 };
 
 void doc_init(Doc *doc);
@@ -101,6 +103,12 @@ int doc_badges(Doc *doc, int x, int w, const BadgeSpec *badges, size_t count, CO
 int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count);
 /// A section header in small caps style, as an inset grouped list has; advances.
 int doc_section(Doc *doc, int x, int w, const char *title);
+
+/// Items [first, last) follow the scroll down to `limit`, as a sidebar beside a long column: they stay in view, and
+/// one taller than the view scrolls with the content until its bottom shows. One group per document.
+void doc_sticky(Doc *doc, int first, int last, int limit);
+/// Moves the sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
+void doc_set_view(Doc *doc, int scroll_y, int view_height);
 
 void doc_paint(Doc *doc, HDC hdc, int scroll_x, int scroll_y, const RECT *clip);
 /// The topmost clickable item at a content point, or -1.
