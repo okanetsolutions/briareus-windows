@@ -283,8 +283,8 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             };
             bool matched = false;
             for (size_t e = 0; e < sizeof entities / sizeof *entities && !matched; e++) {
-                size_t len = strlen(entities[e].name);
-                if ((size_t)(end - p) >= len && memcmp(p, entities[e].name, len) == 0) { str_appendz(&plain, entities[e].text); p += len; matched = true; }
+                size_t n = strlen(entities[e].name);
+                if ((size_t)(end - p) >= n && memcmp(p, entities[e].name, n) == 0) { str_appendz(&plain, entities[e].text); p += n; matched = true; }
             }
             if (matched) continue;
         }

@@ -1,5 +1,6 @@
 # Build output (Makefile and build.bat both write here)
 build/
+build-*/
 *.o
 *.obj
 *.exe
@@ -12,6 +13,8 @@ build/
 *.res
 *.aps
 *.zip
+*.gcda
+*.gcno
 
 # Visual Studio and MSVC
 .vs/

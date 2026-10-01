@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older runs; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   mingw:
     name: Build and test (MinGW-w64)
@@ -16,27 +21,86 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
-      - name: Build the app and run the core tests
-        run: mingw32-make
-      - uses: actions/upload-artifact@v4
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck
+      - name: Build the app and run the tests, warnings as errors
+        run: mingw32-make WERROR=1
+      - name: Static analysis (cppcheck)
+        run: mingw32-make lint
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Briareus-windows-x64
           path: build/Briareus.exe
+
+  coverage:
+    name: Test coverage
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-python-gcovr
+      - name: Measure line coverage of core/ (fails below the floor in the Makefile)
+        run: |
+          set -o pipefail
+          mingw32-make coverage 2>&1 | tee coverage.txt
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '### Test coverage of core/'
+            echo '```'
+            grep -E '^(lines|functions|branches):|minimum' coverage.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-report
+          path: build-cov/coverage/
 
   msvc:
     name: Build and test (MSVC)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
           arch: x64
-      - name: Build the app and run the core tests
+      - name: Build the app and run the tests, warnings as errors
         shell: cmd
+        env:
+          CL: /WX
         run: build.bat
+
+  asan:
+    name: Tests under AddressSanitizer (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      # The tests catch overruns, use after free and double frees the plain build passes over.
+      - name: Build with AddressSanitizer and run the tests
+        shell: cmd
+        env:
+          CL: /fsanitize=address /Zi
+        run: build.bat
+
+  editorconfig:
+    name: Formatting (.editorconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: editorconfig-checker/action-editorconfig-checker@51f63319f592f97930c73d9c46184d20bd206393 # v3.0.0
+      - run: editorconfig-checker

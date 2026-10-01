@@ -1011,7 +1011,7 @@ static const char *run_shown_profile(PullScreen *s);
 static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
     bool loaded = !json_is_null(s->pr);
-    double additions, deletions;
+    double additions = 0, deletions = 0;
     bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
     DiffStatData *ds = NULL; int dsw = 0;
     if (has_diff) { ds = xcalloc(1, sizeof *ds); ds->additions = (int)additions; ds->deletions = (int)deletions; dsw = diffstat_width(doc->cv, ds); right -= dsw + px(16); }
@@ -1436,6 +1436,7 @@ static void layout_runs(PullScreen *s, Doc *doc, Col c) {
             int di = doc_add(doc, &br, paint_delete_run);
             Item *it = doc_item(doc, di);
             bool mine = s->deleting_run && str_eq(s->deleting_run, session_id(&s->runs[i]));
+            // cppcheck-suppress intToPointerCast
             it->data = mine ? (void *)1 : NULL;   // a marker only, never freed
             if (!s->deleting_run) { it->action = ACT_DELETE_RUN; it->arg = (intptr_t)i; it->hand = true; }
         }
@@ -2507,6 +2508,13 @@ static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     }
 }
+static Json *link_json(const BoardLink *l) {
+    Json *o = json_object();
+    json_set_num(o, "number", l->number); json_set_str(o, "title", l->title); json_set_str(o, "url", l->url); json_set_str(o, "repo", l->repo);
+    json_set_bool(o, "draft", l->draft); json_set_str(o, "state", l->state); json_set_str(o, "stateReason", l->state_reason);
+    Json *labels = json_array(); for (size_t i = 0; i < l->label_count; i++) { Json *x = json_object(); json_set_str(x, "name", l->labels[i].name); json_set_str(x, "color", l->labels[i].color); json_array_push(labels, x); } json_object_set(o, "labels", labels);
+    return o;
+}
 static void issue_timer(Screen *base, UINT id) {
     IssueScreen *s = (IssueScreen *)base;
     if (poller_fired(&s->poller, id)) { request_cancel(&s->req_runs); issue_load(s, false); }
@@ -2538,7 +2546,6 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
         if (tm) { strftime(iso, sizeof iso, "%Y-%m-%dT%H:%M:%SZ", tm); json_set_str(j, dates[k].key, iso); }
     }
     Json *sub = json_object(); json_set_num(sub, "total", issue->sub_issues); json_set_num(sub, "completed", issue->sub_issues_done); json_object_set(j, "subIssues", sub);
-    Json *link_json(const BoardLink *l);
     if (issue->has_parent) json_object_set(j, "parent", link_json(&issue->parent));
     Json *pulls = json_array(); for (size_t i = 0; i < issue->pull_count; i++) json_array_push(pulls, link_json(&issue->pulls[i])); json_object_set(j, "pulls", pulls);
     issue_summary_parse(j, &s->issue);
@@ -2549,11 +2556,4 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
     free(key);
     if (saved) { issue_board_show(s, saved, true); json_free(saved); }
     return &s->base;
-}
-Json *link_json(const BoardLink *l) {
-    Json *o = json_object();
-    json_set_num(o, "number", l->number); json_set_str(o, "title", l->title); json_set_str(o, "url", l->url); json_set_str(o, "repo", l->repo);
-    json_set_bool(o, "draft", l->draft); json_set_str(o, "state", l->state); json_set_str(o, "stateReason", l->state_reason);
-    Json *labels = json_array(); for (size_t i = 0; i < l->label_count; i++) { Json *x = json_object(); json_set_str(x, "name", l->labels[i].name); json_set_str(x, "color", l->labels[i].color); json_array_push(labels, x); } json_object_set(o, "labels", labels);
-    return o;
 }

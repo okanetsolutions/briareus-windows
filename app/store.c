@@ -140,7 +140,7 @@ static void pair_done(void *p) {
     free(g_store.server); g_store.server = xstrdup(j->address.origin);
     settings_write_origin(j->address.origin);
     Json *saved = cache_value(g_store.cache, "connection");
-    Connection previous;
+    Connection previous = { 0 };
     bool had = saved && connection_parse(saved, &previous);
     if (!had || !str_eq(previous.device.id, j->discovery.device.id)) cache_remove_all(g_store.cache);
     if (had) connection_free(&previous);

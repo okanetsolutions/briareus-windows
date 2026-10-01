@@ -165,7 +165,7 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     result = api_call(c, "delete_project", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/7"); CHECK_STR(stub.last_method, "DELETE"); CHECK(stub.last_body == NULL);
     args = json_object();
-    { Json *ids = json_array(); json_array_push(ids, json_number(2)); json_array_push(ids, json_number(1)); json_object_set(args, "ids", ids); }
+    { Json *order = json_array(); json_array_push(order, json_number(2)); json_array_push(order, json_number(1)); json_object_set(args, "ids", order); }
     result = api_call(c, "order_projects", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/order"); CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_body, "{\"ids\":[2,1]}");
     // A provider's status reads fresh through the query; finishing a login sends the code in the body, the id in the path.
