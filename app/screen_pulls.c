@@ -473,8 +473,8 @@ typedef struct {
     char **profiles; size_t profile_count; bool profiles_read;   // the project's run profiles, the default first
     Request *req_run, *req_profiles;
     // The log of the Run under way, from its session's transcript: `log_session` is the session followed (found in the
-    // Sessions list while `serve_pull` prepares it), `log_cursor` the last line read.
-    char *log_session; double log_cursor; char **log_lines; bool *log_errors; size_t log_count; Request *req_log;
+    // Sessions list while `serve_pull` prepares it).
+    char *log_session; RunLog log; Request *req_log;
     WebView *web; RECT web_rc; bool shown;
     int tab;
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
@@ -681,7 +681,7 @@ static void pull_destroy(Screen *base) {
     board_actions_free(s->actions, s->action_count);
     pull_files_free(s->files);
     request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);
-    str_array_free(s->log_lines, s->log_count); free(s->log_errors); free(s->log_session);
+    run_log_clear(&s->log); free(s->log_session);
     webview_free(s->web);
     free(s->run_url); free(s->run_session); free(s->run_profile); free(s->run_want); free(s->run_asked); free(s->serve_error);
     str_array_free(s->profiles, s->profile_count);
@@ -1631,76 +1631,42 @@ static void layout_run(PullScreen *s, Doc *doc, int w) {
         doc_item(doc, i)->action = ACT_WEB_BROWSER; doc_item(doc, i)->hand = true;
     }
     // The setup as it happens, its latest lines filling what is left of the area, as a terminal does.
-    if (s->log_count && (s->run_busy || !s->run_url)) {
+    if (s->log.count && (s->run_busy || !s->run_url)) {
         doc_space(doc, px(12));
         int line = px(17), room = area + h - doc->y - px(24);
-        size_t fit = room > line ? (size_t)(room / line) : 1, first = s->log_count > fit ? s->log_count - fit : 0;
+        size_t fit = room > line ? (size_t)(room / line) : 1, first = s->log.count > fit ? s->log.count - fit : 0;
         int box = doc_box_begin(doc, px(4), w - px(8), px(10), theme.sunken, theme.line, px(6));
         doc_item(doc, box)->hover_fill = false;
-        for (size_t i = first; i < s->log_count; i++)
-            doc_text(doc, px(16), w - px(32), s->log_lines[i], FONT_MONO_SMALL, s->log_errors[i] ? theme.danger : theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        for (size_t i = first; i < s->log.count; i++)
+            doc_text(doc, px(16), w - px(32), s->log.lines[i], FONT_MONO_SMALL, s->log.errors[i] ? theme.danger : theme.secondary, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         doc_box_end(doc, box, px(10));
     }
     if (doc->y < area + h) doc->y = area + h;
 }
-/// Adds a transcript line to the log, one entry per line of its text, keeping the latest 400.
-static void log_add(PullScreen *s, const char *text, bool error) {
-    for (const char *p = text; p && *p;) {
-        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
-        if (n && p[n - 1] == '\r') n--;
-        if (n) {
-            if (s->log_count == 400) { free(s->log_lines[0]); memmove(s->log_lines, s->log_lines + 1, 399 * sizeof *s->log_lines); memmove(s->log_errors, s->log_errors + 1, 399 * sizeof *s->log_errors); s->log_count--; }
-            s->log_lines = xrealloc(s->log_lines, (s->log_count + 1) * sizeof *s->log_lines);
-            s->log_errors = xrealloc(s->log_errors, (s->log_count + 1) * sizeof *s->log_errors);
-            s->log_lines[s->log_count] = xstrndup(p, n); s->log_errors[s->log_count] = error; s->log_count++;
-        }
-        p = e ? e + 1 : p + n;
-    }
-}
 static void log_follow(PullScreen *s, const char *session) {
     if (str_eq(s->log_session, session)) return;
-    set_string(&s->log_session, session); s->log_cursor = 0;
-    str_array_free(s->log_lines, s->log_count); free(s->log_errors); s->log_lines = NULL; s->log_errors = NULL; s->log_count = 0;
+    set_string(&s->log_session, session);
+    run_log_clear(&s->log);
 }
 static void log_events_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok || !str_eq(json_str(json_get(req->args, "sessionId")), s->log_session)) return;
-    const Json *events = json_get(req->result, "events");
-    for (size_t i = 0; i < json_count(events); i++) {
-        const Json *e = json_at(events, i);
-        double seq = 0;
-        if (json_num(json_get(e, "seq"), &seq) && seq <= s->log_cursor) continue;
-        if (seq > s->log_cursor) s->log_cursor = seq;
-        const char *kind = json_str(json_get(e, "kind")), *text = json_str(json_get(e, "text"));
-        if (str_eq(kind, "status")) { char *t = xstrfmt("\xE2\x80\xA2 %s", json_str_or(json_get(e, "status"), "")); log_add(s, t, false); free(t); continue; }
-        if (!text || !(str_eq(kind, "info") || str_eq(kind, "cmd") || str_eq(kind, "git") || str_eq(kind, "setup") || str_eq(kind, "stderr") || str_eq(kind, "claude"))) continue;
-        if (str_eq(kind, "cmd")) { char *t = xstrfmt("$ %s", text); log_add(s, t, false); free(t); }
-        else log_add(s, text, str_eq(kind, "stderr"));
-    }
-    if (s->tab == PR_TAB_RUN && s->base.pane) pane_relayout(s->base.pane);
+    if (run_log_add_events(&s->log, json_get(req->result, "events")) && s->tab == PR_TAB_RUN && s->base.pane) pane_relayout(s->base.pane);
 }
 /// While `serve_pull` prepares the session, its id is not known yet: the newest ▶ Run session on this pull request is it.
 static void log_find_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok || s->run_session) return;
-    Session *all; size_t n;
-    if (!sessions_parse(req->result, &all, &n)) return;
-    const char *best = NULL, *best_at = NULL;
-    for (size_t i = 0; i < n; i++) {
-        const Json *raw = all[i].raw;
-        const char *title = json_str(json_get(raw, "title")), *at = json_str_or(json_get(raw, "createdAt"), "");
-        if (session_pull_number(&all[i]) != s->number || !title || strncmp(title, "Run: #", 6)) continue;
-        if (!best || strcmp(at, best_at) > 0) { best = session_id(&all[i]); best_at = at; }
-    }
-    if (best) log_follow(s, best);
-    sessions_free(all, n);
+    char *id = run_session_preparing(req->result, s->number);
+    if (id) log_follow(s, id);
+    free(id);
 }
 static void run_log_tick(PullScreen *s) {
     if (!s->run_busy) { if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_RUN_LOG); return; }
     if (s->req_log) return;
     if (s->run_session) log_follow(s, s->run_session);
     if (s->log_session && store_supports("session")) {
-        Json *a = json_object(); json_set_str(a, "sessionId", s->log_session); json_set_num(a, "since", s->log_cursor);
+        Json *a = json_object(); json_set_str(a, "sessionId", s->log_session); json_set_num(a, "since", s->log.cursor);
         store_call("session", a, 0, s, log_events_done, TAG_RUN_LOG, &s->req_log);
     } else if (!s->run_session && store_supports("sessions")) {
         Json *a = json_object(); json_set_str(a, "repo", s->project.repo);
@@ -1721,19 +1687,11 @@ static void profiles_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok) return;
     s->profiles_read = true;
-    const Json *rows = json_get(req->result, "projects");
-    for (size_t i = 0; i < json_count(rows); i++) {
-        const Json *row = json_at(rows, i);
-        if (!str_eq(json_str(json_get(row, "repo")), s->project.repo)) continue;
-        const Json *names = json_get(row, "runProfiles");
-        str_array_free(s->profiles, s->profile_count); s->profile_count = 0;
-        s->profiles = xcalloc(json_count(names) + 1, sizeof *s->profiles);
-        for (size_t k = 0; k < json_count(names); k++) if (json_str_nonempty(json_at(names, k))) s->profiles[s->profile_count++] = xstrdup(json_str(json_at(names, k)));
-    }
+    str_array_free(s->profiles, s->profile_count);
+    s->profiles = run_profiles_parse(req->result, s->project.repo, &s->profile_count);
     run_changed(s);
 }
 static void run_start(PullScreen *s);
-static void log_add(PullScreen *s, const char *text, bool error);
 static void run_done(void *owner, Request *req) {
     PullScreen *s = owner;
     s->run_busy = false;
@@ -1781,20 +1739,22 @@ static void run_start(PullScreen *s) {
         set_string(&s->run_asked, s->run_want);
     } else { json_set_str(args, "repo", s->project.repo); json_set_num(args, "prNumber", s->number); }
     store_call(op, args, 170000, s, run_done, TAG_RUN, &s->req_run);
-    if (s->run_asked) { char *t = xstrfmt("\xE2\x96\xB6 Switching to profile %s", s->run_asked); log_add(s, t, false); free(t); }
+    if (s->run_asked) { char *t = xstrfmt("\xE2\x96\xB6 Switching to profile %s", s->run_asked); run_log_add(&s->log, t, false); free(t); }
     if (s->base.pane) SetTimer(pane_hwnd(s->base.pane), TIMER_RUN_LOG, 1500, NULL);
     run_changed(s);
 }
 /// A Run already serving this pull request (one of its sessions with serve links) is shown as it is.
 static bool run_adopt(PullScreen *s) {
-    for (size_t i = 0; i < s->run_count; i++) {
-        const char *url = json_str(json_get(json_at(json_get(s->runs[i].raw, "serveLinks"), 0), "url"));
-        if (!safe_web_url(url)) continue;
-        set_string(&s->run_session, session_id(&s->runs[i]));
-        show_run(s, url);
-        return true;
-    }
-    return false;
+    Json *rows = json_array();
+    for (size_t i = 0; i < s->run_count; i++) json_array_push(rows, json_clone(s->runs[i].raw));
+    char *id = NULL, *url = NULL;
+    bool found = run_session_serving(rows, s->number, &id, &url);
+    json_free(rows);
+    if (!found) return false;
+    set_string(&s->run_session, id);
+    show_run(s, url);
+    free(id); free(url);
+    return true;
 }
 static void run_resume(PullScreen *s) { if (!s->run_url && !s->run_busy && !s->serve_error && !run_adopt(s)) run_start(s); }
 /// The Run tab was opened: reads the project's run profiles once, and serves the pull request unless it is served.
