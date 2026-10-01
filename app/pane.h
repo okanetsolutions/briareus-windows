@@ -9,7 +9,8 @@ typedef struct Pane Pane;
 typedef struct Screen Screen;
 
 /// A header button: a glyph alone, or a labelled pill when `label` is set and the header has room for the labels.
-typedef struct { wchar_t glyph; int action; bool enabled; const char *tip; char label[40]; bool destructive; } HeaderButton;
+/// `prominent` fills it with the accent, as the dashboard's `.btn-primary` (Save).
+typedef struct { wchar_t glyph; int action; bool enabled; const char *tip; char label[40]; bool destructive, prominent; } HeaderButton;
 enum { HEADER_BUTTONS = 8 };
 typedef struct {
     char title[512]; char subtitle[512]; char status[48];   // status draws a dot before the subtitle
@@ -43,6 +44,8 @@ typedef struct ScreenVTable {
     void (*scrolled)(Screen *s, bool at_bottom);
     /// The application came to the foreground or left it.
     void (*activated)(Screen *s, bool active);
+    /// Another screen is about to replace this one as the detail pane's root: false keeps it (unsaved changes); optional.
+    bool (*can_leave)(Screen *s);
 } ScreenVTable;
 
 struct Screen {

@@ -272,4 +272,42 @@ void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char
     doc_box_action(doc, box, action, arg);
 }
 
+// MARK: - Tabs
+
+// GitHub's `tabnav`, as the pull request page and the project settings lay their tabs out.
+typedef struct { wchar_t glyph; char *title, *count; bool active; } TabnavData;
+static void tabnav_free(void *p) { TabnavData *d = p; free(d->title); free(d->count); free(d); }
+static int tabnav_width(Canvas *cv, const TabnavData *d) {
+    int w = px(12) + px(16) + px(8) + text_width(cv, d->title, FONT_FOOTNOTE_SEMIBOLD) + px(12);
+    if (d->count) w += px(6) + text_width(cv, d->count, FONT_CAPTION) + px(12);
+    return w;
+}
+static void paint_tabnav(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    TabnavData *d = it->data;
+    bool hovered = doc->hover >= 0 && &doc->items[doc->hover] == it;
+    COLORREF ink = d->active || hovered ? theme.ink : theme.muted;
+    if (hovered && !d->active) { RECT h = { rc->left + px(2), rc->top + px(5), rc->right - px(2), rc->bottom - px(7) }; fill_round_rect(cv, &h, px(6), theme.raise, theme.raise); }
+    int x = rc->left + px(12);
+    RECT g = { x, rc->top, x + px(16), rc->bottom - px(2) }; draw_glyph(cv, d->glyph, &g, FONT_ICON_SMALL, d->active ? theme.ink : theme.muted); x += px(16) + px(8);
+    FontId f = d->active ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE;
+    int lw = text_width(cv, d->title, f);
+    RECT t = { x, rc->top, x + lw + px(2), rc->bottom - px(2) }; draw_text(cv, d->title, &t, f, ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += lw + px(6);
+    if (d->count) {
+        // `.Counter`: the number in a small rounded bubble.
+        int cw = text_width(cv, d->count, FONT_CAPTION) + px(12), ch = font_height(cv, FONT_CAPTION) + px(4);
+        int cy = rc->top + (rc->bottom - px(2) - rc->top - ch) / 2;
+        RECT b = { x, cy, x + cw, cy + ch }; fill_round_rect(cv, &b, ch / 2, theme.line, theme.line);
+        draw_text(cv, d->count, &b, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    if (d->active) { RECT u = { rc->left + px(4), rc->bottom - px(2), rc->right - px(4), rc->bottom }; fill_round_rect(cv, &u, px(1), theme.accent, theme.accent); }
+}
+void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg) {
+    TabnavData *d = xcalloc(1, sizeof *d); d->glyph = glyph; d->title = xstrdup(title); d->count = count ? xstrdup(count) : NULL; d->active = active;
+    int w = tabnav_width(doc->cv, d);
+    if (*x > left && *x + w > right) { *x = left; *y += h; }
+    doc->y = *y;
+    int i = doc_custom(doc, *x, w, h, paint_tabnav, d, tabnav_free, active ? 0 : action, arg);
+    doc_item(doc, i)->hover_fill = false;
+    *x += w;
+}
 int content_left(Pane *pane) { (void)pane; return 0; }

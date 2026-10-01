@@ -29,6 +29,9 @@ void canvas_end_dc(Canvas *cv);
 
 /// Clips drawing to a rectangle, in the canvas's own coordinates; clips nest.
 void canvas_clip(Canvas *cv, const RECT *rc);
+/// Clips to a rounded rectangle, anti-aliased, as `overflow-hidden rounded-full` does.
+void canvas_clip_round(Canvas *cv, const RECT *rc, int radius);
+/// Ends the innermost clip.
 void canvas_unclip(Canvas *cv);
 /// Moves the origin: what is drawn at (0, 0) lands at (dx, dy).
 void canvas_offset(Canvas *cv, int dx, int dy);

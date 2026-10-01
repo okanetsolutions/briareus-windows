@@ -21,6 +21,7 @@ struct Canvas {
     ID2D1SolidColorBrush *brush;
     bool color_fonts;                   // the target draws colour glyphs (emoji), Windows 8.1 and later
     int clips;
+    unsigned layers;                    // bit n: clip n is a rounded layer rather than an axis-aligned clip
 };
 
 static ID2D1Factory *d2d;
@@ -229,7 +230,7 @@ extern "C" bool canvas_begin(Canvas *cv) {
     if (!cv || !ensure_target(cv)) return false;
     cv->rt->BeginDraw();
     cv->rt->SetTransform(D2D1::Matrix3x2F::Identity());
-    cv->clips = 0;
+    cv->clips = 0; cv->layers = 0;
     return true;
 }
 extern "C" void canvas_end(Canvas *cv) {
@@ -255,7 +256,7 @@ extern "C" Canvas *canvas_begin_dc(HDC hdc, const RECT *rc) {
     if (FAILED(dc_rt->BindDC(hdc, rc))) return NULL;
     dc_rt->BeginDraw();
     dc_rt->SetTransform(D2D1::Matrix3x2F::Identity());
-    dc_canvas.clips = 0;
+    dc_canvas.clips = 0; dc_canvas.layers = 0;
     return &dc_canvas;
 }
 extern "C" void canvas_end_dc(Canvas *cv) {
@@ -268,13 +269,25 @@ static D2D1_RECT_F rectf(const RECT *rc) { return D2D1::RectF((float)rc->left, (
 
 extern "C" void canvas_clip(Canvas *cv, const RECT *rc) {
     if (!cv || !cv->rt) return;
+    if (cv->clips >= 32) return;
     cv->rt->PushAxisAlignedClip(rectf(rc), D2D1_ANTIALIAS_MODE_ALIASED);
+    cv->clips++;
+}
+extern "C" void canvas_clip_round(Canvas *cv, const RECT *rc, int radius) {
+    if (!cv || !cv->rt || cv->clips >= 32) return;
+    ID2D1RoundedRectangleGeometry *shape = NULL;
+    D2D1_ROUNDED_RECT rr = D2D1::RoundedRect(rectf(rc), (float)radius, (float)radius);
+    if (FAILED(d2d->CreateRoundedRectangleGeometry(&rr, &shape))) { canvas_clip(cv, rc); return; }
+    cv->rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), shape), NULL);
+    shape->Release();   // the layer holds its own reference
+    cv->layers |= 1u << cv->clips;
     cv->clips++;
 }
 extern "C" void canvas_unclip(Canvas *cv) {
     if (!cv || !cv->rt || cv->clips <= 0) return;
-    cv->rt->PopAxisAlignedClip();
     cv->clips--;
+    if (cv->layers & (1u << cv->clips)) { cv->rt->PopLayer(); cv->layers &= ~(1u << cv->clips); }
+    else cv->rt->PopAxisAlignedClip();
 }
 extern "C" void canvas_offset(Canvas *cv, int dx, int dy) {
     if (cv && cv->rt) cv->rt->SetTransform(D2D1::Matrix3x2F::Translation((float)dx, (float)dy));
