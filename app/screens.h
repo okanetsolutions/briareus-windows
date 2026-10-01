@@ -40,8 +40,16 @@ void pull_files_layout(PullFiles *files, Doc *doc, int x, int w);
 bool pull_files_action(PullFiles *files, int action, intptr_t arg);
 /// True when the timer was the component's.
 bool pull_files_timer(PullFiles *files, UINT id);
-/// The column beside a conversation: its pull request, commits, reviews and findings, as the dashboard's `#pr-panel`.
-Screen *pull_panel_screen_new(const char *repo, int number);
+/// The column beside a conversation, as the dashboard's `#pr-panel`: its pull request, commits, reviews and findings once
+/// it has one, and its context usage.
+Screen *session_panel_screen_new(const Session *session);
+/// Whether a session has anything for that column to show.
+bool session_panel_wanted(const Session *session);
+/// Hands the panel the session's latest record, when the panel is that session's.
+void session_panel_update(const Session *session);
+/// Runs a session operation (`compact`, `clear`, `rename` with compaction settings) through its open conversation,
+/// which shows its progress and errors and reads the session again afterwards.
+void conversation_session_op(const char *session_id, const char *operation, Json *extra);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
 /// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
 Screen *findings_screen_new(void);
