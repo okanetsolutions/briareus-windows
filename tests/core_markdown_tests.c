@@ -292,6 +292,21 @@ static void test_bold_italic_and_strike_markers(void) {
     CHECK_OWNED_STR(spans_desc("_**both**_"), "[BI:both]");
 }
 
+static void test_tripled_markers_are_bold_and_italic(void) {
+    CHECK_OWNED_STR(spans_desc("***bi***"), "[BI:bi]");
+    CHECK_OWNED_STR(spans_desc("a ___bi___ b"), "[:a ][BI:bi][: b]");
+    CHECK_OWNED_STR(spans_desc("a___b___c"), "[:a___b___c]");
+    CHECK_OWNED_STR(spans_desc("***open"), "[:***open]");
+}
+
+static void test_italics_step_over_bold_inside_them(void) {
+    CHECK_OWNED_STR(spans_desc("*a **b** c*"), "[I:a ][BI:b][I: c]");
+    CHECK_OWNED_STR(spans_desc("_a __b__ c_"), "[I:a ][BI:b][I: c]");
+    CHECK_OWNED_STR(spans_desc("*a **b***"), "[I:a ][BI:b]");
+    // A doubled marker that closes nothing is still the italic's end.
+    CHECK_OWNED_STR(spans_desc("*a**"), "[I:a][:*]");
+}
+
 static void test_emphasis_needs_text_hugging_its_markers(void) {
     CHECK_OWNED_STR(spans_desc("2 * 3 * 4"), "[:2 * 3 * 4]");
     CHECK_OWNED_STR(spans_desc("* not*"), "[:* not*]");
@@ -338,6 +353,17 @@ static void test_links_carry_their_url_on_every_label_span(void) {
     CHECK_OWNED_STR(spans_desc("[t](https://a.example \"Title\")"), "[L:t@https://a.example]");
     CHECK_OWNED_STR(spans_desc("[a [b] c](u)"), "[L:a [b] c@u]");
     CHECK_OWNED_STR(spans_desc("go [here](u) now"), "[:go ][L:here@u][: now]");
+}
+
+static void test_link_urls_keep_balanced_parentheses(void) {
+    CHECK_OWNED_STR(spans_desc("[w](https://en.wikipedia.org/wiki/A_(b))"), "[L:w@https://en.wikipedia.org/wiki/A_(b)]");
+    CHECK_OWNED_STR(spans_desc("([w](u)) x"), "[:(][L:w@u][:) x]");
+    CHECK_OWNED_STR(spans_desc("[w](u(v)"), "[:[w](u(v)]");
+}
+
+static void test_links_with_an_empty_label_show_their_url(void) {
+    CHECK_OWNED_STR(spans_desc("see [](https://a.example) now"), "[:see ][L:https://a.example@https://a.example][: now]");
+    CHECK_OWNED_STR(spans_desc("[]()"), "");
 }
 
 static void test_adjacent_links_stay_separate_spans(void) {
@@ -442,11 +468,15 @@ void markdown_tests(void) {
     test_run("code spans take matching backtick runs", test_code_spans_take_matching_backtick_runs);
     test_run("unclosed backticks are literal", test_unclosed_backticks_are_literal);
     test_run("bold, italic and strike markers", test_bold_italic_and_strike_markers);
+    test_run("tripled markers are bold and italic", test_tripled_markers_are_bold_and_italic);
+    test_run("italics step over bold inside them", test_italics_step_over_bold_inside_them);
     test_run("emphasis needs text hugging its markers", test_emphasis_needs_text_hugging_its_markers);
     test_run("unclosed emphasis is literal", test_unclosed_emphasis_is_literal);
     test_run("intraword underscores are literal", test_intraword_underscores_are_literal);
     test_run("backslash escapes drop the backslash", test_backslash_escapes_drop_the_backslash);
     test_run("links carry their URL on every label span", test_links_carry_their_url_on_every_label_span);
+    test_run("link urls keep balanced parentheses", test_link_urls_keep_balanced_parentheses);
+    test_run("links with an empty label show their url", test_links_with_an_empty_label_show_their_url);
     test_run("adjacent links stay separate spans", test_adjacent_links_stay_separate_spans);
     test_run("brackets that are not links are literal", test_brackets_that_are_not_links_are_literal);
     test_run("images show their alt text as a link", test_images_show_their_alt_text_as_a_link);
