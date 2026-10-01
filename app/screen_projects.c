@@ -1,4 +1,4 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp, the 📊 and ⚑ switches and ⚙ Settings, the projects
+// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp and Slack, the 📊 and ⚑ switches and ⚙ Settings, the projects
 // with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
 #include "dialogs.h"
 #include "media.h"
@@ -12,12 +12,13 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP };
-enum { STRIP_H = 32, ICON_W = 30, STRIP_GAP = 4, STRIP_ICONS = 4 };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 5 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
-typedef struct { char text[40]; int badge; bool active, wide, whatsapp; } StripData;
+typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_SLACK } StripMark;
+typedef struct { char text[40]; int badge; bool active, wide; StripMark mark; } StripData;
 /// WhatsApp's mark, which no font has: a green chat bubble with its tail at the lower left, and a white handset.
 static void paint_whatsapp_mark(Canvas *cv, const RECT *rc) {
     const COLORREF green = RGB(0x25, 0xD3, 0x66);
@@ -27,15 +28,35 @@ static void paint_whatsapp_mark(Canvas *cv, const RECT *rc) {
     fill_round_rect(cv, &bubble, d / 2, green, green);
     draw_glyph(cv, 0xE717, &bubble, FONT_ICON_SMALL, RGB(0xFF, 0xFF, 0xFF));
 }
+/// Slack's mark, which no font has either: four pills turning about the centre, blue, green, yellow and red, each with a
+/// round nub that carries the other line of the # past it.
+static void paint_slack_mark(Canvas *cv, const RECT *rc) {
+    static const COLORREF colors[4] = { RGB(0x36, 0xC5, 0xF0), RGB(0x2E, 0xB6, 0x7D), RGB(0xEC, 0xB2, 0x2E), RGB(0xE0, 0x1E, 0x5A) };
+    int cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
+    int r = px(10), t = px(4), g = px(3), top = -g - t / 2;
+    // The blue pieces, before turning: a pill across the upper line from the left edge to the centre, and above it the
+    // nub of the left line. A quarter turn maps (x, y) to (-y, x).
+    const int pieces[2][4] = { { -r, top, 0, top + t }, { top, top - px(1) - t, top + t, top - px(1) } };
+    for (int k = 0; k < 4; k++) {
+        for (int p = 0; p < 2; p++) {
+            int x1 = pieces[p][0], y1 = pieces[p][1], x2 = pieces[p][2], y2 = pieces[p][3];
+            for (int q = 0; q < k; q++) { int nx1 = -y2, nx2 = -y1; y1 = x1; y2 = x2; x1 = nx1; x2 = nx2; }
+            RECT box = { cx + x1, cy + y1, cx + x2, cy + y2 };
+            fill_round_rect(cv, &box, t / 2, colors[k], colors[k]);
+        }
+    }
+}
 static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StripData *d = it->data;
     bool hovered = doc_item_hovered(doc, it);
     COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
     fill_round_rect(cv, rc, px(8), theme.raise, border);
-    if (d->whatsapp) {
+    if (d->mark == MARK_WHATSAPP) {
         paint_whatsapp_mark(cv, rc);
+    } else if (d->mark == MARK_SLACK) {
+        paint_slack_mark(cv, rc);
     } else if (d->wide) {
-        RECT t = { rc->left + px(8), rc->top, rc->right - px(8), rc->bottom };
+        RECT t = { rc->left + px(6), rc->top, rc->right - px(6), rc->bottom };
         draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
         RECT t = *rc;
@@ -59,7 +80,7 @@ static StripData *strip_button(Doc *doc, const RECT *rc, const char *text, bool 
     it->data = d; it->free_data = free; it->action = action; it->hand = true;
     return d;
 }
-/// The strip; `selected` is the detail pane's root id, for the WhatsApp, 📊 and ⚑ switches' accent.
+/// The strip; `selected` is the detail pane's root id, for the WhatsApp, Slack, 📊 and ⚑ switches' accent.
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
@@ -67,7 +88,9 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
-    RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->whatsapp = true;
+    RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->mark = MARK_WHATSAPP;
+    x += iw + gap;
+    RECT kr = { x, y, x + iw, y + h }; strip_button(doc, &kr, "", false, 0, str_eq(selected, "slack"), ACT_SLACK)->mark = MARK_SLACK;
     x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
@@ -150,7 +173,8 @@ static void sign_out(void) {
 static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
-    case ACT_WHATSAPP: app_show_detail(whatsapp_screen_new()); return true;
+    case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
+    case ACT_SLACK: app_show_detail(web_app_screen_new(WEB_APP_SLACK)); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;

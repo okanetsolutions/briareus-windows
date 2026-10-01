@@ -54,8 +54,10 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
-/// WhatsApp Web, from the sidebar strip's WhatsApp button.
-Screen *whatsapp_screen_new(void);
+/// The web apps the sidebar strip opens in the detail pane; the screen's id is "whatsapp" or "slack".
+typedef enum { WEB_APP_WHATSAPP, WEB_APP_SLACK, WEB_APP_COUNT } WebApp;
+/// WhatsApp Web or Slack, from the sidebar strip's buttons.
+Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool and the SSH
 /// servers, each with ＋ New.
 Screen *settings_screen_new(void);
