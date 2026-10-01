@@ -432,7 +432,7 @@ char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *co
 }
 
 char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, ApiError *error) {
-    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the serverâs 25 MB limit for an attachment.", -1); return NULL; }
+    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the server’s 25 MB limit for an attachment.", -1); return NULL; }
     char *encoded = url_encode(str_empty(name) ? "file" : name);
     char *url = xstrfmt("%suploads?name=%s", c->address.base_url, encoded);
     free(encoded);

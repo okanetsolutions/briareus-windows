@@ -847,7 +847,7 @@ static void test_upload_limit_boundary(void) {
     CHECK_INT(stub.calls, 1); CHECK_INT(stub.last_body_len, API_UPLOAD_LIMIT);
     CHECK((unsigned char)stub.last_body[API_UPLOAD_LIMIT - 1] == 0x42);
     CHECK(api_upload(c, "over.bin", bytes, (size_t)API_UPLOAD_LIMIT + 1, &e) == NULL);
-    CHECK(e.kind == API_HTTP && e.status == 413); CHECK(api_error_is_refusal(&e)); CHECK(strstr(e.message, "25 MB limit") != NULL);
+    CHECK(e.kind == API_HTTP && e.status == 413); CHECK(api_error_is_refusal(&e)); CHECK_STR(e.message, "The file exceeds the server\xE2\x80\x99s 25 MB limit for an attachment.");
     CHECK_INT(stub.calls, 1);
     free(bytes);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
