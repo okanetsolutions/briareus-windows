@@ -385,6 +385,24 @@ extern "C" void draw_thick_line(Canvas *cv, int x1, int y1, int x2, int y2, COLO
     if (!ready(cv)) return;
     cv->rt->DrawLine(D2D1::Point2F(x1 + 0.5f, y1 + 0.5f), D2D1::Point2F(x2 + 0.5f, y2 + 0.5f), paint(cv, color), (float)width, stroke_style(false));
 }
+extern "C" void draw_check_mark(Canvas *cv, const RECT *rc, COLORREF color) {
+    if (!ready(cv)) return;
+    // A tick in the middle of the box, as the dashboard's checked checkbox draws it: the font's ✓ sits by its line box.
+    float w = (float)(rc->right - rc->left), h = (float)(rc->bottom - rc->top), x = (float)rc->left, y = (float)rc->top;
+    D2D1_POINT_2F a = D2D1::Point2F(x + w * 0.24f, y + h * 0.52f), b = D2D1::Point2F(x + w * 0.42f, y + h * 0.70f), c = D2D1::Point2F(x + w * 0.76f, y + h * 0.32f);
+    ID2D1PathGeometry *path = NULL; ID2D1GeometrySink *sink = NULL;
+    if (FAILED(d2d->CreatePathGeometry(&path))) return;
+    if (SUCCEEDED(path->Open(&sink))) {
+        sink->BeginFigure(a, D2D1_FIGURE_BEGIN_HOLLOW);
+        sink->AddLine(b);
+        sink->AddLine(c);
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        sink->Close();
+        release(sink);
+        cv->rt->DrawGeometry(path, paint(cv, color), w * 0.13f > 1.5f ? w * 0.13f : 1.5f, stroke_style(false));
+    }
+    release(path);
+}
 extern "C" void stroke_dotted_round_rect(Canvas *cv, const RECT *rc, int radius, COLORREF color) {
     if (!ready(cv)) return;
     D2D1_RECT_F r = D2D1::RectF(rc->left + 0.5f, rc->top + 0.5f, rc->right - 0.5f, rc->bottom - 0.5f);

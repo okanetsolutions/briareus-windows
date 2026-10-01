@@ -170,6 +170,13 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     { Json *ids = json_array(); json_array_push(ids, json_number(2)); json_array_push(ids, json_number(1)); json_object_set(args, "ids", ids); }
     result = api_call(c, "order_projects", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
     CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/projects/order"); CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_body, "{\"ids\":[2,1]}");
+    // A provider's status reads fresh through the query; finishing a login sends the code in the body, the id in the path.
+    args = json_object(); json_set_num(args, "id", 3); json_set_num(args, "fresh", 1);
+    result = api_call(c, "provider_status", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/providers/3/status?fresh=1"); CHECK_STR(stub.last_method, "GET");
+    args = json_object(); json_set_num(args, "id", 3); json_set_str(args, "code", "abc#def");
+    result = api_call(c, "provider_login_finish", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
+    CHECK_STR(stub.last_url, "https://example.com/api/v1/settings/providers/3/login/finish"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_body, "{\"code\":\"abc#def\"}");
     // An SSH server, the same way.
     args = json_object(); json_set_num(args, "id", 1727000000000.0); json_set_str(args, "host", "web.example.com"); json_set_num(args, "port", 2222);
     result = api_call(c, "update_ssh_server", args, 0, &e); CHECK(result != NULL); json_free(result); json_free(args);
@@ -210,6 +217,8 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
                             "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
                             "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe",
                             "settings_projects", "create_project", "update_project", "delete_project", "order_projects",
+                            "settings_providers", "create_provider", "update_provider", "delete_provider", "test_provider", "provider_status",
+                            "provider_login", "provider_login_start", "provider_login_finish",
                             "settings_ssh_servers", "create_ssh_server", "update_ssh_server", "delete_ssh_server" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
     CHECK(api_route("operations") == NULL);

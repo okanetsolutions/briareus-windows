@@ -178,7 +178,7 @@ static void paint_session_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     if (d->select_mode) {
         RECT box = { x, top + px(4), x + px(13), top + px(4) + px(13) };
         fill_round_rect(cv, &box, px(2), d->picked ? theme.accent : theme.field, d->picked ? theme.accent : theme.line_strong);
-        if (d->picked) draw_glyph(cv, 0xE73E, &box, FONT_ICON_SMALL, theme.on_accent);
+        if (d->picked) draw_check_mark(cv, &box, theme.on_accent);
         x += px(13) + px(8);
     }
     x += px(8) + px(8);   // the fold gutter and the gap after it

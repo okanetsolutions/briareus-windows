@@ -1,6 +1,7 @@
 // Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, Devices and clients, the projects
-// and the SSH servers, each with ＋ New) and a project's or an SSH server's form, its sections as tabs, saved through
-// /settings/projects and /settings/ssh/servers. Those routes need an Admin token; any other token gets a sentence saying so.
+// and the providers and the SSH servers, each with ＋ New) and a project's or an SSH server's form, its sections as tabs,
+// saved through /settings/projects and /settings/ssh/servers. The provider form is screen_provider_settings.c. Those
+// routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -19,7 +20,10 @@ static char *form_id(int id) { return id > 0 ? xstrfmt("settings-project:%d", id
 /// An SSH server's id is the time it was registered in milliseconds, past what an int holds.
 static char *ssh_form_id(double id) { return id > 0 ? xstrfmt("settings-ssh:%.0f", id) : xstrdup("settings-ssh:new"); }
 static double ssh_row_id(const Json *row) { double id; return json_num(json_get(row, "id"), &id) && isfinite(id) ? id : 0; }
-static bool is_form_id(const char *id) { return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-ssh:")); }
+/// A settings form in the detail pane: a project's, a provider's or an SSH server's.
+static bool is_form_id(const char *id) {
+    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-ssh:"));
+}
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
 static char *unavailable(const char *call, const char *path, const char *what, const char *manage) {
@@ -36,7 +40,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_SSH, ACT_OPEN_SSH };
+enum { ACT_BACK = 1000, ACT_DEVICES, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SSH, ACT_OPEN_SSH };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -46,6 +50,10 @@ typedef struct {
     bool loaded;
     char *error;
     Request *req, *req_order;
+    Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
+    bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
+    char *providers_error;
+    Request *req_providers;
     Json *ssh;          // the server's SshServer rows as `list`, and `defaults`
     bool ssh_loaded;
     char *ssh_error;
@@ -95,11 +103,39 @@ static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+typedef struct { char *label, *binary; bool active, login, endpoint, selected, unsaved; } ProviderRowData;
+static void provider_row_free(void *p) { ProviderRowData *d = p; free(d->label); free(d->binary); free(d); }
+static void paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    ProviderRowData *d = it->data;
+    bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
+    COLORREF background = hovered || d->selected ? theme.raise : theme.sidebar;
+    if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
+    int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
+    draw_status_dot(cv, x + px(3), top + lh / 2, d->active ? "idle" : "");
+    RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
+    draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The dashboard's badges: the CLI it runs, and what sets it apart.
+    const char *tags[] = { d->binary, d->active || d->unsaved ? NULL : "inactive", d->login ? "own login" : NULL, d->endpoint ? "custom endpoint" : NULL };
+    int bx = x, y2 = top + lh, right = rc->right - px(8);
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) {
+        if (str_empty(tags[i])) continue;
+        int bw = text_width(cv, tags[i], FONT_CAPTION2) + px(12) + 2;
+        if (bx + bw > right) break;
+        int h; draw_chip(cv, bx, y2 + px(1), tags[i], theme.muted, background, &h);
+        bx += bw + px(6);
+    }
+}
+
 static void settings_open_row(SettingsScreen *s, size_t index) {
     const Json *row = json_at(json_get(s->projects, "list"), index);
     if (json_is_object(row)) app_show_detail(project_settings_screen_new(row, json_get(s->projects, "defaults")));
 }
 static const Json *settings_rows(SettingsScreen *s) { return json_get(s->projects, "list"); }
+static const Json *provider_rows(SettingsScreen *s) { return json_get(s->providers, "list"); }
+static void settings_open_provider(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(provider_rows(s), index);
+    if (json_is_object(row)) app_show_detail(provider_settings_screen_new(row, json_get(s->providers, "defaults")));
+}
 
 static void settings_load(SettingsScreen *s);
 static void settings_done(void *owner, Request *req) {
@@ -137,6 +173,34 @@ static void ssh_load(SettingsScreen *s) {
 static void projects_load(SettingsScreen *s) {
     if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
     store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
+}
+static void providers_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->providers_loaded = true;
+    if (!req->ok) { char *t = request_error_text(req); set_string(&s->providers_error, t); free(t); pane_relayout(s->base.pane); return; }
+    set_string(&s->providers_error, NULL);
+    json_free(s->providers);
+    s->providers = json_object();
+    json_object_set(s->providers, "list", json_clone(json_get(req->result, "providers")));
+    json_object_set(s->providers, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+    // After a delete the first provider left opens in its place, as a project's delete opens the first project left.
+    if (!s->open_first_provider) return;
+    s->open_first_provider = false;
+    Screen *root = pane_root(app_detail_pane());
+    if (root && (is_form_id(root->id) || str_eq(root->id, "connection"))) return;
+    if (json_count(provider_rows(s))) settings_open_provider(s, 0);
+    else app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults")));
+}
+static void providers_load(SettingsScreen *s) {
+    if (s->req_providers || !store_supports("settings_providers")) { s->providers_loaded = true; return; }
+    store_call("settings_providers", json_object(), 0, s, providers_done, 0, &s->req_providers);
+}
+void settings_providers_changed(bool open_first) {
+    if (!g_settings) return;
+    g_settings->open_first_provider = open_first;
+    request_cancel(&g_settings->req_providers);
+    providers_load(g_settings);
 }
 static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); }
 void settings_projects_changed(int select_id) {
@@ -184,11 +248,13 @@ static void settings_move(SettingsScreen *s, size_t index, int delta) {
 static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
-    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_ssh);
-    json_free(s->projects); free(s->error); json_free(s->ssh); free(s->ssh_error);
+    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_ssh);
+    json_free(s->projects); free(s->error);
+    json_free(s->providers); free(s->providers_error);
+    json_free(s->ssh); free(s->ssh_error);
     screen_release(base);
 }
-/// A section's summary: its title and, when it can be added to, its ＋ New.
+/// A section's summary: its title, and its ＋ New when `new_action` is set.
 static void section_title(Doc *doc, int w, const char *title, int new_action) {
     int y = doc->y, h = px(20);
     RECT tr = { px(8), y, w - px(60), y + h };
@@ -205,7 +271,7 @@ static void section_title(Doc *doc, int w, const char *title, int new_action) {
 /// The SSH servers under the projects, as the web's settings sidebar lists them: label and project, and a tag on one whose
 /// commands run without approval.
 static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected) {
-    doc_space(doc, px(16));
+    doc_space(doc, px(8));
     char *why = ssh_unavailable();
     section_title(doc, w, "SSH servers", why ? 0 : ACT_NEW_SSH);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); return; }
@@ -234,6 +300,8 @@ static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected)
     if (s->ssh_loaded && !json_count(rows) && !s->ssh_error) doc_text(doc, px(8), w - px(16), "No SSH servers registered. \xEF\xBC\x8B New lets a project's sessions run commands on one, with approval.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->ssh_loaded) doc_loading(doc, 0, w, "Loading SSH servers\xE2\x80\xA6");
 }
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void settings_layout(Screen *base, Doc *doc) {
     SettingsScreen *s = (SettingsScreen *)base;
     int w = doc->width;
@@ -247,6 +315,44 @@ static void settings_layout(Screen *base, Doc *doc) {
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); doc_space(doc, px(8)); return; }
+    layout_projects(s, doc, w, selected);
+    // The providers sessions start on, below the projects as on the dashboard; a server without the routes shows none.
+    if (store_supports("settings_providers")) {
+        doc_space(doc, px(8));
+        section_title(doc, w, "Providers", store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
+        layout_providers(s, doc, w, selected);
+    }
+    layout_ssh(s, doc, w, selected);
+    doc_space(doc, px(8));
+}
+static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    if (s->providers_error) { doc_notice(doc, px(8), w - px(16), s->providers_error); doc_space(doc, px(8)); }
+    const Json *rows = provider_rows(s);
+    int h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        const char *label = json_str_nonempty(json_get(row, "label")), *binary = json_str(json_get(row, "binary"));
+        d->label = label ? xstrdup(label) : xstrfmt("Provider #%d", row_id(row));
+        d->binary = xstrdup(binary ? binary : "");
+        d->active = !json_bool_is(json_get(row, "active"), false);
+        d->login = json_bool_is(json_get(row, "hasLogin"), true);
+        d->endpoint = json_str_nonempty(json_get(row, "baseUrl")) != NULL;
+        char *id = xstrfmt("settings-provider:%d", row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, ACT_OPEN_PROVIDER, (intptr_t)i);
+    }
+    if (str_eq(selected, "settings-provider:new")) {
+        ProviderRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New provider"); d->binary = xstrdup("not saved yet"); d->unsaved = true; d->selected = true;
+        doc_custom(doc, 0, w, h, paint_provider_row, d, provider_row_free, 0, 0);
+    }
+    if (s->providers_loaded && !json_count(rows) && !s->providers_error) doc_text(doc, px(8), w - px(16), "No providers yet. Add one so sessions can be started.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->providers_loaded) doc_loading(doc, 0, w, "Loading providers\xE2\x80\xA6");
+    doc_space(doc, px(8));
+}
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     const Json *rows = settings_rows(s);
     for (size_t i = 0; i < json_count(rows); i++) {
@@ -270,7 +376,6 @@ static void settings_layout(Screen *base, Doc *doc) {
     }
     if (s->loaded && !json_count(rows) && !s->error) doc_text(doc, px(8), w - px(16), "No projects yet. \xEF\xBC\x8B New adds a repository sessions can be started against.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading projects\xE2\x80\xA6");
-    layout_ssh(s, doc, w, selected);
     doc_space(doc, px(8));
 }
 static void settings_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
@@ -310,6 +415,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_DEVICES: app_show_detail(connection_screen_new()); break;
     case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
     case ACT_OPEN_PROJECT: settings_open_row(s, (size_t)arg); break;
+    case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
+    case ACT_OPEN_PROVIDER: settings_open_provider(s, (size_t)arg); break;
     case ACT_NEW_SSH: app_show_detail(ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
     case ACT_OPEN_SSH: ssh_open_row(s, (size_t)arg); break;
     }
@@ -330,9 +437,14 @@ static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (!shown) return;
     if (!s->loaded && !s->req) projects_load(s);
+    if (!s->providers_loaded && !s->req_providers) providers_load(s);
     if (!s->ssh_loaded && !s->req_ssh) ssh_load(s);
 }
-static void settings_refresh(Screen *base) { SettingsScreen *s = (SettingsScreen *)base; request_cancel(&s->req); request_cancel(&s->req_ssh); settings_load(s); }
+static void settings_refresh(Screen *base) {
+    SettingsScreen *s = (SettingsScreen *)base;
+    request_cancel(&s->req); request_cancel(&s->req_ssh); settings_load(s);
+    request_cancel(&s->req_providers); providers_load(s);
+}
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     (void)ctrl; (void)shift;
     // Backspace and Escape leave Settings as ← Back to sessions does, so a form with changes is asked first.
@@ -349,6 +461,7 @@ Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
     s->projects = json_object(); s->ssh = json_object();
+    s->providers = json_object();
     g_settings = s;
     return &s->base;
 }
@@ -693,11 +806,12 @@ static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
     bool hovered = doc->hover >= 0 && doc_item(doc, doc->hover) == it;
-    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
+    // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
+    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
     bool on = s->bools[f];
     fill_round_rect(cv, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (on) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
+    if (on) draw_check_mark(cv, &b, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
     draw_text(cv, FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }

@@ -625,7 +625,7 @@ static void quote_bar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { RECT r =
 static void paint_task_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool checked = it->arg != 0;
     fill_round_rect(cv, rc, px(3), checked ? theme.accent : theme.elevated, checked ? theme.accent : blend(theme.text, theme.background, 0.35));
-    if (checked) draw_glyph(cv, 0xE73E, rc, FONT_ICON_SMALL, theme.white);
+    if (checked) draw_check_mark(cv, rc, theme.white);
 }
 
 // MARK: - Tables

@@ -316,6 +316,16 @@ static const ApiRoute ROUTES[] = {
     { "update_project", "PUT", "settings/projects/{id}" },
     { "delete_project", "DELETE", "settings/projects/{id}" },
     { "order_projects", "PUT", "settings/projects/order" },
+    // The providers sessions start on: every row, its connection and quota, its login, and a probe of an endpoint.
+    { "settings_providers", "GET", "settings/providers" },
+    { "create_provider", "POST", "settings/providers" },
+    { "update_provider", "PUT", "settings/providers/{id}" },
+    { "delete_provider", "DELETE", "settings/providers/{id}" },
+    { "test_provider", "POST", "settings/providers/test" },
+    { "provider_status", "GET", "settings/providers/{id}/status" },
+    { "provider_login", "POST", "settings/providers/{id}/login" },
+    { "provider_login_start", "POST", "settings/providers/{id}/login/start" },
+    { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
     // The SSH servers agents may run commands on, each held to one project; also for an admin token.
     { "settings_ssh_servers", "GET", "settings/ssh/servers" },
     { "create_ssh_server", "POST", "settings/ssh/servers" },
