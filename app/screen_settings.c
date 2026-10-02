@@ -1658,8 +1658,8 @@ static void ssh_layout(Screen *base, Doc *doc) {
     } else if (!ssh_db_offered()) {
         doc_text(doc, x, col, "This Briareus server does not store database logins yet: its API has no GET /settings/ssh/servers/{id}/db-credentials. Update the server, then reconnect.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     } else {
-        // The server's database, reached over SSH to it: what the project's SSH tab opens a database session with.
-        note(doc, x, col, "A MySQL login on this server, stored encrypted. The project's SSH tab opens a database session with it, running the mysql client on the server over SSH.");
+        // The server's database, reached through a tunnel over SSH to it.
+        note(doc, x, col, "A MySQL login on this server, stored encrypted. Clients reach the database through an SSH tunnel to this server, at the host and port below as the server itself sees them.");
         doc_space(doc, px(8));
         if (s->login_error) { char *text = xstrfmt("The stored login could not be read: %s", s->login_error); doc_notice_box(doc, x, col, text); free(text); doc_space(doc, px(16)); }
         ssh_row(s, doc, x, col, C_DBHOST, C_DBPORT);

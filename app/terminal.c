@@ -31,9 +31,6 @@ struct Term {
     int id, spawn;                 // the session, and the run of its program the pseudoconsole's events belong to
     char *key, *group, *label, *user, *host, *target;
     int port;
-    char *command, *answer;        // what runs on the server instead of its shell, and the password its prompt takes
-    bool answered;                 // the answer went, this run of the program
-    char tail[48];                 // the end of the output so far, for a prompt split over two reads
     HWND hwnd;
     Vt *vt;
     int cols, rows;
@@ -153,46 +150,12 @@ char *term_target_problem(const TermTarget *target) {
     return NULL;
 }
 
-/// One argument of a Windows command line, quoted as the C runtime splits it: backslashes stay as they are unless a quote
-/// follows them.
-static void append_win_arg(Str *b, const char *z) {
-    str_appendc(b, '"');
-    size_t slashes = 0;
-    for (const char *p = z; *p; p++) {
-        if (*p == '\\') { slashes++; continue; }
-        for (size_t i = 0; i < (*p == '"' ? slashes * 2 + 1 : slashes); i++) str_appendc(b, '\\');
-        slashes = 0;
-        str_appendc(b, *p);
-    }
-    for (size_t i = 0; i < slashes * 2; i++) str_appendc(b, '\\');
-    str_appendc(b, '"');
-}
 wchar_t *term_command_line(const wchar_t *client, const TermTarget *target) {
     char *exe = wide_to_utf8(client);
-    Str b; str_init(&b);
-    // A remote command gets a terminal of its own (-t), as an interactive client such as mysql needs.
-    str_appendf(&b, "\"%s\" %s-p %d -l %s -- %s", exe, target->command ? "-t " : "", target->port, target->user, target->host);
-    if (target->command) { str_appendc(&b, ' '); append_win_arg(&b, target->command); }
-    char *line = str_detach(&b);
+    char *line = xstrfmt("\"%s\" -p %d -l %s -- %s", exe, target->port, target->user, target->host);
     wchar_t *w = utf8_to_wide(line);
     free(exe); free(line);
     return w;
-}
-char *term_shell_quote(const char *z) {
-    Str b; str_init(&b);
-    str_appendc(&b, '\'');
-    for (const char *p = z ? z : ""; *p; p++) {
-        if (*p == '\'') str_appendz(&b, "'\\''");
-        else str_appendc(&b, *p);
-    }
-    str_appendc(&b, '\'');
-    return str_detach(&b);
-}
-char *term_mysql_command(const char *host, int port, const char *user) {
-    char *h = term_shell_quote(host), *u = term_shell_quote(user);
-    char *cmd = xstrfmt("mysql --host=%s --port=%d --user=%s --password", h, port, u);
-    free(h); free(u);
-    return cmd;
 }
 
 static bool file_exists(const wchar_t *path) {
@@ -312,29 +275,12 @@ static void process_ended(Term *t) {
     t->pc = NULL;
 }
 
-/// Types the session's answer once mysql asks for its password; output is watched only until then.
-static void answer_prompt(Term *t, const char *data, size_t len) {
-    static const char prompt[] = "Enter password:";
-    if (!t->answer || t->answered || !t->running) return;
-    size_t keep = sizeof t->tail - 1;
-    size_t have = strlen(t->tail), take = len > keep ? keep : len;
-    if (have + take > keep) { memmove(t->tail, t->tail + (have + take - keep), keep - take); have = keep - take; }
-    memcpy(t->tail + have, data + (len - take), take);
-    t->tail[have + take] = 0;
-    // The pseudoconsole's output can hold NULs; a prompt after one is still found.
-    for (size_t i = 0; i < have + take; i++) if (!t->tail[i]) t->tail[i] = ' ';
-    if (!strstr(t->tail, prompt)) return;
-    t->answered = true;
-    term_write(t, t->answer, strlen(t->answer));
-    term_write(t, "\r", 1);
-}
-
 static LRESULT CALLBACK events_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_TERM_DATA: {
         Chunk *c = (Chunk *)lp;
         Term *t = by_id(c->term);
-        if (t) { feed(t, c->data, c->len); answer_prompt(t, c->data, c->len); }
+        if (t) feed(t, c->data, c->len);
         free(c);
         return 0;
     }
@@ -377,7 +323,7 @@ static bool spawn(Term *t, char **error) {
         *error = xstrfmt("%s was not found. Install Git for Windows, or the OpenSSH Client under Settings \xE2\x86\x92 System \xE2\x86\x92 Optional features.", "ssh.exe");
         return false;
     }
-    TermTarget target = { t->key, t->group, t->label, t->user, t->host, t->port, t->command, t->answer };
+    TermTarget target = { t->key, t->group, t->label, t->user, t->host, t->port };
     char *problem = term_target_problem(&target);
     if (problem) { *error = problem; return false; }
 
@@ -427,7 +373,6 @@ static bool spawn(Term *t, char **error) {
     CloseHandle(pi.hThread);
 
     t->spawn = g_next_spawn++;
-    t->answered = false; t->tail[0] = 0;
     t->pc = pc; t->in_write = in_write; t->process = pi.hProcess;
     t->running = true; t->exited = false; t->exit_code = 0;
     ReaderArgs *a = xmalloc(sizeof *a);
@@ -873,14 +818,6 @@ bool term_is_window(HWND hwnd) {
 
 // MARK: - Sessions
 
-/// Frees a session's strings and itself; the password is wiped first.
-static void term_free(Term *t) {
-    if (t->answer) SecureZeroMemory(t->answer, strlen(t->answer));
-    free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
-    free(t->command); free(t->answer);
-    free(t);
-}
-
 Term *term_open(HWND parent, const TermTarget *target, char **error) {
     char *problem = term_target_problem(target);
     if (problem) { *error = problem; return NULL; }
@@ -892,8 +829,6 @@ Term *term_open(HWND parent, const TermTarget *target, char **error) {
     t->group = xstrdup(target->group ? target->group : "");
     t->label = xstrdup(!str_empty(target->label) ? target->label : target->host);
     t->user = xstrdup(target->user); t->host = xstrdup(target->host); t->port = target->port;
-    t->command = target->command ? xstrdup(target->command) : NULL;
-    t->answer = target->answer ? xstrdup(target->answer) : NULL;
     t->target = xstrfmt("%s@%s:%d", t->user, t->host, t->port);
     t->hwnd = CreateWindowExW(0, TERM_CLASS, L"", WS_CHILD | WS_VSCROLL | WS_CLIPSIBLINGS, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), t);
     theme_apply_control(t->hwnd);
@@ -905,7 +840,8 @@ Term *term_open(HWND parent, const TermTarget *target, char **error) {
     if (!spawn(t, error)) {
         DestroyWindow(t->hwnd);
         vt_free(t->vt);
-        term_free(t);
+        free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
+        free(t);
         return NULL;
     }
     if (g_count == g_cap) { g_cap = g_cap ? g_cap * 2 : 8; g_terms = xrealloc(g_terms, g_cap * sizeof *g_terms); }
@@ -946,7 +882,8 @@ void term_close(Term *t) {
     stop(t);
     DestroyWindow(t->hwnd);
     vt_free(t->vt);
-    term_free(t);
+    free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
+    free(t);
     notify();
 }
 
@@ -955,7 +892,8 @@ void term_shutdown(void) {
         Term *t = g_terms[--g_count];
         stop(t);
         vt_free(t->vt);
-        term_free(t);
+        free(t->key); free(t->group); free(t->label); free(t->user); free(t->host); free(t->target);
+        free(t);
     }
     g_active = NULL;
 }
@@ -981,10 +919,7 @@ const char *term_group(const Term *t) { return t->group; }
 const char *term_key(const Term *t) { return t->key; }
 const char *term_label(const Term *t) { return t->label; }
 const char *term_target(const Term *t) { return t->target; }
-void term_get_target(const Term *t, TermTarget *out) {
-    out->key = t->key; out->group = t->group; out->label = t->label; out->user = t->user; out->host = t->host; out->port = t->port;
-    out->command = t->command; out->answer = t->answer;
-}
+void term_get_target(const Term *t, TermTarget *out) { out->key = t->key; out->group = t->group; out->label = t->label; out->user = t->user; out->host = t->host; out->port = t->port; }
 const char *term_title(const Term *t) {
     // Until the remote shell names the window, ConPTY titles it with the client's path.
     const char *title = vt_title(t->vt);

@@ -10,21 +10,14 @@
 typedef struct Term Term;
 
 /// What a session connects to. `key` names the registered server, so a second click finds its open session; `group` is
-/// the project it belongs to, whose tab lists it. `command`, when set, is run on the server instead of its login shell
-/// (already quoted for the remote shell), and `answer` is typed once, followed by Enter, when the session first shows
-/// mysql's "Enter password:" prompt.
-typedef struct { const char *key, *group, *label, *user, *host; int port; const char *command, *answer; } TermTarget;
+/// the project it belongs to, whose tab lists it.
+typedef struct { const char *key, *group, *label, *user, *host; int port; } TermTarget;
 
 /// Why a target cannot be handed to ssh as it is (an empty or option-like host or user, a port out of range); NULL when
 /// it can. The caller frees it.
 char *term_target_problem(const TermTarget *target);
 /// The command line a session runs, for `client` (the full path of ssh.exe). The caller frees it.
 wchar_t *term_command_line(const wchar_t *client, const TermTarget *target);
-/// A shell word the server's shell reads back as `z` exactly: single-quoted. The caller frees it.
-char *term_shell_quote(const char *z);
-/// The remote command of a database session: the mysql client on the server, to `host`:`port` as `user`, asking for the
-/// password. The caller frees it.
-char *term_mysql_command(const char *host, int port, const char *user);
 /// The full path of one of OpenSSH's programs (ssh.exe, sftp.exe): Git for Windows' first, then Windows' OpenSSH Client,
 /// then PATH; false when none is installed.
 bool term_find_program(const wchar_t *name, wchar_t *out, DWORD n);

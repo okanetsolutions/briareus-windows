@@ -349,7 +349,7 @@ static const ApiRoute ROUTES[] = {
     { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },
     { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
-    // A server's database login, opened, for a database session over SSH to it.
+    // A server's database login, opened: the Settings form reads the username back from it.
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
 };
 const ApiRoute *api_route(const char *name) {

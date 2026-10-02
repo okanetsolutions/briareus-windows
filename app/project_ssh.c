@@ -2,8 +2,7 @@
 // down the left, and its open sessions as tabs over a terminal on the right. A click on a server opens an SSH session to it
 // (or returns to the open one). Sessions run this PC's OpenSSH client
 // (terminal.c) straight to the server, so its keys, agent and ~/.ssh/config apply, and they stay open while other screens
-// are shown. A server with a database login stored in Settings also has a database button: a session running the mysql
-// client on the server, signed in with that login (read through GET …/db-credentials and typed at its prompt).
+// are shown.
 #include "screens.h"
 #include "str.h"
 #include "terminal.h"
@@ -13,7 +12,7 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_SERVER, A_TAB, A_TAB_CLOSE, A_RECONNECT, A_CLOSE, A_DATABASE };
+enum { A_SERVER, A_TAB, A_TAB_CLOSE, A_RECONNECT, A_CLOSE };
 enum { LIST_W = 260, TAB_H = 30, TAB_CLOSE_W = 22, MAX_INSTANCES = 16 };
 
 struct ProjectSsh {
@@ -24,7 +23,6 @@ struct ProjectSsh {
     bool loaded, loading;
     char *error;
     Request *req;
-    Request *req_db;       // a database login being read, to open a database session with
     RECT term_rc;          // the terminal's area, in content coordinates
     Term *focused;         // the session last given the keyboard
 };
@@ -47,12 +45,6 @@ static char *server_name(const Json *row) {
     return user && *user ? xstrfmt("%s@%s", user, host ? host : "") : xstrdup(host ? host : "SSH server");
 }
 static int server_port(const Json *row) { int port = json_int_or(json_get(row, "port"), 22); return port > 0 ? port : 22; }
-static double server_id(const Json *row) { double id; return json_num(json_get(row, "id"), &id) && isfinite(id) ? id : 0; }
-static char *database_key(double id) { return xstrfmt("db:%.0f", id); }
-/// Whether a server offers a database session: a login is stored for it and this token may read it.
-static bool has_database(const Json *row) {
-    return server_id(row) > 0 && json_bool_is(json_get(row, "hasDbCredentials"), true) && store_supports("ssh_db_credentials");
-}
 
 /// The project's session on show: the active one when it is the project's, else its first.
 static Term *shown_term(ProjectSsh *p) {
@@ -107,64 +99,22 @@ void servers_ssh_changed(void) {
 
 // MARK: - Connecting
 
-static void open_target(ProjectSsh *p, const TermTarget *target, const char *name) {
-    char *error = NULL;
-    if (!term_open(pane_hwnd(p->host->pane), target, &error)) {
-        char *title = xstrfmt("Could not connect to %s", name);
-        app_alert(title, error ? error : "The session could not start.");
-        free(title);
-    }
-    free(error);
-}
 static void connect_row(ProjectSsh *p, const Json *row) {
     if (!json_is_object(row) || !p->host->pane) return;
     char *key = server_key(row), *name = server_name(row);
     Term *open = term_find(key);
     if (open) term_set_active(open);
     else {
-        TermTarget target = { key, p->repo, name, json_str(json_get(row, "username")), json_str(json_get(row, "host")), server_port(row), NULL, NULL };
-        open_target(p, &target, name);
+        TermTarget target = { key, p->repo, name, json_str(json_get(row, "username")), json_str(json_get(row, "host")), server_port(row) };
+        char *error = NULL;
+        if (!term_open(pane_hwnd(p->host->pane), &target, &error)) {
+            char *title = xstrfmt("Could not connect to %s", name);
+            app_alert(title, error ? error : "The session could not start.");
+            free(title);
+        }
+        free(error);
     }
     free(key); free(name);
-    relayout(p);
-}
-
-/// The login came back: a session to the server running mysql against its database, the password typed at its prompt.
-static void database_done(void *owner, Request *req) {
-    ProjectSsh *p = owner;
-    double id = 0;
-    json_num(json_get(req->args, "id"), &id);
-    const Json *row = NULL;
-    for (size_t i = 0; i < json_count(p->rows); i++) if (server_id(json_at(p->rows, i)) == id) row = json_at(p->rows, i);
-    const Json *login = req->ok ? json_get(req->result, "credentials") : NULL;
-    if (!row || !p->host->pane) return;
-    char *name = server_name(row);
-    const char *db_host = json_str_nonempty(json_get(login, "host")), *db_user = json_str_nonempty(json_get(login, "username"));
-    if (!db_host || !db_user) {
-        char *title = xstrfmt("Could not read the database login of %s", name);
-        char *why = req->ok ? xstrdup("The server's answer had no host or username.") : request_error_text(req);
-        app_alert(title, why);
-        free(title); free(why); free(name);
-        return;
-    }
-    const char *password = json_str(json_get(login, "password"));
-    int db_port = json_int_or(json_get(login, "port"), 3306);
-    char *key = database_key(id), *label = xstrfmt("%s \xC2\xB7 database", name);
-    char *command = term_mysql_command(db_host, db_port > 0 ? db_port : 3306, db_user);
-    TermTarget target = { key, p->repo, label, json_str(json_get(row, "username")), json_str(json_get(row, "host")), server_port(row), command, password ? password : "" };
-    open_target(p, &target, label);
-    free(key); free(label); free(command); free(name);
-    relayout(p);
-}
-static void connect_database(ProjectSsh *p, const Json *row) {
-    if (!json_is_object(row) || !p->host->pane || !has_database(row)) return;
-    char *key = database_key(server_id(row));
-    Term *open = term_find(key);
-    free(key);
-    if (open) { term_set_active(open); relayout(p); return; }
-    if (p->req_db) return;
-    Json *args = json_object(); json_set_num(args, "id", server_id(row));
-    store_call("ssh_db_credentials", args, 0, p, database_done, 0, &p->req_db);
     relayout(p);
 }
 static void close_term(Term *t) {
@@ -180,7 +130,7 @@ static void close_term(Term *t) {
 
 // MARK: - Layout
 
-typedef struct { char *name, *target; int sessions; bool live, enabled, database; } ServerRowData;
+typedef struct { char *name, *target; int sessions; bool live, enabled; } ServerRowData;
 static void server_row_free(void *v) { ServerRowData *d = v; free(d->name); free(d->target); free(d); }
 static void paint_server(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ServerRowData *d = it->data;
@@ -189,7 +139,6 @@ static void paint_server(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT icon = { x, rc->top, x + px(20), rc->bottom };
     draw_glyph(cv, 0xE7F4, &icon, FONT_ICON_SMALL, d->live ? theme.accent : theme.secondary);
     int right = rc->right - px(8);
-    if (d->database) right -= px(30);   // the database button, an item of its own over the row
     if (d->sessions) {
         // A dot and how many sessions are open: green while one is connected.
         char n[16]; snprintf(n, sizeof n, "%d", d->sessions);
@@ -204,14 +153,6 @@ static void paint_server(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->name, &t, FONT_SUBHEADLINE, d->enabled ? theme.ink : theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT sub = { tx, top + px(20), right, top + px(36) };
     draw_text(cv, d->target, &sub, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
-typedef struct { bool live, loading; } DatabaseButtonData;
-static void paint_database_button(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    DatabaseButtonData *d = it->data;
-    bool hovered = doc_item_hovered(doc, it);
-    if (hovered) fill_round_rect(cv, rc, px(6), theme.line, theme.line);
-    draw_glyph(cv, d->loading ? 0xE895 : 0xE1D3, rc, FONT_ICON_SMALL, d->live ? theme.accent : hovered ? theme.ink : theme.secondary);
 }
 
 static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_rect(cv, rc, theme.line); }
@@ -250,20 +191,7 @@ static void layout_list(ProjectSsh *p, Doc *doc, int x, int w) {
         d->sessions = (int)term_count_for(key);
         for (size_t t = 0; t < term_count(); t++) if (str_eq(term_key(term_at(t)), key) && term_running(term_at(t))) d->live = true;
         free(key);
-        d->database = has_database(row);
-        int top = doc->y;
         doc_custom(doc, x, w, px(46), paint_server, d, server_row_free, p->base + A_SERVER, (intptr_t)i);
-        if (d->database) {
-            // A database session to the server: the mysql client on it, signed in with the login stored in Settings.
-            DatabaseButtonData *b = xcalloc(1, sizeof *b);
-            char *db_key = database_key(server_id(row));
-            for (size_t t = 0; t < term_count(); t++) if (str_eq(term_key(term_at(t)), db_key) && term_running(term_at(t))) b->live = true;
-            free(db_key);
-            b->loading = p->req_db && server_id(row) == json_num_or(json_get(p->req_db->args, "id"), 0);
-            RECT br = { x + w - px(34), top + px(9), x + w - px(6), top + px(37) };
-            Item *it = doc_item(doc, doc_add(doc, &br, paint_database_button));
-            it->data = b; it->free_data = free; it->action = p->base + A_DATABASE; it->arg = (intptr_t)i; it->hand = true;
-        }
     }
     if (!json_count(p->rows) && !p->error) {
         doc_text(doc, x + px(6), w - px(12), "No SSH servers for this project. Register one under \xE2\x9A\x99 Settings.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
@@ -318,8 +246,7 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
         doc_space(doc, px(40));
         doc_empty_state(doc, rx, rw, 0xE7F4, "No open sessions",
                         "Click a server on the left to open an SSH session here. It connects from this PC straight to the server with your own "
-                        "OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply, and password prompts appear in the terminal. "
-                        "A server with a database login has a database button beside it that opens the mysql client on it.");
+                        "OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply, and password prompts appear in the terminal.");
     } else {
         layout_tabs(p, doc, rx, rw);
         doc_space(doc, px(8));
@@ -373,7 +300,6 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
     if (action < p->base || action >= p->base + PROJECT_SSH_ACTIONS) return false;
     switch (action - p->base) {
     case A_SERVER: connect_row(p, json_at(p->rows, (size_t)arg)); break;
-    case A_DATABASE: connect_database(p, json_at(p->rows, (size_t)arg)); break;
     case A_TAB: term_set_active(term_by_index(arg)); break;
     case A_TAB_CLOSE: close_term(term_by_index(arg)); break;
     case A_CLOSE: close_term(shown_term(p)); break;
@@ -405,7 +331,7 @@ void project_ssh_free(ProjectSsh *p) {
     term_remove_listener(terms_changed, p);
     // The sessions go on; their windows wait, hidden, for the tab to come back.
     for (size_t i = 0; i < term_count(); i++) if (str_eq(term_group(term_at(i)), p->repo)) term_place(term_at(i), NULL, false);
-    request_cancel(&p->req); request_cancel(&p->req_db);
+    request_cancel(&p->req);
     json_free(p->rows);
     free(p->repo); free(p->error);
     free(p);
