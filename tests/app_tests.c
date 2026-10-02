@@ -6,5 +6,6 @@ int main(void) {
     app_format_tests();
     app_common_tests();
     app_store_tests();
+    app_terminal_tests();
     return test_summary();
 }

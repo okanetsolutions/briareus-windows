@@ -349,6 +349,8 @@ static const ApiRoute ROUTES[] = {
     { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },
     { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
+    // A server's database login, opened, for a database session over SSH to it.
+    { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];

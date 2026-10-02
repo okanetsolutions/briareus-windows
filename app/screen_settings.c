@@ -1377,8 +1377,10 @@ Screen *project_settings_screen_new(const Json *row, const Json *defaults) {
 
 // MARK: - The SSH server form
 
-/// An SSH server's boxes, as the web's form has them, each on one of the tabs below.
-enum { S_LABEL, S_HOST, S_PORT, S_USER, S_KEY, S_COUNT };
+/// An SSH server's boxes, as the web's form has them, each on one of the tabs below. The database login under them is
+/// write-only on the server: the row says only whether one is stored (`hasDbCredentials`), so the username is read back
+/// through `GET …/db-credentials` and the password box stays empty, sent only when something is typed in it.
+enum { S_LABEL, S_HOST, S_PORT, S_USER, S_KEY, S_DBHOST, S_DBPORT, S_DBUSER, S_DBPASS, S_COUNT };
 static const FieldDef SSH_FIELDS[S_COUNT] = {
     [S_LABEL] = { "label", K_TEXT, "Label", "Production web server", "Leave empty to name it user@host:port.", 0, false },
     [S_HOST] = { "host", K_TEXT, "Host", "server.example.com", NULL, 0, true },
@@ -1386,16 +1388,28 @@ static const FieldDef SSH_FIELDS[S_COUNT] = {
     [S_USER] = { "username", K_TEXT, "Username", "deploy", NULL, 0, true },
     [S_KEY] = { "identityFile", K_TEXT, "Private key path", "/home/you/.ssh/id_ed25519",
         "Absolute path on the machine running Briareus; leave empty for its default SSH keys or agent. Password prompts are not supported.", 0, true },
+    [S_DBHOST] = { "dbHost", K_TEXT, "Database host", "127.0.0.1", "Where the database listens, as seen from this server itself.", 0, true },
+    [S_DBPORT] = { "dbPort", K_NUMBER, "Database port", "3306", NULL, 0, true },
+    [S_DBUSER] = { "dbUsername", K_TEXT, "Database username", "app", "Empty removes the stored login.", 0, true },
+    [S_DBPASS] = { "dbPassword", K_TEXT, "Database password", "", NULL, 0, true },
 };
 /// The two pickers: the project whose sessions may use the server, and whether its commands wait for approval.
 enum { SP_REPO, SP_MODE, SP_COUNT };
 static const char *const SSH_PICK_KEYS[SP_COUNT] = { "repo", "permissionMode" };
 
 /// The form's cells, two to a row: what the server is, how it is reached, and what it may run unasked.
-enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_ENABLED };
+enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_ENABLED, C_DBHOST, C_DBPORT, C_DBUSER, C_DBPASS };
 static const char *mode_title(const char *mode) { return str_eq(mode, "allow") ? "Don\xE2\x80\x99t ask anything" : "Ask for all commands"; }
 
-enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS };
+/// The form's tabs: the server itself, and the database login on it. The open one stays open from one server to the next.
+enum { ST_SERVER, ST_DATABASE, ST_COUNT };
+static const struct { const char *title; wchar_t glyph; } SSH_TABS[ST_COUNT] = {
+    [ST_SERVER] = { "SSH server", 0xE968 }, [ST_DATABASE] = { "Database", 0xE1D3 },
+};
+static int g_ssh_tab;
+static int ssh_field_tab(int f) { return f >= S_DBHOST ? ST_DATABASE : ST_SERVER; }
+
+enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS, ACT_SSH_TAB };
 enum { ID_SSH_FIELD = 2100 };
 
 typedef struct {
@@ -1407,10 +1421,13 @@ typedef struct {
     bool laid[S_COUNT], clipped[S_COUNT];
     bool enabled;          // Available to sessions on this project
     char *picks[SP_COUNT];
-    Request *req_save, *req_delete;
+    Request *req_save, *req_delete, *req_login;
     bool dirty, filling, shown, tab_dot;
     int focused, focus_first;
     char *error;
+    int error_tab;         // the tab whose field the last refused save was about
+    char *db_user;         // the stored database username, as read back; NULL until known
+    char *login_error;     // why it could not be read back
 } SshForm;
 
 static char *ssh_field_text(const Json *row, int f) {
@@ -1418,6 +1435,18 @@ static char *ssh_field_text(const Json *row, int f) {
     double n;
     if (SSH_FIELDS[f].kind == K_NUMBER) return json_num(v, &n) && isfinite(n) ? xstrfmt("%.10g", n) : xstrdup("");
     return xstrdup(json_str(v) ? json_str(v) : "");
+}
+/// A box's text as the form was filled: a saved server's database username is the one read back, never in its row.
+static char *ssh_text(SshForm *s, int f) {
+    if (f == S_DBUSER && !json_str(json_get(s->row, "dbUsername"))) return xstrdup(s->db_user ? s->db_user : "");
+    return ssh_field_text(s->row, f);
+}
+static bool ssh_has_login(SshForm *s) { return s->id && json_bool_is(json_get(s->row, "hasDbCredentials"), true); }
+/// The password box's cue says whether leaving it empty keeps a stored password.
+static void ssh_password_cue(SshForm *s) {
+    if (!s->edits[S_DBPASS]) return;
+    const char *cue = ssh_has_login(s) ? "stored; leave empty to keep it" : "empty = no password";
+    wchar_t *w = utf8_to_wide(cue); SendMessageW(s->edits[S_DBPASS], EM_SETCUEBANNER, TRUE, (LPARAM)w); free(w);
 }
 /// A picker's value as the row has it saved; a server without a mode asks, as the server's own default does.
 static const char *ssh_saved_pick(const Json *row, int p) {
@@ -1432,26 +1461,42 @@ static void ssh_fill(SshForm *s) {
     s->filling = true;
     for (int f = 0; f < S_COUNT; f++) {
         if (!s->edits[f]) continue;
-        char *text = ssh_field_text(s->row, f);
+        char *text = ssh_text(s, f);
         set_edit_text(s->edits[f], text);
         free(text);
     }
     s->filling = false;
     s->dirty = false;
+    ssh_password_cue(s);
 }
 
 /// The body a save sends; NULL with `*why` when a field cannot be sent as it is.
 static Json *ssh_body(SshForm *s, char **why) {
+    s->error_tab = ST_SERVER;
     Json *body = json_is_object(s->row) ? json_clone(s->row) : json_object();
     json_object_remove(body, "id");
+    json_object_remove(body, "hasDbCredentials");
+    json_object_remove(body, "dbUsername");
+    json_object_remove(body, "dbPassword");
     for (int f = 0; f < S_COUNT; f++) {
         if (!s->edits[f]) continue;
-        char *text = edit_text(s->edits[f]), *t = str_trim(text);
+        char *text = edit_text(s->edits[f]), *t = f == S_DBPASS ? xstrdup(text) : str_trim(text);
         free(text);
-        if (SSH_FIELDS[f].kind == K_NUMBER) {
+        if (f == S_DBUSER) {
+            // Sent only when it changed: the server keeps the password with a new username, and empty clears the login.
+            char *saved = ssh_text(s, f);
+            if (!str_eq(t, saved) && (*t || s->db_user || json_str(json_get(s->row, "dbUsername")))) json_set_str(body, "dbUsername", t);
+            free(saved);
+        } else if (f == S_DBPASS) {
+            // Left empty, the stored password stays.
+            if (*t) json_set_str(body, "dbPassword", t);
+        } else if (f == S_DBPORT && !*t) {
+            json_object_remove(body, "dbPort");   // the server's own default, 3306
+        } else if (SSH_FIELDS[f].kind == K_NUMBER) {
             char *end; long port = strtol(t, &end, 10);
             if (!*t || *end || port < 1 || port > 65535) {
-                *why = xstrdup("Enter a port from 1 to 65535.");
+                *why = xstrdup(f == S_DBPORT ? "Enter a database port from 1 to 65535." : "Enter a port from 1 to 65535.");
+                s->error_tab = ssh_field_tab(f);
                 free(t); json_free(body);
                 return NULL;
             }
@@ -1465,24 +1510,32 @@ static Json *ssh_body(SshForm *s, char **why) {
     if (str_empty(json_str(json_get(body, "repo")))) missing = "Choose the project whose sessions may use this server.";
     else if (str_empty(json_str(json_get(body, "host")))) missing = "Enter the host: a hostname or an IP address.";
     else if (str_empty(json_str(json_get(body, "username")))) missing = "Enter the username to connect as.";
+    else if (json_str_nonempty(json_get(body, "dbPassword"))) {
+        // A password goes with a username: the one typed, else the one stored.
+        const char *user = json_str(json_get(body, "dbUsername"));
+        if (user ? !*user : !s->db_user ? !ssh_has_login(s) : !*s->db_user) { missing = "A database password needs a database username."; s->error_tab = ST_DATABASE; }
+    }
     if (missing) { *why = xstrdup(missing); json_free(body); return NULL; }
     return body;
 }
 
-/// Whether the form holds a change not saved yet, for the dot after the tab's title.
-static bool ssh_form_changed(SshForm *s) {
-    if (s->enabled != ssh_saved_enabled(s->row)) return true;
-    for (int p = 0; p < SP_COUNT; p++)
-        if (!str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
+/// Whether a tab holds a change not saved yet, for the dot after its title.
+static bool ssh_tab_changed(SshForm *s, int tab) {
+    if (tab == ST_SERVER) {
+        if (s->enabled != ssh_saved_enabled(s->row)) return true;
+        for (int p = 0; p < SP_COUNT; p++)
+            if (!str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
+    }
     for (int f = 0; f < S_COUNT; f++) {
-        if (!s->edits[f]) continue;
-        char *now = edit_text(s->edits[f]), *saved = ssh_field_text(s->row, f);
+        if (!s->edits[f] || ssh_field_tab(f) != tab) continue;
+        char *now = edit_text(s->edits[f]), *saved = ssh_text(s, f);
         bool differs = !str_eq(now, saved);
         free(now); free(saved);
         if (differs) return true;
     }
     return false;
 }
+static bool ssh_form_changed(SshForm *s) { return ssh_tab_changed(s, ST_SERVER) || ssh_tab_changed(s, ST_DATABASE); }
 static void ssh_changed(SshForm *s) {
     if (s->filling) return;
     if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
@@ -1555,6 +1608,10 @@ static void ssh_cell(SshForm *s, Doc *doc, int x, int w, int cell) {
         break;
     }
     case C_MODE: ssh_select(s, doc, x, w, SP_MODE, "Permission mode", "Ask shows the exact command in the dashboard for approval. Don't ask anything sends every command immediately."); break;
+    case C_DBHOST: ssh_field(s, doc, x, w, S_DBHOST); break;
+    case C_DBPORT: ssh_field(s, doc, x, w, S_DBPORT); break;
+    case C_DBUSER: ssh_field(s, doc, x, w, S_DBUSER); break;
+    case C_DBPASS: ssh_field(s, doc, x, w, S_DBPASS); break;
     }
 }
 /// Two cells side by side, each half the width, as the web's `.field-row`; the row is as tall as its taller cell.
@@ -1574,19 +1631,36 @@ static void ssh_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(8));
     char *why = ssh_unavailable();
     if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
-    // One tab, drawn as the other settings forms draw theirs, with the dot when something is not saved yet.
+    // The tabs, drawn as the other settings forms draw theirs, each with the dot when something on it is not saved yet.
     int h = px(42), tx = x, ty = doc->y;
-    s->tab_dot = s->dirty && ssh_form_changed(s);
-    doc_tab(doc, &tx, &ty, x, x + col, h, 0xE968, s->tab_dot ? "SSH server \xE2\x80\xA2" : "SSH server", NULL, true, 0, 0);
+    s->tab_dot = false;
+    for (int t = 0; t < ST_COUNT; t++) {
+        bool changed = s->dirty && ssh_tab_changed(s, t);
+        s->tab_dot |= changed;
+        char *title = changed ? xstrfmt("%s \xE2\x80\xA2", SSH_TABS[t].title) : xstrdup(SSH_TABS[t].title);
+        doc_tab(doc, &tx, &ty, x, x + col, h, SSH_TABS[t].glyph, title, NULL, t == g_ssh_tab, ACT_SSH_TAB, t);
+        free(title);
+    }
     doc->y = ty + h;
     doc_rule(doc, x, col);
     doc_space(doc, px(18));
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
-    ssh_row(s, doc, x, col, C_LABEL, C_REPO);
-    ssh_row(s, doc, x, col, C_HOST, C_PORT);
-    ssh_row(s, doc, x, col, C_USER, C_KEY);
-    ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
-    note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
+    if (g_ssh_tab == ST_SERVER) {
+        ssh_row(s, doc, x, col, C_LABEL, C_REPO);
+        ssh_row(s, doc, x, col, C_HOST, C_PORT);
+        ssh_row(s, doc, x, col, C_USER, C_KEY);
+        ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
+        note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
+    } else {
+        // The server's database, reached over SSH to it: what the project's SSH tab opens a database session with.
+        note(doc, x, col, "A MySQL login on this server, stored encrypted. The project's SSH tab opens a database session with it, running the mysql client on the server over SSH.");
+        doc_space(doc, px(8));
+        if (s->login_error) { char *text = xstrfmt("The stored login could not be read: %s", s->login_error); doc_notice_box(doc, x, col, text); free(text); doc_space(doc, px(16)); }
+        ssh_row(s, doc, x, col, C_DBHOST, C_DBPORT);
+        ssh_row(s, doc, x, col, C_DBUSER, C_DBPASS);
+        if (s->req_login) note(doc, x, col, "Reading the stored login\xE2\x80\xA6");
+        else if (ssh_has_login(s)) note(doc, x, col, "A login is stored. Type a password only to change it.");
+    }
     doc_space(doc, px(40));
 }
 
@@ -1669,7 +1743,7 @@ static void ssh_ensure_controls(SshForm *s) {
     if (s->edits[0]) return;
     HWND owner = pane_hwnd(s->base.pane);
     for (int f = 0; f < S_COUNT; f++) {
-        DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (SSH_FIELDS[f].kind == K_NUMBER ? ES_NUMBER : 0);
+        DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (SSH_FIELDS[f].kind == K_NUMBER ? ES_NUMBER : 0) | (f == S_DBPASS ? ES_PASSWORD : 0);
         HWND e = CreateWindowExW(0, L"EDIT", L"", style, 0, 0, 10, 10, owner, (HMENU)(INT_PTR)(ID_SSH_FIELD + f), GetModuleHandleW(NULL), NULL);
         SendMessageW(e, WM_SETFONT, (WPARAM)font(SSH_FIELDS[f].mono ? FONT_MONO : FONT_BODY), TRUE);
         SendMessageW(e, EM_SETLIMITTEXT, SSH_FIELDS[f].kind == K_NUMBER ? 5 : 1024, 0);
@@ -1680,8 +1754,32 @@ static void ssh_ensure_controls(SshForm *s) {
     }
     // The edits take the row's text; what was picked or ticked before they existed stays as it is.
     s->filling = true;
-    for (int f = 0; f < S_COUNT; f++) { char *text = ssh_field_text(s->row, f); set_edit_text(s->edits[f], text); free(text); }
+    for (int f = 0; f < S_COUNT; f++) { char *text = ssh_text(s, f); set_edit_text(s->edits[f], text); free(text); }
     s->filling = false;
+    ssh_password_cue(s);
+}
+
+/// The stored database username, read back so the box shows it; the password that comes with it is not kept.
+static void ssh_login_done(void *owner, Request *req) {
+    SshForm *s = owner;
+    const Json *login = req->ok ? json_get(req->result, "credentials") : NULL;
+    if (!json_is_object(login)) { request_error_into(&s->login_error, req); pane_relayout(s->base.pane); return; }
+    set_string(&s->login_error, NULL);
+    const char *user = json_str(json_get(login, "username"));
+    // The box takes it unless something was typed in it meanwhile.
+    char *now = s->edits[S_DBUSER] ? edit_text(s->edits[S_DBUSER]) : xstrdup("");
+    bool untouched = !*now;
+    free(now);
+    set_string(&s->db_user, user ? user : "");
+    if (untouched && s->edits[S_DBUSER]) { s->filling = true; set_edit_text(s->edits[S_DBUSER], s->db_user); s->filling = false; }
+    // Filling the box is no edit; one typed meanwhile is now measured against the username read back.
+    if (s->dirty) ssh_changed(s);
+    pane_relayout(s->base.pane);
+}
+static void ssh_load_login(SshForm *s) {
+    if (s->db_user || s->req_login || s->login_error || !ssh_has_login(s) || !store_supports("ssh_db_credentials")) return;
+    Json *args = json_object(); json_set_num(args, "id", s->id);
+    store_call("ssh_db_credentials", args, 0, s, ssh_login_done, 0, &s->req_login);
 }
 
 /// The project or permission mode picker, as a menu under the pointer.
@@ -1718,6 +1816,7 @@ static void ssh_pick(SshForm *s, int p, POINT pt) {
 
 static void ssh_show_error(SshForm *s, char *text) {
     set_string(&s->error, text); free(text);
+    g_ssh_tab = s->error_tab;
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
 }
 static void ssh_save_done(void *owner, Request *req) {
@@ -1725,10 +1824,17 @@ static void ssh_save_done(void *owner, Request *req) {
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
     if (!json_is_object(row)) {
         char *text = request_error_or_unexpected(req);
+        // The server's own words: a database one opens the Database tab.
+        s->error_tab = str_icontains(text, "database") ? ST_DATABASE : ST_SERVER;
         ssh_show_error(s, text);
         return;
     }
     // The server's word on what was saved: an empty label is now user@host:port, and a new server has an id.
+    // The username just sent is now the stored one; a server without a login has none.
+    const Json *sent = json_get(req->args, "dbUsername");
+    if (!json_bool_is(json_get(row, "hasDbCredentials"), true)) set_string(&s->db_user, "");
+    else if (json_str(sent)) set_string(&s->db_user, json_str(sent));
+    else if (!s->db_user && !s->id) set_string(&s->db_user, "");
     json_free(s->row); s->row = json_clone(row);
     set_string(&s->error, NULL);
     s->id = ssh_row_id(row);
@@ -1749,7 +1855,7 @@ static void ssh_save(SshForm *s) {
 }
 static void ssh_delete_done(void *owner, Request *req) {
     SshForm *s = owner;
-    if (!req->ok) { ssh_show_error(s, request_error_text(req)); return; }
+    if (!req->ok) { s->error_tab = g_ssh_tab; ssh_show_error(s, request_error_text(req)); return; }
     s->dirty = false;
     app_clear_detail();
     settings_ssh_changed();
@@ -1769,11 +1875,14 @@ static void ssh_clone(SshForm *s) {
     char *why = NULL;
     Json *copy = ssh_body(s, &why);
     if (!copy) { ssh_show_error(s, why); return; }
-    // The copy carries what the form holds now, saved or not, without the label that named this one.
+    // The copy carries what the form holds now, saved or not, without the label that named this one. The database
+    // username goes with it; a stored password is never read back, so only one typed here does.
     json_set_str(copy, "label", "");
+    if (s->edits[S_DBUSER]) { char *text = edit_text(s->edits[S_DBUSER]), *t = str_trim(text); json_set_str(copy, "dbUsername", t); free(text); free(t); }
     s->dirty = false;
     Screen *clone = ssh_settings_screen_new(copy, NULL);
     ((SshForm *)clone)->focus_first = S_LABEL;
+    g_ssh_tab = ST_SERVER;
     json_free(copy);
     app_show_detail(clone);
 }
@@ -1782,10 +1891,10 @@ static void ssh_clone(SshForm *s) {
 
 static void ssh_destroy(Screen *base) {
     SshForm *s = (SshForm *)base;
-    request_cancel(&s->req_save); request_cancel(&s->req_delete);
+    request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_login);
     for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
     for (int p = 0; p < SP_COUNT; p++) free(s->picks[p]);
-    json_free(s->row); free(s->error);
+    json_free(s->row); free(s->error); free(s->db_user); free(s->login_error);
     screen_release(base);
 }
 static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -1797,6 +1906,12 @@ static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_SSH_TOGGLE: s->enabled = !s->enabled; ssh_changed(s); pane_relayout(base->pane); break;
     case ACT_SSH_PICK: if (arg >= 0 && arg < SP_COUNT) ssh_pick(s, (int)arg, pt); break;
     case ACT_SSH_FOCUS: if (arg >= 0 && arg < S_COUNT && s->edits[arg]) SetFocus(s->edits[arg]); break;
+    case ACT_SSH_TAB:
+        if (arg < 0 || arg >= ST_COUNT) break;
+        if (s->focused >= 0) SetFocus(pane_hwnd(base->pane));
+        g_ssh_tab = (int)arg;
+        pane_relayout(base->pane); pane_scroll_to_top(base->pane);
+        break;
     }
 }
 static void ssh_command(Screen *base, int id, int code, HWND control) {
@@ -1827,6 +1942,7 @@ static void ssh_visible(Screen *base, bool shown) {
     s->shown = shown;
     if (shown) {
         ssh_ensure_controls(s);
+        ssh_load_login(s);
         if (s->focus_first >= 0) { int f = s->focus_first; s->focus_first = -1; SetFocus(s->edits[f]); }
     } else for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) ShowWindow(s->edits[f], SW_HIDE);
 }
@@ -1859,7 +1975,7 @@ static Screen *ssh_settings_screen_new(const Json *row, const Json *defaults) {
             if (first) json_set_str(s->row, "repo", first);
         }
         if (!json_get(s->row, "port")) json_set_num(s->row, "port", 22);
-        if (!row) s->focus_first = S_LABEL;
+        if (!row) { s->focus_first = S_LABEL; g_ssh_tab = ST_SERVER; }
     }
     ssh_fill(s);
     return &s->base;

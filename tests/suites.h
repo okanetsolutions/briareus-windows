@@ -18,5 +18,6 @@ void sftp_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);
 void app_store_tests(void);
+void app_terminal_tests(void);
 
 #endif
