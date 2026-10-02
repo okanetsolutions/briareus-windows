@@ -1007,6 +1007,24 @@ static void test_a_run_already_serving_is_found_by_its_serve_link(void) {
     CHECK(!run_session_serving(j, 9, &id, &url)); CHECK(id == NULL && url == NULL);
     json_free(j);
 }
+static void test_a_branch_run_is_a_preview_with_no_pull_request(void) {
+    Json *j = json_parsez("{\"sessions\":["
+        "{\"id\":\"chat\",\"title\":\"Run: main\",\"createdAt\":\"2026-10-01T13:00:00Z\",\"serveLinks\":[{\"url\":\"https://chat.example.com\"}]},"
+        "{\"id\":\"pr\",\"preview\":true,\"startedOnPr\":7,\"createdAt\":\"2026-10-01T12:00:00Z\",\"serveLinks\":[{\"url\":\"https://pr.example.com\"}]},"
+        "{\"id\":\"old\",\"preview\":true,\"createdAt\":\"2026-10-01T10:00:00Z\",\"serveLinks\":[{\"url\":\"https://old.example.com\"}]},"
+        "{\"id\":\"new\",\"preview\":true,\"createdAt\":\"2026-10-01T11:00:00Z\",\"serveLinks\":null}]}");
+    CHECK_OWNED_STR(run_session_preparing_branch(j), "new");
+    char *id = NULL, *url = NULL;
+    CHECK(run_session_serving_branch(j, &id, &url));
+    CHECK_STR(id, "old"); CHECK_STR(url, "https://old.example.com"); free(id); free(url);
+    json_free(j);
+    j = json_parsez("[{\"id\":\"pr\",\"preview\":true,\"prStatus\":{\"number\":3},\"serveLinks\":[{\"url\":\"https://pr.example.com\"}]}]");
+    id = url = NULL;
+    CHECK(run_session_preparing_branch(j) == NULL);
+    CHECK(!run_session_serving_branch(j, &id, &url)); CHECK(id == NULL && url == NULL);
+    CHECK(run_session_preparing_branch(NULL) == NULL);
+    json_free(j);
+}
 static void test_the_run_log_reads_log_lines_past_its_cursor(void) {
     RunLog log; memset(&log, 0, sizeof log);
     Json *events = json_parsez("["
@@ -1105,6 +1123,7 @@ void board_tests(void) {
     test_run("run profiles are empty when none or unlisted", test_run_profiles_are_empty_when_none_or_unlisted);
     test_run("the run being prepared is the newest run session on the pull request", test_the_run_being_prepared_is_the_newest_run_session_on_the_pull_request);
     test_run("a run already serving is found by its serve link", test_a_run_already_serving_is_found_by_its_serve_link);
+    test_run("a branch run is a preview with no pull request", test_a_branch_run_is_a_preview_with_no_pull_request);
     test_run("the run log reads log lines past its cursor", test_the_run_log_reads_log_lines_past_its_cursor);
     test_run("the run log keeps its latest lines", test_the_run_log_keeps_its_latest_lines);
 }

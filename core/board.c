@@ -637,6 +637,31 @@ bool run_session_serving(const Json *sessions, int number, char **session_id_out
     return false;
 }
 
+/// A ▶ Run on a branch: a preview session with no pull request.
+static bool branch_run(const Session *s) { return json_bool_is(json_get(s->raw, "preview"), true) && session_pull_number(s) == 0 && session_id(s); }
+char *run_session_preparing_branch(const Json *sessions) {
+    const Json *rows = list_of(sessions, "sessions");
+    const char *best = NULL, *best_at = NULL;
+    for (size_t i = 0; i < json_count(rows); i++) {
+        Session s; s.raw = (Json *)json_at(rows, i);
+        const char *at = json_str_or(json_get(s.raw, "createdAt"), "");
+        if (!branch_run(&s)) continue;
+        if (!best || strcmp(at, best_at) > 0) { best = session_id(&s); best_at = at; }
+    }
+    return best ? xstrdup(best) : NULL;
+}
+bool run_session_serving_branch(const Json *sessions, char **session_id_out, char **url_out) {
+    const Json *rows = list_of(sessions, "sessions");
+    for (size_t i = 0; i < json_count(rows); i++) {
+        Session s; s.raw = (Json *)json_at(rows, i);
+        const char *url = json_str(json_get(json_at(json_get(s.raw, "serveLinks"), 0), "url"));
+        if (!branch_run(&s) || !safe_web_url(url)) continue;
+        *session_id_out = xstrdup(session_id(&s)); *url_out = xstrdup(url);
+        return true;
+    }
+    return false;
+}
+
 size_t run_log_add(RunLog *log, const char *text, bool error) {
     size_t added = 0;
     for (const char *p = text; p && *p;) {
