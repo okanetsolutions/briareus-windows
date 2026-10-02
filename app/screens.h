@@ -109,6 +109,21 @@ bool project_sftp_action(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 /// A right click: a file's or folder's menu. True when the item was the tab's.
 bool project_sftp_context(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 void servers_sftp_changed(void);
+/// A project's Database tab, laid out inside its board: the project's SSH servers down the left as a tree of their
+/// databases and tables, and the table clicked as a grid of its rows on the right, queried with the server's stored
+/// database login over SSH. Its items use `PROJECT_DB_ACTIONS` actions from `action_base` up.
+typedef struct ProjectDb ProjectDb;
+enum { PROJECT_DB_ACTIONS = 4 };
+ProjectDb *project_db_new(const char *repo, Screen *host, int action_base);
+void project_db_free(ProjectDb *p);
+/// Whether this token may read the SSH servers and their database logins (an Admin token, on a server that stores them).
+bool project_db_offered(void);
+void project_db_load(ProjectDb *p);
+void project_db_refresh(ProjectDb *p);
+/// Lays the tab out from `doc->y` down to the bottom of the pane.
+void project_db_layout(ProjectDb *p, Doc *doc, int w);
+/// True when the action was the tab's.
+bool project_db_action(ProjectDb *p, int action, intptr_t arg, POINT pt);
 /// A project's Forge tab, laid out inside its board: the servers of the Laravel Forge accounts available to the project
 /// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
 /// actions from `action_base` up.
