@@ -20,11 +20,17 @@
 #define SIDEBAR_WIDTH 268
 #define PANEL_WIDTH 272
 #define NARROW_WIDTH 1024
+// A session's browser docks as a column of its own on the right, beside the conversation, with a divider to drag.
+#define BROWSER_MIN_WIDTH 360
+#define DETAIL_MIN_WIDTH 380
+#define SPLITTER_WIDTH 6
 
 static HWND g_main;
 typedef HRESULT (WINAPI *TaskDialogIndirectFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
 static TaskDialogIndirectFn g_task_dialog;
-static Pane *g_pairing, *g_sidebar, *g_detail, *g_panel;
+static Pane *g_pairing, *g_sidebar, *g_detail, *g_panel, *g_browser;
+static int g_browser_width;    // the docked browser's width once the divider was dragged; 0 for the default
+static bool g_browser_expanded, g_dragging_splitter;
 static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
 
@@ -32,9 +38,27 @@ HWND app_window(void) { return g_main; }
 Pane *app_sidebar_pane(void) { return g_sidebar; }
 Pane *app_detail_pane(void) { return g_detail; }
 Pane *app_panel_pane(void) { return g_panel; }
+Pane *app_browser_pane(void) { return g_browser; }
 
 static bool is_narrow(void) { RECT rc; GetClientRect(g_main, &rc); return rc.right - rc.left < px(NARROW_WIDTH); }
-static bool panel_shown(void) { return g_panel && pane_root(g_panel) != NULL; }
+static bool browser_docked(void) { return g_browser && pane_root(g_browser) != NULL; }
+// The browser column takes the pull request panel's place while it is open.
+static bool panel_shown(void) { return g_panel && pane_root(g_panel) != NULL && !browser_docked(); }
+bool app_browser_dockable(void) { return g_main && !is_narrow() && !IsIconic(g_main); }
+bool app_browser_expanded(void) { return g_browser_expanded; }
+/// The docked browser's left edge, and the divider before it; false when it is not beside the detail.
+static bool browser_split(const RECT *rc, int *left, RECT *splitter) {
+    if (!g_connected_layout || !browser_docked() || is_narrow()) return false;
+    int sw = px(SIDEBAR_WIDTH), avail = rc->right - sw;
+    if (g_browser_expanded) { *left = sw; SetRectEmpty(splitter); return true; }
+    int gap = px(SPLITTER_WIDTH), lo = px(BROWSER_MIN_WIDTH), hi = avail - gap - px(DETAIL_MIN_WIDTH);
+    int bw = g_browser_width ? g_browser_width : avail * 45 / 100;
+    if (bw > hi) bw = hi;
+    if (bw < lo) bw = hi < lo ? avail / 2 : lo;
+    *left = rc->right - bw;
+    SetRect(splitter, *left - gap, rc->top, *left, rc->bottom);
+    return true;
+}
 
 static void back_to_sidebar(void *ctx) { (void)ctx; g_narrow_detail = false; PostMessageW(g_main, WM_SIZE, 0, 0); }
 
@@ -45,6 +69,7 @@ static void layout(void) {
         if (g_sidebar) pane_show(g_sidebar, false);
         if (g_detail) pane_show(g_detail, false);
         if (g_panel) pane_show(g_panel, false);
+        if (g_browser) pane_show(g_browser, false);
         return;
     }
     if (g_pairing) pane_show(g_pairing, false);
@@ -56,6 +81,7 @@ static void layout(void) {
         if (show_detail) { pane_set_bounds(g_detail, &rc); pane_show(g_detail, true); pane_show(g_sidebar, false); }
         else { pane_set_bounds(g_sidebar, &rc); pane_show(g_sidebar, true); pane_show(g_detail, false); }
         if (g_panel) pane_show(g_panel, false);
+        if (g_browser) pane_show(g_browser, false);
     } else {
         pane_set_root_back(g_detail, false, NULL, NULL);
         int sw = px(SIDEBAR_WIDTH), pw = panel_shown() ? px(PANEL_WIDTH) : 0;
@@ -64,6 +90,13 @@ static void layout(void) {
         pane_set_bounds(g_sidebar, &side); pane_set_bounds(g_detail, &main);
         pane_show(g_sidebar, true); pane_show(g_detail, true);
         if (g_panel) { pane_set_bounds(g_panel, &panel); pane_show(g_panel, pw > 0); }
+        int left; RECT splitter;
+        if (browser_split(&rc, &left, &splitter)) {
+            RECT browser = { left, rc.top, rc.right, rc.bottom };
+            pane_set_bounds(g_browser, &browser); pane_show(g_browser, true);
+            if (g_browser_expanded) pane_show(g_detail, false);
+            else { main.right = splitter.left; pane_set_bounds(g_detail, &main); }
+        } else if (g_browser) pane_show(g_browser, false);
     }
 }
 
@@ -73,6 +106,17 @@ static void paint_divider(Canvas *cv) {
     int x = px(SIDEBAR_WIDTH);
     draw_line(cv, x - 1, rc.top, x - 1, rc.bottom, theme.line);
     if (panel_shown()) { int px_ = rc.right - px(PANEL_WIDTH); draw_line(cv, px_, rc.top, px_, rc.bottom, theme.line); }
+    int left; RECT splitter;
+    if (browser_split(&rc, &left, &splitter) && !IsRectEmpty(&splitter)) {
+        int mx = (splitter.left + splitter.right) / 2;
+        draw_line(cv, mx, rc.top, mx, rc.bottom, g_dragging_splitter ? theme.accent : theme.line);
+    }
+}
+static bool over_splitter(int x, int y) {
+    RECT rc; GetClientRect(g_main, &rc);
+    int left; RECT splitter;
+    POINT pt = { x, y };
+    return browser_split(&rc, &left, &splitter) && PtInRect(&splitter, pt);
 }
 
 void app_set_panel(Screen *screen) {
@@ -82,6 +126,31 @@ void app_set_panel(Screen *screen) {
     pane_set_root(g_panel, screen);
     layout();
     InvalidateRect(g_main, NULL, TRUE);
+}
+
+void app_set_browser(Screen *screen) {
+    if (!g_browser) { if (screen) screen->vt->destroy(screen); return; }
+    Screen *root = pane_root(g_browser);
+    if (root && screen && screen->id && str_eq(root->id, screen->id)) { screen->vt->destroy(screen); return; }
+    if (!screen) g_browser_expanded = false;
+    pane_set_root(g_browser, screen);
+    layout();
+    InvalidateRect(g_main, NULL, TRUE);
+}
+void app_set_browser_expanded(bool expanded) {
+    if (g_browser_expanded == expanded) return;
+    g_browser_expanded = expanded;
+    layout();
+    if (g_browser) pane_relayout(g_browser);
+    InvalidateRect(g_main, NULL, TRUE);
+}
+/// The docked browser belongs to the conversation beside it: another page in the detail takes it away.
+static void drop_browser_unless(const char *detail_id) {
+    Screen *root = g_browser ? pane_root(g_browser) : NULL;
+    if (!root) return;
+    const char *session = root->id && str_has_prefix(root->id, "browser:") ? root->id + 8 : NULL;
+    if (session && detail_id && str_has_prefix(detail_id, "conversation:") && str_eq(detail_id + 13, session)) return;
+    app_set_browser(NULL);
 }
 
 static void rebuild_for_connection(void) {
@@ -97,10 +166,12 @@ static void rebuild_for_connection(void) {
         pane_set_root(g_sidebar, projects_screen_new());
         pane_set_root(g_detail, placeholder_screen_new());
         pane_set_root(g_panel, NULL);
+        pane_set_root(g_browser, NULL);
         pane_set_selected_id(g_sidebar, NULL);
         g_narrow_detail = false;
     } else {
-        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL);
+        browser_windows_close_all();
+        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL); pane_set_root(g_browser, NULL);
         pane_set_root(g_pairing, pairing_screen_new());
     }
     layout();
@@ -116,6 +187,7 @@ void app_show_detail(Screen *screen) {
         screen->vt->destroy(screen);
     } else {
         pane_set_root(g_panel, NULL);
+        drop_browser_unless(screen->id);
         pane_set_root(g_detail, screen);
     }
     pane_set_selected_id(g_sidebar, pane_root(g_detail) ? pane_root(g_detail)->id : NULL);
@@ -128,6 +200,7 @@ void app_clear_detail(void) {
     Screen *root = pane_root(g_detail);
     if (root && root->vt->can_leave && !root->vt->can_leave(root)) return;
     pane_set_root(g_panel, NULL);
+    app_set_browser(NULL);
     pane_set_root(g_detail, placeholder_screen_new());
     pane_set_selected_id(g_sidebar, NULL);
     g_narrow_detail = false;
@@ -201,6 +274,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_sidebar = pane_create(hwnd, true);
         g_detail = pane_create(hwnd, false);
         g_panel = pane_create(hwnd, true);
+        g_browser = pane_create(hwnd, true);
         store_init(hwnd);
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
@@ -233,6 +307,8 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_sidebar) { SendMessageW(pane_hwnd(g_sidebar), WM_THEMECHANGED, 0, 0); pane_relayout(g_sidebar); }
         if (g_detail) { SendMessageW(pane_hwnd(g_detail), WM_THEMECHANGED, 0, 0); pane_relayout(g_detail); }
         if (g_panel) { SendMessageW(pane_hwnd(g_panel), WM_THEMECHANGED, 0, 0); pane_relayout(g_panel); }
+        if (g_browser) { SendMessageW(pane_hwnd(g_browser), WM_THEMECHANGED, 0, 0); pane_relayout(g_browser); }
+        browser_windows_themed();
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     case WM_DPICHANGED: {
@@ -243,9 +319,29 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_sidebar) pane_relayout(g_sidebar);
         if (g_detail) pane_relayout(g_detail);
         if (g_panel) pane_relayout(g_panel);
+        if (g_browser) pane_relayout(g_browser);
         layout();
         return 0;
     }
+    case WM_SETCURSOR:
+        if ((HWND)wp == hwnd && LOWORD(lp) == HTCLIENT) {
+            POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+            if (g_dragging_splitter || over_splitter(pt.x, pt.y)) { SetCursor(LoadCursorW(NULL, IDC_SIZEWE)); return TRUE; }
+        }
+        break;
+    case WM_LBUTTONDOWN:
+        if (over_splitter((short)LOWORD(lp), (short)HIWORD(lp))) { g_dragging_splitter = true; SetCapture(hwnd); InvalidateRect(hwnd, NULL, FALSE); }
+        return 0;
+    case WM_MOUSEMOVE:
+        if (g_dragging_splitter) {
+            RECT rc; GetClientRect(hwnd, &rc);
+            int x = (short)LOWORD(lp), w = rc.right - x - px(SPLITTER_WIDTH) / 2;
+            if (w < px(BROWSER_MIN_WIDTH)) w = px(BROWSER_MIN_WIDTH);
+            if (w != g_browser_width) { g_browser_width = w; layout(); InvalidateRect(hwnd, NULL, FALSE); }
+        }
+        return 0;
+    case WM_LBUTTONUP: if (g_dragging_splitter) ReleaseCapture(); return 0;
+    case WM_CAPTURECHANGED: if (g_dragging_splitter) { g_dragging_splitter = false; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_CLOSE: {
         // Open SSH and SFTP sessions end with the app, so it asks first.
         size_t ssh = 0, sftp = sftp_live_count();
@@ -261,11 +357,12 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_DESTROY:
+        browser_windows_close_all();
         term_shutdown();
         sftp_shutdown();
         media_stop();
-        pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel);
-        g_pairing = g_sidebar = g_detail = g_panel = NULL;
+        pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel); pane_destroy(g_browser);
+        g_pairing = g_sidebar = g_detail = g_panel = g_browser = NULL;
         store_shutdown();
         PostQuitMessage(0);
         return 0;
