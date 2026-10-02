@@ -12,6 +12,7 @@
 
 Palette theme;
 static HFONT fonts[FONT_COUNT];
+static int edit_heights[FONT_COUNT];   // edit_line_height's answers, measured once per font
 static int current_dpi = 96;
 
 static COLORREF rgb_hex(unsigned hex) { return RGB((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF); }
@@ -105,6 +106,7 @@ static bool font_exists(const wchar_t *face) {
 void theme_set_dpi(int dpi) {
     current_dpi = dpi > 0 ? dpi : 96;
     for (int i = 0; i < FONT_COUNT; i++) if (fonts[i]) { DeleteObject(fonts[i]); fonts[i] = NULL; }
+    memset(edit_heights, 0, sizeof edit_heights);
     // The dashboard's type at its own pixel sizes: `--font-sans` is Segoe UI on Windows and `--font-mono` Cascadia Code.
     // Body text is 15px (`text-sm`), the smallest chrome 13px (`text-xs`), the sidebar rows 14px, metadata 12px and 11px.
     const wchar_t *ui = L"Segoe UI";
@@ -152,6 +154,17 @@ void theme_init(void) {
 int theme_dpi(void) { return current_dpi; }
 int px(int units) { return MulDiv(units, current_dpi, 96); }
 HFONT font(FontId id) { return fonts[id]; }
+int edit_line_height(FontId id) {
+    if (!edit_heights[id] && fonts[id]) {
+        HDC hdc = GetDC(NULL);
+        HFONT old = SelectObject(hdc, fonts[id]);
+        TEXTMETRICW tm;
+        if (GetTextMetricsW(hdc, &tm)) edit_heights[id] = tm.tmHeight;
+        SelectObject(hdc, old); ReleaseDC(NULL, hdc);
+    }
+    int dw = font_height(NULL, id);
+    return edit_heights[id] > dw ? edit_heights[id] : dw;
+}
 
 COLORREF theme_status_color(const char *status) {
     if (str_eq(status, "running") || str_eq(status, "queued") || str_eq(status, "preparing") || str_eq(status, "starting")) return theme.accent;
