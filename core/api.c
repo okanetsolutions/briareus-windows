@@ -295,6 +295,8 @@ static const ApiRoute ROUTES[] = {
     { "serve_pull", "POST", "pulls/{prNumber}/serve" },
     { "serve_branch", "POST", "branches/serve" },          // ▶ Run on a branch, the default one when `branch` is absent
     // Issues
+    { "issue", "GET", "issues/{issue}" },                  // one issue in full: body, type, projects, sub-issues, linked pulls
+    { "issue_timeline", "GET", "issues/{issue}/timeline" }, // its comments and events, a `page` of 100 at a time
     { "close_issue", "POST", "issues/{issue}/close" },      // `reason` completed or not_planned, and an optional `comment` posted first
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },

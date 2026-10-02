@@ -178,6 +178,7 @@ void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *r
     if (link->draft) { d->state = xstrdup("draft"); d->state_color = theme.warning; }
     else if (board_link_not_planned(link)) { d->state = xstrdup("not planned"); d->state_color = theme.warning; }
     else if (str_eq(link->state, "open")) { d->state = xstrdup("open"); d->state_color = theme.success; }
+    else if (str_eq(link->state, "merged")) { d->state = xstrdup("merged"); d->state_color = theme.accent; }
     else if (str_eq(link->state, "closed")) { d->state = xstrdup("closed"); d->state_color = theme.secondary; }
     int h = px(20);
     int i = doc_custom(doc, x, w, h, paint_linked, d, linked_free, action, arg);
