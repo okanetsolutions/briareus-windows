@@ -46,6 +46,9 @@ int theme_dpi(void);
 int px(int units);
 /// The GDI font, for the Edit controls that draw their own text.
 HFONT font(FontId id);
+/// How tall an Edit control must be for one line of `font(id)`: GDI's cell for the font, which is taller than the
+/// DirectWrite line `font_height` measures, so a box sized by that clips the descenders.
+int edit_line_height(FontId id);
 /// The `.dot` colours: running/queued in the accent, idle green, waiting amber, failed red, the rest grey.
 COLORREF theme_status_color(const char *status);
 /// `color` at `alpha` (0...1) over `background`, as the dashboard's translucent tints come out on its opaque surfaces.

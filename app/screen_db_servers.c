@@ -154,7 +154,7 @@ static void field(DbForm *s, Doc *doc, int x, int w, int f) {
     if (!row_has(s, FIELDS[f].key)) return;
     doc_text(doc, x, w, FIELDS[f].label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
-    int fh = font_height(doc->cv, FIELDS[f].mono ? FONT_MONO : FONT_BODY), h = px(36);
+    int fh = edit_line_height(FIELDS[f].mono ? FONT_MONO : FONT_BODY), h = px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     Item *it = doc_item(doc, doc_add(doc, &box, paint_box));
     it->data = s; it->arg = f; it->action = ACT_FOCUS;
