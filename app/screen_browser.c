@@ -431,6 +431,7 @@ static LRESULT CALLBACK view_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_BROWSER_FEED: drain_feed(s); return 0;
     case WM_ERASEBKGND: return 1;
+    case WM_SIZE: InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(hwnd, &ps); paint_view(s, hwnd, dc); EndPaint(hwnd, &ps); return 0; }
     case WM_SETFOCUS: case WM_KILLFOCUS: InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_GETDLGCODE: return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
@@ -516,7 +517,8 @@ static void register_view_class(void) {
     static bool registered;
     if (registered) return;
     WNDCLASSW wc; memset(&wc, 0, sizeof wc);
-    wc.style = CS_DBLCLKS; wc.lpfnWndProc = view_proc; wc.hInstance = GetModuleHandleW(NULL);
+    // Redrawn whole on a resize: the picture is centred, so the pixels it had are in the wrong place.
+    wc.style = CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW; wc.lpfnWndProc = view_proc; wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW); wc.lpszClassName = VIEW_CLASS;
     registered = RegisterClassW(&wc) != 0;
 }
@@ -704,7 +706,7 @@ static void browser_place(Screen *base, const RECT *content, int scroll_y) {
         RECT v = { content->left + m + s->view_rc.left, content->top + s->view_rc.top - scroll_y, content->left + m + s->view_rc.right, content->top + s->view_rc.bottom - scroll_y };
         RECT a = { content->left + m + s->address_rc.left, content->top + s->address_rc.top - scroll_y, content->left + m + s->address_rc.right, content->top + s->address_rc.bottom - scroll_y };
         RECT visible;
-        if (IntersectRect(&visible, &v, content)) MoveWindow(s->view, visible.left, visible.top, visible.right - visible.left, visible.bottom - visible.top, TRUE);
+        if (IntersectRect(&visible, &v, content)) SetWindowPos(s->view, NULL, visible.left, visible.top, visible.right - visible.left, visible.bottom - visible.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         MoveWindow(s->address, a.left, a.top, a.right - a.left, a.bottom - a.top, TRUE);
     }
     ShowWindow(s->view, on ? SW_SHOWNA : SW_HIDE);
