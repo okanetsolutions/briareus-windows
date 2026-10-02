@@ -229,7 +229,7 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
                             "provider_login", "provider_login_start", "provider_login_finish",
                             "settings_db_servers", "create_db_server", "update_db_server", "delete_db_server", "test_db_server",
 
-                            "settings_ssh_servers", "create_ssh_server", "update_ssh_server", "delete_ssh_server" };
+                            "settings_ssh_servers", "create_ssh_server", "update_ssh_server", "delete_ssh_server", "ssh_db_credentials" };
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) { if (!api_route(names[i])) printf("  no route for %s\n", names[i]); CHECK(api_route(names[i]) != NULL); }
     CHECK(api_route("operations") == NULL);
     free(bearer); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
