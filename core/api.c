@@ -349,6 +349,11 @@ static const ApiRoute ROUTES[] = {
     { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },
     { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
+    // The Laravel Forge accounts: an organization, its token (write-only) and the projects it serves; admin as well.
+    { "settings_forge_accounts", "GET", "settings/forge/accounts" },
+    { "create_forge_account", "POST", "settings/forge/accounts" },
+    { "update_forge_account", "PUT", "settings/forge/accounts/{id}" },
+    { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
