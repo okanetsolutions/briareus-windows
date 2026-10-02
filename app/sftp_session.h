@@ -88,5 +88,7 @@ void sftp_shutdown(void);
 /// Briareus.exe as ssh's SSH_ASKPASS: when the environment says so, asks the prompt on the command line in a dialog,
 /// prints the answer for ssh and returns true with the exit code; false when the app should start as usual.
 bool sftp_askpass_main(int *exit_code);
+/// This process's environment with ssh pointed at Briareus.exe for its prompts, for any ssh the app starts. Freed by the caller.
+wchar_t *sftp_child_environment(void);
 
 #endif

@@ -83,6 +83,9 @@ void pane_relayout(Pane *pane);
 void pane_repaint(Pane *pane);
 void pane_header_changed(Pane *pane);
 void pane_footer_changed(Pane *pane);
+/// Shows a child control (a footer's composer) at `rc`. A move redraws the control instead of keeping the pixels it had:
+/// the pane paints with Direct2D, so the bits Windows would carry along are stale background, not the control.
+void pane_place_control(HWND control, const RECT *rc);
 void pane_scroll_to_bottom(Pane *pane);
 void pane_scroll_to_top(Pane *pane);
 bool pane_at_bottom(Pane *pane);
