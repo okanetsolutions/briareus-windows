@@ -15,12 +15,13 @@ static char *form_id(int id) { return id > 0 ? xstrfmt("settings-db:%d", id) : x
 
 enum { F_LABEL, F_HOST, F_PORT, F_USERNAME, F_PASSWORD, F_COUNT };
 /// One of the form's boxes: the DbServer key it edits and the words around it.
-typedef struct { const char *key, *label, *cue; bool number, secret, mono; } FieldDef;
+typedef struct { const char *key, *label, *cue; bool number, secret, mono; const char *hint; } FieldDef;
 static const FieldDef FIELDS[F_COUNT] = {
-    [F_LABEL] = { "label", "Label", "defaults to host:port", false, false, false },
-    [F_HOST] = { "host", "Host", "127.0.0.1", false, false, true },
+    [F_LABEL] = { "label", "Label", "defaults to host:port", false, false, false, "A label left empty is host:port." },
+    [F_HOST] = { "host", "Host", "127.0.0.1", false, false, true, "Host and port are unique in the pool." },
     [F_PORT] = { "port", "Port", "3306", true, false, true },
-    [F_USERNAME] = { "username", "Username", "root", false, false, true },
+    [F_USERNAME] = { "username", "Username", "root", false, false, true,
+        "The user sessions connect as. It needs the rights to create the databases its projects name." },
     [F_PASSWORD] = { "password", "Password", "empty = no password", false, true, true },
 };
 static const char *const ENABLED_KEY = "enabled";
@@ -149,10 +150,10 @@ static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
     fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
 }
-/// A labelled box with its edit at (x, cursor); advances.
+/// A labelled box with its edit at (x, cursor), the hint behind a help icon beside the label; advances.
 static void field(DbForm *s, Doc *doc, int x, int w, int f) {
     if (!row_has(s, FIELDS[f].key)) return;
-    doc_text(doc, x, w, FIELDS[f].label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, FIELDS[f].label, theme.ink, FIELDS[f].hint);
     doc_space(doc, px(6));
     int fh = edit_line_height(FIELDS[f].mono ? FONT_MONO : FONT_BODY), h = px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
@@ -258,10 +259,7 @@ static void form_layout(Screen *base, Doc *doc) {
         }
         field(s, doc, x, col, F_LABEL);
         field_pair(s, doc, x, col, F_HOST, F_PORT, px(140));
-        note(doc, x, col, "Host and port are unique in the pool. A label left empty is host:port.");
-        doc_space(doc, px(8));
         field_pair(s, doc, x, col, F_USERNAME, F_PASSWORD, 0);
-        note(doc, x, col, "The user sessions connect as. It needs the rights to create the databases its projects name.");
         layout_test(s, doc, x, col);
         break;
     case T_POOL: layout_pool(s, doc, x, col); break;
