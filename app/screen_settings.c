@@ -1830,8 +1830,8 @@ static void ssh_save_done(void *owner, Request *req) {
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
     if (!json_is_object(row)) {
         char *text = request_error_or_unexpected(req);
-        // The server's own words: a database one opens the Database tab.
-        s->error_tab = str_icontains(text, "database") ? ST_DATABASE : ST_SERVER;
+        // The server's own words, on the tab in use; one about the database login or its key opens the Database tab.
+        s->error_tab = str_icontains(text, "database") || str_icontains(text, "credential") ? ST_DATABASE : g_ssh_tab;
         ssh_show_error(s, text);
         return;
     }
