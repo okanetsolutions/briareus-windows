@@ -109,6 +109,28 @@ bool project_sftp_action(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 /// A right click: a file's or folder's menu. True when the item was the tab's.
 bool project_sftp_context(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 void servers_sftp_changed(void);
+/// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
+/// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
+/// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
+typedef struct ProjectRun ProjectRun;
+enum { PROJECT_RUN_ACTIONS = 8 };
+ProjectRun *project_run_new(const char *repo, Screen *host, int action_base, UINT timer);
+void project_run_free(ProjectRun *p);
+/// Whether this token may serve a branch, on a server that can.
+bool project_run_offered(void);
+/// The tab was opened: reads the run profiles once, and serves the branch unless a Run already serves it.
+void project_run_open(ProjectRun *p);
+/// Lays the tab out from `doc->y` down to the bottom of the pane.
+void project_run_layout(ProjectRun *p, Doc *doc, int w);
+/// The branch and the served address under the title, and the profile picker, Reload, Open in browser and Delete.
+void project_run_header(ProjectRun *p, HeaderInfo *info);
+/// Shows the browser over the tab's area, or hides it when `shown` is false.
+void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool shown);
+/// Reloads the page, or serves the branch again when there is none.
+void project_run_refresh(ProjectRun *p);
+/// True when the timer or action was the tab's.
+bool project_run_timer(ProjectRun *p, UINT id);
+bool project_run_action(ProjectRun *p, int action, intptr_t arg, POINT pt);
 /// One project's settings, the dashboard's project form. `row` is the server's Project (NULL with `defaults` for a new
 /// one); `defaults` is what a new one starts from.
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);

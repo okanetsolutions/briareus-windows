@@ -286,7 +286,7 @@ static const Expected ROUTE_TABLE[] = {
     { "pull_files", "GET", "pulls/{pr}/files" }, { "pull_comments", "GET", "pulls/{pr}/comments" }, { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" }, { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" }, { "merge_pull", "POST", "pulls/{pr}/merge" },
-    { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "close_issue", "POST", "issues/{issue}/close" },
+    { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" }, { "close_issue", "POST", "issues/{issue}/close" },
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" }, { "start_session", "POST", "sessions" },
     { "review", "POST", "sessions", "review" }, { "qa", "POST", "sessions", "qa" },
     { "session", "GET", "sessions/{sessionId}" }, { "rename", "PATCH", "sessions/{sessionId}" }, { "delete", "DELETE", "sessions/{sessionId}" },

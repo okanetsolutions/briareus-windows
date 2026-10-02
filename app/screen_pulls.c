@@ -44,8 +44,9 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP };
-enum { TIMER_POLL = 1 };
+enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN };
+enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
 typedef struct {
@@ -54,9 +55,10 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_SSH or TAB_SFTP
+    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_RUN, TAB_SSH or TAB_SFTP
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
+    ProjectRun *run;   // the Run tab, on the default branch
     bool shown;
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
@@ -214,6 +216,7 @@ static void pulls_destroy(Screen *base) {
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
     project_ssh_free(s->ssh);
     project_sftp_free(s->sftp);
+    project_run_free(s->run);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
@@ -229,14 +232,15 @@ static void paint_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->label, &t, FONT_FOOTNOTE, d->active || hovered ? theme.ink : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     if (d->active) { RECT u = { rc->left, rc->bottom - px(2), rc->right, rc->bottom }; fill_rect(cv, &u, theme.accent); }
 }
-static void doc_tabs(Doc *doc, int w, const char *const *labels, size_t count, int active) {
+/// The tabs `labels`, each opening the tab named by the same entry of `ids`.
+static void doc_tabs(Doc *doc, int w, const char *const *labels, const int *ids, size_t count, int active) {
     int x = 0, h = px(34);
     for (size_t i = 0; i < count; i++) {
         int tw = px(8) * 2 + text_width(doc->cv, labels[i], FONT_FOOTNOTE) + px(2);
-        TabData *d = xcalloc(1, sizeof *d); d->label = xstrdup(labels[i]); d->active = (int)i == active;
+        TabData *d = xcalloc(1, sizeof *d); d->label = xstrdup(labels[i]); d->active = ids[i] == active;
         RECT rc = { x, doc->y, x + tw, doc->y + h };
         int it = doc_add(doc, &rc, paint_tab);
-        doc_item(doc, it)->data = d; doc_item(doc, it)->free_data = tab_free; doc_item(doc, it)->action = ACT_TAB; doc_item(doc, it)->arg = (intptr_t)i; doc_item(doc, it)->hand = true;
+        doc_item(doc, it)->data = d; doc_item(doc, it)->free_data = tab_free; doc_item(doc, it)->action = ACT_TAB; doc_item(doc, it)->arg = ids[i]; doc_item(doc, it)->hand = true;
         x += tw + px(4);
     }
     doc->y += h;
@@ -249,10 +253,16 @@ static void pulls_layout(Screen *base, Doc *doc) {
     size_t open = project_ssh_session_count(s->project.repo), files = project_sftp_session_count(s->project.repo);
     char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
     char *sftp_label = files ? xstrfmt("\xE2\x87\xB5 SFTP sessions %zu", files) : xstrdup("\xE2\x87\xB5 SFTP sessions");
-    const char *tabs[4] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues", ssh_label, sftp_label };
-    doc_tabs(doc, w, tabs, project_ssh_offered() ? 4 : 2, s->tab);
+    // Run, on the default branch, for a token that may serve one.
+    const char *tabs[5] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
+    int ids[5] = { TAB_PULLS, TAB_ISSUES };
+    size_t n = 2;
+    if (project_run_offered()) { tabs[n] = "\xE2\x96\xB6 Run"; ids[n++] = TAB_RUN; }
+    if (project_ssh_offered()) { tabs[n] = ssh_label; ids[n++] = TAB_SSH; tabs[n] = sftp_label; ids[n++] = TAB_SFTP; }
+    doc_tabs(doc, w, tabs, ids, n, s->tab);
     free(ssh_label); free(sftp_label);
     doc_space(doc, px(14));
+    if (s->tab == TAB_RUN) { project_run_layout(s->run, doc, w); return; }
     if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->tab == TAB_SFTP) { project_sftp_layout(s->sftp, doc, w); return; }
     if (s->error) { doc_notice(doc, 0, w, s->error); doc_space(doc, px(10)); }
@@ -341,6 +351,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     str_free(&sub);
+    if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }
     if (s->tab == TAB_SSH) {
         project_ssh_header(s->ssh, info);
         HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
@@ -391,13 +402,18 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
     if (project_ssh_action(s->ssh, action, arg, pt)) return;
     if (project_sftp_action(s->sftp, action, arg, pt)) return;
+    if (project_run_action(s->run, action, arg, pt)) return;
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
-    case ACT_TAB: s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) ? (int)arg : TAB_PULLS; pane_relayout(base->pane); pane_header_changed(base->pane); break;
+    case ACT_TAB:
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) ? (int)arg : TAB_PULLS;
+        if (s->tab == TAB_RUN) project_run_open(s->run);
+        pane_relayout(base->pane); pane_header_changed(base->pane);
+        break;
     case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
@@ -429,12 +445,14 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
 }
 static void pulls_timer(Screen *base, UINT id) {
     PullsScreen *s = (PullsScreen *)base;
+    if (project_run_timer(s->run, id)) return;
     if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
 }
 static void pulls_place(Screen *base, const RECT *content, int scroll_y) {
     PullsScreen *s = (PullsScreen *)base;
     project_ssh_place(s->ssh, content, scroll_y, s->shown && s->tab == TAB_SSH);
     project_sftp_place(s->sftp, content, scroll_y, s->shown && s->tab == TAB_SFTP);
+    project_run_place(s->run, content, scroll_y, s->shown && s->tab == TAB_RUN);
 }
 static void pulls_context(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
@@ -443,7 +461,7 @@ static void pulls_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
     s->shown = shown;
-    if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); }
+    if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); project_run_place(s->run, NULL, 0, false); }
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); }
 }
@@ -451,6 +469,7 @@ static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
     if (s->tab == TAB_SSH) { project_ssh_refresh(s->ssh); pane_relayout(base->pane); return; }
     if (s->tab == TAB_SFTP) { project_sftp_refresh(s->sftp); pane_relayout(base->pane); return; }
+    if (s->tab == TAB_RUN) { project_run_refresh(s->run); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     pulls_load(s, true);
@@ -469,6 +488,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->has_opening = !filters_restore(s);
     s->ssh = project_ssh_new(project->repo, &s->base, ACT_SSH_BASE);
     s->sftp = project_sftp_new(project->repo, &s->base, ACT_SFTP_BASE);
+    s->run = project_run_new(project->repo, &s->base, ACT_RUN_BASE, TIMER_BOARD_RUN_LOG);
     return &s->base;
 }
 

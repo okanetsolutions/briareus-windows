@@ -174,6 +174,11 @@ char *run_session_preparing(const Json *sessions, int number);
 /// A ▶ Run already serving pull request `number`: one of its sessions with a serve link. Sets new strings.
 bool run_session_serving(const Json *sessions, int number, char **session_id, char **url);
 
+/// The same two for a ▶ Run on a branch (the board's Run tab, on the default branch): its sessions are previews with no
+/// pull request.
+char *run_session_preparing_branch(const Json *sessions);
+bool run_session_serving_branch(const Json *sessions, char **session_id, char **url);
+
 /// The Run tab's log: the log lines of a session's transcript, one entry per line of text, the latest RUN_LOG_CAP.
 enum { RUN_LOG_CAP = 400 };
 typedef struct { char **lines; bool *errors; size_t count; double cursor; } RunLog;
