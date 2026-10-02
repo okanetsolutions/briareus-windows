@@ -1442,6 +1442,9 @@ static char *ssh_text(SshForm *s, int f) {
     return ssh_field_text(s->row, f);
 }
 static bool ssh_has_login(SshForm *s) { return s->id && json_bool_is(json_get(s->row, "hasDbCredentials"), true); }
+/// Whether the server stores a database login with each SSH server. One from before that drops the fields without a
+/// word, so the Database tab is offered only when its catalog names the route that reads a login back.
+static bool ssh_db_offered(void) { return store_supports("ssh_db_credentials"); }
 /// The password box's cue says whether leaving it empty keeps a stored password.
 static void ssh_password_cue(SshForm *s) {
     if (!s->edits[S_DBPASS]) return;
@@ -1478,8 +1481,9 @@ static Json *ssh_body(SshForm *s, char **why) {
     json_object_remove(body, "hasDbCredentials");
     json_object_remove(body, "dbUsername");
     json_object_remove(body, "dbPassword");
+    if (!ssh_db_offered()) { json_object_remove(body, "dbHost"); json_object_remove(body, "dbPort"); }
     for (int f = 0; f < S_COUNT; f++) {
-        if (!s->edits[f]) continue;
+        if (!s->edits[f] || (ssh_field_tab(f) == ST_DATABASE && !ssh_db_offered())) continue;
         char *text = edit_text(s->edits[f]), *t = f == S_DBPASS ? xstrdup(text) : str_trim(text);
         free(text);
         if (f == S_DBUSER) {
@@ -1651,6 +1655,8 @@ static void ssh_layout(Screen *base, Doc *doc) {
         ssh_row(s, doc, x, col, C_USER, C_KEY);
         ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
         note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
+    } else if (!ssh_db_offered()) {
+        doc_text(doc, x, col, "This Briareus server does not store database logins yet: its API has no GET /settings/ssh/servers/{id}/db-credentials. Update the server, then reconnect.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     } else {
         // The server's database, reached over SSH to it: what the project's SSH tab opens a database session with.
         note(doc, x, col, "A MySQL login on this server, stored encrypted. The project's SSH tab opens a database session with it, running the mysql client on the server over SSH.");
@@ -1841,6 +1847,13 @@ static void ssh_save_done(void *owner, Request *req) {
     free(s->base.id); s->base.id = ssh_form_id(s->id);
     pane_set_selected_id(app_sidebar_pane(), s->base.id);
     ssh_fill(s);
+    // A server that answers without the login's fields did not keep it: say so rather than show an empty form as saved.
+    bool sent_login = json_str(json_get(req->args, "dbUsername")) || json_str(json_get(req->args, "dbPassword"));
+    const Json *has = json_get(row, "hasDbCredentials");
+    if (sent_login && !json_bool_is(has, true) && !json_bool_is(has, false)) {
+        s->error_tab = ST_DATABASE;
+        ssh_show_error(s, xstrdup("The server saved the SSH server but not its database login: it does not store database logins yet. Update the Briareus server."));
+    }
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
     settings_ssh_changed();
 }
