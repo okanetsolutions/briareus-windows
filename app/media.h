@@ -1,5 +1,5 @@
 // What Spotify (or, without it, whichever app Windows lists as playing) is playing, and its ⏮ ⏯ ⏭, through the system's
-// media sessions (Windows.Media.Control), and its volume through Core Audio. No Spotify account or Web API: the desktop app publishes its session to Windows.
+// media sessions (Windows.Media.Control), and the Windows volume through Core Audio. No Spotify account or Web API: the desktop app publishes its session to Windows.
 #ifndef BRIAREUS_MEDIA_H
 #define BRIAREUS_MEDIA_H
 #include <windows.h>
@@ -13,8 +13,7 @@ typedef struct {
     bool spotify;                       // and it is Spotify's
     bool playing;
     bool can_previous, can_toggle, can_next;
-    bool has_volume;                    // the volume below can be read and set
-    bool app_volume;                    // it is the app's own, in the volume mixer, rather than the speakers'
+    bool has_volume;                    // the Windows volume below can be read and set
     bool muted;
     float volume;                       // 0...1
     char title[256], artist[256];
@@ -32,7 +31,7 @@ void media_set_active(bool active);
 void media_state(MediaState *out);
 /// Sends ⏮, ⏯ or ⏭ to the session shown; the state follows once the player has acted.
 void media_command(MediaCommand command);
-/// Sets the player's volume (0...1) and unmutes it: the app's own in the volume mixer, or the speakers' without one.
+/// Sets the Windows volume (0...1) of the default speakers and unmutes them.
 void media_set_volume(float level);
 
 #endif

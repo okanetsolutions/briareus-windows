@@ -100,7 +100,7 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
 }
 
 /// The player above the foot while a media session is open: Spotify's, or whichever app plays, with ⏮ ⏯ ⏭, and under
-/// them its volume: the speaker mutes, the slider drags or clicks to a level, and the wheel over the player steps it.
+/// them the Windows volume: the speaker mutes, the slider drags or clicks to a level, and the wheel over the player steps it.
 enum { PLAYER_ROW = 36, PLAYER_BUTTON = 26, VOLUME_ROW = 22, VOLUME_STEP = 5 };
 static int player_height(void) {
     MediaState st; media_state(&st);

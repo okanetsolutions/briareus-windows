@@ -1,15 +1,14 @@
 // The system's media sessions, read and driven on a thread of their own. MinGW ships no header for Windows.Media.Control,
 // so its interfaces are called through their vtables by slot, in the order of Windows.Media.winmd (as windows-rs lists
 // them), and combase's WinRT functions are looked up at run time. Asynchronous calls are waited on by polling IAsyncInfo,
-// which needs none of the parameterized interface ids a completion handler would. Volume is Core Audio's: the player
-// app's own sessions in the volume mixer, or the speakers' when none of its sessions can be told apart.
+// which needs none of the parameterized interface ids a completion handler would. Volume is Core Audio's: the Windows
+// volume of the default speakers, as the taskbar's speaker sets it.
 #define COBJMACROS
 #include "media.h"
 #include "str.h"
 #include <objbase.h>
 #include <initguid.h>
 #include <mmdeviceapi.h>
-#include <audiopolicy.h>
 #include <endpointvolume.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,87 +119,18 @@ static void *pick_session(void *manager, bool *spotify) {
 
 // MARK: - Volume
 
-/// True when the process's executable is the app a media session names: Spotify.exe for "Spotify.exe" or the Store's
-/// "SpotifyAB.SpotifyMusic_...!Spotify", chrome.exe for "Chrome", msedge.exe for "MSEdge".
-static bool process_is_app(DWORD pid, const char *app) {
-    if (!pid || !app[0]) return false;
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process) return false;
-    wchar_t path[MAX_PATH]; DWORD n = MAX_PATH;
-    bool ok = QueryFullProcessImageNameW(process, 0, path, &n) != 0;
-    CloseHandle(process);
-    if (!ok) return false;
-    const wchar_t *base = wcsrchr(path, L'\\'); base = base ? base + 1 : path;
-    char *name = wide_to_utf8(base);
-    if (!name) return false;
-    char *dot = strrchr(name, '.'); if (dot) *dot = 0;
-    bool match = strlen(name) >= 3 && str_icontains(app, name);
-    free(name);
-    return match;
-}
-
-/// The default speakers, or NULL.
-static IMMDevice *speakers(void) {
+/// The Windows volume of the default speakers, or NULL.
+static IAudioEndpointVolume *speaker_volume(void) {
     if (!g_devices && FAILED(CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (void **)&g_devices))) g_devices = NULL;
     IMMDevice *device = NULL;
-    if (g_devices && FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(g_devices, eRender, eMultimedia, &device))) device = NULL;
-    return device;
-}
-
-/// Calls `fn` on the volume of each of the app's sessions on the speakers; how many there were.
-static int each_app_volume(const char *app, void (*fn)(ISimpleAudioVolume *, void *), void *ctx) {
-    IMMDevice *device = speakers();
-    if (!device) return 0;
-    int found = 0;
-    IAudioSessionManager2 *manager = NULL;
-    IAudioSessionEnumerator *list = NULL;
-    if (SUCCEEDED(IMMDevice_Activate(device, &IID_IAudioSessionManager2, CLSCTX_ALL, NULL, (void **)&manager))
-        && SUCCEEDED(IAudioSessionManager2_GetSessionEnumerator(manager, &list))) {
-        int count = 0; IAudioSessionEnumerator_GetCount(list, &count);
-        for (int i = 0; i < count; i++) {
-            IAudioSessionControl *control = NULL; IAudioSessionControl2 *control2 = NULL; ISimpleAudioVolume *volume = NULL;
-            if (FAILED(IAudioSessionEnumerator_GetSession(list, i, &control))) continue;
-            DWORD pid = 0;
-            if (SUCCEEDED(IAudioSessionControl_QueryInterface(control, &IID_IAudioSessionControl2, (void **)&control2))) {
-                IAudioSessionControl2_GetProcessId(control2, &pid);
-                IAudioSessionControl2_Release(control2);
-            }
-            if (process_is_app(pid, app) && SUCCEEDED(IAudioSessionControl_QueryInterface(control, &IID_ISimpleAudioVolume, (void **)&volume))) {
-                fn(volume, ctx);
-                ISimpleAudioVolume_Release(volume);
-                found++;
-            }
-            IAudioSessionControl_Release(control);
-        }
-    }
-    if (list) IAudioSessionEnumerator_Release(list);
-    if (manager) IAudioSessionManager2_Release(manager);
-    IMMDevice_Release(device);
-    return found;
-}
-
-/// The speakers' own volume, when the app has no session of its own to set.
-static IAudioEndpointVolume *speaker_volume(void) {
-    IMMDevice *device = speakers();
-    if (!device) return NULL;
+    if (!g_devices || FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(g_devices, eRender, eMultimedia, &device))) return NULL;
     IAudioEndpointVolume *volume = NULL;
     if (FAILED(IMMDevice_Activate(device, &IID_IAudioEndpointVolume, CLSCTX_ALL, NULL, (void **)&volume))) volume = NULL;
     IMMDevice_Release(device);
     return volume;
 }
 
-static void read_app_volume(ISimpleAudioVolume *v, void *ctx) {
-    MediaState *st = ctx;
-    float level = 0; BOOL muted = FALSE;
-    ISimpleAudioVolume_GetMasterVolume(v, &level);
-    ISimpleAudioVolume_GetMute(v, &muted);
-    // A browser has a session per tab; the loudest one stands for the app, which is muted only when all of them are.
-    if (!st->has_volume || level > st->volume) st->volume = level;
-    st->muted = st->has_volume ? st->muted && muted : muted;
-    st->has_volume = true;
-}
-static void read_volume(const char *app, MediaState *st) {
-    if (each_app_volume(app, read_app_volume, st)) { st->app_volume = true; return; }
+static void read_volume(MediaState *st) {
     IAudioEndpointVolume *v = speaker_volume();
     if (!v) return;
     BOOL muted = FALSE;
@@ -210,23 +140,18 @@ static void read_volume(const char *app, MediaState *st) {
     IAudioEndpointVolume_Release(v);
 }
 
-static void set_app_level(ISimpleAudioVolume *v, void *ctx) { ISimpleAudioVolume_SetMasterVolume(v, *(float *)ctx, NULL); ISimpleAudioVolume_SetMute(v, FALSE, NULL); }
-static void set_app_mute(ISimpleAudioVolume *v, void *ctx) { ISimpleAudioVolume_SetMute(v, *(BOOL *)ctx, NULL); }
-
 /// Sets the volume (0...1), which also unmutes, or with a negative level flips the mute.
-static void apply_volume(const char *app, float level) {
+static void apply_volume(float level) {
+    IAudioEndpointVolume *v = speaker_volume();
+    if (!v) return;
     if (level >= 0) {
-        if (each_app_volume(app, set_app_level, &level)) return;
-        IAudioEndpointVolume *v = speaker_volume();
-        if (v) { IAudioEndpointVolume_SetMasterVolumeLevelScalar(v, level, NULL); IAudioEndpointVolume_SetMute(v, FALSE, NULL); IAudioEndpointVolume_Release(v); }
-        return;
+        IAudioEndpointVolume_SetMasterVolumeLevelScalar(v, level, NULL);
+        IAudioEndpointVolume_SetMute(v, FALSE, NULL);
+    } else {
+        BOOL muted = FALSE;
+        if (SUCCEEDED(IAudioEndpointVolume_GetMute(v, &muted))) IAudioEndpointVolume_SetMute(v, !muted, NULL);
     }
-    MediaState now; memset(&now, 0, sizeof now);
-    read_volume(app, &now);
-    if (!now.has_volume) return;
-    BOOL mute = !now.muted;
-    if (now.app_volume) each_app_volume(app, set_app_mute, &mute);
-    else { IAudioEndpointVolume *v = speaker_volume(); if (v) { IAudioEndpointVolume_SetMute(v, mute, NULL); IAudioEndpointVolume_Release(v); } }
+    IAudioEndpointVolume_Release(v);
 }
 
 static void read_state(void *manager, MediaState *st) {
@@ -234,8 +159,7 @@ static void read_state(void *manager, MediaState *st) {
     void *session = pick_session(manager, &st->spotify);
     if (!session) return;
     st->available = true;
-    char app[256]; get_string(session, SESSION_APP_ID, app, sizeof app);
-    read_volume(app, st);
+    read_volume(st);
     void *props = await(get_ptr(session, SESSION_PROPERTIES), true, 2000);
     if (props) {
         get_string(props, PROPS_TITLE, st->title, sizeof st->title);
@@ -258,15 +182,10 @@ static void read_state(void *manager, MediaState *st) {
 }
 
 static void run_command(void *manager, MediaCommand command, float level) {
+    if (command == MEDIA_MUTE || command == MEDIA_VOLUME) { apply_volume(command == MEDIA_MUTE ? -1 : level); return; }
     bool spotify;
     void *session = pick_session(manager, &spotify);
     if (!session) return;
-    if (command == MEDIA_MUTE || command == MEDIA_VOLUME) {
-        char app[256]; get_string(session, SESSION_APP_ID, app, sizeof app);
-        apply_volume(app, command == MEDIA_MUTE ? -1 : level);
-        release(session);
-        return;
-    }
     bool playing = false;
     if (command == MEDIA_TOGGLE) {
         void *playback = get_ptr(session, SESSION_PLAYBACK);
