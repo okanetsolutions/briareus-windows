@@ -364,7 +364,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     }
     if (s->tab == TAB_FORGE) {
         project_forge_header(s->forge, info);
-        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the Forge servers and their sites again";
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read it from Forge again";
         return;
     }
     if (s->tab == TAB_SFTP) {
@@ -464,7 +464,19 @@ static void pulls_place(Screen *base, const RECT *content, int scroll_y) {
     project_ssh_place(s->ssh, content, scroll_y, s->shown && s->tab == TAB_SSH);
     project_sftp_place(s->sftp, content, scroll_y, s->shown && s->tab == TAB_SFTP);
     project_run_place(s->run, content, scroll_y, s->shown && s->tab == TAB_RUN);
+    project_forge_place(s->forge, content, scroll_y, s->shown && s->tab == TAB_FORGE);
 }
+static void pulls_command(Screen *base, int id, int code, HWND control) {
+    (void)control;
+    project_forge_command(((PullsScreen *)base)->forge, id, code);
+}
+static bool pulls_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    (void)shift;
+    PullsScreen *s = (PullsScreen *)base;
+    return s->tab == TAB_FORGE && project_forge_key(s->forge, vk, ctrl);
+}
+/// The board gives way to another screen unless a Forge site's unsaved changes are kept.
+static bool pulls_can_leave(Screen *base) { return project_forge_can_leave(((PullsScreen *)base)->forge); }
 static void pulls_context(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
     project_sftp_context(s->sftp, action, arg, pt);
@@ -472,7 +484,7 @@ static void pulls_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
     s->shown = shown;
-    if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); project_run_place(s->run, NULL, 0, false); }
+    if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); project_run_place(s->run, NULL, 0, false); project_forge_place(s->forge, NULL, 0, false); }
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); }
 }
@@ -490,6 +502,7 @@ static void pulls_activated(Screen *base, bool active) { if (active) pulls_visib
 static const ScreenVTable pulls_vt = {
     .destroy = pulls_destroy, .layout = pulls_layout, .header = pulls_header, .action = pulls_action, .timer = pulls_timer,
     .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated, .place = pulls_place, .context = pulls_context,
+    .command = pulls_command, .key = pulls_key, .can_leave = pulls_can_leave,
 };
 Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);

@@ -113,7 +113,7 @@ void servers_sftp_changed(void);
 /// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
 /// actions from `action_base` up.
 typedef struct ProjectForge ProjectForge;
-enum { PROJECT_FORGE_ACTIONS = 8 };
+enum { PROJECT_FORGE_ACTIONS = 16 };
 ProjectForge *project_forge_new(const char *repo, Screen *host, int action_base);
 void project_forge_free(ProjectForge *p);
 /// Whether this token may read the Forge accounts and, through them, their servers and sites (an Admin token).
@@ -125,9 +125,32 @@ void project_forge_refresh(ProjectForge *p);
 void project_forge_layout(ProjectForge *p, Doc *doc, int w);
 /// The server on show in the line under the title.
 void project_forge_header(ProjectForge *p, HeaderInfo *info);
-/// One Forge site, opened from the Forge tab: its Overview, Deploy script and Environment (.env), the last two editable.
-/// `account` is the Forge account the server is read with, `server` the ForgeServer and `site` the ForgeSite as listed.
-Screen *forge_site_screen_new(const char *repo, double account, const Json *server, const Json *site);
+/// Shows the open site's editors over their area, or hides them when `shown` is false.
+void project_forge_place(ProjectForge *p, const RECT *content, int scroll_y, bool shown);
+/// An editor's notification, Ctrl+S, and whether the open site's unsaved changes may be dropped: true when handled.
+bool project_forge_command(ProjectForge *p, int id, int code);
+bool project_forge_key(ProjectForge *p, WPARAM vk, bool ctrl);
+bool project_forge_can_leave(ProjectForge *p);
+/// One Forge site open inside the Forge tab, in place of its server's sites: its Overview, Deploy script and Environment
+/// (.env), the last two editable. `account` is the Forge account the server is read with, `server` the ForgeServer and
+/// `site` the ForgeSite as listed. Its items and header buttons use `FORGE_SITE_ACTIONS` actions from `action_base` up.
+typedef struct ForgeSite ForgeSite;
+enum { FORGE_SITE_ACTIONS = 8 };
+ForgeSite *forge_site_new(Screen *host, int action_base, double account, const Json *server, const Json *site);
+void forge_site_free(ForgeSite *v);
+/// Lays the site out from `doc->y` down, in the column from `x` across `w`.
+void forge_site_layout(ForgeSite *v, Doc *doc, int x, int w);
+/// The open editor's Save.
+void forge_site_header(ForgeSite *v, HeaderInfo *info);
+void forge_site_place(ForgeSite *v, const RECT *content, int scroll_y, bool shown);
+/// Reads the open tab from Forge again.
+void forge_site_refresh(ForgeSite *v);
+/// Each true when it was the site's; all take a NULL site.
+bool forge_site_action(ForgeSite *v, int action, intptr_t arg);
+bool forge_site_command(ForgeSite *v, int id, int code);
+bool forge_site_key(ForgeSite *v, WPARAM vk, bool ctrl);
+/// True unless unsaved changes are kept when asked.
+bool forge_site_can_leave(ForgeSite *v);
 /// True when the action was the tab's.
 bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run

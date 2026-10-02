@@ -10,7 +10,8 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_SERVER, A_OPEN_SITE, A_SITE_PAGE };
+// The site open in the tab takes the next FORGE_SITE_ACTIONS, from A_SITE_VIEW up.
+enum { A_SERVER, A_OPEN_SITE, A_SITE_PAGE, A_BACK, A_SITE_VIEW = 8 };
 enum { LIST_W = 280, MAX_PAGES = 20 };
 
 struct ProjectForge {
@@ -30,6 +31,7 @@ struct ProjectForge {
     int site_pages;
     char *sites_error;
     Request *req_sites;
+    ForgeSite *site;       // the site open in place of the server's list, if any
 };
 
 bool project_forge_offered(void) { return store_supports("settings_forge_accounts") && store_supports("forge_servers") && store_supports("forge_sites"); }
@@ -156,6 +158,8 @@ static void sites_load(ProjectForge *p) {
     sites_next(p, server, NULL);
 }
 void project_forge_refresh(ProjectForge *p) {
+    // With a site open, ⟳ reads the site's open tab again.
+    if (p->site) { forge_site_refresh(p->site); return; }
     request_cancel(&p->req); request_cancel(&p->req_sites);
     json_free(p->incoming); p->incoming = NULL;
     json_free(p->sites); p->sites = json_object();
@@ -319,9 +323,22 @@ static void layout_site(ProjectForge *p, Doc *doc, int x, int w, const Json *sit
 
 /// The server on show and its sites, the project's first.
 static void layout_server(ProjectForge *p, Doc *doc, int x, int w) {
+    const Json *server = selected_server(p);
+    // A site open takes the column, under a way back to the server's sites.
+    if (p->site && server) {
+        const char *name = json_str_nonempty(json_get(server, "name"));
+        char *back = xstrfmt("\xE2\x80\xB9 All sites on %s", name ? name : "this server");
+        int bw = text_width(doc->cv, back, FONT_FOOTNOTE) + px(4);
+        RECT br = { x, doc->y, x + bw, doc->y + px(22) };
+        int bi = doc_text_at(doc, &br, back, FONT_FOOTNOTE, theme.accent, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        doc_item(doc, bi)->action = p->base + A_BACK; doc_item(doc, bi)->hand = true;
+        free(back);
+        doc->y = br.bottom + px(8);
+        forge_site_layout(p->site, doc, x, w);
+        return;
+    }
     // A wide pane would spread each label and its value apart; the column stops at a reading width.
     if (w > px(820)) w = px(820);
-    const Json *server = selected_server(p);
     if (!server) {
         if (p->loaded && json_count(p->servers)) doc_empty_state(doc, x, w, 0xE753, "No server picked", "Click a server on the left to see its Forge sites.");
         return;
@@ -385,6 +402,14 @@ void project_forge_layout(ProjectForge *p, Doc *doc, int w) {
 void project_forge_header(ProjectForge *p, HeaderInfo *info) {
     const Json *server = selected_server(p);
     if (!server) return;
+    if (p->site) {
+        char *detail = server_detail(server);
+        const char *name = json_str_nonempty(json_get(server, "name"));
+        snprintf(info->subtitle, sizeof info->subtitle, "Forge %s \xC2\xB7 %s", name ? name : "server", detail);
+        free(detail);
+        forge_site_header(p->site, info);
+        return;
+    }
     const char *name = json_str_nonempty(json_get(server, "name"));
     const Json *sites = json_get(p->sites, p->selected);
     char *detail = server_detail(server);
@@ -395,13 +420,24 @@ void project_forge_header(ProjectForge *p, HeaderInfo *info) {
 
 // MARK: - Actions
 
+/// Closes the open site, unless its unsaved changes are kept; true when none is open any more.
+static bool close_site(ProjectForge *p) {
+    if (!p->site) return true;
+    if (!forge_site_can_leave(p->site)) return false;
+    forge_site_free(p->site);
+    p->site = NULL;
+    return true;
+}
 bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt) {
     (void)pt;
     if (action < p->base || action >= p->base + PROJECT_FORGE_ACTIONS) return false;
+    if (forge_site_action(p->site, action, arg)) return true;
     switch (action - p->base) {
+    case A_BACK: if (close_site(p)) { relayout(p); if (p->host->pane) pane_scroll_to_top(p->host->pane); } break;
     case A_SERVER: {
         const Json *row = json_at(p->servers, (size_t)arg);
         if (!json_is_object(row)) break;
+        if (!close_site(p)) break;
         char *key = server_key(row);
         if (!str_eq(key, p->selected)) {
             // The sites of the server left behind stop being read.
@@ -417,8 +453,10 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt) {
     }
     case A_SITE_PAGE: {
         const Json *server = selected_server(p), *site = json_at(json_get(p->sites, p->selected), (size_t)arg);
-        if (json_is_object(server) && json_is_object(site))
-            app_push_detail(forge_site_screen_new(p->repo, json_num_or(json_get(server, "_account"), 0), server, site));
+        if (!json_is_object(server) || !json_is_object(site) || !close_site(p)) break;
+        p->site = forge_site_new(p->host, p->base + A_SITE_VIEW, json_num_or(json_get(server, "_account"), 0), server, site);
+        relayout(p);
+        if (p->host->pane) pane_scroll_to_top(p->host->pane);
         break;
     }
     case A_OPEN_SITE: {
@@ -433,6 +471,13 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt) {
     return true;
 }
 
+void project_forge_place(ProjectForge *p, const RECT *content, int scroll_y, bool shown) {
+    if (p->site) forge_site_place(p->site, content, scroll_y, shown);
+}
+bool project_forge_command(ProjectForge *p, int id, int code) { return forge_site_command(p->site, id, code); }
+bool project_forge_key(ProjectForge *p, WPARAM vk, bool ctrl) { return forge_site_key(p->site, vk, ctrl); }
+bool project_forge_can_leave(ProjectForge *p) { return forge_site_can_leave(p->site); }
+
 // MARK: - Lifetime
 
 ProjectForge *project_forge_new(const char *repo, Screen *host, int action_base) {
@@ -445,6 +490,7 @@ ProjectForge *project_forge_new(const char *repo, Screen *host, int action_base)
 void project_forge_free(ProjectForge *p) {
     if (!p) return;
     request_cancel(&p->req); request_cancel(&p->req_sites);
+    forge_site_free(p->site);
     json_free(p->accounts); json_free(p->servers); json_free(p->sites); json_free(p->incoming);
     free(p->repo); free(p->error); free(p->selected); free(p->sites_error);
     free(p);
