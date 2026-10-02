@@ -109,6 +109,24 @@ bool project_sftp_action(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 /// A right click: a file's or folder's menu. True when the item was the tab's.
 bool project_sftp_context(ProjectSftp *p, int action, intptr_t arg, POINT pt);
 void servers_sftp_changed(void);
+/// A project's Forge tab, laid out inside its board: the servers of the Laravel Forge accounts available to the project
+/// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
+/// actions from `action_base` up.
+typedef struct ProjectForge ProjectForge;
+enum { PROJECT_FORGE_ACTIONS = 8 };
+ProjectForge *project_forge_new(const char *repo, Screen *host, int action_base);
+void project_forge_free(ProjectForge *p);
+/// Whether this token may read the Forge accounts and, through them, their servers and sites (an Admin token).
+bool project_forge_offered(void);
+/// Reads the accounts and their servers once; the refresh reads them, and the sites, again.
+void project_forge_load(ProjectForge *p);
+void project_forge_refresh(ProjectForge *p);
+/// Lays the tab out from `doc->y` down to the bottom of the pane.
+void project_forge_layout(ProjectForge *p, Doc *doc, int w);
+/// The server on show in the line under the title.
+void project_forge_header(ProjectForge *p, HeaderInfo *info);
+/// True when the action was the tab's.
+bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
 /// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
 /// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
