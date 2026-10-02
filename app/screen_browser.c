@@ -1,7 +1,9 @@
 // A session's shared browser, as the dashboard's browser panel: the headless Chromium on the server that the session's
 // agent drives through Playwright, shown here as the frames its event stream sends and driven with this window's mouse
-// and keyboard (`POST …/browser/input`), on the same tabs at the same time. The header goes back, forward, reloads, opens
-// and closes tabs and switches the browser on or off; the tabs and an address field sit over the picture.
+// and keyboard (`POST …/browser/input`), on the same tabs at the same time. As Claude's browser pane, it docks as a column
+// beside the conversation under a compact bar of its own (the tabs and ＋, pop out, ⋯, expand and close, then back, forward,
+// reload and the address), and pops out into a window of its own that can dock again.
+#include "resource.h"
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -12,7 +14,8 @@
 #include <string.h>
 #include <wincodec.h>
 
-enum { ACT_START = 1000, ACT_STOP, ACT_BACK, ACT_FORWARD, ACT_RELOAD, ACT_NEW_TAB, ACT_CLOSE_TAB, ACT_TAB };
+enum { ACT_START = 1000, ACT_STOP, ACT_BACK, ACT_FORWARD, ACT_RELOAD, ACT_NEW_TAB, ACT_CLOSE_TAB, ACT_TAB, ACT_MORE, ACT_EXPAND,
+       ACT_DETACH, ACT_DOCK, ACT_CLOSE_PANE };
 enum { TIMER_POLL = 1, TIMER_RECONNECT = 2 };
 enum { ID_ADDRESS = 401 };
 #define WM_BROWSER_FEED (WM_APP + 61)
@@ -171,6 +174,8 @@ typedef struct {
     // The pointer: a press becomes a click when it is let go where it started, else a drag of down, moves and up.
     bool pressing, dragging; int press_x, press_y, clicks; const char *button;
     wchar_t high_surrogate;
+    bool detached;                       // in a window of its own rather than docked beside the conversation
+    char *window_title;                  // that window's title as last set
 } BrowserScreen;
 
 static void read_state(BrowserScreen *s);
@@ -426,6 +431,7 @@ static LRESULT CALLBACK view_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_BROWSER_FEED: drain_feed(s); return 0;
     case WM_ERASEBKGND: return 1;
+    case WM_SIZE: InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_PAINT: { PAINTSTRUCT ps; HDC dc = BeginPaint(hwnd, &ps); paint_view(s, hwnd, dc); EndPaint(hwnd, &ps); return 0; }
     case WM_SETFOCUS: case WM_KILLFOCUS: InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_GETDLGCODE: return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
@@ -511,7 +517,8 @@ static void register_view_class(void) {
     static bool registered;
     if (registered) return;
     WNDCLASSW wc; memset(&wc, 0, sizeof wc);
-    wc.style = CS_DBLCLKS; wc.lpfnWndProc = view_proc; wc.hInstance = GetModuleHandleW(NULL);
+    // Redrawn whole on a resize: the picture is centred, so the pixels it had are in the wrong place.
+    wc.style = CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW; wc.lpfnWndProc = view_proc; wc.hInstance = GetModuleHandleW(NULL);
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW); wc.lpszClassName = VIEW_CLASS;
     registered = RegisterClassW(&wc) != 0;
 }
@@ -542,28 +549,117 @@ static void ensure_controls(BrowserScreen *s) {
     set_address(s);
 }
 
-// MARK: - Layout
+// MARK: - The chrome
 
 static void paint_field(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_round_rect(cv, rc, px(8), theme.field, theme.line); }
 static void paint_lock(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; draw_glyph(cv, (wchar_t)it->arg, rc, FONT_ICON_SMALL, theme.muted); }
 
-/// A tab's title for its strip: the page title, else its address, cut to a length a tab can show.
-static char *tab_label(const BrowserTab *tab) {
-    const char *t = !str_empty(tab->title) ? tab->title : !str_empty(tab->url) && !str_eq(tab->url, "about:blank") ? tab->url : "New tab";
-    size_t len = strlen(t), cut = 0, chars = 0;
-    while (cut < len && chars < 28) { cut++; while (cut < len && ((unsigned char)t[cut] & 0xC0) == 0x80) cut++; chars++; }
-    return cut < len ? xstrfmt("%.*s\xE2\x80\xA6", (int)cut, t) : xstrdup(t);
+/// A toolbar glyph, as Claude's browser pane has them: no frame, tinted under the mouse, greyed while it cannot act.
+typedef struct { wchar_t glyph; bool enabled; } IconData;
+static void paint_icon(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    IconData *d = it->data;
+    bool hovered = d->enabled && doc_item_hovered(doc, it);
+    if (hovered) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
+    draw_glyph(cv, d->glyph, rc, FONT_ICON_SMALL, !d->enabled ? theme.line_strong : hovered ? theme.ink : theme.muted);
+}
+static void icon(Doc *doc, int x, int y, int size, wchar_t glyph, const char *tip, int action, bool enabled) {
+    IconData *d = xmalloc(sizeof *d); d->glyph = glyph; d->enabled = enabled;
+    int keep = doc->y;
+    doc->y = y;
+    Item *it = doc_item(doc, doc_custom(doc, x, size, size, paint_icon, d, free, enabled ? action : 0, 0));
+    it->hover_fill = false;
+    it->tip = xstrdup(tip);
+    doc->y = keep;
+}
+
+/// A tab in the strip: its title alone, the one in view in the ink and the others muted until hovered.
+typedef struct { char *label; bool active; } TabData;
+static void tab_free(void *p) { TabData *d = p; free(d->label); free(d); }
+static void paint_tab(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    TabData *d = it->data;
+    bool hovered = doc_item_hovered(doc, it);
+    if (d->active || hovered) fill_round_rect(cv, rc, px(6), d->active ? theme.raise : blend(theme.raise, theme.sidebar, 0.6), theme.raise);
+    RECT t = { rc->left + px(10), rc->top, rc->right - px(10), rc->bottom };
+    draw_text(cv, d->label, &t, d->active ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, d->active || hovered ? theme.ink : theme.muted,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+/// A tab's title for its strip: the page title, else its address.
+static const char *tab_label(const BrowserTab *tab) {
+    return !str_empty(tab->title) ? tab->title : !str_empty(tab->url) && !str_eq(tab->url, "about:blank") ? tab->url : "New tab";
+}
+
+/// Whether the session's conversation is the page in the detail, which the browser can dock beside.
+static bool conversation_shown(const char *session_id) {
+    Screen *root = app_detail_pane() ? pane_root(app_detail_pane()) : NULL;
+    return root && root->id && str_has_prefix(root->id, "conversation:") && str_eq(root->id + 13, session_id);
+}
+static bool can_dock(BrowserScreen *s) { return app_browser_dockable() && conversation_shown(s->session_id); }
+
+/// A window of its own is titled after the page in view, as a browser's is.
+static void title_window(BrowserScreen *s) {
+    if (!s->detached || !s->base.pane) return;
+    const BrowserTab *tab = s->state.running ? browser_active_tab(&s->state) : NULL;
+    char *title = xstrfmt("%s \xC2\xB7 %s", tab ? tab_label(tab) : "Browser", s->title ? s->title : "Conversation");
+    if (!str_eq(title, s->window_title)) {
+        wchar_t *w = utf8_to_wide(title);
+        SetWindowTextW(GetAncestor(pane_hwnd(s->base.pane), GA_ROOT), w);
+        free(w);
+        free(s->window_title); s->window_title = title;
+    } else free(title);
 }
 
 static void browser_layout(Screen *base, Doc *doc) {
     BrowserScreen *s = (BrowserScreen *)base;
     int w = doc->width;
     SetRectEmpty(&s->view_rc); SetRectEmpty(&s->address_rc);
-    doc_space(doc, px(8));
+    title_window(s);
+    // The top bar: the tabs and ＋ on the left; pop out (or dock), ⋯, expand and close on the right.
+    int bar = px(36), ib = px(28), top = doc->y + px(4), iy = top + (bar - ib) / 2, gap = px(2);
+    int x = w - ib;
+    icon(doc, x, iy, ib, 0xE711, s->detached ? "Close the window" : "Close the browser", ACT_CLOSE_PANE, true);
+    if (!s->detached) {
+        bool expanded = app_browser_expanded();
+        x -= ib + gap;
+        icon(doc, x, iy, ib, expanded ? 0xE73F : 0xE740, expanded ? "Show the conversation again" : "Expand over the conversation", ACT_EXPAND, true);
+    }
+    x -= ib + gap;
+    icon(doc, x, iy, ib, 0xE712, "More", ACT_MORE, true);
+    x -= ib + gap;
+    if (s->detached) icon(doc, x, iy, ib, 0xE90D, can_dock(s) ? "Dock beside the conversation" : "Dock beside the conversation (open the conversation first)", ACT_DOCK, can_dock(s));
+    else icon(doc, x, iy, ib, 0xE8A7, "Open in a separate window", ACT_DETACH, true);
+    int right = x - px(8);
+    if (s->state.running && s->state.count) {
+        int plus = can_drive() ? ib + px(4) : 0, avail = right - plus;
+        int share = (avail - (int)s->state.count * gap) / (int)s->state.count;
+        if (share > px(200)) share = px(200);
+        if (share < px(72)) share = px(72);
+        int tx = 0;
+        for (size_t i = 0; i < s->state.count; i++) {
+            const char *label = tab_label(&s->state.tabs[i]);
+            bool active = str_eq(s->state.tabs[i].id, s->state.active);
+            int tw = text_width(doc->cv, label, active ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE) + px(22);
+            if (tw > share) tw = share;
+            // Tabs past the room left stay reachable from ⋯.
+            if (tx + tw > avail) break;
+            TabData *d = xmalloc(sizeof *d); d->label = xstrdup(label); d->active = active;
+            doc->y = top + px(4);
+            Item *it = doc_item(doc, doc_custom(doc, tx, tw, bar - px(8), paint_tab, d, tab_free, ACT_TAB, (intptr_t)i));
+            it->hover_fill = false;
+            if (strlen(label) > 24) it->tip = xstrdup(label);
+            tx += tw + gap;
+        }
+        if (can_drive()) icon(doc, tx + px(2), iy, ib, 0xE710, "New tab", ACT_NEW_TAB, true);
+    } else {
+        RECT t = { 0, top, right, top + bar };
+        doc_text_at(doc, &t, "Browser", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    doc->y = top + bar + px(4);
     const char *notice = s->error ? s->error : s->state_error;
-    if (notice) { doc_notice(doc, 0, w, notice); doc_space(doc, px(10)); }
-    if (!s->state_read) { doc_loading(doc, 0, w, "Reading the browser\xE2\x80\xA6"); return; }
-    if (!s->state.running) {
+    if (!s->state_read || !s->state.running) {
+        doc_space(doc, px(8));
+        if (notice) { doc_notice(doc, 0, w, notice); doc_space(doc, px(10)); }
+        if (!s->state_read) { doc_loading(doc, 0, w, "Reading the browser\xE2\x80\xA6"); return; }
         const char *title = s->starting ? "Starting the browser\xE2\x80\xA6" : s->state.on ? "The browser is switched on but not running" : "The shared browser is off";
         const char *detail = s->closed_session ? "This conversation is closed. Reopen it, then start the browser."
             : s->state.on ? "It starts with the agent\xE2\x80\x99s next turn, or start it now. Its cookies and logins are still there."
@@ -575,32 +671,27 @@ static void browser_layout(Screen *base, Doc *doc) {
         }
         return;
     }
-    // The tabs, as a tab strip, and ＋ for a new one.
-    int h = px(38), tx = 0, ty = doc->y;
-    for (size_t i = 0; i < s->state.count; i++) {
-        char *label = tab_label(&s->state.tabs[i]);
-        doc_tab(doc, &tx, &ty, 0, w, h, 0xE774, label, NULL, str_eq(s->state.tabs[i].id, s->state.active), ACT_TAB, (intptr_t)i);
-        free(label);
-    }
-    if (can_drive()) doc_tab(doc, &tx, &ty, 0, w, h, 0xE710, "New tab", NULL, false, ACT_NEW_TAB, 0);
-    doc->y = ty + h;
-    doc_rule(doc, 0, w);
-    doc_space(doc, px(10));
-    // The address field: the tab in view's address, and where to go on Enter.
-    int field_h = px(34), top = doc->y;
-    RECT field = { 0, top, w, top + field_h };
+    // The address bar: back, forward and reload, then the tab in view's address, and where to go on Enter.
+    bool drive = can_drive();
+    int nh = px(32), ny = doc->y, by = ny + (nh - ib) / 2;
+    icon(doc, 0, by, ib, 0xE72B, "Back", ACT_BACK, drive);
+    icon(doc, ib + gap, by, ib, 0xE72A, "Forward", ACT_FORWARD, drive);
+    icon(doc, 2 * (ib + gap), by, ib, 0xE72C, "Reload", ACT_RELOAD, drive);
+    int fx = 3 * (ib + gap) + px(6);
+    RECT field = { fx, ny, w, ny + nh };
     doc_add(doc, &field, paint_field);
-    RECT lock = { px(10), top, px(10) + px(16), top + field_h };
+    RECT lock = { fx + px(10), ny, fx + px(26), ny + nh };
     const BrowserTab *tab = browser_active_tab(&s->state);
-    int li = doc_add(doc, &lock, paint_lock);
-    doc_item(doc, li)->arg = tab && str_has_prefix(tab->url, "https://") ? 0xE72E : 0xE774;
-    int ex = px(34), eh = edit_line_height(FONT_BODY);
-    SetRect(&s->address_rc, ex, top + (field_h - eh) / 2, w - px(10), top + (field_h - eh) / 2 + eh);
-    doc->y = top + field_h + px(10);
+    doc_item(doc, doc_add(doc, &lock, paint_lock))->arg = tab && str_has_prefix(tab->url, "https://") ? 0xE72E : 0xE774;
+    int eh = edit_line_height(FONT_BODY);
+    SetRect(&s->address_rc, fx + px(34), ny + (nh - eh) / 2, w - px(10), ny + (nh - eh) / 2 + eh);
+    doc->y = ny + nh + px(8);
+    if (notice) { doc_notice(doc, 0, w, notice); doc_space(doc, px(6)); }
+    if (!drive) { doc_text(doc, 0, w, "Watching only: this token cannot act in the browser.", FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(6)); }
     // The picture fills what is left of the pane.
     RECT view = pane_content_rect(base->pane);
-    int area = doc->y, vh = (view.bottom - view.top) - area - px(12);
-    if (vh < px(320)) vh = px(320);
+    int area = doc->y, vh = (view.bottom - view.top) - area - px(10);
+    if (vh < px(200)) vh = px(200);
     SetRect(&s->view_rc, 0, area, w, area + vh);
     doc->y = area + vh;
 }
@@ -615,7 +706,7 @@ static void browser_place(Screen *base, const RECT *content, int scroll_y) {
         RECT v = { content->left + m + s->view_rc.left, content->top + s->view_rc.top - scroll_y, content->left + m + s->view_rc.right, content->top + s->view_rc.bottom - scroll_y };
         RECT a = { content->left + m + s->address_rc.left, content->top + s->address_rc.top - scroll_y, content->left + m + s->address_rc.right, content->top + s->address_rc.bottom - scroll_y };
         RECT visible;
-        if (IntersectRect(&visible, &v, content)) MoveWindow(s->view, visible.left, visible.top, visible.right - visible.left, visible.bottom - visible.top, TRUE);
+        if (IntersectRect(&visible, &v, content)) SetWindowPos(s->view, NULL, visible.left, visible.top, visible.right - visible.left, visible.bottom - visible.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
         MoveWindow(s->address, a.left, a.top, a.right - a.left, a.bottom - a.top, TRUE);
     }
     ShowWindow(s->view, on ? SW_SHOWNA : SW_HIDE);
@@ -623,38 +714,56 @@ static void browser_place(Screen *base, const RECT *content, int scroll_y) {
     EnableWindow(s->address, can_drive());
 }
 
-static void header_button(HeaderInfo *info, wchar_t glyph, const char *tip, int action, bool enabled, bool destructive) {
-    if (info->button_count >= HEADER_BUTTONS) return;
-    HeaderButton *b = &info->buttons[info->button_count++];
-    b->glyph = glyph; b->tip = tip; b->action = action; b->enabled = enabled; b->destructive = destructive;
-}
-static void browser_header(Screen *base, HeaderInfo *info) {
-    BrowserScreen *s = (BrowserScreen *)base;
-    snprintf(info->title, sizeof info->title, "\xF0\x9F\x8C\x90 Browser \xC2\xB7 %s", s->title ? s->title : "Conversation");
-    const BrowserTab *tab = browser_active_tab(&s->state);
-    const char *line = !s->state_read ? "" : s->state.running ? (tab ? tab->url : "Running") : s->state.on ? "Switched on, not running" : "Off";
-    snprintf(info->subtitle, sizeof info->subtitle, "%s%s", line, s->state.running && !can_drive() ? " \xC2\xB7 watching only: this token cannot act in it" : "");
-    if (s->state.running) snprintf(info->status, sizeof info->status, "running");
+/// No pane header: the top bar is the screen's own, as compact as a browser's.
+static void browser_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
+
+static void post_move(BrowserScreen *s, int op);
+enum { MORE_RELOAD = 1, MORE_CLOSE_TAB, MORE_START, MORE_STOP, MORE_DETACH, MORE_DOCK, MORE_TAB = 100 };
+/// ⋯: the tabs the strip has no room for, the tab in view's reload and close, switching the browser on or off, and where
+/// it is shown.
+static void more_menu(BrowserScreen *s, POINT pt) {
+    HMENU menu = CreatePopupMenu();
     bool drive = can_drive() && s->state.running;
-    header_button(info, 0xE72B, "Back", ACT_BACK, drive, false);
-    header_button(info, 0xE72A, "Forward", ACT_FORWARD, drive, false);
-    header_button(info, 0xE72C, "Reload the page", ACT_RELOAD, drive, false);
-    header_button(info, 0xE710, "Open a new tab", ACT_NEW_TAB, drive, false);
-    header_button(info, 0xE711, "Close this tab", ACT_CLOSE_TAB, drive && tab, false);
+    const BrowserTab *tab = browser_active_tab(&s->state);
+    if (s->state.running && s->state.count > 1) {
+        for (size_t i = 0; i < s->state.count && i < 50; i++) {
+            wchar_t *w = utf8_to_wide(tab_label(&s->state.tabs[i]));
+            AppendMenuW(menu, MF_STRING | (str_eq(s->state.tabs[i].id, s->state.active) ? MF_CHECKED : 0) | (drive ? 0 : MF_GRAYED), MORE_TAB + i, w);
+            free(w);
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    }
+    AppendMenuW(menu, MF_STRING | (drive ? 0 : MF_GRAYED), MORE_RELOAD, L"Reload\tF5");
+    AppendMenuW(menu, MF_STRING | (drive && tab ? 0 : MF_GRAYED), MORE_CLOSE_TAB, L"Close this tab");
     if (store_can_manage() && s->state.on && store_supports("browser_off")) {
-        HeaderButton *b = &info->buttons[info->button_count++];
-        b->glyph = 0xE7E8; b->tip = "Switch the browser off"; b->action = ACT_STOP; b->enabled = !s->stopping && !s->starting; b->destructive = true;
-        snprintf(b->label, sizeof b->label, "Switch off");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING | (s->stopping || s->starting ? MF_GRAYED : 0), MORE_STOP, L"Switch the browser off\x2026");
     } else if (store_can_manage() && store_supports("browser_on")) {
-        HeaderButton *b = &info->buttons[info->button_count++];
-        b->glyph = 0xE7E8; b->tip = "Switch the browser on"; b->action = ACT_START; b->enabled = !s->starting && !s->stopping; b->prominent = true;
-        snprintf(b->label, sizeof b->label, "Start");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING | (s->stopping || s->starting ? MF_GRAYED : 0), MORE_START, L"Start the browser");
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    if (s->detached) AppendMenuW(menu, MF_STRING | (can_dock(s) ? 0 : MF_GRAYED), MORE_DOCK, L"Dock beside the conversation");
+    else AppendMenuW(menu, MF_STRING, MORE_DETACH, L"Open in a separate window");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(menu);
+    if (chosen >= MORE_TAB && (size_t)(chosen - MORE_TAB) < s->state.count) {
+        Json *j = simple_input("tab"); json_set_str(j, "tab", s->state.tabs[chosen - MORE_TAB].id);
+        send_input(s, j);
+        return;
+    }
+    switch (chosen) {
+    case MORE_RELOAD: send_input(s, simple_input("reload")); break;
+    case MORE_CLOSE_TAB: if ((tab = browser_active_tab(&s->state))) { Json *j = simple_input("closeTab"); json_set_str(j, "tab", tab->id); send_input(s, j); } break;
+    case MORE_START: switch_browser(s, true); break;
+    case MORE_STOP: switch_browser(s, false); break;
+    case MORE_DETACH: post_move(s, ACT_DETACH); break;
+    case MORE_DOCK: post_move(s, ACT_DOCK); break;
     }
 }
 
 static void browser_action(Screen *base, int action, intptr_t arg, POINT pt) {
     BrowserScreen *s = (BrowserScreen *)base;
-    (void)pt;
     switch (action) {
     case ACT_START: switch_browser(s, true); break;
     case ACT_STOP: switch_browser(s, false); break;
@@ -670,14 +779,17 @@ static void browser_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_TAB:
-        if (arg >= 0 && (size_t)arg < s->state.count) {
+        if (arg >= 0 && (size_t)arg < s->state.count && !str_eq(s->state.tabs[arg].id, s->state.active)) {
             Json *j = simple_input("tab"); json_set_str(j, "tab", s->state.tabs[arg].id);
             send_input(s, j);
         }
         break;
+    case ACT_MORE: more_menu(s, pt); break;
+    case ACT_EXPAND: app_set_browser_expanded(!app_browser_expanded()); break;
+    case ACT_DETACH: case ACT_DOCK: case ACT_CLOSE_PANE: post_move(s, action); break;
     }
 }
-/// A right click on a tab closes it, as a browser's tab menu would.
+/// A right click on a tab shows or closes it, as a browser's tab menu would.
 static void browser_context(Screen *base, int action, intptr_t arg, POINT pt) {
     BrowserScreen *s = (BrowserScreen *)base;
     if (action != ACT_TAB || arg < 0 || (size_t)arg >= s->state.count || !can_drive()) return;
@@ -731,7 +843,7 @@ static void browser_destroy(Screen *base) {
     if (s->address) DestroyWindow(s->address);
     browser_state_free(&s->state);
     browser_inputs_free(&s->inputs);
-    free(s->pixels); free(s->session_id); free(s->title); free(s->error); free(s->state_error);
+    free(s->pixels); free(s->session_id); free(s->title); free(s->error); free(s->state_error); free(s->window_title);
     screen_release(base);
 }
 
@@ -743,15 +855,191 @@ static const ScreenVTable browser_vt = {
 
 bool browser_offered(void) { return store_supports("browser"); }
 
-Screen *browser_screen_new(const Session *session) {
+static Screen *browser_new(const char *session_id_, const char *title, bool on, bool running, bool detached) {
     BrowserScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &browser_vt;
-    s->base.id = xstrfmt("browser:%s", session_id(session));
-    s->session_id = xstrdup(session_id(session));
-    s->title = xstrdup(session_display_title(session));
-    // The session record says whether the browser is on before the first read does.
-    bool running = false;
-    s->state.on = browser_session_on(session->raw, &running);
-    s->state.running = running;
+    s->base.id = xstrfmt("browser:%s", session_id_);
+    s->session_id = xstrdup(session_id_);
+    s->title = xstrdup(title);
+    s->state.on = on; s->state.running = running;
+    s->detached = detached;
     return &s->base;
+}
+Screen *browser_screen_new(const Session *session) {
+    // The session record says whether the browser is on before the first read does.
+    bool running = false, on = browser_session_on(session->raw, &running);
+    return browser_new(session_id(session), session_display_title(session), on, running, false);
+}
+
+// MARK: - Docked, or in a window of its own
+
+/// A popped-out browser: a top-level window holding a pane whose only screen is the session's browser.
+typedef struct { HWND hwnd; Pane *pane; HWND focus; } BrowserWindow;
+static BrowserWindow **g_windows; static size_t g_window_count;
+static const wchar_t WINDOW_CLASS[] = L"BriareusBrowserWindow";
+static const wchar_t HOST_CLASS[] = L"BriareusBrowserHost";
+#define WM_BROWSER_MOVE (WM_APP + 62)
+
+static BrowserScreen *window_screen(BrowserWindow *w) { return w->pane ? (BrowserScreen *)pane_root(w->pane) : NULL; }
+static BrowserWindow *find_window(const char *session_id_) {
+    for (size_t i = 0; i < g_window_count; i++) {
+        BrowserScreen *s = window_screen(g_windows[i]);
+        if (s && str_eq(s->session_id, session_id_)) return g_windows[i];
+    }
+    return NULL;
+}
+static BrowserScreen *docked(void) { return app_browser_pane() ? (BrowserScreen *)pane_root(app_browser_pane()) : NULL; }
+
+static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    BrowserWindow *w = (BrowserWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg) {
+    case WM_NCCREATE:
+        w = ((CREATESTRUCTW *)lp)->lpCreateParams;
+        w->hwnd = hwnd;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)w);
+        break;
+    case WM_CREATE: theme_apply_window(hwnd); w->pane = pane_create(hwnd, true); return 0;
+    case WM_SIZE: if (w && w->pane && wp != SIZE_MINIMIZED) { RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc); } return 0;
+    case WM_ERASEBKGND: return 1;
+    case WM_ACTIVATE:
+        // Keys go back to where they went before the window lost the foreground: the page, or the address field.
+        if (!w || !w->pane) break;
+        if (LOWORD(wp) == WA_INACTIVE) w->focus = GetFocus();
+        else SetFocus(w->focus && IsChild(hwnd, w->focus) ? w->focus : pane_hwnd(w->pane));
+        return 0;
+    case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(320); return 0; }
+    case WM_DPICHANGED: { RECT *rc = (RECT *)lp; SetWindowPos(hwnd, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, SWP_NOZORDER | SWP_NOACTIVATE); return 0; }
+    case WM_DESTROY:
+        if (!w) return 0;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        pane_destroy(w->pane);
+        for (size_t i = 0; i < g_window_count; i++) if (g_windows[i] == w) { g_windows[i] = g_windows[--g_window_count]; break; }
+        free(w);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+/// Opens the screen in a window of its own, over `at` (screen coordinates) when given: where it was docked.
+static void open_window(Screen *screen, const RECT *at) {
+    static bool registered;
+    HINSTANCE instance = GetModuleHandleW(NULL);
+    if (!registered) {
+        WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);
+        wc.cbSize = sizeof wc; wc.lpfnWndProc = window_proc; wc.hInstance = instance; wc.lpszClassName = WINDOW_CLASS;
+        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP)); wc.hIconSm = wc.hIcon;
+        registered = RegisterClassExW(&wc) != 0;
+    }
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT, cx = px(1100), cy = px(800);
+    if (at && !IsRectEmpty(at)) {
+        x = at->left + px(24); y = at->top + px(24); cx = at->right - at->left; cy = at->bottom - at->top;
+        // Kept on the monitor it popped out on.
+        MONITORINFO mi = { sizeof mi };
+        if (GetMonitorInfoW(MonitorFromRect(at, MONITOR_DEFAULTTONEAREST), &mi)) {
+            RECT wa = mi.rcWork;
+            if (cx > wa.right - wa.left) cx = wa.right - wa.left;
+            if (cy > wa.bottom - wa.top) cy = wa.bottom - wa.top;
+            if (x + cx > wa.right) x = wa.right - cx;
+            if (y + cy > wa.bottom) y = wa.bottom - cy;
+            if (x < wa.left) x = wa.left;
+            if (y < wa.top) y = wa.top;
+        }
+    }
+    BrowserWindow *w = xcalloc(1, sizeof *w);
+    g_windows = xrealloc(g_windows, (g_window_count + 1) * sizeof *g_windows);
+    g_windows[g_window_count++] = w;
+    // Not owned by the main window: it stays put when that one is minimized, and has its own taskbar button.
+    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, WINDOW_CLASS, L"Browser", WS_OVERLAPPEDWINDOW, x, y, cx, cy, NULL, NULL, instance, w);
+    if (!hwnd) {
+        for (size_t i = 0; i < g_window_count; i++) if (g_windows[i] == w) { g_windows[i] = g_windows[--g_window_count]; break; }
+        free(w);
+        screen->vt->destroy(screen);
+        return;
+    }
+    RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc);
+    pane_set_root(w->pane, screen);
+    ShowWindow(hwnd, SW_SHOWNORMAL);
+    SetForegroundWindow(hwnd);
+}
+
+typedef struct { int op; char *session_id, *title; bool on, running; } Move;
+/// Where the browser is shown changes once the click that asked for it is over: the screen that asked goes with it.
+static void do_move(const Move *m) {
+    BrowserWindow *w = find_window(m->session_id);
+    BrowserScreen *d = docked();
+    bool is_docked = d && str_eq(d->session_id, m->session_id);
+    switch (m->op) {
+    case ACT_CLOSE_PANE:
+        if (w) DestroyWindow(w->hwnd); else if (is_docked) app_set_browser(NULL);
+        break;
+    case ACT_DETACH: {
+        if (!is_docked) break;
+        RECT at; GetWindowRect(pane_hwnd(app_browser_pane()), &at);
+        app_set_browser(NULL);
+        open_window(browser_new(m->session_id, m->title, m->on, m->running, true), &at);
+        break;
+    }
+    case ACT_DOCK:
+        if (!w || !app_browser_dockable() || !conversation_shown(m->session_id)) break;
+        DestroyWindow(w->hwnd);
+        app_set_browser(browser_new(m->session_id, m->title, m->on, m->running, false));
+        SetForegroundWindow(app_window());
+        break;
+    }
+}
+static LRESULT CALLBACK host_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_BROWSER_MOVE) {
+        Move *m = (Move *)lp;
+        do_move(m);
+        free(m->session_id); free(m->title); free(m);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+static void post_move(BrowserScreen *s, int op) {
+    static HWND host;
+    if (!host) {
+        WNDCLASSW wc; memset(&wc, 0, sizeof wc);
+        wc.lpfnWndProc = host_proc; wc.hInstance = GetModuleHandleW(NULL); wc.lpszClassName = HOST_CLASS;
+        RegisterClassW(&wc);
+        host = CreateWindowExW(0, HOST_CLASS, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+        if (!host) return;
+    }
+    Move *m = xcalloc(1, sizeof *m);
+    m->op = op; m->session_id = xstrdup(s->session_id); m->title = xstrdup(s->title);
+    m->on = s->state.on; m->running = s->state.running;
+    if (!PostMessageW(host, WM_BROWSER_MOVE, 0, (LPARAM)m)) { free(m->session_id); free(m->title); free(m); }
+}
+
+void browser_open(const Session *session) {
+    const char *id = session_id(session);
+    BrowserWindow *w = find_window(id);
+    if (w) {
+        if (IsIconic(w->hwnd)) ShowWindow(w->hwnd, SW_RESTORE);
+        SetForegroundWindow(w->hwnd);
+        return;
+    }
+    BrowserScreen *d = docked();
+    if (d && str_eq(d->session_id, id)) { app_set_browser(NULL); return; }
+    Screen *s = browser_screen_new(session);
+    if (app_browser_dockable()) { app_set_browser(s); return; }
+    // Too narrow for a column beside the conversation: a window of its own.
+    ((BrowserScreen *)s)->detached = true;
+    open_window(s, NULL);
+}
+void browser_windows_close_all(void) {
+    while (g_window_count) {
+        size_t before = g_window_count;
+        DestroyWindow(g_windows[g_window_count - 1]->hwnd);
+        if (g_window_count == before) break;
+    }
+}
+void browser_windows_themed(void) {
+    for (size_t i = 0; i < g_window_count; i++) {
+        theme_apply_window(g_windows[i]->hwnd);
+        if (!g_windows[i]->pane) continue;
+        SendMessageW(pane_hwnd(g_windows[i]->pane), WM_THEMECHANGED, 0, 0);
+        pane_relayout(g_windows[i]->pane);
+    }
 }

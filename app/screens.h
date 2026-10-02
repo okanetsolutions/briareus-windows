@@ -47,10 +47,19 @@ bool session_panel_wanted(const Session *session);
 /// Hands the panel the session's latest record, when the panel is that session's.
 void session_panel_update(const Session *session);
 /// A session's shared browser: the server's headless Chromium its agent drives, watched as live frames and driven with the
-/// mouse and keyboard on the same tabs, with its tabs, an address field, and switching it on and off.
+/// mouse and keyboard on the same tabs, with its tabs, an address field, and switching it on and off. It docks as a column
+/// beside the conversation, or pops out into a window of its own.
 Screen *browser_screen_new(const Session *session);
 /// Whether the server has the shared browser and this token may read it.
 bool browser_offered(void);
+/// The conversation's 🌐 Browser: docks the session's browser beside it (or closes it when it already is), brings its own
+/// window forward when it was popped out, and opens it in a window when the main window is too narrow for a column.
+void browser_open(const Session *session);
+/// Whether a session's browser is docked or in a window of its own.
+bool browser_is_open(const char *session_id);
+/// The popped-out browser windows close (signing out, quitting) or take a new theme.
+void browser_windows_close_all(void);
+void browser_windows_themed(void);
 /// Runs a session operation (`compact`, `clear`, `rename` with compaction settings) through its open conversation,
 /// which shows its progress and errors and reads the session again afterwards.
 void conversation_session_op(const char *session_id, const char *operation, Json *extra);
@@ -232,6 +241,14 @@ Pane *app_detail_pane(void);
 /// The column on the right of a conversation, the dashboard's pull request panel; NULL takes it away.
 Pane *app_panel_pane(void);
 void app_set_panel(Screen *screen);
+/// The column a session's browser docks in, on the right of its conversation; NULL takes it away.
+Pane *app_browser_pane(void);
+void app_set_browser(Screen *screen);
+/// Whether the main window has room for the browser column beside the detail.
+bool app_browser_dockable(void);
+/// The docked browser fills the main column, the conversation hidden, until set back.
+bool app_browser_expanded(void);
+void app_set_browser_expanded(bool expanded);
 HWND app_window(void);
 
 /// A confirmation with one continue button; true when confirmed.

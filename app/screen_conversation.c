@@ -699,7 +699,7 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_CHANGES: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_files_screen_new(&p, number)); project_free(&p); break; }
     case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
     case MENU_COPY: break;
-    case MENU_BROWSER: app_push_detail(browser_screen_new(ss)); break;
+    case MENU_BROWSER: browser_open(ss); break;
     case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
     case MENU_LOOP_ON: confirm_and_mutate(s, "review_loop"); break;
     case MENU_RENAME: {
