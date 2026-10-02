@@ -16,7 +16,7 @@ static void clear_items(Doc *doc) {
         Item *it = &doc->items[i];
         if (it->free_data) it->free_data(it->data);
         if (it->sel_owned) rich_free(it->sel);
-        free(it->text);
+        free(it->text); free(it->tip);
     }
     doc->count = 0;
 }
@@ -370,6 +370,24 @@ static void paint_label(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT g = { rc->left, rc->top, rc->left + d->glyph_w, rc->top + font_height(cv, it->font) + px(2) };
     draw_glyph(cv, d->glyph, &g, d->glyph_font, it->color);
     rich_paint(doc, it, it->sel, cv, rc);
+}
+static void paint_help(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    draw_glyph(cv, 0xE9CE, rc, FONT_ICON_SMALL, doc_item_hovered(doc, it) ? theme.ink : theme.muted);
+}
+int doc_field_label(Doc *doc, int x, int w, const char *label, COLORREF color, const char *help) {
+    UINT flags = DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS;
+    if (!help || !*help) return doc_text(doc, x, w, label, FONT_FOOTNOTE, color, flags);
+    int size = px(18), gap = px(4), top = doc->y;
+    int lw = text_width(doc->cv, label, FONT_FOOTNOTE) + 2;
+    if (lw > w - size - gap) lw = w - size - gap;
+    if (lw < 0) lw = 0;
+    int i = doc_text(doc, x, lw, label, FONT_FOOTNOTE, color, flags);
+    int mid = (top + doc->y) / 2;
+    RECT r = { x + lw + gap, mid - size / 2, x + lw + gap + size, mid - size / 2 + size };
+    Item *it = doc_item(doc, doc_add(doc, &r, paint_help));
+    it->action = ACTION_TIP;
+    it->tip = str_replace(help, "`", "");   // the hints' inline code reads as plain text in a tooltip
+    return i;
 }
 int doc_label(Doc *doc, int x, int w, wchar_t glyph, const char *text, FontId f, COLORREF color) {
     LabelData *d = xcalloc(1, sizeof *d);

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windowsx.h>
+#include <commctrl.h>
 
 #define PANE_CLASS L"BriareusPane"
 
@@ -29,6 +30,8 @@ struct Pane {
     bool dragging_thumb; int drag_offset;
     RECT thumb_rect;
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
+    HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
+    int tip_item;           // the item it shows for, or -1
 };
 
 static Pane **all_panes; static size_t pane_count;
@@ -52,7 +55,7 @@ static void register_class(void) {
 Pane *pane_create(HWND parent, bool sidebar) {
     register_class();
     Pane *p = xcalloc(1, sizeof *p);
-    p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1;
+    p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1; p->tip_item = -1;
     doc_init(&p->doc);
     p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
     p->canvas = canvas_for_window(p->hwnd);
@@ -137,7 +140,42 @@ static int max_scroll(Pane *p) {
 }
 bool pane_at_bottom(Pane *p) { return p->scroll_y >= max_scroll(p) - px(24); }
 
+// MARK: - Tooltip
+
+static void hide_tip(Pane *p) {
+    if (p->tip_item < 0) return;
+    p->tip_item = -1;
+    TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, 0, p->hwnd, 1 };
+    SendMessageW(p->tip, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
+}
+/// Shows the hovered item's tip under it, or hides the tooltip when it has none.
+static void update_tip(Pane *p) {
+    Item *it = doc_item(&p->doc, p->doc.hover);
+    if (!it || !it->tip) { hide_tip(p); return; }
+    if (p->tip_item == p->doc.hover) return;
+    TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, TTF_TRACK | TTF_ABSOLUTE | TTF_TRANSPARENT, p->hwnd, 1 };
+    if (!p->tip) {
+        p->tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+                                 0, 0, 0, 0, p->hwnd, NULL, GetModuleHandleW(NULL), NULL);
+        theme_apply_control(p->tip);
+        ti.lpszText = L"";
+        SendMessageW(p->tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+        SendMessageW(p->tip, TTM_SETMAXTIPWIDTH, 0, px(360));
+    }
+    p->tip_item = p->doc.hover;
+    wchar_t *text = utf8_to_wide(it->tip);
+    ti.lpszText = text;
+    SendMessageW(p->tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+    free(text);
+    RECT content = pane_content_rect(p);
+    POINT at = { it->rc.left + margin(p) - p->scroll_x, it->rc.bottom + content.top - p->scroll_y + px(4) };
+    ClientToScreen(p->hwnd, &at);
+    SendMessageW(p->tip, TTM_TRACKPOSITION, 0, MAKELPARAM(at.x, at.y));
+    SendMessageW(p->tip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+}
+
 static void after_scroll(Pane *p) {
+    hide_tip(p);
     Screen *s = pane_top(p);
     RECT rc = pane_content_rect(p);
     doc_set_view(&p->doc, p->scroll_y, rc.bottom - rc.top);
@@ -197,6 +235,7 @@ static void layout_if_needed(Pane *p, Canvas *cv) {
     bool was_bottom = p->scroll_y >= 0x3fffffff || pane_at_bottom(p);
     int content_width = width - 2 * margin(p);
     if (content_width < px(120)) content_width = px(120);
+    hide_tip(p);   // the items move; the next mouse move shows it again
     doc_begin(&p->doc, cv, content_width);
     if (s && s->vt->layout) s->vt->layout(s, &p->doc);
     doc_end(&p->doc);
@@ -448,6 +487,7 @@ static void mouse_move(Pane *p, int x, int y) {
         p->hover_button = button; p->doc.hover = item;
         InvalidateRect(p->hwnd, NULL, FALSE);
     }
+    update_tip(p);
 }
 static void mouse_down(Pane *p, int x, int y, bool right) {
     SetFocus(p->hwnd);
@@ -509,6 +549,7 @@ static void mouse_up(Pane *p, int x, int y) {
         if (item == pressed && it && s) {
             if (it->action == ACTION_OPEN_LINK) { const char *url = doc_link_at(&p->doc, pressed, c.x, c.y); if (url) open_web_url(url); }
             else if (it->action == ACTION_COPY_CODE) { copy_to_clipboard(p->hwnd, (const char *)it->arg); }
+            else if (it->action == ACTION_TIP) { }
             else if (s->vt->action) s->vt->action(s, it->action, it->arg, sp);
         }
         InvalidateRect(p->hwnd, NULL, FALSE);
@@ -525,7 +566,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
-    case WM_MOUSELEAVE: p->tracking = false; if (p->hover_button != -1 || p->doc.hover != -1) { p->hover_button = -1; p->doc.hover = -1; InvalidateRect(hwnd, NULL, FALSE); } return 0;
+    case WM_MOUSELEAVE: p->tracking = false; hide_tip(p); if (p->hover_button != -1 || p->doc.hover != -1) { p->hover_button = -1; p->doc.hover = -1; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;

@@ -862,12 +862,12 @@ static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     // A disabled edit paints the same fill, so only the border says the box is off.
     fill_round_rect(cv, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
 }
-/// A labelled box with its edit, and the hint under it; advances.
+/// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
     if (!field_offered(s, f)) return;
     const FieldDef *d = &FIELDS[f];
     bool on = field_enabled(s, f);
-    doc_text(doc, x, w, d->label, FONT_FOOTNOTE, on ? theme.ink : theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, d->label, on ? theme.ink : theme.muted, d->hint);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
     int fh = font_height(doc->cv, fid);
@@ -881,7 +881,6 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
     s->rects[f] = er; s->laid[f] = true;
     if (s->edits[f]) EnableWindow(s->edits[f], on);
     doc->y = box.bottom;
-    if (d->hint) { doc_space(doc, px(6)); doc_text(doc, x, w, d->hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
     doc_space(doc, px(14));
 }
 
@@ -1497,10 +1496,10 @@ static void paint_ssh_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     SshForm *s = it->data;
     fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
 }
-/// A labelled box with its edit, and the hint under it; advances.
+/// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
     const FieldDef *d = &SSH_FIELDS[f];
-    doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, d->label, theme.ink, d->hint);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
     int fh = font_height(doc->cv, fid), h = px(36);
@@ -1510,7 +1509,6 @@ static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
     s->rects[f] = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
     s->laid[f] = true;
     doc->y = box.bottom;
-    if (d->hint) { doc_space(doc, px(6)); doc_text(doc, x, w, d->hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
     doc_space(doc, px(14));
 }
 static void paint_ssh_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -1525,7 +1523,7 @@ static void paint_ssh_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 }
 /// A labelled picker, as the web's `<select>`; advances.
 static void ssh_select(SshForm *s, Doc *doc, int x, int w, int p, const char *label, const char *hint) {
-    doc_text(doc, x, w, label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, label, theme.ink, hint);
     doc_space(doc, px(6));
     RECT box = { x, doc->y, x + w, doc->y + px(36) };
     Item *it = doc_item(doc, doc_add(doc, &box, paint_select));
@@ -1535,7 +1533,6 @@ static void ssh_select(SshForm *s, Doc *doc, int x, int w, int p, const char *la
     d->enabled = true;
     it->data = d; it->free_data = select_free; it->action = ACT_SSH_PICK; it->arg = p; it->hand = true;
     doc->y = box.bottom;
-    if (hint) { doc_space(doc, px(6)); doc_text(doc, x, w, hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
     doc_space(doc, px(14));
 }
 static void ssh_cell(SshForm *s, Doc *doc, int x, int w, int cell) {

@@ -249,11 +249,11 @@ static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 static void hint(Doc *doc, int x, int w, const char *text) {
     doc_rich(doc, x, w, text, FONT_CAPTION, theme.muted);
 }
-/// A labelled box with its edit, and the hint under it; advances.
+/// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 static void field(FormScreen *s, Doc *doc, int x, int w, int f, const char *note) {
     if (!field_shown(s, f)) return;
     const FieldDef *d = &FIELDS[f];
-    doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, d->label, theme.ink, note);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
     int fh = font_height(doc->cv, fid);
@@ -265,7 +265,6 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f, const char *note
                                   : (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
     s->laid[f] = true;
     doc->y = box.bottom;
-    if (note) { doc_space(doc, px(6)); hint(doc, x, w, note); }
     doc_space(doc, px(14));
 }
 /// Two fields side by side, as the dashboard's `.field-row`; advances past the taller.

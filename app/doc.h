@@ -27,6 +27,7 @@ struct Item {
     int id;               // a screen's own marker, such as the bottom anchor
     Rich *sel;            // the item's text in runs, relative to rc, when it can be selected
     bool sel_owned;       // `sel` is freed with the item (otherwise it is `data`)
+    char *tip;            // shown in a tooltip while the item is hovered; freed with the item
 };
 
 /// A character position: an item and an offset into its plain text.
@@ -79,6 +80,8 @@ void doc_space(Doc *doc, int h);
 int doc_rule(Doc *doc, int x, int w);
 /// A custom-painted item stacked at the cursor.
 int doc_custom(Doc *doc, int x, int w, int h, ItemPaint paint, void *data, ItemFree free_data, int action, intptr_t arg);
+/// A form field's label in `color`; with `help`, a help glyph after it that shows `help` in a tooltip on hover. Advances.
+int doc_field_label(Doc *doc, int x, int w, const char *label, COLORREF color, const char *help);
 /// A glyph followed by text, in one colour; advances.
 int doc_label(Doc *doc, int x, int w, wchar_t glyph, const char *text, FontId f, COLORREF color);
 /// An error notice: warning glyph, danger colour, wrapped; advances.
@@ -143,6 +146,6 @@ void doc_select_word(Doc *doc, DocPos pos);
 char *doc_selection_text(Doc *doc);
 
 /// Standard actions items may carry; screens use values from 1000 up.
-enum { ACTION_NONE = 0, ACTION_OPEN_LINK = 1, ACTION_COPY_CODE = 2 };
+enum { ACTION_NONE = 0, ACTION_OPEN_LINK = 1, ACTION_COPY_CODE = 2, ACTION_TIP = 3 };   // ACTION_TIP: hovered for its tip, a click does nothing
 
 #endif
