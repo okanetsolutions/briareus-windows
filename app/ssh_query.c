@@ -258,13 +258,15 @@ void sql_table_parse(const char *out, SqlTable *t) {
         if (!t->rows) t->cols = fields;
         if (len || t->cols == 1) {
             if ((t->rows + 1) * t->cols > cap) { cap = cap ? cap * 2 : 64 * t->cols; while (cap < (t->rows + 1) * t->cols) cap *= 2; t->cells = xrealloc(t->cells, cap * sizeof *t->cells); }
-            const char *f = line;
+            // `f` never passes the line's end: a row shorter than the header has its missing fields empty.
+            const char *f = line, *stop = line + len;
+            bool more = true;
             for (size_t c = 0; c < t->cols; c++) {
-                const char *tab = c + 1 < t->cols ? memchr(f, '\t', (size_t)(line + len - f)) : NULL;
-                size_t n = tab ? (size_t)(tab - f) : (size_t)(line + len - f);
-                if (f > line + len) n = 0;
-                t->cells[t->rows * t->cols + c] = f <= line + len ? unescape(f, n) : xstrdup("");
-                f = tab ? tab + 1 : line + len + 1;
+                if (!more) { t->cells[t->rows * t->cols + c] = xstrdup(""); continue; }
+                const char *tab = c + 1 < t->cols ? memchr(f, '\t', (size_t)(stop - f)) : NULL;
+                t->cells[t->rows * t->cols + c] = unescape(f, (size_t)((tab ? tab : stop) - f));
+                if (tab) f = tab + 1;
+                else more = false;
             }
             t->rows++;
         }
