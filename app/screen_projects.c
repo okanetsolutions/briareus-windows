@@ -512,7 +512,7 @@ static void projects_header(Screen *base, HeaderInfo *info) { (void)base; (void)
 static int projects_footer_height(Screen *base, int width) { (void)base; return sidebar_footer_height(width); }
 static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(cv, rc, &s->footer, false); }
 static bool projects_footer_press(Screen *base, POINT pt) { return player_press(base->pane, &((ProjectsScreen *)base)->footer, pt); }
-static void projects_footer_drag(Screen *base, POINT pt, bool done) { (void)done; player_drag(base->pane, &((ProjectsScreen *)base)->footer, pt); }
+static void projects_footer_drag(Screen *base, POINT pt) { player_drag(base->pane, &((ProjectsScreen *)base)->footer, pt); }
 static bool projects_footer_wheel(Screen *base, POINT pt, int delta) { return player_wheel(base->pane, &((ProjectsScreen *)base)->footer, pt, delta); }
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
@@ -776,7 +776,7 @@ static void sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     sidebar_footer_paint(cv, &foot, &s->footer, s->select_mode);
 }
 static bool sessions_footer_press(Screen *base, POINT pt) { return player_press(base->pane, &((SessionsScreen *)base)->footer, pt); }
-static void sessions_footer_drag(Screen *base, POINT pt, bool done) { (void)done; player_drag(base->pane, &((SessionsScreen *)base)->footer, pt); }
+static void sessions_footer_drag(Screen *base, POINT pt) { player_drag(base->pane, &((SessionsScreen *)base)->footer, pt); }
 static bool sessions_footer_wheel(Screen *base, POINT pt, int delta) { return player_wheel(base->pane, &((SessionsScreen *)base)->footer, pt, delta); }
 static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;

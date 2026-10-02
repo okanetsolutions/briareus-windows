@@ -33,9 +33,9 @@ typedef struct ScreenVTable {
     void (*footer_paint)(Screen *s, Canvas *cv, const RECT *rc);
     void (*footer_click)(Screen *s, POINT pt);
     /// A press in the footer that starts a drag, as a slider's: true takes the mouse, and footer_drag then follows it
-    /// until the button is let go (`done`); optional, asked before footer_click.
+    /// until the button is let go; optional, asked before footer_click.
     bool (*footer_press)(Screen *s, POINT pt);
-    void (*footer_drag)(Screen *s, POINT pt, bool done);
+    void (*footer_drag)(Screen *s, POINT pt);
     /// The wheel over the footer, in WHEEL_DELTA units: true when handled; optional.
     bool (*footer_wheel)(Screen *s, POINT pt, int delta);
     /// Moves content child controls after a layout or scroll; optional.

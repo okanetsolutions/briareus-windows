@@ -475,7 +475,7 @@ static void mouse_move(Pane *p, int x, int y) {
     if (p->dragging_footer) {
         Screen *s = pane_top(p);
         POINT pt = { x, y };
-        if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt, false);
+        if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt);
         return;
     }
     if (p->dragging_thumb) {
@@ -535,14 +535,9 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
 static void mouse_up(Pane *p, int x, int y) {
     if (p->doc.selecting) { end_selection(p); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
+    if (p->dragging_footer) { p->dragging_footer = false; ReleaseCapture(); return; }
     if (GetCapture() == p->hwnd) ReleaseCapture();
     Screen *s = pane_top(p);
-    if (p->dragging_footer) {
-        p->dragging_footer = false;
-        POINT pt = { x, y };
-        if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt, true);
-        return;
-    }
     POINT sp = { x, y }; ClientToScreen(p->hwnd, &sp);
     if (p->pressed_button != -1) {
         int b = p->pressed_button; p->pressed_button = -1;
@@ -584,14 +579,8 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
-    case WM_CAPTURECHANGED:
-        // A footer drag the mouse was taken from (another window, Alt+Tab) ends where the cursor is.
-        if (p->dragging_footer && (HWND)lp != hwnd) {
-            p->dragging_footer = false;
-            POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
-            if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt, true);
-        }
-        return 0;
+    // A footer drag the mouse was taken from (another window, Alt+Tab) ends where it was.
+    case WM_CAPTURECHANGED: p->dragging_footer = false; return 0;
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         RECT content = pane_content_rect(p);
