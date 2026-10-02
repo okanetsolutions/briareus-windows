@@ -2566,10 +2566,6 @@ static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_ISSUE_CHECKED: s->uncertain = false; set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_ISSUE_START: {
         if (s->busy || s->uncertain) break;
-        char *title = xstrfmt("Start a paid session on issue #%d?", s->issue.number);
-        bool ok = app_confirm(title, issue_run_active(s) ? "A session is already working on this issue." : NULL, "Start session", false);
-        free(title);
-        if (!ok) break;
         s->busy = true;
         char *prompt = issue_prompt(&s->issue, s->project.repo);
         Json *args = json_object();
