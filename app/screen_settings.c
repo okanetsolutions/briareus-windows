@@ -870,7 +870,7 @@ static void field(FormScreen *s, Doc *doc, int x, int w, int f) {
     doc_text(doc, x, w, d->label, FONT_FOOTNOTE, on ? theme.ink : theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
-    int fh = font_height(doc->cv, fid);
+    int fh = edit_line_height(fid);
     int h = is_multiline(f) ? shown_rows(s, f) * fh + px(16) : px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     int i = doc_add(doc, &box, paint_box);
@@ -1560,7 +1560,7 @@ static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
     doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
-    int fh = font_height(doc->cv, fid), h = px(36);
+    int fh = edit_line_height(fid), h = px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
     Item *it = doc_item(doc, doc_add(doc, &box, paint_ssh_box));
     it->data = s; it->arg = f; it->action = ACT_SSH_FOCUS;
