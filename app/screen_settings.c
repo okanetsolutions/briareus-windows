@@ -459,20 +459,20 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
 }
 static void settings_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
 
-/// The foot, as the dashboard's settings page has it: `Settings` and `⎋ Sign out`, 12px muted, above a border.
-static int settings_footer_height(Screen *base, int width) { (void)base; (void)width; return px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
+/// The foot, as the dashboard's settings page has it: `Settings` 12px muted and the `⎋ Sign out` button, above a border.
+static int settings_footer_height(Screen *base, int width) { (void)base; (void)width; return px(6) + 1 + px(8) + px(26) + px(8); }
 static void settings_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     SettingsScreen *s = (SettingsScreen *)base;
     fill_rect(cv, rc, theme.sidebar);
     int top = rc->top + px(6);
     draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
-    int y = top + 1 + px(10), h = px(18), left = rc->left + px(16), right = rc->right - px(16);
+    int y = top + 1 + px(8), h = px(26), left = rc->left + px(16), right = rc->right - px(10);
     const char *out = "\xE2\x8E\x8B Sign out";
-    int ow = text_width(cv, out, FONT_CAPTION);
+    int ow = text_width(cv, out, FONT_CAPTION) + px(20);
     RECT a = { left, y, right - ow - px(8), y + h }, c = { right - ow, y, right, y + h };
     draw_text(cv, "Settings", &a, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(cv, out, &c, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    InflateRect(&c, px(4), px(4));
+    fill_round_rect(cv, &c, px(7), theme.raise, theme.line);
+    draw_text(cv, out, &c, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     s->signout_rc = c;
 }
 static void settings_footer_click(Screen *base, POINT pt) { SettingsScreen *s = (SettingsScreen *)base; if (in_rect(&s->signout_rc, pt)) sign_out(); }
