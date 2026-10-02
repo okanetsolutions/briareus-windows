@@ -32,6 +32,12 @@ typedef struct ScreenVTable {
     void (*footer_layout)(Screen *s, const RECT *rc);
     void (*footer_paint)(Screen *s, Canvas *cv, const RECT *rc);
     void (*footer_click)(Screen *s, POINT pt);
+    /// A press in the footer that starts a drag, as a slider's: true takes the mouse, and footer_drag then follows it
+    /// until the button is let go (`done`); optional, asked before footer_click.
+    bool (*footer_press)(Screen *s, POINT pt);
+    void (*footer_drag)(Screen *s, POINT pt, bool done);
+    /// The wheel over the footer, in WHEEL_DELTA units: true when handled; optional.
+    bool (*footer_wheel)(Screen *s, POINT pt, int delta);
     /// Moves content child controls after a layout or scroll; optional.
     void (*place)(Screen *s, const RECT *content, int scroll_y);
     /// The screen is (or stops being) the pane's top: start or stop polling, show or hide controls.
