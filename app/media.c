@@ -7,7 +7,6 @@
 #include "media.h"
 #include "str.h"
 #include <objbase.h>
-#include <initguid.h>
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
 #include <stdlib.h>
@@ -37,6 +36,10 @@ enum { ASYNC_STARTED = 0, ASYNC_COMPLETED = 1 };
 
 static const GUID IID_ManagerStatics = { 0x2050c4ee, 0x11a0, 0x57de, { 0xae, 0xd7, 0xc9, 0x7c, 0x70, 0x33, 0x82, 0x45 } };
 static const GUID IID_AsyncInfo = { 0x00000036, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+// Core Audio's, spelled out: MSVC's headers only declare them, for uuid.lib or initguid.h to define.
+static const GUID CLSID_Devices = { 0xbcde0395, 0xe52f, 0x467c, { 0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e } };
+static const GUID IID_Devices = { 0xa95664d2, 0x9614, 0x4f35, { 0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6 } };
+static const GUID IID_EndpointVolume = { 0x5cdf2c82, 0x841e, 0x4546, { 0x97, 0x22, 0x0c, 0xf7, 0x40, 0x78, 0x22, 0x9a } };
 static const wchar_t MANAGER_CLASS[] = L"Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager";
 
 typedef void *WinString;
@@ -121,11 +124,11 @@ static void *pick_session(void *manager, bool *spotify) {
 
 /// The Windows volume of the default speakers, or NULL.
 static IAudioEndpointVolume *speaker_volume(void) {
-    if (!g_devices && FAILED(CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, &IID_IMMDeviceEnumerator, (void **)&g_devices))) g_devices = NULL;
+    if (!g_devices && FAILED(CoCreateInstance(&CLSID_Devices, NULL, CLSCTX_ALL, &IID_Devices, (void **)&g_devices))) g_devices = NULL;
     IMMDevice *device = NULL;
     if (!g_devices || FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(g_devices, eRender, eMultimedia, &device))) return NULL;
     IAudioEndpointVolume *volume = NULL;
-    if (FAILED(IMMDevice_Activate(device, &IID_IAudioEndpointVolume, CLSCTX_ALL, NULL, (void **)&volume))) volume = NULL;
+    if (FAILED(IMMDevice_Activate(device, &IID_EndpointVolume, CLSCTX_ALL, NULL, (void **)&volume))) volume = NULL;
     IMMDevice_Release(device);
     return volume;
 }
