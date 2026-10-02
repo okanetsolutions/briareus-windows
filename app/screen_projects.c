@@ -1,5 +1,5 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp and Slack, the 📊 and ⚑ switches and ⚙ Settings, the projects
-// with their session counts, and inside a project its conversations; what Spotify plays, ☑ Select and ⎋ along the foot.
+// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp and Slack and the 📊 and ⚑ switches, the projects with their
+// session counts, and inside a project its conversations; what Spotify plays, ☑ Select, ⚙ Settings and the ⎋ Sign out button along the foot.
 #include "dialogs.h"
 #include "media.h"
 #include "resource.h"
@@ -13,7 +13,7 @@
 // MARK: - What both sidebar screens draw
 
 enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK };
-enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 5 };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
@@ -95,8 +95,6 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
-    x += iw + gap;
-    RECT sr = { x, y, x + iw, y + h }; strip_button(doc, &sr, "\xE2\x9A\x99", false, 0, false, ACT_SETTINGS);
     doc->y = y + h;
     doc_space(doc, px(14));
 }
@@ -107,7 +105,7 @@ static int player_height(void) {
     MediaState st; media_state(&st);
     return st.available ? px(6) + 1 + px(8) + px(PLAYER_ROW) + px(2) : 0;
 }
-typedef struct { RECT select_rc, signout_rc, previous_rc, toggle_rc, next_rc; } FooterRects;
+typedef struct { RECT select_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc; } FooterRects;
 static int player_paint(Canvas *cv, const RECT *rc, FooterRects *out) {
     SetRectEmpty(&out->previous_rc); SetRectEmpty(&out->toggle_rc); SetRectEmpty(&out->next_rc);
     MediaState st; media_state(&st);
@@ -147,23 +145,31 @@ static bool player_click(Pane *pane, const FooterRects *f, POINT pt) {
     return true;
 }
 
-/// The foot: `☑ Select` and `⎋`, 13px muted, above a border, under the player.
-static int sidebar_footer_height(int width) { (void)width; return player_height() + px(6) + 1 + px(10) + px(18) + px(2) + px(10); }
+/// The foot: `☑ Select` 13px muted and the version, then at the right the ⚙ Settings icon button and the `⎋ Sign out`
+/// button, above a border, under the player.
+enum { FOOT_BUTTON = 26 };
+static int sidebar_footer_height(int width) { (void)width; return player_height() + px(6) + 1 + px(8) + px(FOOT_BUTTON) + px(8); }
 static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, bool select_on) {
     fill_rect(cv, rc, theme.sidebar);
     int top = player_paint(cv, rc, out) + px(6);
     draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
-    int y = top + 1 + px(10), h = px(18);
-    int left = rc->left + px(16), right = rc->right - px(16);
-    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B", *version = "v" APP_VERSION_STRING;
-    int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = text_width(cv, out_, FONT_FOOTNOTE), vw = text_width(cv, version, FONT_CAPTION2);
-    RECT a = { left, y, left + sw, y + h }, c = { right - ow, y, right, y + h };
-    RECT v = { (left + right) / 2 - vw / 2, y, (left + right) / 2 + vw / 2 + 1, y + h };
+    int y = top + 1 + px(8), h = px(FOOT_BUTTON);
+    int left = rc->left + px(16), right = rc->right - px(10);
+    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B Sign out", *version = "v" APP_VERSION_STRING;
+    int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = text_width(cv, out_, FONT_CAPTION) + px(20), vw = text_width(cv, version, FONT_CAPTION2);
+    RECT c = { right - ow, y, right, y + h }, g = { c.left - px(6) - h, y, c.left - px(6), y + h };
+    RECT a = { left, y, left + sw, y + h };
+    // The version sits between ☑ Select and the buttons, and gives way when the sidebar is too narrow for it.
+    int mid = (a.right + g.left) / 2;
+    RECT v = { mid - vw / 2, y, mid + vw / 2 + 1, y + h };
     draw_text(cv, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(cv, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    draw_text(cv, out_, &c, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    InflateRect(&a, px(4), px(4)); InflateRect(&c, px(4), px(4));
-    out->select_rc = a; out->signout_rc = c;
+    if (v.left > a.right + px(6)) draw_text(cv, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_round_rect(cv, &g, px(7), theme.raise, theme.line);
+    draw_text(cv, "\xE2\x9A\x99", &g, FONT_EMOJI, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    fill_round_rect(cv, &c, px(7), theme.raise, theme.line);
+    draw_text(cv, out_, &c, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    InflateRect(&a, px(4), 0);
+    out->select_rc = a; out->settings_rc = g; out->signout_rc = c;
 }
 static void sign_out(void) {
     if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. Revoke the token itself in web Settings.", "Sign out", true)) return;
@@ -448,6 +454,7 @@ static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { Pr
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
+    if (PtInRect(&s->footer.settings_rc, pt)) sidebar_common_action(base->pane, ACT_SETTINGS);
     if (PtInRect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
 static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -708,6 +715,7 @@ static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
+    if (PtInRect(&s->footer.settings_rc, pt)) { sidebar_common_action(base->pane, ACT_SETTINGS); return; }
     if (PtInRect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;
     if (PtInRect(&g_bulk.all, pt)) { clear_picks(s); for (size_t i = 0; i < s->count; i++) toggle_pick(s, session_id(&s->sessions[i])); pane_footer_changed(base->pane); }
