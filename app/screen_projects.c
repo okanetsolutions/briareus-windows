@@ -99,15 +99,47 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(14));
 }
 
-/// The player above the foot while a media session is open: Spotify's, or whichever app plays, with ⏮ ⏯ ⏭.
-enum { PLAYER_ROW = 36, PLAYER_BUTTON = 26 };
+/// The player above the foot while a media session is open: Spotify's, or whichever app plays, with ⏮ ⏯ ⏭, and under
+/// them the Windows volume: the speaker mutes, the slider drags or clicks to a level, and the wheel over the player steps it.
+enum { PLAYER_ROW = 36, PLAYER_BUTTON = 26, VOLUME_ROW = 22, VOLUME_STEP = 5 };
 static int player_height(void) {
     MediaState st; media_state(&st);
-    return st.available ? px(6) + 1 + px(8) + px(PLAYER_ROW) + px(2) : 0;
+    if (!st.available) return 0;
+    return px(6) + 1 + px(8) + px(PLAYER_ROW) + (st.has_volume ? px(VOLUME_ROW) : 0) + px(2);
 }
-typedef struct { RECT select_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc; } FooterRects;
+typedef struct {
+    RECT select_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc;
+    RECT player_rc, mute_rc, volume_rc;     // the whole player for the wheel; the slider's track takes clicks around it
+    int track_left, track_right;
+} FooterRects;
+/// The speaker for a level: crossed out when muted, then with one to three waves.
+static wchar_t volume_glyph(const MediaState *st) {
+    if (st->muted || st->volume <= 0.001f) return 0xE74F;
+    return st->volume < 0.34f ? 0xE993 : st->volume < 0.67f ? 0xE994 : 0xE995;
+}
+static void volume_paint(Canvas *cv, const MediaState *st, int left, int right, int y, FooterRects *out) {
+    int h = px(VOLUME_ROW), cy = y + h / 2;
+    RECT m = { left - px(4), y, left + px(20), y + h };
+    draw_glyph(cv, volume_glyph(st), &m, FONT_ICON_SMALL, st->muted ? theme.muted : theme.ink);
+    out->mute_rc = m;
+    // The level in percent at the right, under ⏭; the track between the speaker and it, aligned with the title.
+    char pct[8]; snprintf(pct, sizeof pct, "%d%%", (int)(st->volume * 100 + 0.5f));
+    RECT t = { right - px(36), y, right - px(4), y + h };
+    draw_text(cv, pct, &t, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    int tl = left + px(24), tr = t.left - px(8), th = px(4), knob = px(6);
+    if (tr - tl < px(24)) { SetRectEmpty(&out->volume_rc); return; }
+    int fx = tl + (int)((tr - tl) * st->volume + 0.5f);
+    RECT track = { tl, cy - th / 2, tr, cy - th / 2 + th }, done = { tl, track.top, fx, track.bottom };
+    fill_round_rect(cv, &track, th / 2, theme.line, theme.line);
+    COLORREF level = st->muted ? blend(theme.muted, theme.sidebar, 0.6) : st->spotify ? RGB(0x1D, 0xB9, 0x54) : theme.accent;
+    if (done.right > done.left) fill_round_rect(cv, &done, th / 2, level, level);
+    fill_circle(cv, fx, cy, knob, st->muted ? theme.muted : theme.ink);
+    out->track_left = tl; out->track_right = tr;
+    out->volume_rc = (RECT){ tl - knob, y, tr + knob, y + h };
+}
 static int player_paint(Canvas *cv, const RECT *rc, FooterRects *out) {
     SetRectEmpty(&out->previous_rc); SetRectEmpty(&out->toggle_rc); SetRectEmpty(&out->next_rc);
+    SetRectEmpty(&out->player_rc); SetRectEmpty(&out->mute_rc); SetRectEmpty(&out->volume_rc);
     MediaState st; media_state(&st);
     if (!st.available) return rc->top;
     int y = rc->top + px(6);
@@ -131,7 +163,10 @@ static int player_paint(Canvas *cv, const RECT *rc, FooterRects *out) {
     RECT t = { tl, y + px(1), tr, y + px(19) }, a = { tl, y + px(19), tr, y + h - px(1) };
     draw_text(cv, title, &t, FONT_CAPTION_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     if (st.artist[0]) draw_text(cv, st.artist, &a, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    return y + h + px(2);
+    int bottom = y + h;
+    if (st.has_volume) { volume_paint(cv, &st, left, right, bottom, out); bottom += px(VOLUME_ROW); }
+    out->player_rc = (RECT){ rc->left, y, rc->right, bottom };
+    return bottom + px(2);
 }
 /// True when the click was on one of the player's buttons.
 static bool player_click(Pane *pane, const FooterRects *f, POINT pt) {
@@ -139,8 +174,33 @@ static bool player_click(Pane *pane, const FooterRects *f, POINT pt) {
     if (PtInRect(&f->previous_rc, pt)) command = MEDIA_PREVIOUS;
     else if (PtInRect(&f->toggle_rc, pt)) command = MEDIA_TOGGLE;
     else if (PtInRect(&f->next_rc, pt)) command = MEDIA_NEXT;
+    else if (PtInRect(&f->mute_rc, pt)) command = MEDIA_MUTE;
     else return false;
     media_command(command);
+    pane_footer_changed(pane);
+    return true;
+}
+
+static void player_volume_at(Pane *pane, const FooterRects *f, int x) {
+    if (f->track_right <= f->track_left) return;
+    media_set_volume((float)(x - f->track_left) / (float)(f->track_right - f->track_left));
+    pane_footer_changed(pane);
+}
+/// A press on the slider sets the level there and starts a drag.
+static bool player_press(Pane *pane, const FooterRects *f, POINT pt) {
+    if (!PtInRect(&f->volume_rc, pt)) return false;
+    player_volume_at(pane, f, pt.x);
+    return true;
+}
+static void player_drag(Pane *pane, const FooterRects *f, POINT pt) { player_volume_at(pane, f, pt.x); }
+static bool player_wheel(Pane *pane, const FooterRects *f, POINT pt, int delta) {
+    if (!PtInRect(&f->player_rc, pt)) return false;
+    MediaState st; media_state(&st);
+    if (!st.has_volume) return false;
+    // From the level shown, rounded to the step, so a few notches land on 50% and not 47%.
+    int level = (int)(st.volume * 100 + 0.5f) + VOLUME_STEP * delta / WHEEL_DELTA;
+    level = (level + (level >= 0 ? VOLUME_STEP / 2 : 0)) / VOLUME_STEP * VOLUME_STEP;
+    media_set_volume(level / 100.0f);
     pane_footer_changed(pane);
     return true;
 }
@@ -451,6 +511,9 @@ static void projects_layout(Screen *base, Doc *doc) {
 static void projects_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
 static int projects_footer_height(Screen *base, int width) { (void)base; return sidebar_footer_height(width); }
 static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; sidebar_footer_paint(cv, rc, &s->footer, false); }
+static bool projects_footer_press(Screen *base, POINT pt) { return player_press(base->pane, &((ProjectsScreen *)base)->footer, pt); }
+static void projects_footer_drag(Screen *base, POINT pt) { player_drag(base->pane, &((ProjectsScreen *)base)->footer, pt); }
+static bool projects_footer_wheel(Screen *base, POINT pt, int delta) { return player_wheel(base->pane, &((ProjectsScreen *)base)->footer, pt, delta); }
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
@@ -480,6 +543,7 @@ static const ScreenVTable projects_vt = {
     .destroy = projects_destroy, .layout = projects_layout, .header = projects_header, .action = projects_action,
     .timer = projects_timer, .visible = projects_visible, .refresh = projects_refresh, .activated = projects_activated,
     .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
+    .footer_press = projects_footer_press, .footer_drag = projects_footer_drag, .footer_wheel = projects_footer_wheel,
 };
 Screen *projects_screen_new(void) {
     ProjectsScreen *s = xcalloc(1, sizeof *s);
@@ -711,6 +775,9 @@ static void sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     RECT foot = { rc->left, y, rc->right, rc->bottom };
     sidebar_footer_paint(cv, &foot, &s->footer, s->select_mode);
 }
+static bool sessions_footer_press(Screen *base, POINT pt) { return player_press(base->pane, &((SessionsScreen *)base)->footer, pt); }
+static void sessions_footer_drag(Screen *base, POINT pt) { player_drag(base->pane, &((SessionsScreen *)base)->footer, pt); }
+static bool sessions_footer_wheel(Screen *base, POINT pt, int delta) { return player_wheel(base->pane, &((SessionsScreen *)base)->footer, pt, delta); }
 static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
@@ -760,7 +827,8 @@ static bool sessions_key_press(Screen *base, WPARAM vk, bool ctrl, bool shift) {
 static const ScreenVTable sessions_vt = {
     .destroy = sessions_destroy, .layout = sessions_layout, .header = sessions_header, .action = sessions_action,
     .timer = sessions_timer, .visible = sessions_visible, .refresh = sessions_refresh, .activated = sessions_activated,
-    .footer_height = sessions_footer_height, .footer_paint = sessions_footer_paint, .footer_click = sessions_footer_click, .key = sessions_key_press,
+    .footer_height = sessions_footer_height, .footer_paint = sessions_footer_paint, .footer_click = sessions_footer_click,
+    .footer_press = sessions_footer_press, .footer_drag = sessions_footer_drag, .footer_wheel = sessions_footer_wheel, .key = sessions_key_press,
 };
 Screen *sessions_screen_new(const Project *project) {
     SessionsScreen *s = xcalloc(1, sizeof *s);

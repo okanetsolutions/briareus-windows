@@ -1,10 +1,14 @@
 // The system's media sessions, read and driven on a thread of their own. MinGW ships no header for Windows.Media.Control,
 // so its interfaces are called through their vtables by slot, in the order of Windows.Media.winmd (as windows-rs lists
 // them), and combase's WinRT functions are looked up at run time. Asynchronous calls are waited on by polling IAsyncInfo,
-// which needs none of the parameterized interface ids a completion handler would.
+// which needs none of the parameterized interface ids a completion handler would. Volume is Core Audio's: the Windows
+// volume of the default speakers, as the taskbar's speaker sets it.
+#define COBJMACROS
 #include "media.h"
 #include "str.h"
 #include <objbase.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -32,6 +36,10 @@ enum { ASYNC_STARTED = 0, ASYNC_COMPLETED = 1 };
 
 static const GUID IID_ManagerStatics = { 0x2050c4ee, 0x11a0, 0x57de, { 0xae, 0xd7, 0xc9, 0x7c, 0x70, 0x33, 0x82, 0x45 } };
 static const GUID IID_AsyncInfo = { 0x00000036, 0x0000, 0x0000, { 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+// Core Audio's, spelled out: MSVC's headers only declare them, for uuid.lib or initguid.h to define.
+static const GUID CLSID_Devices = { 0xbcde0395, 0xe52f, 0x467c, { 0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e } };
+static const GUID IID_Devices = { 0xa95664d2, 0x9614, 0x4f35, { 0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6 } };
+static const GUID IID_EndpointVolume = { 0x5cdf2c82, 0x841e, 0x4546, { 0x97, 0x22, 0x0c, 0xf7, 0x40, 0x78, 0x22, 0x9a } };
 static const wchar_t MANAGER_CLASS[] = L"Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager";
 
 typedef void *WinString;
@@ -51,6 +59,8 @@ static HANDLE g_thread, g_wake;
 static volatile LONG g_quit, g_active = 1;
 static MediaCommand g_pending[8];
 static int g_pending_count;
+static float g_pending_volume = -1;     // the latest volume asked for and not yet set, or -1
+static IMMDeviceEnumerator *g_devices;
 
 static void release(void *o) { if (o) ((ReleaseFn)VT(o)[2])(o); }
 static void *get_ptr(void *o, int slot) {
@@ -110,11 +120,49 @@ static void *pick_session(void *manager, bool *spotify) {
     return get_ptr(manager, MANAGER_CURRENT);
 }
 
+// MARK: - Volume
+
+/// The Windows volume of the default speakers, or NULL.
+static IAudioEndpointVolume *speaker_volume(void) {
+    if (!g_devices && FAILED(CoCreateInstance(&CLSID_Devices, NULL, CLSCTX_ALL, &IID_Devices, (void **)&g_devices))) g_devices = NULL;
+    IMMDevice *device = NULL;
+    if (!g_devices || FAILED(IMMDeviceEnumerator_GetDefaultAudioEndpoint(g_devices, eRender, eMultimedia, &device))) return NULL;
+    IAudioEndpointVolume *volume = NULL;
+    if (FAILED(IMMDevice_Activate(device, &IID_EndpointVolume, CLSCTX_ALL, NULL, (void **)&volume))) volume = NULL;
+    IMMDevice_Release(device);
+    return volume;
+}
+
+static void read_volume(MediaState *st) {
+    IAudioEndpointVolume *v = speaker_volume();
+    if (!v) return;
+    BOOL muted = FALSE;
+    if (SUCCEEDED(IAudioEndpointVolume_GetMasterVolumeLevelScalar(v, &st->volume)) && SUCCEEDED(IAudioEndpointVolume_GetMute(v, &muted))) {
+        st->has_volume = true; st->muted = muted;
+    }
+    IAudioEndpointVolume_Release(v);
+}
+
+/// Sets the volume (0...1), which also unmutes, or with a negative level flips the mute.
+static void apply_volume(float level) {
+    IAudioEndpointVolume *v = speaker_volume();
+    if (!v) return;
+    if (level >= 0) {
+        IAudioEndpointVolume_SetMasterVolumeLevelScalar(v, level, NULL);
+        IAudioEndpointVolume_SetMute(v, FALSE, NULL);
+    } else {
+        BOOL muted = FALSE;
+        if (SUCCEEDED(IAudioEndpointVolume_GetMute(v, &muted))) IAudioEndpointVolume_SetMute(v, !muted, NULL);
+    }
+    IAudioEndpointVolume_Release(v);
+}
+
 static void read_state(void *manager, MediaState *st) {
     memset(st, 0, sizeof *st);
     void *session = pick_session(manager, &st->spotify);
     if (!session) return;
     st->available = true;
+    read_volume(st);
     void *props = await(get_ptr(session, SESSION_PROPERTIES), true, 2000);
     if (props) {
         get_string(props, PROPS_TITLE, st->title, sizeof st->title);
@@ -136,7 +184,8 @@ static void read_state(void *manager, MediaState *st) {
     release(session);
 }
 
-static void run_command(void *manager, MediaCommand command) {
+static void run_command(void *manager, MediaCommand command, float level) {
+    if (command == MEDIA_MUTE || command == MEDIA_VOLUME) { apply_volume(command == MEDIA_MUTE ? -1 : level); return; }
     bool spotify;
     void *session = pick_session(manager, &spotify);
     if (!session) return;
@@ -179,12 +228,17 @@ static DWORD WINAPI watch(void *arg) {
         EnterCriticalSection(&g_lock);
         MediaCommand pending[8]; int count = g_pending_count;
         memcpy(pending, g_pending, sizeof pending); g_pending_count = 0;
+        float level = g_pending_volume; g_pending_volume = -1;
         LeaveCriticalSection(&g_lock);
-        for (int i = 0; i < count && !g_quit; i++) run_command(manager, pending[i]);
-        // A player takes a moment to report what a command did.
-        if (count) Sleep(250);
+        if (level >= 0 && !g_quit) run_command(manager, MEDIA_VOLUME, level);
+        bool transport = false;
+        for (int i = 0; i < count && !g_quit; i++) { run_command(manager, pending[i], 0); transport |= pending[i] != MEDIA_MUTE; }
+        // A player takes a moment to report what ⏮ ⏯ ⏭ did; a volume reads back at once.
+        if (transport) Sleep(250);
         MediaState st; read_state(manager, &st);
         EnterCriticalSection(&g_lock);
+        // A drag that moved on since keeps showing where it is, not a level it passed through.
+        if (g_pending_volume >= 0) { st.volume = g_pending_volume; st.muted = false; }
         bool changed = memcmp(&st, &g_state, sizeof st) != 0;
         if (changed) g_state = st;
         LeaveCriticalSection(&g_lock);
@@ -192,6 +246,7 @@ static DWORD WINAPI watch(void *arg) {
         WaitForSingleObject(g_wake, g_active ? 1000 : 5000);
     }
     release(manager);
+    if (g_devices) { IMMDeviceEnumerator_Release(g_devices); g_devices = NULL; }
     CoUninitialize();
     return 0;
 }
@@ -234,6 +289,19 @@ void media_command(MediaCommand command) {
     if (g_pending_count < (int)(sizeof g_pending / sizeof g_pending[0])) g_pending[g_pending_count++] = command;
     // Shown at once; the watcher corrects it if the player did otherwise.
     if (command == MEDIA_TOGGLE) g_state.playing = !g_state.playing;
+    if (command == MEDIA_MUTE) g_state.muted = !g_state.muted;
+    LeaveCriticalSection(&g_lock);
+    SetEvent(g_wake);
+}
+
+void media_set_volume(float level) {
+    if (!g_thread) return;
+    if (level < 0) level = 0;
+    if (level > 1) level = 1;
+    EnterCriticalSection(&g_lock);
+    // Only the latest level of a drag is set.
+    g_pending_volume = level;
+    g_state.volume = level; g_state.muted = false;
     LeaveCriticalSection(&g_lock);
     SetEvent(g_wake);
 }

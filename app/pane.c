@@ -28,6 +28,7 @@ struct Pane {
     HBRUSH edit_brush;
     // scrollbar drag
     bool dragging_thumb; int drag_offset;
+    bool dragging_footer;   // the top screen's footer_drag follows the mouse
     RECT thumb_rect;
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
     HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
@@ -471,6 +472,12 @@ static bool context_menu(Pane *p, int x, int y) {
 static void mouse_move(Pane *p, int x, int y) {
     if (!p->tracking) { TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, p->hwnd, 0 }; TrackMouseEvent(&tme); p->tracking = true; }
     if (p->doc.selecting) { drag_selection(p, x, y); return; }
+    if (p->dragging_footer) {
+        Screen *s = pane_top(p);
+        POINT pt = { x, y };
+        if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt);
+        return;
+    }
     if (p->dragging_thumb) {
         RECT content = pane_content_rect(p);
         int track = content.bottom - content.top;
@@ -521,12 +528,14 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
     if (!right && p->footer_h && y >= content.bottom) {
         Screen *s = pane_top(p);
         POINT pt = { x, y };
+        if (s && s->vt->footer_press && s->vt->footer_press(s, pt)) { p->dragging_footer = true; SetCapture(p->hwnd); return; }
         if (s && s->vt->footer_click) s->vt->footer_click(s, pt);
     }
 }
 static void mouse_up(Pane *p, int x, int y) {
     if (p->doc.selecting) { end_selection(p); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
+    if (p->dragging_footer) { p->dragging_footer = false; ReleaseCapture(); return; }
     if (GetCapture() == p->hwnd) ReleaseCapture();
     Screen *s = pane_top(p);
     POINT sp = { x, y }; ClientToScreen(p->hwnd, &sp);
@@ -570,6 +579,8 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
+    // A footer drag the mouse was taken from (another window, Alt+Tab) ends where it was.
+    case WM_CAPTURECHANGED: p->dragging_footer = false; return 0;
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         RECT content = pane_content_rect(p);
@@ -596,6 +607,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // Over a sticky sidebar that overflows, such as the file tree, the wheel scrolls it and not the page.
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; ScreenToClient(hwnd, &pt);
         RECT content = pane_content_rect(p);
+        if (p->footer_h && pt.y >= content.bottom && s && s->vt->footer_wheel && s->vt->footer_wheel(s, pt, delta)) return 0;
         int dy = -delta * px(40) / WHEEL_DELTA;
         if (in_rect(&content, pt.x, pt.y)) {
             POINT c = to_content(p, pt.x, pt.y);
