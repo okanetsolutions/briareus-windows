@@ -122,6 +122,13 @@ void pane_relayout(Pane *p) { p->dirty = true; InvalidateRect(p->hwnd, NULL, FAL
 void pane_repaint(Pane *p) { InvalidateRect(p->hwnd, NULL, FALSE); }
 void pane_header_changed(Pane *p) { RECT rc = { 0, 0, 10000, p->header_h }; InvalidateRect(p->hwnd, &rc, FALSE); }
 void pane_footer_changed(Pane *p) { p->dirty = true; InvalidateRect(p->hwnd, NULL, FALSE); }
+void pane_place_control(HWND control, const RECT *rc) {
+    RECT now; GetWindowRect(control, &now); MapWindowPoints(NULL, GetParent(control), (POINT *)&now, 2);
+    bool moved = !EqualRect(&now, rc), shown = IsWindowVisible(control);
+    if (moved) SetWindowPos(control, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    if (!shown) ShowWindow(control, SW_SHOW);
+    if (moved || !shown) RedrawWindow(control, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME);
+}
 
 static RECT client(Pane *p) { RECT rc; GetClientRect(p->hwnd, &rc); return rc; }
 RECT pane_content_rect(Pane *p) {

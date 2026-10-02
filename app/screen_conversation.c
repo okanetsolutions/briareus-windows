@@ -824,8 +824,7 @@ static void conversation_footer_layout(Screen *base, const RECT *rc) {
     int top = col.top + px(8) + chips + px(8);
     RECT er = { col.left + px(12) + 1, top + px(10) + 1 + files, col.right - px(12) - 1, top + px(10) + 1 + files + ch };
     s->composer_rc = er;
-    MoveWindow(s->composer, er.left, er.top, er.right - er.left, er.bottom - er.top, TRUE);
-    ShowWindow(s->composer, SW_SHOW);
+    pane_place_control(s->composer, &er);
 }
 static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     ConversationScreen *s = (ConversationScreen *)base;
