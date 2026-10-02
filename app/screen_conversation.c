@@ -17,7 +17,7 @@ enum {
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
 enum { ID_COMPOSER = 301 };
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
-enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY };
+enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER };
 
 
 typedef struct {
@@ -649,6 +649,8 @@ static char *status_line(const Session *ss) {
     if (json_is_object(loop)) { if (json_num(json_get(loop, "rounds"), &round)) str_appendf(&sub, " \xC2\xB7 \xF0\x9F\x94\x81 loop round %d", (int)round); else str_appendz(&sub, " \xC2\xB7 \xF0\x9F\x94\x81 loop"); }
     const char *branch = json_str_nonempty(json_get(ss->raw, "branch"));
     if (branch) str_appendf(&sub, " \xC2\xB7 %s", branch);
+    bool browser_up = false;
+    if (browser_session_on(ss->raw, &browser_up)) str_appendz(&sub, browser_up ? " \xC2\xB7 \xF0\x9F\x8C\x90 browser" : " \xC2\xB7 \xF0\x9F\x8C\x90 browser starts next turn");
     double in = 0, out = 0, cost;
     bool has_in = json_num(json_get(ss->raw, "inputTokens"), &in), has_out = json_num(json_get(ss->raw, "outputTokens"), &out);
     if (has_in || has_out) { char *tk = format_tokens(in + out); str_appendf(&sub, " \xC2\xB7 %s tok", tk); free(tk); }
@@ -678,6 +680,10 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
     if (store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
     bool can = !s->busy && !s->uncertain;
     bool closed = str_eq(session_status(ss), "closed");
+    if (browser_offered()) {
+        bool running = false, on = browser_session_on(ss->raw, &running);
+        header_button(info, 0xE774, on && running ? "\xF0\x9F\x8C\x90 Browser \xE2\x97\x8F" : "\xF0\x9F\x8C\x90 Browser", ACT_MENU_ITEM + MENU_BROWSER, true, false);
+    }
     if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "\xE2\x8F\xB9 Stop", ACT_MENU_ITEM + MENU_STOP, can, false);
     if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "\xE2\x9F\xB3 Reopen", ACT_MENU_ITEM + MENU_REOPEN, can, false);
     if (store_supports("close") && !closed) header_button(info, 0xE8BB, "Close", ACT_MENU_ITEM + MENU_CLOSE, can, false);
@@ -693,6 +699,7 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_CHANGES: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_files_screen_new(&p, number)); project_free(&p); break; }
     case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
     case MENU_COPY: break;
+    case MENU_BROWSER: app_push_detail(browser_screen_new(ss)); break;
     case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
     case MENU_LOOP_ON: confirm_and_mutate(s, "review_loop"); break;
     case MENU_RENAME: {
@@ -711,7 +718,7 @@ static void menu_choice(ConversationScreen *s, int chosen) {
 
 static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_COPY) { menu_choice(s, action - ACT_MENU_ITEM); return; }
+    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_BROWSER) { menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
     case ACT_ANSWER: {
         int seq = (int)(arg >> 8), index = (int)(arg & 0xFF);
