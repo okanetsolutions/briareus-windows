@@ -45,7 +45,8 @@ enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN };
+enum { ACT_DB_BASE = 1160 };    // the Database tab's, PROJECT_DB_ACTIONS of them
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB };
 enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -55,10 +56,11 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_RUN, TAB_SSH or TAB_SFTP
+    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_RUN, TAB_SSH, TAB_SFTP or TAB_DB
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
     ProjectRun *run;   // the Run tab, on the default branch
+    ProjectDb *db;     // the Database tab
     bool shown;
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
@@ -217,6 +219,7 @@ static void pulls_destroy(Screen *base) {
     project_ssh_free(s->ssh);
     project_sftp_free(s->sftp);
     project_run_free(s->run);
+    project_db_free(s->db);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
@@ -254,17 +257,19 @@ static void pulls_layout(Screen *base, Doc *doc) {
     char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
     char *sftp_label = files ? xstrfmt("\xE2\x87\xB5 SFTP sessions %zu", files) : xstrdup("\xE2\x87\xB5 SFTP sessions");
     // Run, on the default branch, for a token that may serve one.
-    const char *tabs[5] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    int ids[5] = { TAB_PULLS, TAB_ISSUES };
+    const char *tabs[6] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
+    int ids[6] = { TAB_PULLS, TAB_ISSUES };
     size_t n = 2;
     if (project_run_offered()) { tabs[n] = "\xE2\x96\xB6 Run"; ids[n++] = TAB_RUN; }
     if (project_ssh_offered()) { tabs[n] = ssh_label; ids[n++] = TAB_SSH; tabs[n] = sftp_label; ids[n++] = TAB_SFTP; }
+    if (project_db_offered()) { tabs[n] = "\xE2\x9B\x81 Database"; ids[n++] = TAB_DB; }
     doc_tabs(doc, w, tabs, ids, n, s->tab);
     free(ssh_label); free(sftp_label);
     doc_space(doc, px(14));
     if (s->tab == TAB_RUN) { project_run_layout(s->run, doc, w); return; }
     if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->tab == TAB_SFTP) { project_sftp_layout(s->sftp, doc, w); return; }
+    if (s->tab == TAB_DB) { project_db_layout(s->db, doc, w); return; }
     if (s->error) { doc_notice(doc, 0, w, s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, 0, w, s->write_error);
@@ -357,6 +362,10 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
         return;
     }
+    if (s->tab == TAB_DB) {
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
+        return;
+    }
     if (s->tab == TAB_SFTP) {
         project_sftp_header(s->sftp, info);
         HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the servers and the folder on show again";
@@ -403,6 +412,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (project_ssh_action(s->ssh, action, arg, pt)) return;
     if (project_sftp_action(s->sftp, action, arg, pt)) return;
     if (project_run_action(s->run, action, arg, pt)) return;
+    if (project_db_action(s->db, action, arg, pt)) return;
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
@@ -410,7 +420,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
-        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) ? (int)arg : TAB_PULLS;
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
@@ -469,6 +479,7 @@ static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
     if (s->tab == TAB_SSH) { project_ssh_refresh(s->ssh); pane_relayout(base->pane); return; }
     if (s->tab == TAB_SFTP) { project_sftp_refresh(s->sftp); pane_relayout(base->pane); return; }
+    if (s->tab == TAB_DB) { project_db_refresh(s->db); pane_relayout(base->pane); return; }
     if (s->tab == TAB_RUN) { project_run_refresh(s->run); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
@@ -489,6 +500,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->ssh = project_ssh_new(project->repo, &s->base, ACT_SSH_BASE);
     s->sftp = project_sftp_new(project->repo, &s->base, ACT_SFTP_BASE);
     s->run = project_run_new(project->repo, &s->base, ACT_RUN_BASE, TIMER_BOARD_RUN_LOG);
+    s->db = project_db_new(project->repo, &s->base, ACT_DB_BASE);
     return &s->base;
 }
 

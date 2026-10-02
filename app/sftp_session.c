@@ -462,7 +462,7 @@ static DWORD WINAPI reader_main(void *param) {
 }
 
 /// This process's environment with ssh pointed at Briareus.exe for its prompts, and sftp's output in UTF-8.
-static wchar_t *child_environment(void) {
+wchar_t *sftp_child_environment(void) {
     static const wchar_t *const drop[] = { L"SSH_ASKPASS=", L"SSH_ASKPASS_REQUIRE=", L"BRIAREUS_ASKPASS=", L"LC_ALL=" };
     wchar_t exe[MAX_PATH]; GetModuleFileNameW(NULL, exe, MAX_PATH);
     wchar_t extra[MAX_PATH + 128];
@@ -521,7 +521,7 @@ static bool spawn(SftpSession *s, char **error) {
     char *line = xstrfmt("\"%s\" -P %d -o User=%s -o ServerAliveInterval=30 -- %s", exe, s->port, s->user, s->host);
     wchar_t *cmd = utf8_to_wide(line);
     free(exe); free(line);
-    wchar_t *env = child_environment();
+    wchar_t *env = sftp_child_environment();
     wchar_t *dir = NULL;
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &dir))) dir = NULL;
     // ssh's prompts are a process of their own, started from the background: let them come to the front.
