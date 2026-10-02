@@ -2188,10 +2188,10 @@ static void paint_forge_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ForgeForm *s = it->data;
     fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
 }
-/// A labelled box with its edit, and the hint under it; advances.
+/// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 static void forge_field(ForgeForm *s, Doc *doc, int x, int w, int f) {
     const FieldDef *d = &FORGE_FIELDS[f];
-    doc_text(doc, x, w, d->label, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, d->label, theme.ink, d->hint);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
     int fh = edit_line_height(fid), h = px(36);
@@ -2201,7 +2201,6 @@ static void forge_field(ForgeForm *s, Doc *doc, int x, int w, int f) {
     s->rects[f] = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
     s->laid[f] = true;
     doc->y = box.bottom;
-    if (d->hint) { doc_space(doc, px(6)); doc_text(doc, x, w, d->hint, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); }
     doc_space(doc, px(14));
 }
 typedef struct { char *text; bool on, gone; } ForgeCheck;
@@ -2218,7 +2217,7 @@ static void paint_forge_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 }
 /// The projects the account is available to, one tick box each, as the web form's multiple select.
 static void forge_projects(ForgeForm *s, Doc *doc, int x, int w) {
-    doc_text(doc, x, w, "Projects", FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_field_label(doc, x, w, "Projects", theme.ink, "Only these projects offer the account's Forge servers and sites to their clients.");
     doc_space(doc, px(6));
     Json *choices = forge_choices(s);
     const Json *rows = g_settings ? settings_rows(g_settings) : NULL;
@@ -2234,8 +2233,6 @@ static void forge_projects(ForgeForm *s, Doc *doc, int x, int w) {
     }
     if (!json_count(choices)) doc_text(doc, x, w, "No projects yet. Add one under Projects first.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     json_free(choices);
-    doc_space(doc, px(6));
-    doc_text(doc, x, w, "Only these projects offer the account's Forge servers and sites to their clients.", FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK);
     doc_space(doc, px(14));
 }
 
