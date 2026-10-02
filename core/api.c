@@ -1,4 +1,5 @@
 #include "api.h"
+#include "browser.h"
 #include "str.h"
 #include <ctype.h>
 #include <math.h>
@@ -318,6 +319,12 @@ static const ApiRoute ROUTES[] = {
     { "save_findings", "POST", "sessions/{sessionId}/findings/save" },
     { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
     { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    // The session's shared browser: its state, switched on and off, acted in, and watched (api_stream).
+    { "browser", "GET", "sessions/{sessionId}/browser" },
+    { "browser_on", "POST", "sessions/{sessionId}/browser" },
+    { "browser_off", "DELETE", "sessions/{sessionId}/browser" },
+    { "browser_input", "POST", "sessions/{sessionId}/browser/input" },
+    { "browser_stream", "GET", "sessions/{sessionId}/browser/stream" },
     // The Cloudflare Access service token the Run tab's browser sends to ▶ Run preview hosts; a manage token.
     { "preview_access", "GET", "preview/access" },
     // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.
@@ -383,27 +390,50 @@ static char *url_value(const Json *v, bool in_path) {
     if (!in_path && json_bool_tristate(v) >= 0) return xstrdup(json_bool_tristate(v) ? "1" : "0");
     return NULL;
 }
-Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeout_ms, ApiError *error) {
-    const ApiRoute *route = api_route(name);
-    if (!route) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return NULL; }
-    Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
-    Str path; str_init(&path);
+/// The route's path with its `{}` filled from `rest`, which loses those arguments; false (and a 400) when one is missing.
+static bool fill_path(const ApiRoute *route, Json *rest, Str *path, ApiError *error) {
     for (const char *p = route->path; *p;) {
-        if (*p != '{') { str_appendc(&path, *p++); continue; }
+        if (*p != '{') { str_appendc(path, *p++); continue; }
         const char *end = strchr(p, '}');
         char *arg = xstrndup(p + 1, (size_t)(end - p - 1));
         char *value = url_value(json_get(rest, arg), true);
         if (!value) {
             char *why = xstrfmt("Missing argument: %s", arg);
             api_error_set(error, API_HTTP, 400, why, -1);
-            free(why); free(arg); str_free(&path); json_free(rest);
-            return NULL;
+            free(why); free(arg);
+            return false;
         }
-        str_appendz(&path, value);
+        str_appendz(path, value);
         json_object_remove(rest, arg);
         free(value); free(arg);
         p = end + 1;
     }
+    return true;
+}
+/// The rest of the arguments as a query string after the path.
+static void append_query(const Json *rest, Str *path) {
+    char sep = '?';
+    for (size_t i = 0; i < json_count(rest); i++) {
+        // An array is a repeatable parameter: `project=a&project=b`.
+        const Json *arg = json_get(rest, json_key(rest, i));
+        size_t n = json_is_array(arg) ? json_count(arg) : 1;
+        char *key = url_encode(json_key(rest, i));
+        for (size_t k = 0; k < n; k++) {
+            char *value = url_value(json_is_array(arg) ? json_at(arg, k) : arg, false);
+            if (!value) continue;
+            str_appendf(path, "%c%s=%s", sep, key, value);
+            sep = '&';
+            free(value);
+        }
+        free(key);
+    }
+}
+Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeout_ms, ApiError *error) {
+    const ApiRoute *route = api_route(name);
+    if (!route) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return NULL; }
+    Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
+    Str path; str_init(&path);
+    if (!fill_path(route, rest, &path, error)) { str_free(&path); json_free(rest); return NULL; }
     char *kept = NULL;
     if (route->filter) {
         const char *f = json_str(json_get(rest, route->filter));
@@ -413,21 +443,7 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
     bool reads = str_eq(route->method, "GET") || str_eq(route->method, "DELETE");
     Json *result;
     if (reads) {
-        char sep = '?';
-        for (size_t i = 0; i < json_count(rest); i++) {
-            // An array is a repeatable parameter: `project=a&project=b`.
-            const Json *arg = json_get(rest, json_key(rest, i));
-            size_t n = json_is_array(arg) ? json_count(arg) : 1;
-            char *key = url_encode(json_key(rest, i));
-            for (size_t k = 0; k < n; k++) {
-                char *value = url_value(json_is_array(arg) ? json_at(arg, k) : arg, false);
-                if (!value) continue;
-                str_appendf(&path, "%c%s=%s", sep, key, value);
-                sep = '&';
-                free(value);
-            }
-            free(key);
-        }
+        append_query(rest, &path);
         result = request(c, path.data, route->method, NULL, timeout_ms, error);
     } else {
         if (route->set) json_set_bool(rest, route->set, true);
@@ -442,6 +458,113 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
     }
     free(kept); str_free(&path); json_free(rest);
     return result;
+}
+
+// MARK: - Event streams
+
+static char *winhttp_error_text(DWORD code);
+static char *query_header(HINTERNET request, DWORD info);
+
+
+void api_stream_cancel_init(ApiStreamCancel *c) { InitializeCriticalSection(&c->lock); c->request = NULL; c->cancelled = false; }
+void api_stream_cancel_free(ApiStreamCancel *c) { DeleteCriticalSection(&c->lock); }
+void api_stream_cancel(ApiStreamCancel *c) {
+    EnterCriticalSection(&c->lock);
+    c->cancelled = true;
+    // Closing the handle is how WinHTTP ends a read blocked on another thread.
+    if (c->request) { WinHttpCloseHandle(c->request); c->request = NULL; }
+    LeaveCriticalSection(&c->lock);
+}
+static bool stream_cancelled(ApiStreamCancel *c) {
+    EnterCriticalSection(&c->lock);
+    bool cancelled = c->cancelled;
+    LeaveCriticalSection(&c->lock);
+    return cancelled;
+}
+
+bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStreamCancel *cancel, SseEmit emit, void *ctx, ApiError *error) {
+    const ApiRoute *route = api_route(name);
+    if (!route || !str_eq(route->method, "GET")) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return false; }
+    Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
+    Str path; str_init(&path);
+    bool filled = fill_path(route, rest, &path, error);
+    if (filled) append_query(rest, &path);
+    json_free(rest);
+    if (!filled) { str_free(&path); return false; }
+    char *url = xstrfmt("%s%s", c->address.base_url, path.data);
+    str_free(&path);
+    bool ended = false;
+    HINTERNET connection = NULL, req = NULL;
+    SseParser parser; sse_init(&parser);
+    wchar_t *wurl = utf8_to_wide(url);
+    URL_COMPONENTS parts; memset(&parts, 0, sizeof parts); parts.dwStructSize = sizeof parts;
+    wchar_t host[256] = L"", wpath[4096] = L"";
+    parts.lpszHostName = host; parts.dwHostNameLength = 255;
+    parts.lpszUrlPath = wpath; parts.dwUrlPathLength = 4095;
+    if (!c->session || !WinHttpCrackUrl(wurl, 0, 0, &parts) || parts.nScheme != INTERNET_SCHEME_HTTPS) {
+        api_error_set(error, API_NETWORK, 0, "The server address is not an HTTPS URL.", -1); goto done;
+    }
+    connection = WinHttpConnect(c->session, host, parts.nPort, 0);
+    if (connection) req = WinHttpOpenRequest(connection, L"GET", wpath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE | WINHTTP_FLAG_REFRESH);
+    if (!req) { char *why = winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); goto done; }
+    EnterCriticalSection(&cancel->lock);
+    bool cancelled = cancel->cancelled;
+    if (!cancelled) cancel->request = req;
+    LeaveCriticalSection(&cancel->lock);
+    if (cancelled) { WinHttpCloseHandle(req); req = NULL; api_error_set(error, API_CANCELLED, 0, NULL, -1); goto done; }
+    DWORD disabled = WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_AUTHENTICATION | WINHTTP_DISABLE_KEEP_ALIVE;
+    WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE, &disabled, sizeof disabled);
+    DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+    WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof policy);
+    // The server pings every 25 seconds: a minute of silence is a connection that went away.
+    WinHttpSetTimeouts(req, REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS, 60000);
+    char *headers = xstrfmt("Authorization: Bearer %s\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\n", c->token);
+    wchar_t *wheaders = utf8_to_wide(headers);
+    SecureZeroMemory(headers, strlen(headers)); free(headers);
+    BOOL sent = WinHttpSendRequest(req, wheaders, (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    SecureZeroMemory(wheaders, wcslen(wheaders) * sizeof *wheaders); free(wheaders);
+    if (!sent || !WinHttpReceiveResponse(req, NULL)) goto failed;
+    DWORD code = 0, size = sizeof code;
+    if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &size, WINHTTP_NO_HEADER_INDEX)) goto failed;
+    if (code < 200 || code >= 300) {
+        // The refusal's own words, as a JSON body says them.
+        char *type = query_header(req, WINHTTP_QUERY_CONTENT_TYPE), *retry = query_header(req, WINHTTP_QUERY_RETRY_AFTER);
+        char body[4096]; DWORD got = 0, total = 0;
+        while (total < sizeof body - 1 && WinHttpReadData(req, body + total, (DWORD)(sizeof body - 1 - total), &got) && got) total += got;
+        body[total] = 0;
+        Json *payload = type && str_icontains(type, "json") ? json_parse(body, total) : NULL;
+        const char *message = json_str_nonempty(json_get(payload, "error"));
+        if (code >= 300 && code < 400) api_error_set(error, API_REDIRECTED, (int)code, NULL, -1);
+        else api_error_set(error, API_HTTP, (int)code, message ? message : status_text((int)code), api_retry_after(retry, time(NULL)));
+        json_free(payload); free(type); free(retry);
+        goto done;
+    }
+    char buffer[16384];
+    for (;;) {
+        // Asked for more than has arrived, a read waits to fill the buffer: a small event (tabs, closed) would sit in it
+        // until the next frame. So it asks what is there first, which returns as soon as anything is.
+        DWORD available = 0, got = 0;
+        if (!WinHttpQueryDataAvailable(req, &available)) goto failed;
+        if (!available) { ended = true; break; }
+        if (!WinHttpReadData(req, buffer, available < sizeof buffer ? available : (DWORD)sizeof buffer, &got)) goto failed;
+        if (!got) { ended = true; break; }
+        sse_feed(&parser, buffer, got, emit, ctx);
+    }
+    goto done;
+failed:
+    if (stream_cancelled(cancel)) api_error_set(error, API_CANCELLED, 0, NULL, -1);
+    else { char *why = winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); }
+done:
+    if (req) {
+        EnterCriticalSection(&cancel->lock);
+        // A cancel that came first closed it already.
+        if (cancel->request == req) { WinHttpCloseHandle(req); cancel->request = NULL; }
+        LeaveCriticalSection(&cancel->lock);
+    }
+    if (connection) WinHttpCloseHandle(connection);
+    sse_free(&parser);
+    free(wurl); free(url);
+    return ended;
 }
 
 char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *content_type, ApiError *error) {

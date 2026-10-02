@@ -13,6 +13,7 @@ void api_tests(void);
 void cache_tests(void);
 void vt_tests(void);
 void sftp_tests(void);
+void browser_tests(void);
 
 // app_tests.exe
 void app_format_tests(void);

@@ -46,6 +46,11 @@ Screen *session_panel_screen_new(const Session *session);
 bool session_panel_wanted(const Session *session);
 /// Hands the panel the session's latest record, when the panel is that session's.
 void session_panel_update(const Session *session);
+/// A session's shared browser: the server's headless Chromium its agent drives, watched as live frames and driven with the
+/// mouse and keyboard on the same tabs, with its tabs, an address field, and switching it on and off.
+Screen *browser_screen_new(const Session *session);
+/// Whether the server has the shared browser and this token may read it.
+bool browser_offered(void);
 /// Runs a session operation (`compact`, `clear`, `rename` with compaction settings) through its open conversation,
 /// which shows its progress and errors and reads the session again afterwards.
 void conversation_session_op(const char *session_id, const char *operation, Json *extra);

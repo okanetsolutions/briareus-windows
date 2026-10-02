@@ -1,11 +1,13 @@
 // The client API (/api/v1) over HTTPS: one token, no cookies, no cache, no redirects, no automatic retries.
 #ifndef BRIAREUS_API_H
 #define BRIAREUS_API_H
+#include "browser.h"
 #include "json.h"
 #include "models.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <time.h>
+#include <windows.h>
 
 typedef enum {
     API_OK = 0,
@@ -74,6 +76,15 @@ bool api_catalog(ApiClient *client, Route **routes, size_t *count, ApiError *err
 /// One call by name, on its route. `timeout_ms` is for a call that answers only once its work is done; 0 leaves the
 /// 30-second default. A name not in the table, or a missing path argument, is refused with a 400 before any network call.
 Json *api_call(ApiClient *client, const char *name, const Json *arguments, int timeout_ms, ApiError *error);
+/// Stops a stream from another thread: the read under way ends at once with API_CANCELLED, and one not yet started never
+/// starts. Initialised before the stream and freed once it returned.
+typedef struct { CRITICAL_SECTION lock; void *request; bool cancelled; } ApiStreamCancel;
+void api_stream_cancel_init(ApiStreamCancel *cancel);
+void api_stream_cancel_free(ApiStreamCancel *cancel);
+void api_stream_cancel(ApiStreamCancel *cancel);
+/// Reads a GET call's server-sent event stream on the calling thread, handing each event to `emit` as it completes, until
+/// the server ends it (true), or it fails or is cancelled (false, with `error`). Always over WinHTTP, never the test stub.
+bool api_stream(ApiClient *client, const char *name, const Json *arguments, ApiStreamCancel *cancel, SseEmit emit, void *ctx, ApiError *error);
 /// The text of a recorded voice note, sent with the content type it was recorded in.
 char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, ApiError *error);
 /// Stores a file to attach to a message, as the dashboard's composer does: the bytes are the body and the name rides in the
