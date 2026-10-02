@@ -357,6 +357,15 @@ static const ApiRoute ROUTES[] = {
     { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" },
     { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    // Laravel Forge itself, read by the server with an account's token: its servers and their sites, 100 to a page.
+    { "forge_servers", "GET", "forge/accounts/{account}/servers" },
+    { "forge_sites", "GET", "forge/accounts/{account}/servers/{server}/sites" },
+    { "forge_site", "GET", "forge/accounts/{account}/servers/{server}/sites/{site}" },
+    // A site's deploy script (`content`, `autoSource`: run with its .env loaded) and its .env, read and replaced whole.
+    { "forge_deploy_script", "GET", "forge/accounts/{account}/servers/{server}/sites/{site}/deployment-script" },
+    { "set_forge_deploy_script", "PUT", "forge/accounts/{account}/servers/{server}/sites/{site}/deployment-script" },
+    { "forge_env", "GET", "forge/accounts/{account}/servers/{server}/sites/{site}/env" },
+    { "set_forge_env", "PUT", "forge/accounts/{account}/servers/{server}/sites/{site}/env" },
 };
 const ApiRoute *api_route(const char *name) {
     for (size_t i = 0; name && i < sizeof ROUTES / sizeof *ROUTES; i++) if (str_eq(ROUTES[i].name, name)) return &ROUTES[i];
