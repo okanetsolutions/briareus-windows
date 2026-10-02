@@ -125,6 +125,9 @@ void project_forge_refresh(ProjectForge *p);
 void project_forge_layout(ProjectForge *p, Doc *doc, int w);
 /// The server on show in the line under the title.
 void project_forge_header(ProjectForge *p, HeaderInfo *info);
+/// One Forge site, opened from the Forge tab: its Overview, Deploy script and Environment (.env), the last two editable.
+/// `account` is the Forge account the server is read with, `server` the ForgeServer and `site` the ForgeSite as listed.
+Screen *forge_site_screen_new(const char *repo, double account, const Json *server, const Json *site);
 /// True when the action was the tab's.
 bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run

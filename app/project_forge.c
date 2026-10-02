@@ -10,7 +10,7 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_SERVER, A_OPEN_SITE };
+enum { A_SERVER, A_OPEN_SITE, A_SITE_PAGE };
 enum { LIST_W = 280, MAX_PAGES = 20 };
 
 struct ProjectForge {
@@ -275,7 +275,6 @@ static void labeled_field(Doc *doc, int x, int w, const char *label, const Json 
 static void layout_site(ProjectForge *p, Doc *doc, int x, int w, const Json *site, size_t index) {
     bool mine = site_is_project(site, p->repo);
     int box = doc_box_begin(doc, x, w, px(12), theme.elevated, mine ? theme.accent : theme.line, px(10));
-    doc_item(doc, box)->hover_fill = false;
     int ix = x + px(14), iw = w - px(28);
     const char *name = json_str_nonempty(json_get(site, "name"));
     doc_text(doc, ix, iw, name ? name : "Forge site", FONT_HEADLINE, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -307,13 +306,15 @@ static void layout_site(ProjectForge *p, Doc *doc, int x, int w, const Json *sit
     char *https = NULL;
     // Forge's `url` may come without a scheme; a bare domain opens over HTTPS.
     if (url && !safe_web_url(url) && !strstr(url, "://")) https = xstrfmt("https://%s", url);
-    if (safe_web_url(https ? https : url)) {
-        doc_space(doc, px(10));
-        ButtonSpec b = { 0xE8A7, "Open site", BUTTON_BORDERED, p->base + A_OPEN_SITE, (intptr_t)index, true };
-        doc_button_row(doc, ix, iw, &b, 1);
-    }
+    // The card opens the site's page; Open site opens the site itself.
+    ButtonSpec buttons[2]; size_t n = 0;
+    buttons[n++] = (ButtonSpec){ 0xE70F, "Deploy script & .env \xE2\x80\xBA", BUTTON_PROMINENT, p->base + A_SITE_PAGE, (intptr_t)index, true };
+    if (safe_web_url(https ? https : url)) buttons[n++] = (ButtonSpec){ 0xE8A7, "Open site", BUTTON_BORDERED, p->base + A_OPEN_SITE, (intptr_t)index, true };
+    doc_space(doc, px(10));
+    doc_button_row(doc, ix, iw, buttons, n);
     free(https);
     doc_box_end(doc, box, px(12));
+    doc_box_action(doc, box, p->base + A_SITE_PAGE, (intptr_t)index);
 }
 
 /// The server on show and its sites, the project's first.
@@ -412,6 +413,12 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt) {
         }
         free(key);
         relayout(p);
+        break;
+    }
+    case A_SITE_PAGE: {
+        const Json *server = selected_server(p), *site = json_at(json_get(p->sites, p->selected), (size_t)arg);
+        if (json_is_object(server) && json_is_object(site))
+            app_push_detail(forge_site_screen_new(p->repo, json_num_or(json_get(server, "_account"), 0), server, site));
         break;
     }
     case A_OPEN_SITE: {
