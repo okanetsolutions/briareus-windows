@@ -47,6 +47,7 @@ struct Doc {
     int sticky_limit, sticky_shift; // the content y they stop at, and how far they are moved now
     int sticky_scroll, sticky_max;  // the group's own scroll inside its window, and how far it can go
     RECT sticky_view;               // the window the group shows through, in content coordinates
+    int pin_last, pin_bottom, pin_shift;  // items [0, pin_last) pinned at the view's top over [0, pin_bottom); none when 0
 };
 
 void doc_init(Doc *doc);
@@ -116,7 +117,10 @@ int doc_section(Doc *doc, int x, int w, const char *title);
 /// needs room for that window: `limit` at least the group's top plus the view's height less 24px. One group per
 /// document; its own scroll survives layouts.
 void doc_sticky(Doc *doc, int first, int last, int limit);
-/// Moves the sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
+/// Items [0, last), laid out above `bottom`, stay at the top of the view as a fixed header: the rest scrolls beneath
+/// them, clipped at `bottom`, and a sticky group's window starts below them. One band per document.
+void doc_pin(Doc *doc, int last, int bottom);
+/// Moves the pinned and sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
 void doc_set_view(Doc *doc, int scroll_y, int view_height);
 /// Scrolls the sticky group by `dy` when the content point is over its window and it overflows; false otherwise.
 bool doc_sticky_wheel(Doc *doc, int x, int y, int dy);

@@ -2025,15 +2025,22 @@ static void pull_layout(Screen *base, Doc *doc) {
     layout_header(s, doc, head);
     doc_space(doc, px(12));
     layout_tabs(s, doc, head);
+    // With the sidebar, the title and the tabs stay at the top while the tab's content scrolls beneath them, unless
+    // they would take most of the view (a long stack overview).
+    RECT view = pane_content_rect(base->pane);
+    int view_h = view.bottom - view.top;
+    bool files = s->tab == PR_TAB_FILES && !json_is_null(s->pr);
+    if (s->tab != PR_TAB_RUN && !files && doc->y < view_h / 2) doc_pin(doc, (int)doc->count, doc->y);
     doc_space(doc, px(18));
     if (s->tab == PR_TAB_RUN) {
         layout_run(s, doc, w);
         return;
-    } else if (s->tab == PR_TAB_FILES && !json_is_null(s->pr)) {
+    } else if (files) {
         // The files take the whole width: GitHub's Files changed tab has no sidebar.
         layout_main(s, doc, col_make(0, w));
     } else if (w >= px(880)) {
-        // Wide: the conversation on the left, GitHub's sidebar on the right.
+        // Wide: the conversation on the left, GitHub's sidebar on the right. The sidebar stays in view beside the
+        // conversation, and scrolls on its own when it is taller than the view.
         int side_w = w * 26 / 100, gap = px(28);
         if (side_w < px(240)) side_w = px(240);
         if (side_w > px(320)) side_w = px(320);
@@ -2041,9 +2048,16 @@ static void pull_layout(Screen *base, Doc *doc) {
         int top = doc->y;
         layout_main(s, doc, main);
         int main_bottom = doc->y;
-        doc->y = top - px(14);
+        int side_top = doc->y = top - px(14), side_first = (int)doc->count;
         layout_sidebar(s, doc, side);
-        if (doc->y < main_bottom) doc->y = main_bottom;
+        if (doc->pin_last) {
+            // The page is as long as the conversation, or as the sidebar's window when that is longer.
+            int side_h = doc->y - side_top, room = view_h - side_top - px(12);
+            if (side_h > room) side_h = room;
+            doc->y = side_top + side_h;
+            if (doc->y < main_bottom) doc->y = main_bottom;
+            doc_sticky(doc, side_first, (int)doc->count, doc->y);
+        } else if (doc->y < main_bottom) doc->y = main_bottom;
     } else {
         layout_main(s, doc, col_make(0, w));
         doc_space(doc, px(6));
