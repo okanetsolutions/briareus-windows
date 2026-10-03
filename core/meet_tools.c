@@ -61,9 +61,10 @@ char *meet_tool_body(MeetTool tool) {
     json_object_set(params, "properties", props);
     json_object_set(params, "required", required);
     json_object_set(config, "parameters", params);
-    // The agent waits for the answer, which takes a few calls to the Briareus server.
+    // The agent waits for the answer, which takes a few calls to the Briareus server: as long as it allows, since a large
+    // project's board takes GitHub a while to read.
     json_set_bool(config, "expects_response", true);
-    json_set_num(config, "response_timeout_secs", 30);
+    json_set_num(config, "response_timeout_secs", 120);
     json_object_set(body, "tool_config", config);
     char *text = json_serialize(body, false);
     json_free(body);

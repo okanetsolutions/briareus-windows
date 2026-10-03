@@ -140,6 +140,8 @@ void meeting_history_clear(void) { wchar_t *path = history_path(); if (path) Del
 
 enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_ENDED };
 enum { TIMER_TICK = 2 };
+/// How long a board read may take, within the 120 s the agent waits for a tool.
+#define BOARD_TIMEOUT_MS 110000
 
 /// One tool call the agent made: its calls to the server, made together, and their answers as they come.
 typedef struct {
@@ -413,7 +415,11 @@ static void lookup_done(void *owner, Request *req) {
     size_t i = (size_t)req->tag;
     if (M.state == MEETING_OFF || i >= l->count) return;
     // Only the first call's answer is needed; a later one that failed is left out.
-    if (req->ok) l->answers[i] = json_clone(req->result);
+    if (req->ok) {
+        l->answers[i] = json_clone(req->result);
+        // The board read for a meeting is the project screen's too.
+        if (str_eq(req->operation, "pulls")) { char *key = xstrfmt("pulls:%s", M.repo); cache_store(g_store.cache, req->result, key); free(key); }
+    }
     else if (i == 0) {
         char *why = request_error_text(req);
         lookup_answer(l, meet_tool_error(why));
@@ -441,8 +447,17 @@ static void on_tool(MeetEvent *e) {
         // The call's arguments go to the request; the plan keeps none.
         Json *args = l->calls[i].args; l->calls[i].args = NULL;
         if (!store_supports(l->calls[i].op)) { json_free(args); l->done++; continue; }
-        store_call(l->calls[i].op, args, 0, l, lookup_done, (int)i, &l->reqs[i]);
+        // A large project's board takes GitHub a while to read: the one the project screen last synced answers at once.
+        bool board = str_eq(l->calls[i].op, "pulls");
+        if (board) {
+            char *key = xstrfmt("pulls:%s", M.repo);
+            l->answers[i] = cache_value(g_store.cache, key);
+            free(key);
+            if (l->answers[i]) { json_free(args); l->done++; continue; }
+        }
+        store_call(l->calls[i].op, args, board ? BOARD_TIMEOUT_MS : 0, l, lookup_done, (int)i, &l->reqs[i]);
     }
+    if (l->done == l->count) { lookup_answer(l, meet_tool_summary(l->tool, l->args, M.repo, (const Json *const *)l->answers, l->count)); return; }
     changed();
 }
 
