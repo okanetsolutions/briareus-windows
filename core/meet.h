@@ -27,8 +27,8 @@ const char *meet_model_label(MeetModel model);
 #define MEET_TTS_MODEL "eleven_v4_turbo"
 /// US dollars per minute of an agent's call, ElevenAgents' rate on every plan (2026-10); the LLM is billed on top.
 #define MEET_AGENT_MINUTE_COST 0.08
-/// A meeting runs at most this long before ElevenLabs ends it.
-#define MEET_MAX_SECONDS (4 * 60 * 60)
+/// A meeting runs at most this long before ElevenLabs ends it: the most it allows.
+#define MEET_MAX_SECONDS (2 * 60 * 60)
 
 /// Who the assistant speaks for and how, in a meeting about `project`, with ElevenLabs voice `voice`. An `independent`
 /// assistant takes part on its own: it speaks when it judges it useful. Otherwise it speaks only when addressed: when a

@@ -25,7 +25,7 @@ static void test_the_agent_speaks_in_the_users_voice_with_the_project_tools(void
     CHECK_STR(json_str(json_get(tts, "model_id")), "eleven_v4_turbo");
     CHECK_STR(json_str(json_get(tts, "agent_output_audio_format")), "pcm_24000");
     CHECK_STR(json_str(json_get(json_get(config, "asr"), "user_input_audio_format")), "pcm_24000");
-    CHECK_INT(json_int_or(json_get(json_get(config, "conversation"), "max_duration_seconds"), 0), 4 * 60 * 60);
+    CHECK_INT(json_int_or(json_get(json_get(config, "conversation"), "max_duration_seconds"), 0), 7200);
     CHECK_STR(json_str(json_get(agent, "language")), "en");
     CHECK(strstr(json_str(json_get(agent, "first_message")), "Nadin's AI assistant") != NULL);
     CHECK_STR(json_str(json_get(prompt, "llm")), MEET_AGENT_LLM);
