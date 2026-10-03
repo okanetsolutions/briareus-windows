@@ -11,6 +11,8 @@
 #pragma GCC diagnostic ignored "-Wundef"
 #pragma GCC diagnostic ignored "-Wstrict-prototypes"
 #pragma GCC diagnostic ignored "-Wshadow"
+#elif defined(_MSC_VER)
+#pragma warning(push, 0)
 #endif
 #define MA_NO_DECODING
 #define MA_NO_ENCODING
@@ -23,6 +25,8 @@
 #include "../third_party/miniaudio/miniaudio.h"
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
 #endif
 
 // MARK: - Rings
@@ -122,6 +126,7 @@ char *meet_cable_name(void) {
     ma_context ctx;
     if (!open_context(&ctx)) return NULL;
     ma_device_id cable; char *name = NULL; bool has_mic;
+    memset(&cable, 0, sizeof cable);
     find_devices(&ctx, &cable, &name, NULL, &has_mic);
     ma_context_uninit(&ctx);
     return name;
@@ -149,6 +154,7 @@ MeetAudio *meet_audio_start(unsigned pid, bool monitor, char **error, char **not
     if (!open_context(&a->context)) { *error = xstrdup("Windows audio (WASAPI) could not be opened."); goto fail; }
     a->has_context = true;
     ma_device_id cable, mic; bool has_mic = false;
+    memset(&cable, 0, sizeof cable); memset(&mic, 0, sizeof mic);
     if (!find_devices(&a->context, &cable, NULL, &mic, &has_mic)) {
         *error = xstrdup("The virtual microphone was not found. Install VB-Cable (free, from vb-audio.com), restart Windows, then pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone in your meeting app.");
         goto fail;

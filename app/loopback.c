@@ -133,7 +133,7 @@ static unsigned __stdcall capture_main(void *arg) {
     IAudioClient *client = activate(l->pid, l->exclude, &hr);
     IAudioCaptureClient *capture = NULL;
     HANDLE event = CreateEventW(NULL, FALSE, FALSE, NULL);
-    WAVEFORMATEX wf;
+    WAVEFORMATEX wf = { 0 };
     if (client) hr = open_stream(client, event, &wf);
     if (client && SUCCEEDED(hr)) hr = IAudioClient_GetService(client, &ID_IAudioCaptureClient, (void **)&capture);
     if (capture) hr = IAudioClient_Start(client);
