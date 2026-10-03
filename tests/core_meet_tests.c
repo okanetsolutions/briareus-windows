@@ -162,6 +162,13 @@ static void test_the_log_keeps_speakers_on_their_own_lines_and_its_tail(void) {
     meet_log_add(&log, MEET_SPEAKER_ASSISTANT, NULL);
     CHECK_OWNED_STR(meet_log_tail(&log, 1000), "Meeting: What is the status?\nAssistant: Let me check.");
     CHECK_OWNED_STR(meet_log_tail(&log, 30), "Assistant: Let me check.");
+    meet_log_line(&log, MEET_SPEAKER_LOOKUP, "list_pull_requests");
+    meet_log_line(&log, MEET_SPEAKER_LOOKUP, "list_issues");
+    meet_log_line(&log, MEET_SPEAKER_ASSISTANT, "Two are\nready.");
+    meet_log_line(&log, MEET_SPEAKER_ASSISTANT, "One waits.");
+    CHECK_OWNED_STR(meet_log_tail(&log, 1000), "Meeting: What is the status?\nAssistant: Let me check.\nLookup: list_pull_requests\n"
+                                               "Lookup: list_issues\nAssistant: Two are ready.\nAssistant: One waits.");
+    meet_log_free(&log); meet_log_init(&log);
     for (int i = 0; i < 2000; i++) { meet_log_add(&log, MEET_SPEAKER_MEETING, "and so on and so forth"); meet_log_add(&log, MEET_SPEAKER_ASSISTANT, "ok"); }
     CHECK(log.text.len <= 24000 + 40);
     CHECK(str_has_prefix(log.text.data, "Meeting: ") || str_has_prefix(log.text.data, "Assistant: "));

@@ -215,7 +215,7 @@ void meet_log_add(MeetLog *log, int speaker, const char *text) {
     if (!text || !*text) return;
     if (speaker != log->speaker) {
         if (log->text.len) str_appendc(&log->text, '\n');
-        str_appendz(&log->text, speaker == MEET_SPEAKER_ASSISTANT ? "Assistant: " : "Meeting: ");
+        str_appendz(&log->text, speaker == MEET_SPEAKER_ASSISTANT ? "Assistant: " : speaker == MEET_SPEAKER_LOOKUP ? "Lookup: " : "Meeting: ");
         log->speaker = speaker;
         while (*text == ' ') text++;
     }
@@ -229,6 +229,15 @@ void meet_log_add(MeetLog *log, int speaker, const char *text) {
             log->text.len -= drop;
         }
     }
+}
+void meet_log_line(MeetLog *log, int speaker, const char *text) {
+    if (!text || !*text) return;
+    log->speaker = 0;
+    // A line's own line breaks would read as new speakers.
+    char *flat = xstrdup(text);
+    for (char *c = flat; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
+    meet_log_add(log, speaker, flat);
+    free(flat);
 }
 char *meet_log_tail(const MeetLog *log, size_t max) {
     if (!log->text.len) return xstrdup("");

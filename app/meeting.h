@@ -54,6 +54,9 @@ void meeting_answer_now(void);
 char *meeting_status(void);
 /// The meeting's transcript so far. New string.
 char *meeting_transcript(void);
+/// The transcript of the meeting about `repo`, running or the last one left, as lines of "Meeting: …", "Assistant: …"
+/// and "Lookup: …"; NULL when there is none. New string.
+char *meeting_transcript_for(const char *repo);
 /// 🎙 Meet's menu at `pt`: join a meeting about `project`, listening to a meeting app; or, in a meeting, mute, answer
 /// now, copy the transcript or leave. Returns whether anything was chosen.
 bool meeting_menu(const Project *project, HWND owner, POINT pt);

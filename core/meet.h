@@ -77,13 +77,15 @@ char *meet_created_id(const Json *answer);
 
 char *base64_encode(const void *data, size_t len);
 
-/// The meeting so far as lines of "Meeting: …" and "Assistant: …", the oldest dropped past a limit.
+/// The meeting so far as lines of "Meeting: …", "Assistant: …" and "Lookup: …", the oldest dropped past a limit.
 typedef struct { Str text; int speaker; } MeetLog;
-enum { MEET_SPEAKER_MEETING = 1, MEET_SPEAKER_ASSISTANT = 2 };
+enum { MEET_SPEAKER_MEETING = 1, MEET_SPEAKER_ASSISTANT = 2, MEET_SPEAKER_LOOKUP = 3 };
 void meet_log_init(MeetLog *log);
 void meet_log_free(MeetLog *log);
 /// Adds a piece of speech; a new speaker starts a new line.
 void meet_log_add(MeetLog *log, int speaker, const char *text);
+/// Adds a whole line: a turn, an answer or a lookup, on its own line even after the same speaker.
+void meet_log_line(MeetLog *log, int speaker, const char *text);
 /// The last `max` bytes or fewer, starting at a line. New string.
 char *meet_log_tail(const MeetLog *log, size_t max);
 

@@ -162,6 +162,7 @@ static struct {
     volatile LONG sending;
     bool ready, muted;
     MeetLog log; CRITICAL_SECTION log_lock;
+    char *log_repo;          // the project the log is about, kept after the meeting for its transcript
     CRITICAL_SECTION lock;   // the generation and the socket, between the connecting thread and the UI thread
     LONG gen;                // each meeting's own; messages and threads of an earlier one are ignored
     MeetRecord record;
@@ -199,10 +200,13 @@ static void send_on(WebSocket *ws, char *event) {
 }
 static void send_owned(char *event) { send_on(M.ws, event); }
 
-static void log_add(int speaker, const char *text) {
+/// A whole line of the transcript, shown at once in the project's Meeting tab.
+static void log_line(int speaker, const char *text) {
     EnterCriticalSection(&M.log_lock);
-    meet_log_add(&M.log, speaker, text);
+    meet_log_line(&M.log, speaker, text);
     LeaveCriticalSection(&M.log_lock);
+    Pane *p = app_detail_pane();
+    if (p) pane_relayout(p);
 }
 static char *log_tail(size_t max) {
     EnterCriticalSection(&M.log_lock);
@@ -439,6 +443,7 @@ static void on_tool(MeetEvent *e) {
     M.lookups = xrealloc(M.lookups, (M.lookup_count + 1) * sizeof *M.lookups);
     M.lookups[M.lookup_count++] = l;
     char *refusal = NULL;
+    log_line(MEET_SPEAKER_LOOKUP, e->text);
     if (!meet_tool_find(e->text, &l->tool)) { lookup_answer(l, meet_tool_error("No such tool: only the project's read-only tools are offered.")); return; }
     l->count = meet_tool_calls(l->tool, l->args, M.repo, l->calls, &refusal);
     if (!l->count) { lookup_answer(l, refusal ? refusal : meet_tool_error("Nothing to read.")); return; }
@@ -477,8 +482,8 @@ static void on_ready(void) {
 static void on_event(MeetEvent *e) {
     switch (e->kind) {
     case MEET_EV_READY: on_ready(); break;
-    case MEET_EV_HEARD_TURN: log_add(MEET_SPEAKER_MEETING, e->text); break;
-    case MEET_EV_SAID: log_add(MEET_SPEAKER_ASSISTANT, e->text); break;
+    case MEET_EV_HEARD_TURN: log_line(MEET_SPEAKER_MEETING, e->text); break;
+    case MEET_EV_SAID: log_line(MEET_SPEAKER_ASSISTANT, e->text); break;
     case MEET_EV_TOOL: on_tool(e); break;
     case MEET_EV_ERROR:
         // Before the conversation started an error ends it; later ones only show.
@@ -591,7 +596,10 @@ bool meeting_join(const Project *project, unsigned pid, const char *source) {
     M.title = str_eq(title, project->repo) ? xstrdup(title) : xstrfmt("%s (%s)", title, project->repo);
     M.source = xstrdup(source ? source : "every app");
     M.persona = (MeetPersona){ M.settings.name, M.settings.wake_words, M.title, M.settings.eleven_voice, M.settings.introduce, M.settings.independent };
+    EnterCriticalSection(&M.log_lock);
     meet_log_free(&M.log); meet_log_init(&M.log);
+    set_string(&M.log_repo, project->repo);
+    LeaveCriticalSection(&M.log_lock);
     M.state = MEETING_CONNECTING;
     set_string(&M.error, note);
     free(note);
@@ -628,6 +636,14 @@ char *meeting_status(void) {
     return str_detach(&s);
 }
 char *meeting_transcript(void) { return M.hwnd ? log_tail(1 << 20) : xstrdup(""); }
+char *meeting_transcript_for(const char *repo) {
+    if (!M.hwnd) return NULL;
+    EnterCriticalSection(&M.log_lock);
+    char *t = str_eq(M.log_repo, repo) ? meet_log_tail(&M.log, 1 << 20) : NULL;
+    LeaveCriticalSection(&M.log_lock);
+    if (t && !*t && !meeting_for(repo)) { free(t); t = NULL; }
+    return t;
+}
 
 // MARK: - The menu
 

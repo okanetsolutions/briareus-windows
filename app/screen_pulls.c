@@ -48,7 +48,7 @@ enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
 enum { ACT_DB_BASE = 1160 };    // the Database tab's, PROJECT_DB_ACTIONS of them
 enum { ACT_FORGE_BASE = 1180 }; // the Forge tab's, PROJECT_FORGE_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE };
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING };
 enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -309,6 +309,44 @@ static void doc_tabs(Doc *doc, int w, const char *const *labels, const int *ids,
     doc->y += h;
     doc_rule(doc, -px(18), w + px(36));
 }
+/// The meeting as a chat: what the meeting said on the left, the assistant's answers on the right, and each lookup it
+/// made between them.
+static void layout_meeting(Doc *doc, int w, const char *transcript) {
+    if (!*transcript) {
+        doc_text(doc, 0, w, "The assistant is joining. What the meeting says and what it answers shows here.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        return;
+    }
+    static const struct { const char *prefix, *label; } KINDS[] = { { "Meeting: ", "Meeting" }, { "Assistant: ", "Assistant" }, { "Lookup: ", NULL } };
+    int bw = w * 3 / 4, pad = px(10);
+    for (const char *line = transcript; *line; ) {
+        const char *end = strchr(line, '\n');
+        size_t n = end ? (size_t)(end - line) : strlen(line);
+        int kind = -1;
+        for (int k = 0; k < 3 && kind < 0; k++) if (!strncmp(line, KINDS[k].prefix, strlen(KINDS[k].prefix))) kind = k;
+        if (kind >= 0) {
+            size_t skip = strlen(KINDS[kind].prefix);
+            char *text = xstrndup(line + skip, n - skip);
+            if (kind == 2) {
+                char *said = xstrfmt("\xF0\x9F\x94\x8E Looked up: %s", text);
+                for (char *c = said; *c; c++) if (*c == '_') *c = ' ';
+                doc_text(doc, 0, w, said, FONT_CAPTION, theme.muted, DT_CENTER | DT_SINGLELINE);
+                free(said);
+            } else {
+                bool mine = kind == 1;
+                int x = mine ? w - bw : 0;
+                doc_text(doc, x, bw, KINDS[kind].label, FONT_CAPTION, theme.muted, (mine ? DT_RIGHT : DT_LEFT) | DT_SINGLELINE);
+                doc_space(doc, px(2));
+                int box = doc_box_begin(doc, x, bw, pad, mine ? blend(theme.accent, theme.raise, 0.18) : theme.raise, mine ? theme.accent_dim : theme.line, px(10));
+                doc_text(doc, x + pad, bw - 2 * pad, text, FONT_BODY, theme.ink, DT_LEFT | DT_WORDBREAK);
+                doc_box_end(doc, box, pad);
+            }
+            doc_space(doc, px(10));
+            free(text);
+        }
+        line = end ? end + 1 : line + n;
+    }
+}
+
 static void pulls_layout(Screen *base, Doc *doc) {
     PullsScreen *s = (PullsScreen *)base;
     int w = doc->width;
@@ -317,13 +355,17 @@ static void pulls_layout(Screen *base, Doc *doc) {
     char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
     char *sftp_label = files ? xstrfmt("\xE2\x87\xB5 SFTP sessions %zu", files) : xstrdup("\xE2\x87\xB5 SFTP sessions");
     // Run, on the default branch, for a token that may serve one.
-    const char *tabs[7] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    int ids[7] = { TAB_PULLS, TAB_ISSUES };
+    const char *tabs[8] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
+    int ids[8] = { TAB_PULLS, TAB_ISSUES };
     size_t n = 2;
     if (project_run_offered()) { tabs[n] = "\xE2\x96\xB6 Run"; ids[n++] = TAB_RUN; }
     if (project_ssh_offered()) { tabs[n] = ssh_label; ids[n++] = TAB_SSH; tabs[n] = sftp_label; ids[n++] = TAB_SFTP; }
     if (project_db_offered()) { tabs[n] = "\xE2\x9B\x81 Database"; ids[n++] = TAB_DB; }
     if (project_forge_offered()) { tabs[n] = "\xE2\x98\x81 Forge"; ids[n++] = TAB_FORGE; }
+    // The meeting's transcript, while one runs on this project and after it.
+    char *transcript = meeting_transcript_for(s->project.repo);
+    if (transcript) { tabs[n] = meeting_for(s->project.repo) ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meeting"; ids[n++] = TAB_MEETING; }
+    else if (s->tab == TAB_MEETING) s->tab = TAB_PULLS;
     doc_tabs(doc, w, tabs, ids, n, s->tab);
     free(ssh_label); free(sftp_label);
     doc_space(doc, px(14));
@@ -331,7 +373,9 @@ static void pulls_layout(Screen *base, Doc *doc) {
     if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->tab == TAB_SFTP) { project_sftp_layout(s->sftp, doc, w); return; }
     if (s->tab == TAB_DB) { project_db_layout(s->db, doc, w); return; }
-    if (s->tab == TAB_FORGE) { project_forge_layout(s->forge, doc, w); return; }
+    if (s->tab == TAB_FORGE) { project_forge_layout(s->forge, doc, w); free(transcript); return; }
+    if (s->tab == TAB_MEETING) { layout_meeting(doc, w, transcript); free(transcript); return; }
+    free(transcript);
     if (s->error) { doc_notice(doc, 0, w, s->error); doc_space(doc, px(10)); }
     if (s->write_error) {
         doc_notice(doc, 0, w, s->write_error);
@@ -432,6 +476,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         snprintf(m->label, sizeof m->label, "%s", here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet");
         m->action = ACT_MEET; m->enabled = true; m->tip = "Join a meeting with an assistant that can look up this project";
     }
+    if (s->tab == TAB_MEETING) return;
     if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }
     if (s->tab == TAB_SSH) {
         project_ssh_header(s->ssh, info);
@@ -504,8 +549,11 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
-        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) ? (int)arg : TAB_PULLS;
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || arg == TAB_MEETING ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
+        // The transcript, like a conversation's, keeps to its latest line.
+        pane_stick_to_bottom(base->pane, s->tab == TAB_MEETING);
+        if (s->tab == TAB_MEETING) pane_scroll_to_bottom(base->pane);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
     case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
