@@ -25,6 +25,7 @@ void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
     doc->cv = cv; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
     doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
+    doc->pin_last = doc->pin_bottom = doc->pin_shift = 0;
 }
 void doc_end(Doc *doc) { doc->cv = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
@@ -811,6 +812,16 @@ void doc_sticky(Doc *doc, int first, int last, int limit) {
     doc->sticky_limit = limit; doc->sticky_shift = 0;
 }
 static bool sticky_active(const Doc *doc) { return doc->sticky_first < doc->sticky_last; }
+void doc_pin(Doc *doc, int last, int bottom) {
+    if (last > (int)doc->count) last = (int)doc->count;
+    doc->pin_last = last > 0 ? last : 0; doc->pin_bottom = bottom; doc->pin_shift = 0;
+}
+static bool pin_active(const Doc *doc) { return doc->pin_last > 0; }
+/// Whether item `i` is out of reach at content y: the pinned band covers the items scrolled beneath it, and the
+/// pinned items are only under the mouse within the band.
+static bool pin_covered(const Doc *doc, size_t i, int y) {
+    return pin_active(doc) && ((int)i < doc->pin_last) != (y < doc->pin_shift + doc->pin_bottom);
+}
 static void sticky_move(Doc *doc, int shift) {
     int delta = shift - doc->sticky_shift;
     if (!delta) return;
@@ -818,6 +829,10 @@ static void sticky_move(Doc *doc, int shift) {
     doc->sticky_shift = shift;
 }
 void doc_set_view(Doc *doc, int scroll_y, int view_height) {
+    if (pin_active(doc) && scroll_y != doc->pin_shift) {
+        for (int i = 0; i < doc->pin_last; i++) OffsetRect(&doc->items[i].rc, 0, scroll_y - doc->pin_shift);
+        doc->pin_shift = scroll_y;
+    }
     if (!sticky_active(doc)) { doc->sticky_scroll = doc->sticky_max = 0; return; }
     // The group's bounds where it was laid out.
     int top = INT_MAX, bottom = INT_MIN, left = INT_MAX, right = INT_MIN;
@@ -829,10 +844,12 @@ void doc_set_view(Doc *doc, int scroll_y, int view_height) {
         if (rc->right > right) right = rc->right;
     }
     top -= doc->sticky_shift; bottom -= doc->sticky_shift;
-    // The window keeps a 12px margin in the view and stops at the limit; the group scrolls inside it.
+    // The window keeps a 12px margin in the view and stops at the limit; the group scrolls inside it. Under a pinned
+    // band it stays where it was laid out, below the band.
     int pad = px(12), height = bottom - top;
-    int want = view_height - 2 * pad; if (want > height) want = height; if (want < 0) want = 0;
-    int win_top = scroll_y + pad;
+    int head = pin_active(doc) ? (top > doc->pin_bottom ? top : doc->pin_bottom) : pad;
+    int want = view_height - head - pad; if (want > height) want = height; if (want < 0) want = 0;
+    int win_top = scroll_y + head;
     if (win_top > doc->sticky_limit - want) win_top = doc->sticky_limit - want;
     if (win_top < top) win_top = top;
     int win_bottom = scroll_y + view_height - pad;
@@ -872,9 +889,22 @@ static void paint_items(Doc *doc, Canvas *cv, int first, int last, int scroll_x,
         if (it->paint) it->paint(doc, it, cv, &rc);
     }
 }
+static void paint_scrolled(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip);
 void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
-    if (!sticky_active(doc)) { paint_items(doc, cv, 0, (int)doc->count, scroll_x, scroll_y, clip); return; }
-    paint_items(doc, cv, 0, doc->sticky_first, scroll_x, scroll_y, clip);
+    if (!pin_active(doc)) { paint_scrolled(doc, cv, scroll_x, scroll_y, clip); return; }
+    // The scrolling items show below the band, and the pinned ones within it.
+    RECT below = *clip; if (below.top < doc->pin_bottom) below.top = doc->pin_bottom;
+    if (below.top < below.bottom) { canvas_clip(cv, &below); paint_scrolled(doc, cv, scroll_x, scroll_y, &below); canvas_unclip(cv); }
+    RECT band = *clip; if (band.bottom > doc->pin_bottom) band.bottom = doc->pin_bottom;
+    canvas_clip(cv, &band);
+    paint_items(doc, cv, 0, doc->pin_last, scroll_x, scroll_y, &band);
+    canvas_unclip(cv);
+}
+/// The items that scroll: all of them but the pinned band, the sticky group through its window.
+static void paint_scrolled(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
+    int first = doc->pin_last;
+    if (!sticky_active(doc)) { paint_items(doc, cv, first, (int)doc->count, scroll_x, scroll_y, clip); return; }
+    paint_items(doc, cv, first, doc->sticky_first, scroll_x, scroll_y, clip);
     // The sticky group shows through its window, with a thin bar at its right edge while it overflows.
     RECT v = doc->sticky_view; OffsetRect(&v, -scroll_x, -scroll_y);
     RECT within; IntersectRect(&within, &v, clip);
@@ -894,7 +924,7 @@ void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *cli
 int doc_hit(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (!it->action || sticky_hidden(doc, i, y)) continue;
+        if (!it->action || sticky_hidden(doc, i, y) || pin_covered(doc, i, y)) continue;
         if (x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) {
             if (it->paint == paint_segments) it->arg = ((SegmentData *)it->data)->arg_base + segment_at(it, x);
             // Linked text is clickable on its links alone; the rest of it selects.
@@ -952,7 +982,7 @@ void doc_clear_selection(Doc *doc) {
 int doc_text_item_at(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (it->sel && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
+        if (it->sel && !pin_covered(doc, i, y) && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
     }
     return -1;
 }
@@ -994,7 +1024,7 @@ bool doc_position_at(Doc *doc, Canvas *cv, int x, int y, DocPos *pos) {
     int best = -1, best_d = 0;
     for (size_t i = 0; i < doc->count; i++) {
         Item *it = &doc->items[i];
-        if (!it->sel || y < it->rc.top || y >= it->rc.bottom) continue;
+        if (!it->sel || pin_covered(doc, i, y) || y < it->rc.top || y >= it->rc.bottom) continue;
         int d = x < it->rc.left ? it->rc.left - x : x >= it->rc.right ? x - it->rc.right + 1 : 0;
         if (best < 0 || d < best_d) { best = (int)i; best_d = d; }
     }
