@@ -19,11 +19,10 @@ static const FieldDef FIELDS[F_COUNT] = {
                  "Comma-separated. With GPT-Realtime 2.1 mini, an assistant that does not act independently answers only a turn that says one of them, or \xE2\x80\x9C" "Answer now\xE2\x80\x9D." },
     [F_VOICE] = { "Voice", "marin", "The OpenAI voice it speaks with, for example marin or cedar." },
 };
-enum { T_INDEPENDENT, T_INTRODUCE, T_MONITOR, T_COUNT };
+enum { T_INDEPENDENT, T_INTRODUCE, T_COUNT };
 static const char *const TOGGLES[T_COUNT] = {
     [T_INDEPENDENT] = "Act independently: take part on my behalf, answer what is asked of me, and let the agent make changes",
     [T_INTRODUCE] = "Introduce itself as my AI assistant when it joins",
-    [T_MONITOR] = "Play its voice on my speakers too",
 };
 
 enum { ACT_SAVE = 1200, ACT_REMOVE_KEY, ACT_TOGGLE, ACT_FOCUS, ACT_CLEAR_HISTORY, ACT_CHECK_CABLE };
@@ -58,7 +57,6 @@ static void reload(MeetingForm *s) {
     meeting_settings_load(&s->saved);
     s->toggles[T_INDEPENDENT] = s->saved.independent;
     s->toggles[T_INTRODUCE] = s->saved.introduce;
-    s->toggles[T_MONITOR] = s->saved.monitor;
     s->has_key = meeting_has_key();
     Json *history = meeting_history();
     meet_totals(history, s->totals);
@@ -204,13 +202,12 @@ static void form_layout(Screen *base, Doc *doc) {
     field(s, doc, x, w, F_WAKE);
     check(s, doc, x, w, T_INDEPENDENT);
     check(s, doc, x, w, T_INTRODUCE);
-    check(s, doc, x, w, T_MONITOR);
     note(doc, x, w, s->toggles[T_INDEPENDENT]
         ? "Acting independently, it decides for itself when to speak, and anyone in the meeting can have the agent change code. It still says it is an AI if asked."
         : "Otherwise it speaks only when you or it are addressed, and asks the agent for answers only, since anyone in the meeting can talk to it.");
     heading(doc, x, w, "Virtual microphone");
     if (s->cable) {
-        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers; use headphones, so the assistant does not hear itself.", s->cable);
+        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers. The assistant speaks only into the meeting, so you will not hear it yourself: its words are in the meeting transcript (\xF0\x9F\x8E\x99 menu).", s->cable);
         doc_label(doc, x, w, 0xE73E, line, FONT_FOOTNOTE, theme.ok);
         free(line);
     } else {
@@ -315,7 +312,7 @@ static void form_save(MeetingForm *s) {
     char *name = edit_text(s->edits[F_NAME]), *wake = edit_text(s->edits[F_WAKE]), *voice = edit_text(s->edits[F_VOICE]);
     next.name = str_trim(name); next.wake_words = str_trim(wake); next.voice = str_trim(voice);
     free(name); free(wake); free(voice);
-    next.independent = s->toggles[T_INDEPENDENT]; next.introduce = s->toggles[T_INTRODUCE]; next.monitor = s->toggles[T_MONITOR];
+    next.independent = s->toggles[T_INDEPENDENT]; next.introduce = s->toggles[T_INTRODUCE];
     meeting_settings_save(&next);
     meeting_settings_free(&next);
     reload(s);

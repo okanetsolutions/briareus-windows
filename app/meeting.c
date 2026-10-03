@@ -81,7 +81,6 @@ void meeting_settings_load(MeetingSettings *s) {
     if (!s->voice || !*s->voice) { free(s->voice); s->voice = xstrdup("marin"); }
     s->introduce = reg_bool(L"introduce", true);
     s->independent = reg_bool(L"independent", false);
-    s->monitor = reg_bool(L"monitor", true);
 }
 void meeting_settings_save(const MeetingSettings *s) {
     HKEY key;
@@ -91,7 +90,6 @@ void meeting_settings_save(const MeetingSettings *s) {
     reg_set_string(key, L"voice", s->voice);
     reg_set_bool(key, L"introduce", s->introduce);
     reg_set_bool(key, L"independent", s->independent);
-    reg_set_bool(key, L"monitor", s->monitor);
     RegCloseKey(key);
 }
 void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->voice); memset(s, 0, sizeof *s); }
@@ -187,7 +185,7 @@ static char *log_tail(size_t max) {
     return t;
 }
 
-/// The socket's reader: speech goes straight to the speakers, everything else to the UI thread. The UI thread joins it
+/// The socket's reader: speech goes straight to the cable, everything else to the UI thread. The UI thread joins it
 /// before the devices close.
 static void read_events(WebSocket *ws, LONG gen) {
     for (;;) {
@@ -472,7 +470,7 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
     ensure_window();
     char *error = NULL, *note = NULL;
     meeting_settings_load(&M.settings);
-    MeetAudio *audio = meet_audio_start(pid, M.settings.monitor, &error, &note);
+    MeetAudio *audio = meet_audio_start(pid, &error, &note);
     if (!audio) {
         app_alert("Meeting assistant", error);
         free(error); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);

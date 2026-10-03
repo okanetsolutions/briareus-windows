@@ -65,11 +65,11 @@ struct MeetAudio {
     ma_context context;
     bool has_context;
     Loopback *loopback;
-    ma_device mic, cable, monitor;
-    bool has_mic, has_cable, has_monitor;
+    ma_device mic, cable;
+    bool has_mic, has_cable;
     Ring heard_meeting, heard_mic;   // what the assistant hears
     Ring mic_to_cable;               // the user's voice on its way into the meeting
-    Ring said_cable, said_monitor;   // the assistant's voice
+    Ring said_cable;                 // the assistant's voice
     volatile LONG muted;
 };
 
@@ -86,11 +86,6 @@ static void on_cable(ma_device *d, void *out, const void *in, ma_uint32 frames) 
     memset(out, 0, frames * sizeof(int16_t));
     ring_mix(&a->mic_to_cable, out, frames);
     ring_mix(&a->said_cable, out, frames);
-}
-static void on_monitor(ma_device *d, void *out, const void *in, ma_uint32 frames) {
-    (void)in;
-    memset(out, 0, frames * sizeof(int16_t));
-    ring_mix(&((MeetAudio *)d->pUserData)->said_monitor, out, frames);
 }
 
 // MARK: - Devices
@@ -143,14 +138,13 @@ static ma_device_config device_config(ma_device_type type, ma_device_data_proc p
     return c;
 }
 
-MeetAudio *meet_audio_start(unsigned pid, bool monitor, char **error, char **note) {
+MeetAudio *meet_audio_start(unsigned pid, char **error, char **note) {
     *error = NULL; *note = NULL;
     MeetAudio *a = xcalloc(1, sizeof *a);
     ring_init(&a->heard_meeting, MS(5000), MS(2000));
     ring_init(&a->heard_mic, MS(5000), MS(2000));
     ring_init(&a->mic_to_cable, MS(1000), MS(150));
     ring_init(&a->said_cable, MS(120000), MS(120000));
-    ring_init(&a->said_monitor, MS(120000), MS(120000));
     if (!open_context(&a->context)) { *error = xstrdup("Windows audio (WASAPI) could not be opened."); goto fail; }
     a->has_context = true;
     ma_device_id cable, mic; bool has_mic = false;
@@ -169,18 +163,11 @@ MeetAudio *meet_audio_start(unsigned pid, bool monitor, char **error, char **not
         a->has_mic = ma_device_init(&a->context, &c, &a->mic) == MA_SUCCESS;
     }
     if (!a->has_mic) *note = xstrdup("No microphone could be opened: the meeting hears only the assistant.");
-    if (monitor) {
-        c = device_config(ma_device_type_playback, on_monitor, a);
-        a->has_monitor = ma_device_init(&a->context, &c, &a->monitor) == MA_SUCCESS;
-        // The default speakers being the cable itself would say everything twice.
-        if (a->has_monitor && names_cable(a->monitor.playback.name)) { ma_device_uninit(&a->monitor); a->has_monitor = false; }
-    }
     if (ma_device_start(&a->cable) != MA_SUCCESS) { *error = xstrdup("The virtual cable could not start."); goto fail; }
     // Per-app loopback: the meeting app's tree, or every app but this one.
     a->loopback = loopback_start(pid ? pid : GetCurrentProcessId(), pid == 0, on_loopback, a, error);
     if (!a->loopback) goto fail;
     if (a->has_mic) ma_device_start(&a->mic);
-    if (a->has_monitor) ma_device_start(&a->monitor);
     return a;
 fail:
     meet_audio_stop(a);
@@ -192,9 +179,8 @@ void meet_audio_stop(MeetAudio *a) {
     loopback_stop(a->loopback);
     if (a->has_mic) ma_device_uninit(&a->mic);
     if (a->has_cable) ma_device_uninit(&a->cable);
-    if (a->has_monitor) ma_device_uninit(&a->monitor);
     if (a->has_context) ma_context_uninit(&a->context);
-    ring_free(&a->heard_meeting); ring_free(&a->heard_mic); ring_free(&a->mic_to_cable); ring_free(&a->said_cable); ring_free(&a->said_monitor);
+    ring_free(&a->heard_meeting); ring_free(&a->heard_mic); ring_free(&a->mic_to_cable); ring_free(&a->said_cable);
     free(a);
 }
 
@@ -206,9 +192,8 @@ void meet_audio_take_input(MeetAudio *a, int16_t *out, size_t samples) {
 void meet_audio_play(MeetAudio *a, const int16_t *pcm, size_t samples) {
     if (a->muted) return;
     ring_write(&a->said_cable, pcm, samples);
-    if (a->has_monitor) ring_write(&a->said_monitor, pcm, samples);
 }
-void meet_audio_flush(MeetAudio *a) { ring_clear(&a->said_cable); ring_clear(&a->said_monitor); }
+void meet_audio_flush(MeetAudio *a) { ring_clear(&a->said_cable); }
 void meet_audio_set_muted(MeetAudio *a, bool muted) { InterlockedExchange(&a->muted, muted); if (muted) meet_audio_flush(a); }
 bool meet_audio_speaking(MeetAudio *a) { return ring_count(&a->said_cable) > MS(60); }
 

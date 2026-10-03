@@ -22,7 +22,6 @@ typedef struct {
     char *voice;
     bool introduce;      // it says who it is as it joins
     bool independent;    // it takes part on its own and may have the agent make changes
-    bool monitor;        // its voice plays on this computer's speakers too
 } MeetingSettings;
 void meeting_settings_load(MeetingSettings *s);
 void meeting_settings_save(const MeetingSettings *s);
