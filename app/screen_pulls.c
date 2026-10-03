@@ -13,7 +13,7 @@
 static const char *action_icon(const char *id) {
     static const struct { const char *id; const char *icon; } icons[] = {
         { "run", "\xE2\x96\xB6" }, { "review", "\xE2\x8C\x95" }, { "solve-conflicts", "\xF0\x9F\x94\x80" }, { "fix-checks", "\xF0\x9F\xA7\xAA" }, { "implement-feedback", "\xF0\x9F\x92\xAC" },
-        { "custom-feedback", "\xE2\x9C\x8D" }, { "pr-body-summary", "\xE2\x9C\x8E" }, { "delete-self-comments", "\xF0\x9F\xA7\xB9" },
+        { "custom-feedback", "\xE2\x9C\x8D" }, { "test-sheet", "\xF0\x9F\x93\x8B" }, { "test-run", "\xF0\x9F\x8E\xAC" }, { "pr-body-summary", "\xE2\x9C\x8E" }, { "delete-self-comments", "\xF0\x9F\xA7\xB9" },
     };
     for (size_t k = 0; k < sizeof icons / sizeof *icons; k++) if (str_eq(icons[k].id, id)) return icons[k].icon;
     return "";

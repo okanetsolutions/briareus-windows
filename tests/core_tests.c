@@ -741,9 +741,9 @@ static bool has_id(const BoardAction *a, size_t n, const char *id) { for (size_t
 static void test_board_offers_the_errands_a_pull_request_is_in_a_state_for(void) {
     Json *b = board(); size_t n; PullSummary *pulls = pull_summaries_parse(json_get(b, "pulls"), &n);
     size_t an; BoardAction *a = board_actions_offered(NULL, &pulls[0], 0, &an);
-    char *s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,fix-checks,custom-feedback,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
+    char *s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[1], 0, &an);
-    s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
+    s = ids(a, an); CHECK_STR(s, "run,review,solve-conflicts,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments"); free(s); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[2], 0, &an);
     CHECK(!has_id(a, an, "solve-conflicts") && !has_id(a, an, "fix-checks") && !has_id(a, an, "implement-feedback")); board_actions_free(a, an);
     a = board_actions_offered(NULL, &pulls[2], 1, &an); CHECK(has_id(a, an, "fix-checks")); board_actions_free(a, an);
@@ -753,7 +753,7 @@ static void test_board_offers_the_errands_a_pull_request_is_in_a_state_for(void)
                                 "{\"id\":\"qa\",\"label\":\"QA\"},{\"id\":\"test-sheet\",\"label\":\"Test sheet\"},{\"id\":\"test-run\",\"label\":\"Run test sheet\"}]");
     a = board_actions_offered(catalog, &pulls[2], 0, &an);
     CHECK(an > 0); if (an) { CHECK_STR(a[an - 1].id, "label-pull"); char *op = board_action_operation(&a[an - 1]); CHECK_STR(op, "action"); free(op); }
-    CHECK(!has_id(a, an, "qa") && !has_id(a, an, "test-sheet") && !has_id(a, an, "test-run"));
+    CHECK(!has_id(a, an, "qa") && has_id(a, an, "test-sheet") && has_id(a, an, "test-run"));
     // Run and Review are always there; an errand the server does not list is not offered.
     CHECK(has_id(a, an, "run") && has_id(a, an, "review") && has_id(a, an, "custom-feedback"));
     CHECK(!has_id(a, an, "pr-body-summary") && !has_id(a, an, "delete-self-comments"));
