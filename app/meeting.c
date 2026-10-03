@@ -172,9 +172,29 @@ static struct {
     Lookup **lookups; size_t lookup_count;   // the tool calls under way
 } M;
 
+/// With BRIAREUS_MEET_LOG naming a file, every message to and from OpenAI and ElevenLabs is written there, cut short, to
+/// see what each service did. Off otherwise: the meeting's words stay out of files.
+static FILE *g_log;
+static SRWLOCK g_log_lock = SRWLOCK_INIT;
+static void debug_open(void) {
+    wchar_t path[MAX_PATH];
+    if (g_log || !GetEnvironmentVariableW(L"BRIAREUS_MEET_LOG", path, MAX_PATH)) return;
+    g_log = _wfopen(path, L"ab");
+}
+static void debug(const char *who, const char *text, size_t len) {
+    if (!g_log) return;
+    AcquireSRWLockExclusive(&g_log_lock);
+    SYSTEMTIME t; GetLocalTime(&t);
+    size_t shown = len > 240 ? 240 : len;
+    fprintf(g_log, "%02d:%02d:%02d.%03d %s %.*s%s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, who, (int)shown, text ? text : "", len > shown ? "\xE2\x80\xA6" : "");
+    fflush(g_log);
+    ReleaseSRWLockExclusive(&g_log_lock);
+}
+static void debugz(const char *who, const char *text) { debug(who, text, text ? strlen(text) : 0); }
+
 static void post(LONG gen, UINT msg, void *payload) { if (!M.hwnd || !PostMessageW(M.hwnd, msg, (WPARAM)gen, (LPARAM)payload)) free(payload); }
 static void changed(void) { Pane *p = app_detail_pane(); if (p) pane_header_changed(p); }
-static void send_owned(char *event) { if (event) { ws_send(M.ws, event); free(event); } }
+static void send_owned(char *event) { if (event) { debugz("openai<", event); ws_send(M.ws, event); free(event); } }
 
 static void log_add(int speaker, const char *text) {
     EnterCriticalSection(&M.log_lock);
@@ -210,7 +230,7 @@ static struct {
 } V;
 
 typedef struct { LONG conn, gen; char *key, *voice; } VoiceConnect;
-static void voice_send_locked(char *event) { if (event) { ws_send(V.ws, event); free(event); } }
+static void voice_send_locked(char *event) { if (event) { debugz("eleven<", event); ws_send(V.ws, event); free(event); } }
 
 static unsigned __stdcall voice_main(void *arg) {
     VoiceConnect *c = arg;
@@ -218,6 +238,7 @@ static unsigned __stdcall voice_main(void *arg) {
     char *error = NULL;
     WebSocket *ws = ws_connect(ELEVEN_HOST, eleven_ws_path(), headers, &error);
     SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
+    debugz("eleven connect", ws ? "open" : error ? error : "failed");
     EnterCriticalSection(&V.lock);
     bool current = c->conn == V.conn;
     if (current) {
@@ -241,6 +262,7 @@ static unsigned __stdcall voice_main(void *arg) {
     for (;;) {
         char *text; size_t len;
         if (ws_receive(ws, &text, &len) <= 0) break;
+        debug("eleven>", text, len);
         MeetEvent *e = xcalloc(1, sizeof *e);
         bool ok = eleven_event_parse(text, len, e);
         free(text);
@@ -351,12 +373,14 @@ static void read_events(WebSocket *ws, LONG gen) {
         char *text; size_t len;
         int got = ws_receive(ws, &text, &len);
         if (got <= 0) break;
+        debug("openai>", text, len);
         MeetEvent *e = xcalloc(1, sizeof *e);
         bool ok = meet_event_parse(text, len, e);
         free(text);
         if (!ok) { free(e); continue; }
         if (e->kind == MEET_EV_AUDIO) {
-            meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
+            // With the user's ElevenLabs voice, OpenAI's own never plays, should it send any.
+            if (!M.persona.eleven_voice) meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
             if (!e->has_usage) { meet_event_free(e); free(e); continue; }
         }
         if (e->kind == MEET_EV_SPEECH_STARTED) { meet_audio_flush(M.audio); voice_interrupt(); }
@@ -409,6 +433,7 @@ static unsigned __stdcall connect_main(void *arg) {
     if (current) M.ws = ws;
     LeaveCriticalSection(&M.lock);
     if (!current) { ws_free(ws); free(c->setup); free(c); return 0; }
+    debugz("openai<", c->setup);
     ws_send(ws, c->setup);
     free(c->setup); free(c);
     read_events(ws, gen);
@@ -599,6 +624,7 @@ bool meeting_join(const Project *project, unsigned pid, const char *source) {
         return false;
     }
     ensure_window();
+    debug_open();
     char *error = NULL, *note = NULL;
     meeting_settings_load(&M.settings);
     // It speaks with the user's ElevenLabs voice when one is set.

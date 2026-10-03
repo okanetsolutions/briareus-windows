@@ -213,7 +213,8 @@ bool meet_event_parse(const char *json, size_t len, MeetEvent *out) {
     else if (str_eq(type, "conversation.item.input_audio_transcription.completed")) take_text(out, MEET_EV_HEARD_TURN, json_get(e, "transcript"));
     else if (str_eq(type, "response.output_audio_transcript.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
     else if (str_eq(type, "response.output_text.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
-    else if (str_eq(type, "response.output_text.done")) out->kind = MEET_EV_SAID_DONE;
+    // An answer in audio has its transcript done too, which ElevenLabs says should OpenAI answer in audio after all.
+    else if (str_eq(type, "response.output_text.done") || str_eq(type, "response.output_audio_transcript.done")) out->kind = MEET_EV_SAID_DONE;
     else if (str_eq(type, "response.created")) out->kind = MEET_EV_RESPONSE;
     else if (str_eq(type, "input_audio_buffer.speech_started")) out->kind = MEET_EV_SPEECH_STARTED;
     else if (str_eq(type, "response.output_item.done")) {
