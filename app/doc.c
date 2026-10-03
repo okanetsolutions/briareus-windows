@@ -574,13 +574,9 @@ int doc_labeled(Doc *doc, int x, int w, const char *label, const char *value, CO
 typedef struct { BadgeSpec *specs; char **texts; RECT *rects; size_t count; COLORREF background; } BadgesData;
 static void badges_free(void *p) { BadgesData *d = p; str_array_free(d->texts, d->count); free(d->specs); free(d->rects); free(d); }
 static int badge_width(Canvas *cv, const BadgeSpec *b, const char *text, int *h) {
-    if (b->chip) {
-        *h = font_height(cv, FONT_CAPTION2) + px(6);
-        return px(7) * 2 + px(6) + px(4) + text_width(cv, text, FONT_CAPTION_MEDIUM);
-    }
-    *h = font_height(cv, FONT_CAPTION2) + px(7);
-    int glyph_w = b->glyph ? px(11) : 0;
-    return px(8) * 2 + glyph_w + (b->glyph && text && *text ? px(3) : 0) + text_width(cv, text, FONT_CAPTION_SEMIBOLD);
+    // Measured by the painters themselves so the layout matches what is drawn.
+    (void)cv;
+    return b->chip ? draw_chip(NULL, 0, 0, text, b->color, 0, h) : draw_badge(NULL, 0, 0, b->glyph, text, b->color, 0, h);
 }
 static void paint_badges(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     BadgesData *d = it->data;
