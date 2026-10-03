@@ -536,14 +536,15 @@ static const BoardAction *known(const char *id) {
 }
 static void test_known_errands_are_listed_in_the_dashboards_order(void) {
     size_t n; const BoardAction *k = board_actions_known(&n);
-    CHECK_OWNED_STR(action_ids(k, n), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(action_ids(k, n), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     for (size_t i = 0; i < n; i++) { CHECK(!str_empty(k[i].label)); CHECK(!str_empty(k[i].hint)); CHECK(k[i].has_input == str_eq(k[i].id, "custom-feedback")); }
     const BoardAction *feedback = known("custom-feedback");
     CHECK(feedback && feedback->input.required);
     if (feedback) { CHECK_STR(feedback->label, "Give feedback"); CHECK_STR(feedback->input.label, "Your feedback"); CHECK_STR(feedback->input.placeholder, "What should change on this pull request?"); }
     CHECK_STR(known("run")->label, "Run"); CHECK_STR(known("review")->label, "Code review");
-    // QA and the test sheet were removed (#12).
-    CHECK(known("qa") == NULL && known("test-sheet") == NULL && known("test-run") == NULL);
+    CHECK_STR(known("test-sheet")->label, "Test sheet"); CHECK_STR(known("test-run")->label, "Record QA");
+    // QA, which writes the sheet and runs it in one session, was removed (#12).
+    CHECK(known("qa") == NULL);
 }
 static void test_errands_start_through_their_own_operation(void) {
     size_t n; const BoardAction *k = board_actions_known(&n);
@@ -564,7 +565,7 @@ static void test_errand_arguments_take_the_shape_each_route_wants(void) {
     CHECK_INT(json_count(a), 3); CHECK_STR(json_str(json_get(a, "branch")), "feat/x"); json_free(a);
     a = board_action_arguments(known("review"), "o/r", 9, NULL, NULL);
     CHECK_INT(json_count(a), 2); CHECK(json_is_null(json_get(a, "action"))); json_free(a);
-    const char *errands[] = { "solve-conflicts", "fix-checks", "implement-feedback", "pr-body-summary", "delete-self-comments" };
+    const char *errands[] = { "solve-conflicts", "fix-checks", "implement-feedback", "test-sheet", "test-run", "pr-body-summary", "delete-self-comments" };
     for (size_t i = 0; i < sizeof errands / sizeof *errands; i++) {
         // Errands look the pull request up by number, so the branch is not sent, nor input they do not take.
         a = board_action_arguments(known(errands[i]), "o/r", 9, "feat/x", "text");
@@ -583,31 +584,31 @@ static void test_errand_arguments_take_the_shape_each_route_wants(void) {
     CHECK_STR(json_str(json_get(a, "input")), "line one\nline two"); json_free(a);
 }
 static void test_errands_are_offered_for_the_state_a_pull_request_is_in(void) {
-    const char *always = "run,review,custom-feedback,pr-body-summary,delete-self-comments";
+    const char *always = "run,review,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments";
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"mergeable\",\"checks\":\"success\"}", 0), always);
     // A draft is offered the same errands.
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"draft\":true}", 0), always);
-    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"conflicting\"}", 0), "run,review,solve-conflicts,custom-feedback,pr-body-summary,delete-self-comments");
-    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"Has-Conflicts\"]}", 0), "run,review,solve-conflicts,custom-feedback,pr-body-summary,delete-self-comments");
-    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"error\"}", 0), "run,review,fix-checks,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"conflicting\"}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"Has-Conflicts\"]}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"error\"}", 0), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     // A run still going has nothing to fix; a count of failed checks from the Checks tab outweighs the summary.
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"pending\"}", 0), always);
-    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"success\"}", 2), "run,review,fix-checks,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"success\"}", 2), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1}", -1), always);
-    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"FEEDBACK-GIVEN\"]}", 0), "run,review,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"FEEDBACK-GIVEN\"]}", 0), "run,review,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"conflicting\",\"checks\":\"failure\",\"labels\":[\"feedback-given\"]}", 0),
-                    "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
+                    "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     // Without a pull request, everything but fixing checks nobody has seen fail.
-    CHECK_OWNED_STR(offered(NULL, NULL, 0), "run,review,solve-conflicts,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
-    CHECK_OWNED_STR(offered(NULL, NULL, 1), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, NULL, 0), "run,review,solve-conflicts,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered(NULL, NULL, 1), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
 }
 static void test_a_known_catalog_restricts_errands_to_those_it_lists(void) {
     const char *conflicted = "{\"number\":1,\"mergeable\":\"conflicting\",\"checks\":\"failure\",\"labels\":[\"feedback-given\"]}";
     // An empty catalog, or one with nothing readable in it, is not known yet.
-    CHECK_OWNED_STR(offered("[]", conflicted, 0), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered("[]", conflicted, 0), "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered("[{\"id\":\"pr-body-summary\"},{\"label\":\"x\"},\"y\"]", conflicted, 0),
-                    "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,pr-body-summary,delete-self-comments");
-    CHECK_OWNED_STR(offered("{\"id\":\"pr-body-summary\",\"label\":\"PR body\"}", "{\"number\":1}", 0), "run,review,custom-feedback,pr-body-summary,delete-self-comments");
+                    "run,review,solve-conflicts,fix-checks,implement-feedback,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
+    CHECK_OWNED_STR(offered("{\"id\":\"pr-body-summary\",\"label\":\"PR body\"}", "{\"number\":1}", 0), "run,review,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     // Run and Code review have routes of their own and stay.
     CHECK_OWNED_STR(offered("[{\"id\":\"pr-body-summary\",\"label\":\"PR body\"}]", conflicted, 0), "run,review,pr-body-summary");
     // Listed is not enough: the pull request has to be in the state for it.
@@ -623,19 +624,19 @@ static void test_errands_the_app_does_not_know_follow_in_the_servers_order(void)
         "{\"id\":\"zz-last\",\"label\":\"Z again\",\"hint\":\"later wins\"}]";
     Json *c = json_parsez(catalog);
     size_t n; BoardAction *a = board_actions_offered(c, NULL, 0, &n);
-    // QA, the test sheet and its run stay gone even when the server lists them (#12).
-    CHECK_OWNED_STR(action_ids(a, n), "run,review,zz-last,aa-first");
-    if (n == 4) {
+    // QA stays gone even when the server lists it (#12); the test sheet and its run are the app's own and keep its wording.
+    CHECK_OWNED_STR(action_ids(a, n), "run,review,test-sheet,test-run,zz-last,aa-first");
+    if (n == 6) {
         // The app words its own errands; the server's label for one it knows is not used.
-        CHECK_STR(a[0].label, "Run"); CHECK(!a[0].has_input);
-        CHECK_STR(a[2].label, "Z again"); CHECK_STR(a[2].hint, "later wins"); CHECK(!a[2].has_input);
-        CHECK_STR(a[3].label, "A"); CHECK_STR(a[3].hint, "Does a"); CHECK(a[3].has_input);
-        CHECK_STR(a[3].input.label, "Why?"); CHECK_STR(a[3].input.placeholder, ""); CHECK(!a[3].input.required);
-        CHECK_OWNED_STR(board_action_operation(&a[3]), "action");
-        Json *args = board_action_arguments(&a[3], "o/r", 4, "b", " because ");
+        CHECK_STR(a[0].label, "Run"); CHECK(!a[0].has_input); CHECK_STR(a[2].label, "Test sheet"); CHECK_STR(a[3].label, "Record QA");
+        CHECK_STR(a[4].label, "Z again"); CHECK_STR(a[4].hint, "later wins"); CHECK(!a[4].has_input);
+        CHECK_STR(a[5].label, "A"); CHECK_STR(a[5].hint, "Does a"); CHECK(a[5].has_input);
+        CHECK_STR(a[5].input.label, "Why?"); CHECK_STR(a[5].input.placeholder, ""); CHECK(!a[5].input.required);
+        CHECK_OWNED_STR(board_action_operation(&a[5]), "action");
+        Json *args = board_action_arguments(&a[5], "o/r", 4, "b", " because ");
         CHECK_INT(json_count(args), 4); CHECK_STR(json_str(json_get(args, "action")), "aa-first"); CHECK_STR(json_str(json_get(args, "input")), "because");
         json_free(args);
-        args = board_action_arguments(&a[2], "o/r", 4, "b", "nothing to take it");
+        args = board_action_arguments(&a[4], "o/r", 4, "b", "nothing to take it");
         CHECK_INT(json_count(args), 3); CHECK_STR(json_str(json_get(args, "action")), "zz-last"); json_free(args);
     }
     board_actions_free(a, n); json_free(c);
