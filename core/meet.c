@@ -25,10 +25,10 @@ char *meet_instructions(MeetModel model, const MeetPersona *p) {
     Str s; str_init(&s);
     if (own_voice)
         str_appendf(&s, "You speak for %s in a live meeting, in %s's own voice, through their microphone. Speak as %s, in the "
-                        "first person. You hear everyone in the meeting, %s included. ", name, name, name, name);
+                        "first person. You hear everyone else in the meeting. ", name, name, name);
     else
         str_appendf(&s, "You are %s's AI voice assistant, taking part in a live meeting for them through their microphone. "
-                        "You hear everyone in the meeting, %s included. ", name, name);
+                        "You hear everyone else in the meeting. ", name);
     if (p->independent)
         str_appendf(&s, "Act independently on %s's behalf: join the discussion when you have something useful to add, answer "
                         "questions put to %s, give updates and agree next steps as %s would. Do not talk over people, and keep "

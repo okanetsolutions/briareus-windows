@@ -371,7 +371,7 @@ static void read_events(WebSocket *ws, LONG gen) {
     }
     post(gen, WM_MEET_ENDED, NULL);
 }
-/// The microphone's sender: what the assistant hears, at the pace it was heard, every 40 ms.
+/// The meeting's sender: what the assistant hears, at the pace it was heard, every 40 ms.
 static unsigned __stdcall sender_main(void *arg) {
     (void)arg;
     LARGE_INTEGER freq, start, now;

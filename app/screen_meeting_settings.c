@@ -205,7 +205,7 @@ static void form_layout(Screen *base, Doc *doc) {
         else doc_notice_box(doc, x, w, s->message);
         doc_space(doc, px(14));
     }
-    note(doc, x, w, "In a conversation, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app and your microphone, "
+    note(doc, x, w, "In a conversation, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app, "
                     "speaks through a virtual microphone, and asks the conversation's agent whatever is about the project.");
     field(s, doc, x, w, F_KEY);
     field_pair(s, doc, x, w, F_NAME, F_VOICE);
@@ -222,7 +222,7 @@ static void form_layout(Screen *base, Doc *doc) {
     if (s->has_eleven_key) { doc_button(doc, x, 0, "Remove the ElevenLabs key", BUTTON_BORDERED, ACT_REMOVE_ELEVEN_KEY, 0, true); doc_space(doc, px(10)); }
     heading(doc, x, w, "Virtual microphone");
     if (s->cable) {
-        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers. The assistant speaks only into the meeting, so you will not hear it yourself: its words are in the meeting transcript (\xF0\x9F\x8E\x99 menu).", s->cable);
+        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers. The meeting then hears only the assistant, never your microphone: to speak yourself, switch the meeting app back to your microphone. The assistant speaks only into the meeting, so you will not hear it yourself: its words are in the meeting transcript (\xF0\x9F\x8E\x99 menu).", s->cable);
         doc_label(doc, x, w, 0xE73E, line, FONT_FOOTNOTE, theme.ok);
         free(line);
     } else {
