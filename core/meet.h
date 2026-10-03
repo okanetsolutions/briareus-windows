@@ -1,7 +1,8 @@
 // The meeting assistant's words with OpenAI: the events a voice session sends and takes, for GPT-Live (`/v1/live/sessions`,
 // the conversation handed back to us as a client delegation) and the Realtime API (`/v1/realtime`, the conversation as
 // the `ask_agent` function), the meeting's running transcript, and the agent's reply read from the conversation's events.
-// No sockets and no audio here: app/meet.c carries the events, app/meet_audio.c the sound.
+// With an ElevenLabs voice, Realtime answers in text and ElevenLabs' Text to Dialogue WebSocket says it in that voice.
+// No sockets and no audio here: app/meeting.c carries the events, app/meet_audio.c the sound.
 #ifndef BRIAREUS_MEET_H
 #define BRIAREUS_MEET_H
 #include "json.h"
@@ -24,7 +25,10 @@ const char *meet_ws_path(MeetModel model);
 /// Who the assistant speaks for and how. An `independent` assistant takes part on its own: it speaks when it judges it
 /// useful, answers what is asked of the user, and may have the agent make changes. Otherwise it speaks only when
 /// addressed (for Realtime: when a turn says one of the comma-separated `wake_words`) and asks the agent for answers only.
-typedef struct { const char *name, *voice, *wake_words, *conversation; bool introduce, independent; } MeetPersona;
+/// With an `eleven_voice` (an ElevenLabs voice ID), Realtime answers in text for ElevenLabs to say; GPT-Live keeps `voice`.
+typedef struct { const char *name, *voice, *wake_words, *conversation; bool introduce, independent; const char *eleven_voice; } MeetPersona;
+/// Whether the model answers in text, for ElevenLabs to say.
+bool meet_text_out(MeetModel model, const MeetPersona *p);
 
 char *meet_instructions(MeetModel model, const MeetPersona *p);
 /// The first event: `session.start` for GPT-Live, `session.update` for Realtime.
@@ -48,8 +52,9 @@ typedef struct {
     double seconds;
     double text_in, text_cached, text_out, audio_in, audio_cached, audio_out;
     double transcribed_seconds;
+    double spoken_chars;     // what ElevenLabs said, in characters
 } MeetUsage;
-/// In US dollars, at the rates the model pages list (2026-10-03).
+/// In US dollars, at the rates the model pages list (2026-10-03), ElevenLabs' at Eleven v4 Turbo's list price.
 double meet_usage_cost(MeetModel model, const MeetUsage *usage);
 /// Takes a reported usage in: GPT-Live's seconds are a running total, Realtime's tokens add up.
 void meet_usage_merge(MeetUsage *into, const MeetUsage *reported, bool snapshot);
@@ -61,6 +66,8 @@ typedef enum {
     MEET_EV_HEARD,           // part of what the meeting said: `text`
     MEET_EV_HEARD_TURN,      // a whole turn the meeting said (Realtime): `text`
     MEET_EV_SAID,            // part of what the assistant said: `text`
+    MEET_EV_SAID_DONE,       // the assistant's text answer is whole (Realtime answering in text)
+    MEET_EV_RESPONSE,        // Realtime started an answer
     MEET_EV_SPEECH_STARTED,  // someone started talking: unplayed speech is dropped
     MEET_EV_ASK,             // the voice model wants the agent: `id`, and `request` when it worded one
     MEET_EV_ERROR,           // `text`
@@ -76,6 +83,28 @@ bool meet_event_parse(MeetModel model, const char *json, size_t len, MeetEvent *
 void meet_event_free(MeetEvent *e);
 
 char *base64_encode(const void *data, size_t len);
+
+// MARK: ElevenLabs
+
+/// Eleven v4 Turbo: ElevenLabs' most natural model for real time, about 150 ms to first speech.
+#define ELEVEN_MODEL "eleven_v4_turbo"
+#define ELEVEN_HOST "api.elevenlabs.io"
+/// US dollars per character said, Eleven v4 Turbo's list price ($0.04 per 1,000).
+#define ELEVEN_CHAR_COST 0.00004
+/// The Text to Dialogue WebSocket's path, PCM at MEET_SAMPLE_RATE.
+const char *eleven_ws_path(void);
+/// The first message: the one voice the session speaks with.
+char *eleven_open_event(const char *voice);
+/// Text to say; `new_turn` starts a new answer.
+char *eleven_text_event(const char *voice, const char *text, bool new_turn);
+/// Says what is buffered now: the answer is whole.
+char *eleven_flush_event(void);
+/// Keeps the socket open through silence (it closes after 20 s without a message).
+char *eleven_keep_alive_event(void);
+/// Reads one server message: MEET_EV_AUDIO, MEET_EV_ERROR, or MEET_EV_OTHER. False for text that is not JSON.
+bool eleven_event_parse(const char *json, size_t len, MeetEvent *out);
+/// Characters in UTF-8 text, as ElevenLabs bills them.
+size_t meet_char_count(const char *text);
 
 /// The meeting so far as lines of "Meeting: …" and "Assistant: …", the oldest dropped past a limit.
 typedef struct { Str text; int speaker; } MeetLog;

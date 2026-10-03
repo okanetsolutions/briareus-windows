@@ -11,14 +11,15 @@
 #include <time.h>
 #include <wincred.h>
 
-// MARK: - The OpenAI API key
+// MARK: - The API keys
 
-static const wchar_t KEY_TARGET[] = L"Briareus OpenAI API key";
+static const wchar_t *const KEY_TARGETS[] = { [MEETING_KEY_OPENAI] = L"Briareus OpenAI API key", [MEETING_KEY_ELEVENLABS] = L"Briareus ElevenLabs API key" };
+static const wchar_t *const KEY_USERS[] = { [MEETING_KEY_OPENAI] = L"openai", [MEETING_KEY_ELEVENLABS] = L"elevenlabs" };
 
-char *meeting_key_read(bool *failed) {
+char *meeting_key_read(MeetingKey which, bool *failed) {
     if (failed) *failed = false;
     PCREDENTIALW cred = NULL;
-    if (!CredReadW(KEY_TARGET, CRED_TYPE_GENERIC, 0, &cred)) {
+    if (!CredReadW(KEY_TARGETS[which], CRED_TYPE_GENERIC, 0, &cred)) {
         if (GetLastError() != ERROR_NOT_FOUND && failed) *failed = true;
         return NULL;
     }
@@ -26,21 +27,21 @@ char *meeting_key_read(bool *failed) {
     CredFree(cred);
     return key;
 }
-bool meeting_key_save(const char *key) {
+bool meeting_key_save(MeetingKey which, const char *key) {
     CREDENTIALW cred; memset(&cred, 0, sizeof cred);
     cred.Type = CRED_TYPE_GENERIC;
-    cred.TargetName = (LPWSTR)KEY_TARGET;
+    cred.TargetName = (LPWSTR)KEY_TARGETS[which];
     cred.CredentialBlobSize = (DWORD)strlen(key);
     cred.CredentialBlob = (LPBYTE)key;
     // This device only, as the device token.
     cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
-    cred.UserName = (LPWSTR)L"openai";
+    cred.UserName = (LPWSTR)KEY_USERS[which];
     cred.Comment = (LPWSTR)L"Briareus meeting assistant";
     return CredWriteW(&cred, 0) != 0;
 }
-bool meeting_key_remove(void) { return CredDeleteW(KEY_TARGET, CRED_TYPE_GENERIC, 0) || GetLastError() == ERROR_NOT_FOUND; }
-bool meeting_has_key(void) {
-    char *key = meeting_key_read(NULL);
+bool meeting_key_remove(MeetingKey which) { return CredDeleteW(KEY_TARGETS[which], CRED_TYPE_GENERIC, 0) || GetLastError() == ERROR_NOT_FOUND; }
+bool meeting_has_key(MeetingKey which) {
+    char *key = meeting_key_read(which, NULL);
     bool has = key && *key;
     if (key) { SecureZeroMemory(key, strlen(key)); free(key); }
     return has;
@@ -79,6 +80,8 @@ void meeting_settings_load(MeetingSettings *s) {
     if (!s->wake_words) s->wake_words = xstrfmt("%s, assistant, Briareus", s->name);
     s->voice = reg_string(L"voice");
     if (!s->voice || !*s->voice) { free(s->voice); s->voice = xstrdup("marin"); }
+    s->eleven_voice = reg_string(L"elevenVoice");
+    if (!s->eleven_voice) s->eleven_voice = xstrdup("");
     s->introduce = reg_bool(L"introduce", true);
     s->independent = reg_bool(L"independent", false);
 }
@@ -88,11 +91,12 @@ void meeting_settings_save(const MeetingSettings *s) {
     reg_set_string(key, L"name", s->name);
     reg_set_string(key, L"wakeWords", s->wake_words);
     reg_set_string(key, L"voice", s->voice);
+    reg_set_string(key, L"elevenVoice", s->eleven_voice);
     reg_set_bool(key, L"introduce", s->introduce);
     reg_set_bool(key, L"independent", s->independent);
     RegCloseKey(key);
 }
-void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->voice); memset(s, 0, sizeof *s); }
+void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->voice); free(s->eleven_voice); memset(s, 0, sizeof *s); }
 
 // MARK: - History
 
@@ -135,10 +139,12 @@ void meeting_history_clear(void) { wchar_t *path = history_path(); if (path) Del
 
 // MARK: - The meeting
 
-enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_READY, WM_MEET_ENDED };
+enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_READY, WM_MEET_ENDED, WM_VOICE_ENDED };
 enum { TIMER_POLL_AGENT = 1, TIMER_TICK = 2, TIMER_CLOSE_WAIT = 3 };
 #define ANSWER_TIMEOUT_MS (10 * 60 * 1000)
 #define PROGRESS_AFTER_MS 20000
+/// ElevenLabs closes a socket after 20 s without a message.
+#define KEEP_ALIVE_SECONDS 10
 
 /// One question for the agent, from a delegation or a function call.
 typedef struct { char *id, *request; DWORD asked; } Ask;
@@ -159,6 +165,7 @@ static struct {
     LONG gen;                // each meeting's own; messages and threads of an earlier one are ignored
     MeetRecord record;
     DWORD joined_tick;
+    unsigned ticks;
     double cost_at_join, cost_now; bool has_cost;
     // The agent: the questions waiting, the one asked, and where the conversation's events were read up to.
     Ask *asks; size_t ask_count;
@@ -185,8 +192,164 @@ static char *log_tail(size_t max) {
     return t;
 }
 
-/// The socket's reader: speech goes straight to the cable, everything else to the UI thread. The UI thread joins it
-/// before the devices close.
+// MARK: - The ElevenLabs voice
+
+/// GPT-Realtime's text answers, said in the user's ElevenLabs voice. One socket at a time: ElevenLabs cannot drop text
+/// it was given, so someone talking over the assistant cuts the socket and a new one opens. Each socket has a thread that
+/// connects and reads; once its socket is no longer the current one, it touches nothing but its own.
+static struct {
+    CRITICAL_SECTION lock;
+    bool on;                 // this meeting speaks with ElevenLabs
+    char *key, *voice;
+    LONG gen;                // the meeting's
+    LONG conn;               // the current socket's number
+    WebSocket *ws;           // the current socket, once open
+    bool connecting;
+    Str pending;             // text to say before the socket opened
+    bool pending_turn, pending_flush;
+    bool turn;               // the next text starts an answer
+    bool used;               // the socket was given text, so it may still be speaking
+    bool skip;               // the answer was talked over: the rest of it is not said
+    double chars;            // said this meeting
+} V;
+
+typedef struct { LONG conn, gen; char *key, *voice; } VoiceConnect;
+static void voice_send_locked(char *event) { if (event) { ws_send(V.ws, event); free(event); } }
+
+static unsigned __stdcall voice_main(void *arg) {
+    VoiceConnect *c = arg;
+    const char *headers[] = { "xi-api-key", c->key, NULL, NULL };
+    char *error = NULL;
+    WebSocket *ws = ws_connect(ELEVEN_HOST, eleven_ws_path(), headers, &error);
+    SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
+    EnterCriticalSection(&V.lock);
+    bool current = c->conn == V.conn;
+    if (current) {
+        V.connecting = false;
+        if (ws) {
+            V.ws = ws;
+            voice_send_locked(eleven_open_event(c->voice));
+            if (V.pending.len) { voice_send_locked(eleven_text_event(c->voice, V.pending.data, V.pending_turn)); V.used = true; }
+            if (V.pending_flush) voice_send_locked(eleven_flush_event());
+            str_free(&V.pending); V.pending_turn = V.pending_flush = false;
+        }
+    }
+    LeaveCriticalSection(&V.lock);
+    free(c->voice);
+    if (!ws || !current) {
+        ws_free(ws);
+        if (current) { char *why = xstrfmt("ElevenLabs: %s", error ? error : "could not connect."); post(c->gen, WM_VOICE_ENDED, why); }
+        free(error); free(c);
+        return 0;
+    }
+    for (;;) {
+        char *text; size_t len;
+        if (ws_receive(ws, &text, &len) <= 0) break;
+        MeetEvent *e = xcalloc(1, sizeof *e);
+        bool ok = eleven_event_parse(text, len, e);
+        free(text);
+        if (ok && e->kind == MEET_EV_AUDIO) {
+            EnterCriticalSection(&V.lock);
+            if (c->conn == V.conn) meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
+            LeaveCriticalSection(&V.lock);
+        } else if (ok && e->kind == MEET_EV_ERROR) { post(c->gen, WM_MEET_EVENT, e); continue; }
+        meet_event_free(e); free(e);
+    }
+    // Cut by an interruption or the meeting's end, the socket is no longer current; otherwise ElevenLabs closed it.
+    EnterCriticalSection(&V.lock);
+    bool mine = V.ws == ws;
+    if (mine) { V.ws = NULL; V.used = false; }
+    LeaveCriticalSection(&V.lock);
+    ws_free(ws);
+    if (mine) post(c->gen, WM_VOICE_ENDED, NULL);
+    free(c);
+    return 0;
+}
+static void voice_open_locked(void) {
+    VoiceConnect *c = xcalloc(1, sizeof *c);
+    c->conn = ++V.conn; c->gen = V.gen; c->key = xstrdup(V.key); c->voice = xstrdup(V.voice);
+    V.connecting = true; V.used = false;
+    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, voice_main, c, 0, NULL);
+    if (thread) CloseHandle(thread);
+    else { V.connecting = false; SecureZeroMemory(c->key, strlen(c->key)); free(c->key); free(c->voice); free(c); }
+}
+/// Cuts the current socket, unsaid speech and all.
+static void voice_cut_locked(void) {
+    V.conn++;
+    if (V.ws) { ws_abort(V.ws); V.ws = NULL; }
+    V.connecting = V.used = false;
+    str_free(&V.pending); V.pending_turn = V.pending_flush = false;
+}
+
+static void voice_start(char *key, const char *voice, LONG gen) {
+    EnterCriticalSection(&V.lock);
+    V.on = true; V.key = key; V.voice = xstrdup(voice); V.gen = gen;
+    V.turn = true; V.skip = false; V.chars = 0;
+    voice_open_locked();
+    LeaveCriticalSection(&V.lock);
+}
+static void voice_stop(void) {
+    EnterCriticalSection(&V.lock);
+    if (V.on) {
+        voice_cut_locked();
+        V.on = false;
+        SecureZeroMemory(V.key, strlen(V.key)); free(V.key); V.key = NULL;
+        free(V.voice); V.voice = NULL;
+    }
+    LeaveCriticalSection(&V.lock);
+}
+/// Part of an answer, said as it comes.
+static void voice_say(const char *text) {
+    if (!text || !*text) return;
+    EnterCriticalSection(&V.lock);
+    if (V.on && !V.skip) {
+        bool turn = V.turn;
+        V.turn = false;
+        V.chars += (double)meet_char_count(text);
+        if (V.ws) { voice_send_locked(eleven_text_event(V.voice, text, turn)); V.used = true; }
+        else {
+            if (!V.pending.len) V.pending_turn = turn;
+            str_appendz(&V.pending, text);
+            if (!V.connecting) voice_open_locked();
+        }
+    }
+    LeaveCriticalSection(&V.lock);
+}
+/// The answer is whole: what ElevenLabs holds back for context is said now.
+static void voice_answer_done(void) {
+    EnterCriticalSection(&V.lock);
+    if (V.on && !V.skip) { if (V.ws) voice_send_locked(eleven_flush_event()); else if (V.pending.len) V.pending_flush = true; }
+    V.turn = true;
+    LeaveCriticalSection(&V.lock);
+}
+static void voice_answer_started(void) {
+    EnterCriticalSection(&V.lock);
+    V.skip = false; V.turn = true;
+    LeaveCriticalSection(&V.lock);
+}
+/// Someone talks: the answer under way stops, and a socket that was given text is replaced by a fresh one.
+static void voice_interrupt(void) {
+    EnterCriticalSection(&V.lock);
+    if (V.on) {
+        V.skip = true;
+        if (V.used || V.pending.len) { voice_cut_locked(); voice_open_locked(); }
+    }
+    LeaveCriticalSection(&V.lock);
+}
+static void voice_keep_alive(void) {
+    EnterCriticalSection(&V.lock);
+    if (V.ws) voice_send_locked(eleven_keep_alive_event());
+    LeaveCriticalSection(&V.lock);
+}
+static double voice_chars(void) {
+    EnterCriticalSection(&V.lock);
+    double n = V.chars;
+    LeaveCriticalSection(&V.lock);
+    return n;
+}
+
+/// The socket's reader: speech goes straight to the cable (text to ElevenLabs, when it speaks), everything else to the
+/// UI thread. The UI thread joins it before the devices close.
 static void read_events(WebSocket *ws, LONG gen) {
     for (;;) {
         char *text; size_t len;
@@ -200,7 +363,10 @@ static void read_events(WebSocket *ws, LONG gen) {
             meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
             if (!e->has_usage) { meet_event_free(e); free(e); continue; }
         }
-        if (e->kind == MEET_EV_SPEECH_STARTED) meet_audio_flush(M.audio);
+        if (e->kind == MEET_EV_SPEECH_STARTED) { meet_audio_flush(M.audio); voice_interrupt(); }
+        else if (e->kind == MEET_EV_RESPONSE) voice_answer_started();
+        else if (e->kind == MEET_EV_SAID) voice_say(e->text);
+        else if (e->kind == MEET_EV_SAID_DONE) voice_answer_done();
         post(gen, WM_MEET_EVENT, e);
     }
     post(gen, WM_MEET_ENDED, NULL);
@@ -398,9 +564,16 @@ static LRESULT CALLBACK meeting_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         free(error);
         return 0;
     }
+    case WM_VOICE_ENDED: {
+        // A voice that cannot connect as the meeting starts ends it; later the next answer opens a new socket.
+        char *error = (char *)lp;
+        if (current && error) { if (!M.ready) finish(error); else { set_string(&M.error, error); changed(); } }
+        free(error);
+        return 0;
+    }
     case WM_TIMER:
         if (wp == TIMER_POLL_AGENT) { KillTimer(hwnd, TIMER_POLL_AGENT); if (M.asking) poll_agent(); }
-        else if (wp == TIMER_TICK) changed();
+        else if (wp == TIMER_TICK) { if (++M.ticks % KEEP_ALIVE_SECONDS == 0) voice_keep_alive(); changed(); }
         else if (wp == TIMER_CLOSE_WAIT) { KillTimer(hwnd, TIMER_CLOSE_WAIT); if (M.state == MEETING_LEAVING) finish(NULL); }
         return 0;
     }
@@ -414,6 +587,7 @@ static void ensure_window(void) {
     M.hwnd = CreateWindowExW(0, L"BriareusMeeting", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
     InitializeCriticalSection(&M.log_lock);
     InitializeCriticalSection(&M.lock);
+    InitializeCriticalSection(&V.lock);
 }
 
 /// Ends the meeting: threads joined, devices closed, the record saved when it got going, and `error` shown.
@@ -434,6 +608,9 @@ static void finish(const char *error) {
     if (ws) ws_abort(ws);
     if (M.reader) { if (ws) WaitForSingleObject(M.reader, INFINITE); CloseHandle(M.reader); M.reader = NULL; }
     ws_free(ws);
+    // The voice's thread plays only while its socket is current, which it no longer is.
+    M.record.usage.spoken_chars = voice_chars();
+    voice_stop();
     meet_audio_stop(M.audio); M.audio = NULL;
     request_cancel(&M.req_message); request_cancel(&M.req_poll);
     if (was_live) {
@@ -460,7 +637,7 @@ static void finish(const char *error) {
 bool meeting_join(const Session *session, MeetModel model, unsigned pid, const char *source) {
     if (M.state != MEETING_OFF) { app_alert("Meeting assistant", "A meeting is already running. Leave it first."); return false; }
     bool failed = false;
-    char *key = meeting_key_read(&failed);
+    char *key = meeting_key_read(MEETING_KEY_OPENAI, &failed);
     if (!key || !*key) {
         free(key);
         app_alert("Meeting assistant", failed ? "The OpenAI API key could not be read from Credential Manager."
@@ -470,10 +647,22 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
     ensure_window();
     char *error = NULL, *note = NULL;
     meeting_settings_load(&M.settings);
+    // GPT-Realtime speaks with the user's ElevenLabs voice when one is set.
+    char *eleven_key = NULL;
+    if (model == MEET_REALTIME && *M.settings.eleven_voice) {
+        eleven_key = meeting_key_read(MEETING_KEY_ELEVENLABS, &failed);
+        if (!eleven_key || !*eleven_key) {
+            free(eleven_key); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);
+            app_alert("Meeting assistant", failed ? "The ElevenLabs API key could not be read from Credential Manager."
+                                                  : "Add your ElevenLabs API key, or clear the ElevenLabs voice: \xE2\x9A\x99 Settings \xE2\x86\x92 Meeting assistant.");
+            return false;
+        }
+    }
     MeetAudio *audio = meet_audio_start(pid, &error, &note);
     if (!audio) {
         app_alert("Meeting assistant", error);
         free(error); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);
+        if (eleven_key) { SecureZeroMemory(eleven_key, strlen(eleven_key)); free(eleven_key); }
         return false;
     }
     memset(&M.record, 0, sizeof M.record);
@@ -484,7 +673,9 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
     M.source = xstrdup(source ? source : "every app");
     M.has_cost = false; read_cost(session->raw);
     M.number = 0;
-    M.persona = (MeetPersona){ M.settings.name, M.settings.voice, M.settings.wake_words, M.title, M.settings.introduce, M.settings.independent };
+    M.persona = (MeetPersona){ M.settings.name, M.settings.voice, M.settings.wake_words, M.title, M.settings.introduce, M.settings.independent,
+                               eleven_key ? M.settings.eleven_voice : NULL };
+    M.ticks = 0;
     meet_log_free(&M.log); meet_log_init(&M.log);
     // The agent's reply is looked for from where the saved transcript ends.
     Transcript saved; transcript_init(&saved);
@@ -499,6 +690,7 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
     Connect *c = xcalloc(1, sizeof *c);
     c->key = key; c->gen = M.gen;
     c->setup = meet_setup_event(model, &M.persona);
+    if (eleven_key) voice_start(eleven_key, M.settings.eleven_voice, M.gen);
     M.reader = (HANDLE)_beginthreadex(NULL, 0, connect_main, c, 0, NULL);
     changed();
     return true;
@@ -527,12 +719,14 @@ void meeting_answer_now(void) { if (M.state == MEETING_LIVE) send_owned(meet_ans
 char *meeting_status(void) {
     if (M.state == MEETING_OFF) return xstrdup("");
     Str s; str_init(&s);
-    str_appendf(&s, "\xF0\x9F\x8E\x99 %s \xC2\xB7 %s", meet_model_label(M.model), M.source);
+    str_appendf(&s, "\xF0\x9F\x8E\x99 %s%s \xC2\xB7 %s", meet_model_label(M.model), M.persona.eleven_voice ? " + ElevenLabs" : "", M.source);
     if (M.state == MEETING_CONNECTING) str_appendz(&s, " \xC2\xB7 connecting\xE2\x80\xA6");
     else if (M.state == MEETING_LEAVING) str_appendz(&s, " \xC2\xB7 leaving\xE2\x80\xA6");
     else {
         unsigned secs = (GetTickCount() - M.joined_tick) / 1000;
-        double cost = meet_usage_cost(M.model, &M.record.usage) + (M.has_cost && M.cost_now > M.cost_at_join ? M.cost_now - M.cost_at_join : 0);
+        MeetUsage usage = M.record.usage;
+        usage.spoken_chars = voice_chars();
+        double cost = meet_usage_cost(M.model, &usage) + (M.has_cost && M.cost_now > M.cost_at_join ? M.cost_now - M.cost_at_join : 0);
         str_appendf(&s, " \xC2\xB7 %u:%02u \xC2\xB7 $%.3f", secs / 60, secs % 60, cost);
         str_appendz(&s, M.muted ? " \xC2\xB7 muted" : M.asking ? " \xC2\xB7 asking the agent\xE2\x80\xA6" : M.audio && meet_audio_speaking(M.audio) ? " \xC2\xB7 speaking" : " \xC2\xB7 listening");
     }

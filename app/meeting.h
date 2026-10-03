@@ -1,6 +1,7 @@
 // The meeting assistant: one meeting at a time, joined from a conversation, whose agent answers what the voice model
-// cannot. It runs on until left, whatever screen is shown. Its settings and OpenAI API key are this computer's, and
-// every meeting is recorded here with its time and costs so the two models can be compared.
+// cannot. It runs on until left, whatever screen is shown. Its settings and API keys (OpenAI, and ElevenLabs for the
+// user's own voice) are this computer's, and every meeting is recorded here with its time and costs so the two models
+// can be compared.
 #ifndef BRIAREUS_MEETING_H
 #define BRIAREUS_MEETING_H
 #include "meet.h"
@@ -9,17 +10,19 @@
 
 // MARK: - Settings
 
-/// The OpenAI API key, in Windows Credential Manager; NULL without one (`*failed` when the store could not be read).
-char *meeting_key_read(bool *failed);
-bool meeting_key_save(const char *key);
-bool meeting_key_remove(void);
+typedef enum { MEETING_KEY_OPENAI, MEETING_KEY_ELEVENLABS } MeetingKey;
+/// An API key, in Windows Credential Manager; NULL without one (`*failed` when the store could not be read).
+char *meeting_key_read(MeetingKey which, bool *failed);
+bool meeting_key_save(MeetingKey which, const char *key);
+bool meeting_key_remove(MeetingKey which);
 /// Whether a key is saved, without reading it out.
-bool meeting_has_key(void);
+bool meeting_has_key(MeetingKey which);
 
 typedef struct {
     char *name;          // who the assistant speaks for
     char *wake_words;    // what makes an addressed Realtime assistant answer
     char *voice;
+    char *eleven_voice;  // the ElevenLabs voice ID GPT-Realtime speaks with; empty for the OpenAI voice
     bool introduce;      // it says who it is as it joins
     bool independent;    // it takes part on its own and may have the agent make changes
 } MeetingSettings;

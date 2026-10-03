@@ -241,6 +241,60 @@ static void test_the_reply_is_read_after_its_message_until_the_turn_ends(void) {
     meet_reply_free(&scan);
     json_free(before); json_free(first); json_free(rest); json_free(ask); free(mine); free(marker);
 }
+static void test_an_elevenlabs_voice_makes_realtime_answer_in_text_as_the_user(void) {
+    MeetPersona p = persona(false);
+    p.eleven_voice = "zozOsuFj6BSfLStTxdrK";
+    CHECK(meet_text_out(MEET_REALTIME, &p)); CHECK(!meet_text_out(MEET_LIVE, &p));
+    Json *e = parsed(meet_setup_event(MEET_REALTIME, &p));
+    const Json *s = json_get(e, "session");
+    CHECK_STR(json_str(json_at(json_get(s, "output_modalities"), 0)), "text");
+    CHECK(!json_is_object(json_get(json_get(s, "audio"), "output")));
+    CHECK_STR(json_str(json_get(json_get(json_get(json_get(s, "audio"), "input"), "format"), "type")), "audio/pcm");
+    const char *instructions = json_str(json_get(s, "instructions"));
+    CHECK(strstr(instructions, "Speak as Nadin, in the first person") != NULL);
+    CHECK(strstr(instructions, "no Markdown") != NULL);
+    CHECK(strstr(instructions, "Never claim") == NULL);
+    json_free(e);
+    // GPT-Live keeps its OpenAI voice.
+    e = parsed(meet_setup_event(MEET_LIVE, &p));
+    CHECK_STR(json_str(json_get(json_get(json_get(json_get(e, "session"), "audio"), "output"), "voice")), "marin");
+    CHECK(strstr(json_str(json_get(json_get(e, "session"), "instructions")), "AI voice assistant") != NULL);
+    json_free(e);
+    p.eleven_voice = "";
+    CHECK(!meet_text_out(MEET_REALTIME, &p));
+}
+static void test_realtime_text_answers_are_read(void) {
+    MeetEvent e = parse(MEET_REALTIME, "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}");
+    CHECK_INT(e.kind, MEET_EV_RESPONSE); meet_event_free(&e);
+    e = parse(MEET_REALTIME, "{\"type\":\"response.output_text.delta\",\"delta\":\"CI is \"}");
+    CHECK_INT(e.kind, MEET_EV_SAID); CHECK_STR(e.text, "CI is "); meet_event_free(&e);
+    e = parse(MEET_REALTIME, "{\"type\":\"response.output_text.done\",\"text\":\"CI is green.\"}");
+    CHECK_INT(e.kind, MEET_EV_SAID_DONE); meet_event_free(&e);
+}
+static void test_elevenlabs_speaks_v4_turbo_pcm_at_24k(void) {
+    CHECK_STR(eleven_ws_path(), "/v1/text-to-dialogue/stream-input?model_id=eleven_v4_turbo&output_format=pcm_24000");
+    Json *open = parsed(eleven_open_event("v1"));
+    CHECK_STR(json_str(json_at(json_get(open, "voices"), 0)), "v1"); CHECK_INT(json_count(json_get(open, "voices")), 1);
+    Json *first = parsed(eleven_text_event("v1", "Hello there", true)), *more = parsed(eleven_text_event("v1", " again", false));
+    const Json *input = json_at(json_get(first, "inputs"), 0);
+    CHECK_STR(json_str(json_get(input, "text")), "Hello there"); CHECK_STR(json_str(json_get(input, "voice_id")), "v1");
+    CHECK(json_bool_is(json_get(input, "new_turn"), true));
+    CHECK(!json_bool_is(json_get(json_at(json_get(more, "inputs"), 0), "new_turn"), true));
+    Json *flush = parsed(eleven_flush_event()), *alive = parsed(eleven_keep_alive_event());
+    CHECK(json_bool_is(json_get(flush, "flush"), true)); CHECK(json_bool_is(json_get(alive, "keep_alive"), true));
+    json_free(open); json_free(first); json_free(more); json_free(flush); json_free(alive);
+    MeetEvent e;
+    const char *audio = "{\"audio\":\"AQD//w==\",\"alignment\":null}";
+    CHECK(eleven_event_parse(audio, strlen(audio), &e)); CHECK_INT(e.kind, MEET_EV_AUDIO); CHECK_INT((int)e.audio_len, 4); meet_event_free(&e);
+    const char *error = "{\"message\":\"Invalid API key\",\"error\":\"authentication_required\",\"code\":1008}";
+    CHECK(eleven_event_parse(error, strlen(error), &e)); CHECK_INT(e.kind, MEET_EV_ERROR); CHECK_STR(e.text, "ElevenLabs: Invalid API key"); meet_event_free(&e);
+    const char *final = "{\"is_final\":true}";
+    CHECK(eleven_event_parse(final, strlen(final), &e)); CHECK_INT(e.kind, MEET_EV_OTHER); meet_event_free(&e);
+    CHECK(!eleven_event_parse("nope", 4, &e));
+    CHECK_INT((int)meet_char_count("caf\xC3\xA9!"), 5);
+    MeetUsage spoken = { .spoken_chars = 1000 };
+    CHECK(near(meet_usage_cost(MEET_REALTIME, &spoken), 0.04));
+}
 static void test_models_are_named(void) {
     CHECK_STR(meet_model_label(MEET_LIVE), "GPT-Live 1");
     CHECK_STR(meet_ws_path(MEET_REALTIME), "/v1/realtime?model=gpt-realtime-2.1-mini");
@@ -267,4 +321,7 @@ void meet_tests(void) {
     test_run("replies are made fit to say", test_replies_are_made_fit_to_say);
     test_run("the reply is read after its message until the turn ends", test_the_reply_is_read_after_its_message_until_the_turn_ends);
     test_run("models are named", test_models_are_named);
+    test_run("an elevenlabs voice makes realtime answer in text as the user", test_an_elevenlabs_voice_makes_realtime_answer_in_text_as_the_user);
+    test_run("realtime text answers are read", test_realtime_text_answers_are_read);
+    test_run("elevenlabs speaks v4 turbo pcm at 24k", test_elevenlabs_speaks_v4_turbo_pcm_at_24k);
 }
