@@ -41,7 +41,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
@@ -78,6 +78,7 @@ typedef struct {
     bool busy, uncertain, dialog_open;
     int starting_number; char *starting_id;
     char *write_error;
+    int merging_number; Request *req_merge;   // the pull request being merged: read for its head first, then merged
 } PullsScreen;
 
 static BoardFilter *current_filter(PullsScreen *s) { return s->tab == 0 ? &s->pull_filter : &s->issue_filter; }
@@ -213,9 +214,64 @@ static void board_start(PullsScreen *s, int number, const char *branch, const Bo
     pane_relayout(s->base.pane);
 }
 
+// Merging from the board: the row has no head commit, and the server merges only the head that was read, so the
+// pull request is read first and merged at the head that read returns.
+static void board_merge_done(void *owner, Request *req) {
+    PullsScreen *s = owner;
+    s->merging_number = 0;
+    if (!req->ok) {
+        char *t = request_error_text(req);
+        if (api_error_is_refusal(&req->error)) set_string(&s->write_error, t);
+        else { char *m = xstrfmt("%s The merge may still have completed; refresh before trying again.", t); set_string(&s->write_error, m); free(m); }
+        free(t);
+    } else {
+        set_string(&s->write_error, NULL);
+        const char *status = json_str(json_get(req->result, "status"));
+        if (str_eq(status, "pending")) set_string(&s->write_error, "GitHub accepted the merge and is still finishing it; the pull request leaves the list once it lands.");
+    }
+    pulls_load(s, true);
+    pane_relayout(s->base.pane);
+}
+static void board_merge_read_done(void *owner, Request *req) {
+    PullsScreen *s = owner;
+    const Json *pr = json_get(req->result, "pr");
+    const char *head = json_str(json_get(pr, "headSha")), *base_ref = json_str(json_get(pr, "baseRef"));
+    if (!req->ok || !head || !base_ref || !str_eq(json_str(json_get(pr, "state")), "open")) {
+        if (!req->ok) request_error_into(&s->write_error, req);
+        else set_string(&s->write_error, str_eq(json_str(json_get(pr, "state")), "open") ? "The server did not say which commit to merge." : "This pull request is no longer open.");
+        s->merging_number = 0;
+        pane_relayout(s->base.pane);
+        return;
+    }
+    Json *args = json_object();
+    json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->merging_number);
+    json_set_str(args, "headSha", head); json_set_str(args, "baseRef", base_ref); json_set_str(args, "method", "squash");
+    store_call("merge_pull", args, 0, s, board_merge_done, 0, &s->req_merge);
+}
+static void board_merge(PullsScreen *s, size_t index) {
+    if (index >= s->pull_count || s->merging_number || s->busy) return;
+    const PullSummary *pull = &s->pulls[index];
+    int number = pull->number;
+    Str msg; str_init(&msg);
+    str_appendf(&msg, "\xE2\x80\x9C%s\xE2\x80\x9D is squash-merged into %s on GitHub.", pull->title ? pull->title : "", str_empty(pull->base_branch) ? "its base branch" : pull->base_branch);
+    if (pull_conflicting(pull)) str_appendz(&msg, "\n\nThis branch has conflicts that must be resolved before it can merge.");
+    if (pull_checks_failed(pull)) str_appendz(&msg, "\n\nSome checks failed.");
+    else if (str_eq(pull->checks, "pending") || str_eq(pull->checks, "expected")) str_appendz(&msg, "\n\nSome checks are still running.");
+    char *title = xstrfmt("Merge #%d?", number);
+    s->dialog_open = true;
+    bool ok = app_confirm(title, msg.data, "Merge", true);
+    s->dialog_open = false;
+    free(title); str_free(&msg);
+    if (!ok || s->merging_number) return;
+    s->merging_number = number; set_string(&s->write_error, NULL);
+    Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", number);
+    store_call("pull", args, 0, s, board_merge_read_done, 0, &s->req_merge);
+    pane_relayout(s->base.pane);
+}
+
 static void pulls_destroy(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); poller_stop(&s->poller);
+    request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); request_cancel(&s->req_merge); poller_stop(&s->poller);
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
     project_ssh_free(s->ssh);
@@ -304,13 +360,18 @@ static void pulls_layout(Screen *base, Doc *doc) {
             StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
             // The dashboard's buttons: the errands its state offers, the suggested one filled. Clicking the row opens the PR.
             size_t an = 0; BoardAction *actions = str_empty(pull->branch) ? NULL : row_actions(s->catalog, pull, 0, &an);
-            ButtonSpec *buttons = xcalloc(an + 1, sizeof *buttons); size_t bn = 0;
+            ButtonSpec *buttons = xcalloc(an + 2, sizeof *buttons); size_t bn = 0;
             char **labels = xcalloc(an + 1, sizeof *labels);
             for (size_t k = 0; k < an && k < ACTION_STRIDE; k++) {
                 bool starting = s->busy && s->starting_number == pull->number && str_eq(s->starting_id, actions[k].id);
                 bool suggested = str_eq(pull->recommended, actions[k].id);
                 labels[k] = starting ? xstrdup("Starting\xE2\x80\xA6") : xstrfmt("%s %s", action_icon(actions[k].id), actions[k].label);
                 ButtonSpec b = { 0, labels[k], suggested ? BUTTON_PROMINENT : BUTTON_BORDERED, ACT_PULL_ACTION, (intptr_t)(i * ACTION_STRIDE + k), !s->busy && !s->uncertain };
+                buttons[bn++] = b;
+            }
+            if (!pull->draft && store_can_manage() && store_supports("pull") && store_supports("merge_pull")) {
+                bool merging = s->merging_number == pull->number;
+                ButtonSpec b = { 0, merging ? "Merging\xE2\x80\xA6" : "\xE2\x86\xB3 Merge", BUTTON_BORDERED, ACT_MERGE_PULL, (intptr_t)i, !s->merging_number && !s->busy };
                 buttons[bn++] = b;
             }
             size_t runs = runs_on(s, pull->number);
@@ -429,6 +490,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
+    case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
         s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) ? (int)arg : TAB_PULLS;
