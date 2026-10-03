@@ -105,7 +105,7 @@ static void write_done(void *owner, Request *req) {
     memset(s->shown_keys, 0, sizeof s->shown_keys);
     show_message(s, rotated ? "Keys rotated. A sender holding the old key is refused until it is given the new one." : "Saved.", true);
 }
-static void write(WebhookForm *s, const char *operation, Json *body) {
+static void submit(WebhookForm *s, const char *operation, Json *body) {
     s->busy = true; set_string(&s->message, NULL);
     Json *args = body ? body : json_object();
     json_set_str(args, "sessionId", session_id(&s->session));
@@ -131,7 +131,7 @@ static void form_save(WebhookForm *s) {
         }
         json_set_num(body, keys[f], (double)n);
     }
-    write(s, "set_session_webhook", body);
+    submit(s, "set_session_webhook", body);
 }
 
 // MARK: - Layout
@@ -369,7 +369,7 @@ static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_SAVE: form_save(s); break;
     case ACT_ROTATE:
         if (s->busy || !app_confirm("Rotate the webhook keys?", "New keys replace both of this session's webhook keys. A sender holding an old key is refused until it is given the new one.", "Rotate", true)) break;
-        write(s, "rotate_session_webhook", NULL);
+        submit(s, "rotate_session_webhook", NULL);
         break;
     case ACT_RETRY: set_string(&s->error, NULL); load(s); break;
     case ACT_TOGGLE:
