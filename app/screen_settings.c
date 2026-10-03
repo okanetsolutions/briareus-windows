@@ -1,7 +1,7 @@
 // Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the projects, the providers, the
-// database pool, the SSH servers and the Forge accounts, each with ＋ New) and a project's form, its sections as tabs, or an
-// SSH server's or a Forge account's on one tab, saved through /settings/projects, /settings/ssh/servers and
-// /settings/forge/accounts. The provider form is screen_provider_settings.c and a
+// database pool, the SSH servers, the Forge accounts and the Slack workspaces, each with ＋ New) and a project's form, its
+// sections as tabs, or an SSH server's, a Forge account's or a Slack workspace's on one tab, saved through
+// /settings/projects, /settings/ssh/servers, /settings/forge/accounts and /settings/slack/workspaces. The provider form is screen_provider_settings.c and a
 // database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
 #include "screens.h"
 #include "str.h"
@@ -23,10 +23,13 @@ static char *ssh_form_id(double id) { return id > 0 ? xstrfmt("settings-ssh:%.0f
 static double ssh_row_id(const Json *row) { double id; return json_num(json_get(row, "id"), &id) && isfinite(id) ? id : 0; }
 /// A Forge account's id is, like an SSH server's, the time it was added in milliseconds.
 static char *forge_form_id(double id) { return id > 0 ? xstrfmt("settings-forge:%.0f", id) : xstrdup("settings-forge:new"); }
-/// A settings form in the detail pane: a project's, a provider's, a database server's, an SSH server's or a Forge account's.
+/// A Slack workspace's id is also the time it was added in milliseconds.
+static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:%.0f", id) : xstrdup("settings-slack:new"); }
+/// A settings form in the detail pane: a project's, a provider's, a database server's, an SSH server's, a Forge account's or
+/// a Slack workspace's.
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
-                  || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:"));
+                  || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -45,7 +48,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -71,6 +74,10 @@ typedef struct {
     bool forge_loaded;
     char *forge_error;
     Request *req_forge;
+    Json *slack;        // the server's SlackWorkspace rows as `list`, and `defaults`
+    bool slack_loaded;
+    char *slack_error;
+    Request *req_slack;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -189,6 +196,24 @@ static void forge_load(SettingsScreen *s) {
     if (s->req_forge || !store_supports("settings_forge_accounts")) { s->forge_loaded = true; return; }
     store_call("settings_forge_accounts", json_object(), 0, s, forge_done, 0, &s->req_forge);
 }
+static void slack_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    s->slack_loaded = true;
+    if (!req->ok) { request_error_into(&s->slack_error, req); pane_relayout(s->base.pane); return; }
+    set_string(&s->slack_error, NULL);
+    json_free(s->slack);
+    s->slack = json_object();
+    json_object_set(s->slack, "list", json_clone(json_get(req->result, "workspaces")));
+    json_object_set(s->slack, "defaults", json_clone(json_get(req->result, "defaults")));
+    pane_relayout(s->base.pane);
+    // The open form marks the projects another workspace already serves from this list.
+    Screen *root = pane_root(app_detail_pane());
+    if (root && str_has_prefix(root->id, "settings-slack:")) pane_relayout(root->pane);
+}
+static void slack_load(SettingsScreen *s) {
+    if (s->req_slack || !store_supports("settings_slack_workspaces")) { s->slack_loaded = true; return; }
+    store_call("settings_slack_workspaces", json_object(), 0, s, slack_done, 0, &s->req_slack);
+}
 static void projects_load(SettingsScreen *s) {
     if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
     store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
@@ -262,7 +287,7 @@ size_t settings_pool_capacity(void) {
     for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
     return n;
 }
-static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); }
+static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); slack_load(s); }
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
@@ -291,6 +316,17 @@ static Screen *forge_settings_screen_new(const Json *row, const Json *defaults);
 static void forge_open_row(SettingsScreen *s, size_t index) {
     const Json *row = json_at(forge_rows(s), index);
     if (json_is_object(row)) app_show_detail(forge_settings_screen_new(row, json_get(s->forge, "defaults")));
+}
+static void settings_slack_changed(void) {
+    if (!g_settings) return;
+    request_cancel(&g_settings->req_slack);
+    slack_load(g_settings);
+}
+static const Json *slack_rows(SettingsScreen *s) { return json_get(s->slack, "list"); }
+static Screen *slack_settings_screen_new(const Json *row, const Json *defaults);
+static void slack_open_row(SettingsScreen *s, size_t index) {
+    const Json *row = json_at(slack_rows(s), index);
+    if (json_is_object(row)) app_show_detail(slack_settings_screen_new(row, json_get(s->slack, "defaults")));
 }
 
 static void order_done(void *owner, Request *req) {
@@ -321,12 +357,13 @@ static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (g_settings == s) g_settings = NULL;
     request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_servers);
-    request_cancel(&s->req_ssh); request_cancel(&s->req_forge);
+    request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack);
     json_free(s->projects); free(s->error);
     json_free(s->providers); free(s->providers_error);
     json_free(s->servers); free(s->servers_error);
     json_free(s->ssh); free(s->ssh_error);
     json_free(s->forge); free(s->forge_error);
+    json_free(s->slack); free(s->slack_error);
     screen_release(base);
 }
 /// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
@@ -409,6 +446,37 @@ static void layout_forge(SettingsScreen *s, Doc *doc, int w, const char *selecte
     if (s->forge_loaded && !json_count(rows) && !s->forge_error) doc_text(doc, px(8), w - px(16), "No Forge accounts yet. \xEF\xBC\x8B New adds a Laravel Forge organization and the projects that may use it.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->forge_loaded) doc_loading(doc, 0, w, "Loading Forge accounts\xE2\x80\xA6");
 }
+/// The Slack workspaces under the Forge accounts: each with its dot (a token is stored), label, workspace and projects.
+static void layout_slack(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    doc_space(doc, px(8));
+    section_title(doc, w, "Slack workspaces", NULL, store_supports("create_slack_workspace") ? ACT_NEW_SLACK : 0);
+    if (s->slack_error) { doc_notice(doc, px(8), w - px(16), s->slack_error); doc_space(doc, px(8)); }
+    const Json *rows = slack_rows(s);
+    int row_h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        const char *label = json_str_nonempty(json_get(row, "label")), *team = json_str_nonempty(json_get(row, "team"));
+        const Json *projects = json_get(row, "projects");
+        size_t n = json_count(projects);
+        const char *one = n == 1 ? json_str(json_get(json_at(projects, 0), "repo")) : NULL;
+        d->label = xstrdup(label ? label : team ? team : "Slack workspace");
+        d->repo = one ? xstrfmt("%s \xC2\xB7 %s", team ? team : "", one) : xstrfmt("%s \xC2\xB7 %zu projects", team ? team : "", n);
+        d->enabled = json_bool_is(json_get(row, "hasToken"), true);
+        char *id = slack_form_id(ssh_row_id(row));
+        d->selected = str_eq(selected, id);
+        free(id);
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, ACT_OPEN_SLACK, (intptr_t)i);
+    }
+    // A workspace being added shows as its own row until it is saved.
+    if (str_eq(selected, "settings-slack:new")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New Slack workspace"); d->repo = xstrdup("not saved yet"); d->selected = true;
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, 0, 0);
+    }
+    if (s->slack_loaded && !json_count(rows) && !s->slack_error) doc_text(doc, px(8), w - px(16), "No Slack workspaces yet. \xEF\xBC\x8B New lets a project's sessions send Slack messages as you and hear the replies.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->slack_loaded) doc_loading(doc, 0, w, "Loading Slack workspaces\xE2\x80\xA6");
+}
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
@@ -443,6 +511,7 @@ static void settings_layout(Screen *base, Doc *doc) {
     // The SSH servers agents may run commands on, as on the dashboard, then the Forge accounts on a server that has them.
     layout_ssh(s, doc, w, selected);
     if (store_supports("settings_forge_accounts")) layout_forge(s, doc, w, selected);
+    if (store_supports("settings_slack_workspaces")) layout_slack(s, doc, w, selected);
 }
 /// The database pool: each server with its dot and host:port.
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
@@ -567,6 +636,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_SSH: ssh_open_row(s, (size_t)arg); break;
     case ACT_NEW_FORGE: app_show_detail(forge_settings_screen_new(NULL, json_get(s->forge, "defaults"))); break;
     case ACT_OPEN_FORGE: forge_open_row(s, (size_t)arg); break;
+    case ACT_NEW_SLACK: app_show_detail(slack_settings_screen_new(NULL, json_get(s->slack, "defaults"))); break;
+    case ACT_OPEN_SLACK: slack_open_row(s, (size_t)arg); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -589,10 +660,11 @@ static void settings_visible(Screen *base, bool shown) {
     if (!s->servers_loaded && !s->req_servers) servers_load(s);
     if (!s->ssh_loaded && !s->req_ssh) ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) forge_load(s);
+    if (!s->slack_loaded && !s->req_slack) slack_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); settings_load(s);
+    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack); settings_load(s);
     request_cancel(&s->req_providers); providers_load(s);
     request_cancel(&s->req_servers); servers_load(s);
 }
@@ -611,7 +683,7 @@ static const ScreenVTable settings_vt = {
 Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
-    s->projects = json_object(); s->ssh = json_object(); s->forge = json_object();
+    s->projects = json_object(); s->ssh = json_object(); s->forge = json_object(); s->slack = json_object();
     s->providers = json_object();
     s->servers = json_object();
     g_settings = s;
@@ -2485,5 +2557,678 @@ static Screen *forge_settings_screen_new(const Json *row, const Json *defaults) 
     // A new account starts where its organization is typed, the one box it cannot do without.
     if (!s->id) s->focus_first = G_ORG;
     forge_fill(s);
+    return &s->base;
+}
+
+// MARK: - The Slack workspace form
+
+/// A Slack workspace's boxes. The token and the signing secret are write-only: the server never sends them back, so their
+/// boxes start empty and a save with one empty keeps the stored one.
+enum { W_LABEL, W_TOKEN, W_SECRET, W_COUNT };
+static const FieldDef SLACK_FIELDS[W_COUNT] = {
+    [W_LABEL] = { "label", K_TEXT, "Label", "Acme", "Leave empty to name it after the workspace.", 0, false },
+    [W_TOKEN] = { "token", K_TEXT, "User OAuth token", "xoxp-\xE2\x80\xA6",
+        "The Slack app's User OAuth Token, under OAuth & Permissions once the app is installed to the workspace. Messages go out as the user who installed it, not as a bot. The server checks it with Slack, stores it encrypted and never sends it back.", 0, true },
+    [W_SECRET] = { "signingSecret", K_TEXT, "Signing secret", "From the app's Basic Information",
+        "Lets the replies Slack sends to the Request URL below reach the sessions. Stored encrypted and never sent back.", 0, true },
+};
+/// The user token scopes the server's Slack tools call with.
+static const char SLACK_SCOPES[] = "chat:write, users:read, channels:read, groups:read, im:write, im:history, channels:history and groups:history";
+
+enum { ACT_SLACK_SAVE = 1400, ACT_SLACK_DELETE, ACT_SLACK_REPO, ACT_SLACK_FOCUS, ACT_SLACK_DM, ACT_SLACK_MODE, ACT_SLACK_COPY };
+enum { ID_SLACK_FIELD = 2300, ID_SLACK_CHANNELS = 2400 };
+
+/// A project the workspace serves: the channels it may post to (typed in a box of its own), whether it may write to
+/// people, and whether each message waits for approval (`ask`) or goes at once (`allow`).
+typedef struct {
+    char *repo, *text;     // `text`: the channels as filled in, until the box exists
+    HWND edit;
+    RECT rect;
+    bool laid, clipped, dm, allow;
+} SlackProject;
+
+typedef struct {
+    Screen base;
+    Json *row;             // what the form was filled from: the saved row or the defaults
+    double id;             // 0 until the workspace is saved
+    HWND edits[W_COUNT];
+    RECT rects[W_COUNT];
+    bool laid[W_COUNT], clipped[W_COUNT];
+    SlackProject *projects;   // the projects ticked, in the order they were
+    size_t project_count;
+    Request *req_save, *req_delete;
+    bool dirty, filling, shown, tab_dot;
+    int focused, focus_first;   // a box: the fields', then each project's channels (W_COUNT + its index); -1 none
+    char *error;
+} SlackForm;
+
+static bool slack_has(const SlackForm *s, const char *key) { return json_bool_is(json_get(s->row, key), true); }
+static char *slack_field_text(const Json *row, int f) {
+    if (f != W_LABEL) return xstrdup("");
+    const char *v = json_str(json_get(row, SLACK_FIELDS[f].key));
+    return xstrdup(v ? v : "");
+}
+/// The channels as the box shows them: `general, deploys`.
+static char *channels_text(const Json *channels) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < json_count(channels); i++) {
+        const char *c = json_str(json_at(channels, i));
+        if (str_empty(c)) continue;
+        if (out.len) str_appendz(&out, ", ");
+        str_appendz(&out, c);
+    }
+    return str_detach(&out);
+}
+/// The channels a box holds, split on commas and spaces, without a leading `#`, each once, as the server keeps them.
+static Json *channels_parse(const char *text) {
+    Json *out = json_array();
+    const char *p = text ? text : "";
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        const char *start = p;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') p++;
+        if (*start == '#') start++;
+        if (p <= start) continue;
+        char *c = xstrndup(start, (size_t)(p - start));
+        if (!repos_has(out, c)) json_array_push(out, json_string(c));
+        free(c);
+    }
+    return out;
+}
+static char *slack_project_channels(const SlackProject *p) { return p->edit ? edit_text(p->edit) : xstrdup(p->text ? p->text : ""); }
+static Json *slack_project_json(const char *repo, Json *channels, bool dm, bool allow) {
+    Json *o = json_object();
+    json_set_str(o, "repo", repo);
+    json_object_set(o, "channels", channels);
+    json_set_bool(o, "directMessages", dm);
+    json_set_str(o, "permissionMode", allow ? "allow" : "ask");
+    return o;
+}
+/// The projects as the form holds them, in the shape the server takes.
+static Json *slack_projects_json(const SlackForm *s) {
+    Json *out = json_array();
+    for (size_t i = 0; i < s->project_count; i++) {
+        const SlackProject *p = &s->projects[i];
+        char *text = slack_project_channels(p);
+        json_array_push(out, slack_project_json(p->repo, channels_parse(text), p->dm, p->allow));
+        free(text);
+    }
+    return out;
+}
+/// The saved projects in the same shape, read the way the form reads them back.
+static Json *slack_saved_projects(const Json *row) {
+    Json *out = json_array();
+    const Json *list = json_get(row, "projects");
+    for (size_t i = 0; i < json_count(list); i++) {
+        const Json *p = json_at(list, i);
+        const char *repo = json_str_nonempty(json_get(p, "repo"));
+        if (!repo) continue;
+        char *text = channels_text(json_get(p, "channels"));
+        json_array_push(out, slack_project_json(repo, channels_parse(text), !json_bool_is(json_get(p, "directMessages"), false),
+                                                str_eq(json_str(json_get(p, "permissionMode")), "allow")));
+        free(text);
+    }
+    return out;
+}
+/// Whether two project lists say the same, in any order.
+static bool slack_projects_same(const Json *a, const Json *b) {
+    if (json_count(a) != json_count(b)) return false;
+    for (size_t i = 0; i < json_count(a); i++) {
+        const Json *x = json_at(a, i), *match = NULL;
+        for (size_t k = 0; k < json_count(b) && !match; k++)
+            if (str_eq(json_str(json_get(json_at(b, k), "repo")), json_str(json_get(x, "repo")))) match = json_at(b, k);
+        if (!match || !json_equal(x, match)) return false;
+    }
+    return true;
+}
+static int slack_find(const SlackForm *s, const char *repo) {
+    for (size_t i = 0; i < s->project_count; i++) if (str_eq(s->projects[i].repo, repo)) return (int)i;
+    return -1;
+}
+/// The label of the other saved workspace that already serves `repo`, if one does: a project sends through one at most.
+static const char *slack_taken_by(const SlackForm *s, const char *repo) {
+    const Json *rows = g_settings ? slack_rows(g_settings) : NULL;
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        if (s->id && ssh_row_id(row) == s->id) continue;
+        const Json *list = json_get(row, "projects");
+        for (size_t k = 0; k < json_count(list); k++)
+            if (str_eq(json_str(json_get(json_at(list, k), "repo")), repo)) {
+                const char *label = json_str_nonempty(json_get(row, "label"));
+                return label ? label : "another";
+            }
+    }
+    return NULL;
+}
+/// What the Projects list offers: every project, then any ticked one that is no longer a project.
+static Json *slack_choices(const SlackForm *s) {
+    Json *out = json_array();
+    const Json *rows = g_settings ? settings_rows(g_settings) : NULL;
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const char *repo = json_str_nonempty(json_get(json_at(rows, i), "repo"));
+        if (repo && !repos_has(out, repo)) json_array_push(out, json_string(repo));
+    }
+    for (size_t i = 0; i < s->project_count; i++)
+        if (!repos_has(out, s->projects[i].repo)) json_array_push(out, json_string(s->projects[i].repo));
+    return out;
+}
+
+static size_t slack_edit_count(const SlackForm *s) { return W_COUNT + s->project_count; }
+static HWND slack_edit_at(const SlackForm *s, size_t k) { return k < W_COUNT ? s->edits[k] : k < slack_edit_count(s) ? s->projects[k - W_COUNT].edit : NULL; }
+static int slack_edit_index(const SlackForm *s, HWND e) {
+    for (size_t k = 0; e && k < slack_edit_count(s); k++) if (slack_edit_at(s, k) == e) return (int)k;
+    return -1;
+}
+static const RECT *slack_edit_rect(const SlackForm *s, size_t k) { return k < W_COUNT ? &s->rects[k] : &s->projects[k - W_COUNT].rect; }
+
+static void slack_remove_project(SlackForm *s, size_t i) {
+    SlackProject *p = &s->projects[i];
+    if (p->edit) DestroyWindow(p->edit);
+    free(p->repo); free(p->text);
+    memmove(p, p + 1, (s->project_count - i - 1) * sizeof *p);
+    s->project_count--;
+    s->focused = -1;
+}
+static void slack_clear_projects(SlackForm *s) {
+    while (s->project_count) slack_remove_project(s, s->project_count - 1);
+    free(s->projects); s->projects = NULL;
+}
+static void slack_create_channels_edit(SlackForm *s, SlackProject *p);
+static void slack_add_project(SlackForm *s, const char *repo, const char *channels, bool dm, bool allow) {
+    s->projects = xrealloc(s->projects, (s->project_count + 1) * sizeof *s->projects);
+    SlackProject *p = &s->projects[s->project_count++];
+    memset(p, 0, sizeof *p);
+    p->repo = xstrdup(repo); p->text = xstrdup(channels ? channels : ""); p->dm = dm; p->allow = allow;
+    if (s->edits[0]) slack_create_channels_edit(s, p);
+}
+
+/// The edits take the row's text, and the token's and the secret's boxes say whether one is stored.
+static void slack_fill_edits(SlackForm *s) {
+    s->filling = true;
+    for (int f = 0; f < W_COUNT; f++) {
+        if (!s->edits[f]) continue;
+        char *text = slack_field_text(s->row, f);
+        set_edit_text(s->edits[f], text);
+        free(text);
+    }
+    if (s->edits[W_TOKEN]) {
+        wchar_t *w = utf8_to_wide(slack_has(s, "hasToken") ? "Stored \xC2\xB7 paste a new token to replace it" : SLACK_FIELDS[W_TOKEN].cue);
+        SendMessageW(s->edits[W_TOKEN], EM_SETCUEBANNER, TRUE, (LPARAM)w);
+        free(w);
+    }
+    if (s->edits[W_SECRET]) {
+        wchar_t *w = utf8_to_wide(slack_has(s, "hasSigningSecret") ? "Stored \xC2\xB7 paste a new secret to replace it" : SLACK_FIELDS[W_SECRET].cue);
+        SendMessageW(s->edits[W_SECRET], EM_SETCUEBANNER, TRUE, (LPARAM)w);
+        free(w);
+    }
+    for (size_t i = 0; i < s->project_count; i++) if (s->projects[i].edit) set_edit_text(s->projects[i].edit, s->projects[i].text);
+    s->filling = false;
+}
+static void slack_fill(SlackForm *s) {
+    slack_clear_projects(s);
+    s->filling = true;
+    const Json *list = json_get(s->row, "projects");
+    for (size_t i = 0; i < json_count(list); i++) {
+        const Json *p = json_at(list, i);
+        const char *repo = json_str_nonempty(json_get(p, "repo"));
+        if (!repo || slack_find(s, repo) >= 0) continue;
+        char *text = channels_text(json_get(p, "channels"));
+        slack_add_project(s, repo, text, !json_bool_is(json_get(p, "directMessages"), false), str_eq(json_str(json_get(p, "permissionMode")), "allow"));
+        free(text);
+    }
+    s->filling = false;
+    slack_fill_edits(s);
+    s->dirty = false;
+}
+
+/// The body a save sends; NULL with `*why` when the form cannot be sent as it is.
+static Json *slack_body(SlackForm *s, char **why) {
+    Json *body = json_object();
+    for (int f = 0; f < W_COUNT; f++) {
+        char *text = s->edits[f] ? edit_text(s->edits[f]) : slack_field_text(s->row, f), *t = str_trim(text);
+        free(text);
+        // An empty token or secret is left out, so the stored one stays.
+        if (f == W_LABEL || *t) json_set_str(body, SLACK_FIELDS[f].key, t);
+        free(t);
+    }
+    json_object_set(body, "projects", slack_projects_json(s));
+    if (!slack_has(s, "hasToken") && str_empty(json_str(json_get(body, "token")))) {
+        *why = xstrdup("Paste the Slack app's User OAuth Token (xoxp-\xE2\x80\xA6): messages go out as the user who installed the app.");
+        json_free(body);
+        return NULL;
+    }
+    return body;
+}
+
+/// Whether the form holds a change not saved yet, for the dot after the tab's title.
+static bool slack_form_changed(SlackForm *s) {
+    Json *now = slack_projects_json(s), *saved = slack_saved_projects(s->row);
+    bool same = slack_projects_same(now, saved);
+    json_free(now); json_free(saved);
+    if (!same) return true;
+    for (int f = 0; f < W_COUNT; f++) {
+        if (!s->edits[f]) continue;
+        char *text = edit_text(s->edits[f]), *saved_text = slack_field_text(s->row, f);
+        bool differs = !str_eq(text, saved_text);
+        free(text); free(saved_text);
+        if (differs) return true;
+    }
+    return false;
+}
+static void slack_changed(SlackForm *s) {
+    if (s->filling) return;
+    if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
+    bool changed = slack_form_changed(s);
+    if (changed != s->tab_dot) { s->tab_dot = changed; pane_relayout(s->base.pane); }
+}
+
+// MARK: Layout
+
+static void paint_slack_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc;
+    SlackForm *s = it->data;
+    fill_round_rect(cv, rc, px(6), theme.raise, s->focused == (int)it->arg ? theme.accent_dim : theme.line);
+}
+/// A box for edit `k` at the cursor, `*rect` set to where its edit goes; advances past it.
+static void slack_box(SlackForm *s, Doc *doc, int x, int w, size_t k, bool mono, RECT *rect) {
+    FontId fid = mono ? FONT_MONO : FONT_BODY;
+    int fh = edit_line_height(fid), h = px(36);
+    RECT box = { x, doc->y, x + w, doc->y + h };
+    Item *it = doc_item(doc, doc_add(doc, &box, paint_slack_box));
+    it->data = s; it->arg = (intptr_t)k; it->action = ACT_SLACK_FOCUS;
+    *rect = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
+    doc->y = box.bottom;
+}
+/// A labelled field, the hint behind a help icon beside the label and `note` under the box; advances.
+static void slack_field(SlackForm *s, Doc *doc, int x, int w, int f, const char *note) {
+    const FieldDef *d = &SLACK_FIELDS[f];
+    doc_field_label(doc, x, w, d->label, theme.ink, d->hint);
+    doc_space(doc, px(6));
+    slack_box(s, doc, x, w, (size_t)f, d->mono, &s->rects[f]);
+    s->laid[f] = true;
+    if (note) { doc_space(doc, px(6)); doc_text(doc, x, w, note, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); }
+    doc_space(doc, px(14));
+}
+/// Who the workspace's messages go out as, from Slack, once a token is stored.
+static void slack_connection(SlackForm *s, Doc *doc, int x, int w) {
+    const char *team = json_str_nonempty(json_get(s->row, "team")), *user = json_str_nonempty(json_get(s->row, "user"));
+    const char *url = json_str_nonempty(json_get(s->row, "url"));
+    int box = doc_box_begin(doc, x, w, px(12), theme.raise, theme.line, px(6));
+    doc_labeled(doc, x + px(12), w - px(24), "Workspace", team ? team : "\xE2\x80\x94", theme.ink);
+    if (url) { doc_space(doc, px(4)); doc_labeled(doc, x + px(12), w - px(24), "Address", url, theme.muted); }
+    doc_space(doc, px(4));
+    doc_labeled(doc, x + px(12), w - px(24), "Sends as", user ? user : "\xE2\x80\x94", theme.ink);
+    doc_box_end(doc, box, px(12));
+    doc_space(doc, px(18));
+}
+/// Where Slack sends the replies: the Request URL for the app's Event Subscriptions, with a Copy button.
+static void slack_events(SlackForm *s, Doc *doc, int x, int w) {
+    doc_field_label(doc, x, w, "Request URL", theme.ink,
+        "Turn on the Slack app's Event Subscriptions with this as the Request URL, and subscribe on behalf of users to message.im, message.channels and message.groups. Like the server's other webhooks, the path must bypass Cloudflare Access.");
+    doc_space(doc, px(6));
+    const char *url = json_str_nonempty(json_get(s->row, "eventsUrl"));
+    if (!s->id) {
+        doc_text(doc, x, w, "Save the workspace to get the Request URL its replies come back through.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    } else if (!url) {
+        doc_text(doc, x, w, "The server has no public address (PUBLIC_BASE_URL), so it has no Request URL to give Slack: messages can be sent, but replies do not reach the sessions.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    } else {
+        int bw = text_width(doc->cv, "Copy", FONT_CAPTION) + px(28), top = doc->y;
+        int cw = text_width(doc->cv, url, FONT_MONO);
+        if (cw > w - bw - px(14)) cw = w - bw - px(14);
+        doc_text(doc, x, cw, url, FONT_MONO, theme.ink, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+        int bottom = doc->y;
+        doc->y = top;
+        doc_button(doc, x + cw + px(14), 0, "Copy", BUTTON_PLAIN, ACT_SLACK_COPY, 0, true);
+        if (doc->y < bottom) doc->y = bottom;
+        doc_space(doc, px(6));
+        doc_text(doc, x, w, "Subscribe on behalf of users to message.im, message.channels and message.groups.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        if (!slack_has(s, "hasSigningSecret")) {
+            doc_space(doc, px(4));
+            doc_text(doc, x, w, "Replies reach the sessions once the signing secret is saved.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        }
+    }
+    doc_space(doc, px(18));
+}
+/// The projects that may send through the workspace, one tick box each; a ticked one opens its channels, whether it may
+/// write to people and whether each message waits for approval.
+static void slack_projects(SlackForm *s, Doc *doc, int x, int w) {
+    doc_field_label(doc, x, w, "Projects", theme.ink, "The projects whose sessions may send through this workspace. A project sends through one workspace at most.");
+    doc_space(doc, px(6));
+    Json *choices = slack_choices(s);
+    const Json *rows = g_settings ? settings_rows(g_settings) : NULL;
+    for (size_t i = 0; i < json_count(choices); i++) {
+        const char *repo = json_str(json_at(choices, i));
+        bool listed = false;
+        for (size_t k = 0; k < json_count(rows); k++) listed |= str_eq(json_str(json_get(json_at(rows, k), "repo")), repo);
+        int at = slack_find(s, repo);
+        const char *taken = at < 0 ? slack_taken_by(s, repo) : NULL;
+        ForgeCheck *d = xcalloc(1, sizeof *d);
+        d->on = at >= 0; d->gone = !listed || taken;
+        d->text = !listed ? xstrfmt("%s (not a project)", repo) : taken ? xstrfmt("%s \xC2\xB7 sends through %s", repo, taken) : xstrdup(repo);
+        int it = doc_custom(doc, x, w, px(28), paint_forge_check, d, forge_check_free, ACT_SLACK_REPO, (intptr_t)i);
+        doc_item(doc, it)->hand = true;
+        if (at < 0) continue;
+        SlackProject *p = &s->projects[at];
+        int ix = x + px(23), iw = w - px(23);
+        doc_space(doc, px(4));
+        doc_field_label(doc, ix, iw, "Channels", theme.muted, "The channel names or ids its sessions may post to, separated by commas. Leave empty for none: it then writes only to people, if allowed below.");
+        doc_space(doc, px(6));
+        slack_box(s, doc, ix, iw, W_COUNT + (size_t)at, true, &p->rect);
+        p->laid = true;
+        doc_space(doc, px(8));
+        ForgeCheck *dm = xcalloc(1, sizeof *dm);
+        dm->on = p->dm; dm->text = xstrdup("May write direct messages to people");
+        it = doc_custom(doc, ix, iw, px(28), paint_forge_check, dm, forge_check_free, ACT_SLACK_DM, (intptr_t)at);
+        doc_item(doc, it)->hand = true;
+        doc_space(doc, px(6));
+        static const char *const modes[] = { "Ask before each message", "Send at once" };
+        doc_segments(doc, ix, iw, modes, 2, p->allow ? 1 : 0, ACT_SLACK_MODE, (intptr_t)at * 2, true);
+        doc_space(doc, px(6));
+        doc_text(doc, ix, iw, p->allow
+            ? "Messages go out as soon as a session sends them, except in a turn a webhook or a Slack reply started, which always asks."
+            : "Each message waits in the attention inbox until you approve it, for a day at most.",
+            FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        doc_space(doc, px(14));
+    }
+    if (!json_count(choices)) doc_text(doc, x, w, "No projects yet. Add one under Projects first.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    json_free(choices);
+    doc_space(doc, px(14));
+}
+
+static void slack_layout(Screen *base, Doc *doc) {
+    SlackForm *s = (SlackForm *)base;
+    memset(s->laid, 0, sizeof s->laid);
+    for (size_t i = 0; i < s->project_count; i++) s->projects[i].laid = false;
+    int col = doc->width, x = 0;
+    doc_space(doc, px(8));
+    int h = px(42), tx = x, ty = doc->y;
+    s->tab_dot = s->dirty && slack_form_changed(s);
+    doc_tab(doc, &tx, &ty, x, x + col, h, 0xE8BD, s->tab_dot ? "Slack workspace \xE2\x80\xA2" : "Slack workspace", NULL, true, 0, 0);
+    doc->y = ty + h;
+    doc_rule(doc, x, col);
+    doc_space(doc, px(18));
+    if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
+    if (s->id && slack_has(s, "hasToken")) slack_connection(s, doc, x, col);
+    // Label and token side by side, as the Forge form's label and organization; the scopes the token needs across under them.
+    int gap = px(14), half = (col - gap) / 2, top = doc->y;
+    slack_field(s, doc, x, half, W_LABEL, NULL);
+    int bottom = doc->y;
+    doc->y = top;
+    slack_field(s, doc, x + half + gap, col - half - gap, W_TOKEN, NULL);
+    if (doc->y < bottom) doc->y = bottom;
+    char *scopes = xstrfmt("Create a Slack app at api.slack.com/apps and give it these user token scopes under OAuth & Permissions: %s. Install it to the workspace, then paste its User OAuth Token.", SLACK_SCOPES);
+    doc->y -= px(8);
+    doc_text(doc, x, col, scopes, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    doc_space(doc, px(14));
+    free(scopes);
+    slack_field(s, doc, x, col, W_SECRET, NULL);
+    slack_events(s, doc, x, col);
+    slack_projects(s, doc, x, col);
+    doc_space(doc, px(40));
+}
+
+static void slack_header(Screen *base, HeaderInfo *info) {
+    SlackForm *s = (SlackForm *)base;
+    const char *label = json_str_nonempty(json_get(s->row, "label")), *team = json_str_nonempty(json_get(s->row, "team"));
+    const char *user = json_str_nonempty(json_get(s->row, "user"));
+    if (s->id) {
+        snprintf(info->title, sizeof info->title, "%s", label ? label : team ? team : "Slack workspace");
+        size_t n = json_count(json_get(s->row, "projects"));
+        if (!slack_has(s, "hasToken")) snprintf(info->subtitle, sizeof info->subtitle, "%zu project%s \xC2\xB7 no token", n, n == 1 ? "" : "s");
+        else snprintf(info->subtitle, sizeof info->subtitle, "%s%s%s \xC2\xB7 %zu project%s%s", team ? team : "Slack", user ? " \xC2\xB7 as " : "", user ? user : "",
+                      n, n == 1 ? "" : "s", slack_has(s, "hasSigningSecret") ? "" : " \xC2\xB7 no replies");
+    } else {
+        snprintf(info->title, sizeof info->title, "New Slack workspace");
+        snprintf(info->subtitle, sizeof info->subtitle, "Sessions send Slack messages as you, and hear the replies.");
+    }
+    bool busy = s->req_save || s->req_delete;
+    HeaderButton *b = &info->buttons[info->button_count++];
+    snprintf(b->label, sizeof b->label, "%s", s->req_save ? "Saving\xE2\x80\xA6" : "Save");
+    b->glyph = 0xE74E; b->action = ACT_SLACK_SAVE; b->prominent = true; b->tip = "Save this Slack workspace (Ctrl+S)";
+    b->enabled = !busy && (s->dirty || !s->id) && store_supports(s->id ? "update_slack_workspace" : "create_slack_workspace");
+    if (!s->id) return;
+    HeaderButton *d = &info->buttons[info->button_count++];
+    d->glyph = 0xE74D; d->action = ACT_SLACK_DELETE; d->destructive = true; d->enabled = !busy && store_supports("delete_slack_workspace"); d->tip = "Delete this Slack workspace";
+}
+
+// MARK: The edits
+
+static void slack_place_edit(Screen *base, HWND e, const RECT *rect, bool laid, bool *clipped, bool shown, const RECT *content, int scroll_y) {
+    if (!e) return;
+    if (!shown || !laid) { ShowWindow(e, SW_HIDE); return; }
+    int m = margin_of(base->pane);
+    RECT r = { content->left + m + rect->left, content->top + rect->top - scroll_y, content->left + m + rect->right, content->top + rect->bottom - scroll_y };
+    RECT visible;
+    if (!IntersectRect(&visible, &r, content)) { ShowWindow(e, SW_HIDE); return; }
+    MoveWindow(e, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
+    bool now = !EqualRect(&visible, &r);
+    if (now) SetWindowRgn(e, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
+    else if (*clipped) SetWindowRgn(e, NULL, TRUE);
+    *clipped = now;
+    ShowWindow(e, SW_SHOWNA);
+}
+static void slack_place(Screen *base, const RECT *content, int scroll_y) {
+    SlackForm *s = (SlackForm *)base;
+    for (int f = 0; f < W_COUNT; f++) slack_place_edit(base, s->edits[f], &s->rects[f], s->laid[f], &s->clipped[f], s->shown, content, scroll_y);
+    for (size_t i = 0; i < s->project_count; i++) {
+        SlackProject *p = &s->projects[i];
+        slack_place_edit(base, p->edit, &p->rect, p->laid, &p->clipped, s->shown, content, scroll_y);
+    }
+}
+
+static void slack_save(SlackForm *s);
+static LRESULT CALLBACK slack_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    SlackForm *s = (SlackForm *)ref;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    switch (msg) {
+    case WM_KEYDOWN: {
+        int k = slack_edit_index(s, hwnd);
+        size_t n = slack_edit_count(s);
+        if ((wp == VK_TAB || wp == VK_RETURN) && k >= 0) {
+            bool back = wp == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000);
+            SetFocus(slack_edit_at(s, ((size_t)k + (back ? n - 1 : 1)) % n));
+            return 0;
+        }
+        if (ctrl && wp == 'S') { slack_save(s); return 0; }
+        if (ctrl && wp == 'A') { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+        if (wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+        break;
+    }
+    case WM_CHAR:
+        if (wp == '\t' || wp == 0x13 || wp == 0x01 || wp == 0x1B || wp == '\r') return 0;
+        break;
+    case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
+    case WM_NCDESTROY: RemoveWindowSubclass(hwnd, slack_field_proc, id); break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+static HWND slack_new_edit(SlackForm *s, int id, bool password, bool mono, int limit, const char *cue) {
+    DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (password ? ES_PASSWORD : 0);
+    HWND e = CreateWindowExW(0, L"EDIT", L"", style, 0, 0, 10, 10, pane_hwnd(s->base.pane), (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
+    SendMessageW(e, WM_SETFONT, (WPARAM)font(mono ? FONT_MONO : FONT_BODY), TRUE);
+    SendMessageW(e, EM_SETLIMITTEXT, limit, 0);
+    wchar_t *w = utf8_to_wide(cue); SendMessageW(e, EM_SETCUEBANNER, TRUE, (LPARAM)w); free(w);
+    SetWindowSubclass(e, slack_field_proc, (UINT_PTR)id, (DWORD_PTR)s);
+    theme_apply_control(e);
+    return e;
+}
+static void slack_create_channels_edit(SlackForm *s, SlackProject *p) {
+    if (p->edit) return;
+    p->edit = slack_new_edit(s, ID_SLACK_CHANNELS, false, true, 2000, "general, deploys");
+    bool filling = s->filling;
+    s->filling = true;
+    set_edit_text(p->edit, p->text);
+    s->filling = filling;
+}
+static void slack_ensure_controls(SlackForm *s) {
+    if (s->edits[0]) return;
+    for (int f = 0; f < W_COUNT; f++)
+        s->edits[f] = slack_new_edit(s, ID_SLACK_FIELD + f, f != W_LABEL, SLACK_FIELDS[f].mono, f == W_LABEL ? 200 : 4096, SLACK_FIELDS[f].cue);
+    for (size_t i = 0; i < s->project_count; i++) slack_create_channels_edit(s, &s->projects[i]);
+    slack_fill_edits(s);
+}
+
+static void slack_toggle_repo(SlackForm *s, size_t index) {
+    Json *choices = slack_choices(s);
+    const char *repo = json_str(json_at(choices, index));
+    if (repo) {
+        int at = slack_find(s, repo);
+        if (at >= 0) slack_remove_project(s, (size_t)at);
+        // The server's defaults for a project: no channels, direct messages allowed, every message asked about.
+        else slack_add_project(s, repo, "", true, false);
+        slack_changed(s);
+        pane_relayout(s->base.pane);
+    }
+    json_free(choices);
+}
+
+// MARK: Saving, deleting
+
+static void slack_show_error(SlackForm *s, char *text) {
+    set_string(&s->error, text); free(text);
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_scroll_to_top(s->base.pane);
+}
+static void slack_save_done(void *owner, Request *req) {
+    SlackForm *s = owner;
+    const Json *row = req->ok ? json_get(req->result, "workspace") : NULL;
+    if (!json_is_object(row)) {
+        char *text = request_error_or_unexpected(req);
+        slack_show_error(s, text);
+        return;
+    }
+    // The server's word on what was saved: who the token is, an empty label now the workspace's name, and a new
+    // workspace's id and Request URL.
+    json_free(s->row); s->row = json_clone(row);
+    set_string(&s->error, NULL);
+    s->id = ssh_row_id(row);
+    free(s->base.id); s->base.id = slack_form_id(s->id);
+    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    slack_fill(s);
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+    settings_slack_changed();
+}
+static void slack_save(SlackForm *s) {
+    if (s->req_save || s->req_delete || !store_supports(s->id ? "update_slack_workspace" : "create_slack_workspace")) return;
+    char *why = NULL;
+    Json *body = slack_body(s, &why);
+    if (!body) { slack_show_error(s, why); return; }
+    if (s->id) json_set_num(body, "id", s->id);
+    store_call(s->id ? "update_slack_workspace" : "create_slack_workspace", body, 0, s, slack_save_done, 0, &s->req_save);
+    pane_header_changed(s->base.pane);
+}
+static void slack_delete_done(void *owner, Request *req) {
+    SlackForm *s = owner;
+    if (!req->ok) { slack_show_error(s, request_error_text(req)); return; }
+    s->dirty = false;
+    app_clear_detail();
+    settings_slack_changed();
+}
+static void slack_delete(SlackForm *s) {
+    if (!s->id || s->req_save || s->req_delete) return;
+    const char *name = json_str_nonempty(json_get(s->row, "label"));
+    char *title = xstrfmt("Delete %s?", name ? name : "this Slack workspace");
+    bool ok = app_confirm(title, "Its stored token and signing secret are removed: its projects' sessions can no longer send Slack messages, and replies stop reaching them.", "Delete", true);
+    free(title);
+    if (!ok) return;
+    Json *args = json_object(); json_set_num(args, "id", s->id);
+    store_call("delete_slack_workspace", args, 0, s, slack_delete_done, 0, &s->req_delete);
+    pane_header_changed(s->base.pane);
+}
+
+// MARK: The screen
+
+static void slack_destroy(Screen *base) {
+    SlackForm *s = (SlackForm *)base;
+    request_cancel(&s->req_save); request_cancel(&s->req_delete);
+    for (int f = 0; f < W_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    slack_clear_projects(s);
+    json_free(s->row); free(s->error);
+    screen_release(base);
+}
+static void slack_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)pt;
+    SlackForm *s = (SlackForm *)base;
+    switch (action) {
+    case ACT_SLACK_SAVE: slack_save(s); break;
+    case ACT_SLACK_DELETE: slack_delete(s); break;
+    case ACT_SLACK_REPO: if (arg >= 0) slack_toggle_repo(s, (size_t)arg); break;
+    case ACT_SLACK_DM:
+        if (arg >= 0 && (size_t)arg < s->project_count) { s->projects[arg].dm = !s->projects[arg].dm; slack_changed(s); pane_relayout(base->pane); }
+        break;
+    case ACT_SLACK_MODE:
+        if (arg >= 0 && (size_t)(arg / 2) < s->project_count) {
+            SlackProject *p = &s->projects[arg / 2];
+            bool allow = arg % 2 == 1;
+            if (p->allow != allow) { p->allow = allow; slack_changed(s); pane_relayout(base->pane); }
+        }
+        break;
+    case ACT_SLACK_FOCUS: { HWND e = arg >= 0 ? slack_edit_at(s, (size_t)arg) : NULL; if (e) SetFocus(e); break; }
+    case ACT_SLACK_COPY: {
+        const char *url = json_str_nonempty(json_get(s->row, "eventsUrl"));
+        if (url) copy_to_clipboard(pane_hwnd(base->pane), url);
+        break;
+    }
+    }
+}
+static void slack_command(Screen *base, int id, int code, HWND control) {
+    SlackForm *s = (SlackForm *)base;
+    if (id != ID_SLACK_CHANNELS && (id < ID_SLACK_FIELD || id >= ID_SLACK_FIELD + W_COUNT)) return;
+    int k = slack_edit_index(s, control);
+    if (k < 0) return;
+    switch (code) {
+    case EN_CHANGE: slack_changed(s); break;
+    case EN_SETFOCUS: {
+        s->focused = k;
+        const RECT *rc = slack_edit_rect(s, (size_t)k);
+        RECT content = pane_content_rect(base->pane);
+        int top = rc->top - px(40), bottom = rc->bottom + px(16), y = pane_scroll_y(base->pane);
+        if (top < y || bottom > y + (content.bottom - content.top)) pane_scroll_to(base->pane, top);
+        pane_repaint(base->pane);
+        break;
+    }
+    case EN_KILLFOCUS: if (s->focused == k) s->focused = -1; pane_repaint(base->pane); break;
+    }
+}
+static bool slack_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    (void)shift;
+    if (ctrl && vk == 'S') { slack_save((SlackForm *)base); return true; }
+    return false;
+}
+static void slack_visible(Screen *base, bool shown) {
+    SlackForm *s = (SlackForm *)base;
+    s->shown = shown;
+    if (shown) {
+        slack_ensure_controls(s);
+        if (s->focus_first >= 0) { HWND e = slack_edit_at(s, (size_t)s->focus_first); s->focus_first = -1; if (e) SetFocus(e); }
+    } else {
+        for (int f = 0; f < W_COUNT; f++) if (s->edits[f]) ShowWindow(s->edits[f], SW_HIDE);
+        for (size_t i = 0; i < s->project_count; i++) if (s->projects[i].edit) ShowWindow(s->projects[i].edit, SW_HIDE);
+    }
+}
+static bool slack_can_leave(Screen *base) {
+    SlackForm *s = (SlackForm *)base;
+    if (!s->dirty) return true;
+    const char *name = json_str_nonempty(json_get(s->row, "label"));
+    char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this Slack workspace") : xstrdup("The new Slack workspace has not been saved.");
+    bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
+    free(message);
+    if (leave) s->dirty = false;
+    return leave;
+}
+
+static const ScreenVTable slack_vt = {
+    .destroy = slack_destroy, .layout = slack_layout, .header = slack_header, .action = slack_action, .place = slack_place,
+    .visible = slack_visible, .command = slack_command, .key = slack_key, .can_leave = slack_can_leave,
+};
+static Screen *slack_settings_screen_new(const Json *row, const Json *defaults) {
+    SlackForm *s = xcalloc(1, sizeof *s);
+    s->base.vt = &slack_vt;
+    s->focused = -1; s->focus_first = -1;
+    s->row = json_is_object(row) ? json_clone(row) : json_is_object(defaults) ? json_clone(defaults) : json_object();
+    s->id = ssh_row_id(s->row);
+    s->base.id = slack_form_id(s->id);
+    // A new workspace starts where its token is pasted, the one box it cannot do without.
+    if (!s->id) s->focus_first = W_TOKEN;
+    slack_fill(s);
     return &s->base;
 }

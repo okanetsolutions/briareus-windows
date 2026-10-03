@@ -319,6 +319,8 @@ static const Expected ROUTE_TABLE[] = {
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
+    { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
 };
 #define ROUTE_COUNT (sizeof ROUTE_TABLE / sizeof *ROUTE_TABLE)
 
@@ -431,6 +433,7 @@ static void test_path_arguments_are_encoded_and_numbers_written_whole(void) {
     check_url(c, &stub, "delete_ssh_server", "{\"id\":1727000000000}", BASE "settings/ssh/servers/1727000000000");
     check_url(c, &stub, "ssh_db_credentials", "{\"id\":1727000000000}", BASE "settings/ssh/servers/1727000000000/db-credentials");
     check_url(c, &stub, "update_forge_account", "{\"id\":1727000000001}", BASE "settings/forge/accounts/1727000000001");
+    check_url(c, &stub, "delete_slack_workspace", "{\"id\":1727000000002}", BASE "settings/slack/workspaces/1727000000002");
     check_url(c, &stub, "update_provider", "{\"id\":999999999999999}", BASE "settings/providers/999999999999999");
     api_client_release(c); stub_reset(&stub);
 }

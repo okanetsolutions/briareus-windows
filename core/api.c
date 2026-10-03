@@ -366,6 +366,12 @@ static const ApiRoute ROUTES[] = {
     { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" },
     { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    // The Slack workspaces sessions send messages in: a user token and a signing secret (both write-only) and the projects
+    // that may use it, each with its channels, direct messages and permission mode; admin as well.
+    { "settings_slack_workspaces", "GET", "settings/slack/workspaces" },
+    { "create_slack_workspace", "POST", "settings/slack/workspaces" },
+    { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" },
+    { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
     // Laravel Forge itself, read by the server with an account's token: its servers and their sites, 100 to a page.
     { "forge_servers", "GET", "forge/accounts/{account}/servers" },
     { "forge_sites", "GET", "forge/accounts/{account}/servers/{server}/sites" },
