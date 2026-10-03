@@ -1,4 +1,4 @@
-// The meeting assistant's tools: what GPT-Realtime may look up about the one project the meeting is about, as
+// The meeting assistant's tools: what the ElevenLabs agent may look up about the one project the meeting is about, as
 // briareus-swift's voice does, read-only. Each tool is a few /api/v1 calls the app makes with its own token, the
 // project's repo put in every one, and their answers cut down to a short JSON summary for the model to say.
 // Nothing here changes anything on the server: in a meeting anyone can speak, so the assistant only reads.
@@ -21,8 +21,9 @@ typedef enum {
 
 const char *meet_tool_name(MeetTool tool);
 bool meet_tool_find(const char *name, MeetTool *out);
-/// Every tool as the Realtime session's `tools` array.
-Json *meet_tools_json(void);
+/// The body that creates the tool in the ElevenLabs workspace (POST /v1/convai/tools) or brings it up to date (PATCH
+/// /v1/convai/tools/{id}): a client tool, which the app runs and answers.
+char *meet_tool_body(MeetTool tool);
 /// What the model is told about the project and the tools.
 char *meet_tools_instructions(const char *project);
 

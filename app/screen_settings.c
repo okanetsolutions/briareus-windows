@@ -493,8 +493,8 @@ static void settings_layout(Screen *base, Doc *doc) {
     section_title(doc, w, "This computer", NULL, 0);
     ProjectRowData *meeting = xcalloc(1, sizeof *meeting);
     meeting->label = xstrdup("\xF0\x9F\x8E\x99 Meeting assistant");
-    meeting->repo = xstrdup(meeting_has_key(MEETING_KEY_OPENAI) ? "OpenAI API key saved" : "add an OpenAI API key");
-    meeting->enabled = meeting_has_key(MEETING_KEY_OPENAI);
+    meeting->repo = xstrdup(meeting_has_key(MEETING_KEY_ELEVENLABS) ? "ElevenLabs API key saved" : "add an ElevenLabs API key");
+    meeting->enabled = meeting_has_key(MEETING_KEY_ELEVENLABS);
     meeting->selected = str_eq(selected, "settings-meeting");
     doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
     doc_space(doc, px(16));

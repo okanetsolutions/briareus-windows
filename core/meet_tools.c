@@ -43,30 +43,31 @@ bool meet_tool_find(const char *name, MeetTool *out) {
     return false;
 }
 
-Json *meet_tools_json(void) {
-    Json *tools = json_array();
-    for (int t = 0; t < MEET_TOOL_COUNT; t++) {
-        Json *tool = json_object(), *params = json_object(), *props = json_object(), *required = json_array();
-        json_set_str(tool, "type", "function");
-        json_set_str(tool, "name", TOOLS[t].name);
-        json_set_str(tool, "description", TOOLS[t].description);
-        for (size_t i = 0; i < 2 && TOOLS[t].params[i].name; i++) {
-            const Param *p = &TOOLS[t].params[i];
-            Json *prop = json_object();
-            json_set_str(prop, "type", p->type);
-            json_set_str(prop, "description", p->about);
-            json_object_set(props, p->name, prop);
-            // Every parameter but a filter is needed.
-            if (!str_eq(p->type, "boolean")) json_array_push(required, json_string(p->name));
-        }
-        json_set_str(params, "type", "object");
-        json_object_set(params, "properties", props);
-        json_object_set(params, "required", required);
-        json_set_bool(params, "additionalProperties", false);
-        json_object_set(tool, "parameters", params);
-        json_array_push(tools, tool);
+char *meet_tool_body(MeetTool tool) {
+    Json *body = json_object(), *config = json_object(), *params = json_object(), *props = json_object(), *required = json_array();
+    json_set_str(config, "type", "client");
+    json_set_str(config, "name", TOOLS[tool].name);
+    json_set_str(config, "description", TOOLS[tool].description);
+    for (size_t i = 0; i < 2 && TOOLS[tool].params[i].name; i++) {
+        const Param *p = &TOOLS[tool].params[i];
+        Json *prop = json_object();
+        json_set_str(prop, "type", p->type);
+        json_set_str(prop, "description", p->about);
+        json_object_set(props, p->name, prop);
+        // Every parameter but a filter is needed.
+        if (!str_eq(p->type, "boolean")) json_array_push(required, json_string(p->name));
     }
-    return tools;
+    json_set_str(params, "type", "object");
+    json_object_set(params, "properties", props);
+    json_object_set(params, "required", required);
+    json_object_set(config, "parameters", params);
+    // The agent waits for the answer, which takes a few calls to the Briareus server.
+    json_set_bool(config, "expects_response", true);
+    json_set_num(config, "response_timeout_secs", 30);
+    json_object_set(body, "tool_config", config);
+    char *text = json_serialize(body, false);
+    json_free(body);
+    return text;
 }
 
 char *meet_tools_instructions(const char *project) {

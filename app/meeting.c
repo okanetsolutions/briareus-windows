@@ -4,6 +4,7 @@
 #include "screens.h"
 #include "str.h"
 #include "ws.h"
+#include "api.h"
 #include <process.h>
 #include <shlobj.h>
 #include <stdio.h>
@@ -79,8 +80,6 @@ void meeting_settings_load(MeetingSettings *s) {
     if (!s->name || !*s->name) { free(s->name); s->name = meeting_default_name(); }
     s->wake_words = reg_string(L"wakeWords");
     if (!s->wake_words) s->wake_words = xstrfmt("%s, assistant, Briareus", s->name);
-    s->voice = reg_string(L"voice");
-    if (!s->voice || !*s->voice) { free(s->voice); s->voice = xstrdup("marin"); }
     s->eleven_voice = reg_string(L"elevenVoice");
     if (!s->eleven_voice) s->eleven_voice = xstrdup("");
     s->introduce = reg_bool(L"introduce", true);
@@ -91,13 +90,12 @@ void meeting_settings_save(const MeetingSettings *s) {
     if (RegCreateKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) != ERROR_SUCCESS) return;
     reg_set_string(key, L"name", s->name);
     reg_set_string(key, L"wakeWords", s->wake_words);
-    reg_set_string(key, L"voice", s->voice);
     reg_set_string(key, L"elevenVoice", s->eleven_voice);
     reg_set_bool(key, L"introduce", s->introduce);
     reg_set_bool(key, L"independent", s->independent);
     RegCloseKey(key);
 }
-void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->voice); free(s->eleven_voice); memset(s, 0, sizeof *s); }
+void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->eleven_voice); memset(s, 0, sizeof *s); }
 
 // MARK: - History
 
@@ -140,12 +138,10 @@ void meeting_history_clear(void) { wchar_t *path = history_path(); if (path) Del
 
 // MARK: - The meeting
 
-enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_READY, WM_MEET_ENDED, WM_VOICE_ENDED };
+enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_ENDED };
 enum { TIMER_TICK = 2 };
-/// ElevenLabs closes a socket after 20 s without a message.
-#define KEEP_ALIVE_SECONDS 10
 
-/// One tool call the model made: its calls to the server, made together, and their answers as they come.
+/// One tool call the agent made: its calls to the server, made together, and their answers as they come.
 typedef struct {
     char *id; MeetTool tool; Json *args; DWORD asked;
     MeetCall calls[MEET_TOOL_MAX_CALLS]; size_t count, done;
@@ -168,12 +164,11 @@ static struct {
     LONG gen;                // each meeting's own; messages and threads of an earlier one are ignored
     MeetRecord record;
     DWORD joined_tick;
-    unsigned ticks;
     Lookup **lookups; size_t lookup_count;   // the tool calls under way
 } M;
 
-/// With BRIAREUS_MEET_LOG naming a file, every message to and from OpenAI and ElevenLabs is written there, cut short, to
-/// see what each service did. Off otherwise: the meeting's words stay out of files.
+/// With BRIAREUS_MEET_LOG naming a file, every message to and from ElevenLabs is written there, cut short, to see what
+/// it did. Off otherwise: the meeting's words stay out of files.
 static FILE *g_log;
 static SRWLOCK g_log_lock = SRWLOCK_INIT;
 static void debug_open(void) {
@@ -185,7 +180,7 @@ static void debug(const char *who, const char *text, size_t len) {
     if (!g_log) return;
     AcquireSRWLockExclusive(&g_log_lock);
     SYSTEMTIME t; GetLocalTime(&t);
-    size_t shown = len > 240 ? 240 : len;
+    size_t shown = len > 300 ? 300 : len;
     fprintf(g_log, "%02d:%02d:%02d.%03d %s %.*s%s\n", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, who, (int)shown, text ? text : "", len > shown ? "\xE2\x80\xA6" : "");
     fflush(g_log);
     ReleaseSRWLockExclusive(&g_log_lock);
@@ -194,7 +189,13 @@ static void debugz(const char *who, const char *text) { debug(who, text, text ? 
 
 static void post(LONG gen, UINT msg, void *payload) { if (!M.hwnd || !PostMessageW(M.hwnd, msg, (WPARAM)gen, (LPARAM)payload)) free(payload); }
 static void changed(void) { Pane *p = app_detail_pane(); if (p) pane_header_changed(p); }
-static void send_owned(char *event) { if (event) { debugz("openai<", event); ws_send(M.ws, event); free(event); } }
+static void send_on(WebSocket *ws, char *event) {
+    if (!event) return;
+    if (!strstr(event, "user_audio_chunk")) debugz("send", event);
+    ws_send(ws, event);
+    free(event);
+}
+static void send_owned(char *event) { send_on(M.ws, event); }
 
 static void log_add(int speaker, const char *text) {
     EnterCriticalSection(&M.log_lock);
@@ -208,190 +209,126 @@ static char *log_tail(size_t max) {
     return t;
 }
 
-// MARK: - The ElevenLabs voice
+// MARK: - The agent in ElevenLabs
 
-/// GPT-Realtime's text answers, said in the user's ElevenLabs voice. One socket at a time: ElevenLabs cannot drop text
-/// it was given, so someone talking over the assistant cuts the socket and a new one opens. Each socket has a thread that
-/// connects and reads; once its socket is no longer the current one, it touches nothing but its own.
-static struct {
-    CRITICAL_SECTION lock;
-    bool on;                 // this meeting speaks with ElevenLabs
-    char *key, *voice;
-    LONG gen;                // the meeting's
-    LONG conn;               // the current socket's number
-    WebSocket *ws;           // the current socket, once open
-    bool connecting;
-    Str pending;             // text to say before the socket opened
-    bool pending_turn, pending_flush;
-    bool turn;               // the next text starts an answer
-    bool used;               // the socket was given text, so it may still be speaking
-    bool skip;               // the answer was talked over: the rest of it is not said
-    double chars;            // said this meeting
-} V;
+/// One call to ElevenLabs' REST API; the answer's JSON, or NULL with `*error` saying why.
+static Json *eleven_call(const char *method, const char *path, const char *body, const char *key, int *status, char **error) {
+    char *url = xstrfmt("https://%s%s", ELEVEN_HOST, path);
+    const char *headers[] = { "xi-api-key", key, "Content-Type", "application/json", "Accept", "application/json", NULL, NULL };
+    char *type = NULL, *retry = NULL, *response = NULL, *why = NULL; size_t len = 0;
+    *status = 0; *error = NULL;
+    bool got = api_winhttp_transport(NULL, method, url, headers, body, body ? strlen(body) : 0, 30000, status, &type, &retry, &response, &len, &why);
+    char *line = xstrfmt("%s %s -> %d", method, path, *status);
+    debugz("rest", line); free(line);
+    free(url); free(type); free(retry);
+    Json *answer = got && response ? json_parse(response, len) : NULL;
+    if (!got) *error = xstrfmt("ElevenLabs could not be reached: %s", why ? why : "no answer.");
+    else if (*status < 200 || *status >= 300) {
+        // ElevenLabs says why in detail.message or detail.
+        const Json *detail = json_get(answer, "detail");
+        const char *message = json_str_nonempty(json_get(detail, "message"));
+        if (!message) message = json_str_nonempty(detail);
+        if (!message && json_is_array(detail)) message = json_str_nonempty(json_get(json_at(detail, 0), "msg"));
+        *error = *status == 401 ? xstrdup("ElevenLabs refused the API key.")
+               : xstrfmt("ElevenLabs answered HTTP %d%s%s", *status, message ? ": " : ".", message ? message : "");
+        json_free(answer); answer = NULL;
+    }
+    free(response); free(why);
+    return answer;
+}
 
-typedef struct { LONG conn, gen; char *key, *voice; } VoiceConnect;
-static void voice_send_locked(char *event) { if (event) { debugz("eleven<", event); ws_send(V.ws, event); free(event); } }
+/// FNV-1a over the tools' bodies: a change of tools updates them in ElevenLabs once.
+static char *tools_version(char **bodies) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (int t = 0; t < MEET_TOOL_COUNT; t++) for (const unsigned char *c = (const unsigned char *)bodies[t]; *c; c++) { h ^= *c; h *= 1099511628211ULL; }
+    return xstrfmt("%016llx", h);
+}
+static void reg_save(const wchar_t *name, const char *value) {
+    HKEY key;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) != ERROR_SUCCESS) return;
+    reg_set_string(key, name, value);
+    RegCloseKey(key);
+}
 
-static unsigned __stdcall voice_main(void *arg) {
-    VoiceConnect *c = arg;
-    const char *headers[] = { "xi-api-key", c->key, NULL, NULL };
-    char *error = NULL;
-    WebSocket *ws = ws_connect(ELEVEN_HOST, eleven_ws_path(), headers, &error);
-    SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
-    debugz("eleven connect", ws ? "open" : error ? error : "failed");
-    EnterCriticalSection(&V.lock);
-    bool current = c->conn == V.conn;
-    if (current) {
-        V.connecting = false;
-        if (ws) {
-            V.ws = ws;
-            voice_send_locked(eleven_open_event(c->voice));
-            if (V.pending.len) { voice_send_locked(eleven_text_event(c->voice, V.pending.data, V.pending_turn)); V.used = true; }
-            if (V.pending_flush) voice_send_locked(eleven_flush_event());
-            str_free(&V.pending); V.pending_turn = V.pending_flush = false;
+/// Creates or brings up to date the project's tools and the agent in the user's workspace; the agent's id, or NULL with
+/// `*error`. The ids are kept in the registry, so a meeting usually updates only the agent.
+static char *agent_ready(const char *key, const MeetPersona *p, char **error) {
+    char *bodies[MEET_TOOL_COUNT], *ids[MEET_TOOL_COUNT];
+    for (int t = 0; t < MEET_TOOL_COUNT; t++) { bodies[t] = meet_tool_body((MeetTool)t); ids[t] = NULL; }
+    char *version = tools_version(bodies), *saved_version = reg_string(L"elevenToolsVersion"), *saved = reg_string(L"elevenTools");
+    Json *saved_ids = saved ? json_parsez(saved) : NULL;
+    free(saved);
+    bool current = str_eq(version, saved_version);
+    char *agent_id = NULL;
+    int status;
+    for (int t = 0; t < MEET_TOOL_COUNT && !*error; t++) {
+        const char *id = json_str_nonempty(json_get(saved_ids, meet_tool_name((MeetTool)t)));
+        if (id && current) { ids[t] = xstrdup(id); continue; }
+        Json *answer = NULL;
+        if (id) {
+            char *path = xstrfmt("/v1/convai/tools/%s", id);
+            answer = eleven_call("PATCH", path, bodies[t], key, &status, error);
+            free(path);
+            if (answer) ids[t] = xstrdup(id);
+            // A tool deleted in ElevenLabs is made again.
+            else if (status == 404) { free(*error); *error = NULL; }
         }
-    }
-    LeaveCriticalSection(&V.lock);
-    free(c->voice);
-    if (!ws || !current) {
-        ws_free(ws);
-        if (current) { char *why = xstrfmt("ElevenLabs: %s", error ? error : "could not connect."); post(c->gen, WM_VOICE_ENDED, why); }
-        free(error); free(c);
-        return 0;
-    }
-    for (;;) {
-        char *text; size_t len;
-        if (ws_receive(ws, &text, &len) <= 0) break;
-        debug("eleven>", text, len);
-        MeetEvent *e = xcalloc(1, sizeof *e);
-        bool ok = eleven_event_parse(text, len, e);
-        free(text);
-        if (ok && e->kind == MEET_EV_AUDIO) {
-            EnterCriticalSection(&V.lock);
-            if (c->conn == V.conn) meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
-            LeaveCriticalSection(&V.lock);
-        } else if (ok && e->kind == MEET_EV_ERROR) { post(c->gen, WM_MEET_EVENT, e); continue; }
-        meet_event_free(e); free(e);
-    }
-    // Cut by an interruption or the meeting's end, the socket is no longer current; otherwise ElevenLabs closed it.
-    EnterCriticalSection(&V.lock);
-    bool mine = V.ws == ws;
-    if (mine) { V.ws = NULL; V.used = false; }
-    LeaveCriticalSection(&V.lock);
-    ws_free(ws);
-    if (mine) post(c->gen, WM_VOICE_ENDED, NULL);
-    free(c);
-    return 0;
-}
-static void voice_open_locked(void) {
-    VoiceConnect *c = xcalloc(1, sizeof *c);
-    c->conn = ++V.conn; c->gen = V.gen; c->key = xstrdup(V.key); c->voice = xstrdup(V.voice);
-    V.connecting = true; V.used = false;
-    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, voice_main, c, 0, NULL);
-    if (thread) CloseHandle(thread);
-    else { V.connecting = false; SecureZeroMemory(c->key, strlen(c->key)); free(c->key); free(c->voice); free(c); }
-}
-/// Cuts the current socket, unsaid speech and all.
-static void voice_cut_locked(void) {
-    V.conn++;
-    if (V.ws) { ws_abort(V.ws); V.ws = NULL; }
-    V.connecting = V.used = false;
-    str_free(&V.pending); V.pending_turn = V.pending_flush = false;
-}
-
-static void voice_start(char *key, const char *voice, LONG gen) {
-    EnterCriticalSection(&V.lock);
-    V.on = true; V.key = key; V.voice = xstrdup(voice); V.gen = gen;
-    V.turn = true; V.skip = false; V.chars = 0;
-    voice_open_locked();
-    LeaveCriticalSection(&V.lock);
-}
-static void voice_stop(void) {
-    EnterCriticalSection(&V.lock);
-    if (V.on) {
-        voice_cut_locked();
-        V.on = false;
-        SecureZeroMemory(V.key, strlen(V.key)); free(V.key); V.key = NULL;
-        free(V.voice); V.voice = NULL;
-    }
-    LeaveCriticalSection(&V.lock);
-}
-/// Part of an answer, said as it comes.
-static void voice_say(const char *text) {
-    if (!text || !*text) return;
-    EnterCriticalSection(&V.lock);
-    if (V.on && !V.skip) {
-        bool turn = V.turn;
-        V.turn = false;
-        V.chars += (double)meet_char_count(text);
-        if (V.ws) { voice_send_locked(eleven_text_event(V.voice, text, turn)); V.used = true; }
-        else {
-            if (!V.pending.len) V.pending_turn = turn;
-            str_appendz(&V.pending, text);
-            if (!V.connecting) voice_open_locked();
+        if (!ids[t] && !*error) {
+            answer = eleven_call("POST", "/v1/convai/tools", bodies[t], key, &status, error);
+            ids[t] = answer ? meet_created_id(answer) : NULL;
+            if (answer && !ids[t]) *error = xstrdup("ElevenLabs did not say the new tool's id.");
         }
+        json_free(answer);
     }
-    LeaveCriticalSection(&V.lock);
-}
-/// The answer is whole: what ElevenLabs holds back for context is said now.
-static void voice_answer_done(void) {
-    EnterCriticalSection(&V.lock);
-    if (V.on && !V.skip) { if (V.ws) voice_send_locked(eleven_flush_event()); else if (V.pending.len) V.pending_flush = true; }
-    V.turn = true;
-    LeaveCriticalSection(&V.lock);
-}
-static void voice_answer_started(void) {
-    EnterCriticalSection(&V.lock);
-    V.skip = false; V.turn = true;
-    LeaveCriticalSection(&V.lock);
-}
-/// Someone talks: the answer under way stops, and a socket that was given text is replaced by a fresh one.
-static void voice_interrupt(void) {
-    EnterCriticalSection(&V.lock);
-    if (V.on) {
-        V.skip = true;
-        if (V.used || V.pending.len) { voice_cut_locked(); voice_open_locked(); }
+    if (!*error) {
+        Json *map = json_object();
+        for (int t = 0; t < MEET_TOOL_COUNT; t++) json_set_str(map, meet_tool_name((MeetTool)t), ids[t]);
+        char *text = json_serialize(map, false);
+        reg_save(L"elevenTools", text); reg_save(L"elevenToolsVersion", version);
+        free(text); json_free(map);
+        char *body = meet_agent_body(p, ids, MEET_TOOL_COUNT), *saved_agent = reg_string(L"elevenAgent");
+        if (saved_agent && *saved_agent) {
+            char *path = xstrfmt("/v1/convai/agents/%s", saved_agent);
+            Json *answer = eleven_call("PATCH", path, body, key, &status, error);
+            free(path);
+            if (answer) agent_id = xstrdup(saved_agent);
+            else if (status == 404) { free(*error); *error = NULL; }
+            json_free(answer);
+        }
+        if (!agent_id && !*error) {
+            Json *answer = eleven_call("POST", "/v1/convai/agents/create", body, key, &status, error);
+            agent_id = answer ? meet_created_id(answer) : NULL;
+            if (answer && !agent_id) *error = xstrdup("ElevenLabs did not say the new agent's id.");
+            if (agent_id) reg_save(L"elevenAgent", agent_id);
+            json_free(answer);
+        }
+        free(body); free(saved_agent);
     }
-    LeaveCriticalSection(&V.lock);
-}
-static void voice_keep_alive(void) {
-    EnterCriticalSection(&V.lock);
-    if (V.ws) voice_send_locked(eleven_keep_alive_event());
-    LeaveCriticalSection(&V.lock);
-}
-static double voice_chars(void) {
-    EnterCriticalSection(&V.lock);
-    double n = V.chars;
-    LeaveCriticalSection(&V.lock);
-    return n;
+    for (int t = 0; t < MEET_TOOL_COUNT; t++) { free(bodies[t]); free(ids[t]); }
+    free(version); free(saved_version); json_free(saved_ids);
+    return agent_id;
 }
 
-/// The socket's reader: speech goes straight to the cable (text to ElevenLabs, when it speaks), everything else to the
-/// UI thread. The UI thread joins it before the devices close.
+/// The socket's reader: speech goes straight to the cable and pings are answered here, everything else goes to the UI
+/// thread. The UI thread joins it before the devices close.
 static void read_events(WebSocket *ws, LONG gen) {
     for (;;) {
         char *text; size_t len;
         int got = ws_receive(ws, &text, &len);
         if (got <= 0) break;
-        debug("openai>", text, len);
         MeetEvent *e = xcalloc(1, sizeof *e);
         bool ok = meet_event_parse(text, len, e);
+        if (ok && e->kind != MEET_EV_AUDIO && e->kind != MEET_EV_PING) debug("recv", text, len);
         free(text);
         if (!ok) { free(e); continue; }
-        if (e->kind == MEET_EV_AUDIO) {
-            // With the user's ElevenLabs voice, OpenAI's own never plays, should it send any.
-            if (!M.persona.eleven_voice) meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2);
-            if (!e->has_usage) { meet_event_free(e); free(e); continue; }
-        }
-        if (e->kind == MEET_EV_SPEECH_STARTED) { meet_audio_flush(M.audio); voice_interrupt(); }
-        else if (e->kind == MEET_EV_RESPONSE) voice_answer_started();
-        else if (e->kind == MEET_EV_SAID) voice_say(e->text);
-        else if (e->kind == MEET_EV_SAID_DONE) voice_answer_done();
+        if (e->kind == MEET_EV_AUDIO) { meet_audio_play(M.audio, (const int16_t *)e->audio, e->audio_len / 2); meet_event_free(e); free(e); continue; }
+        if (e->kind == MEET_EV_PING) { send_on(ws, meet_pong_event(e->event_id)); meet_event_free(e); free(e); continue; }
+        if (e->kind == MEET_EV_INTERRUPTED) meet_audio_flush(M.audio);
         post(gen, WM_MEET_EVENT, e);
     }
     post(gen, WM_MEET_ENDED, NULL);
 }
-/// The meeting's sender: what the assistant hears, at the pace it was heard, every 40 ms.
+/// The meeting's sender: what the assistant hears, at the pace it was heard, every 100 ms.
 static unsigned __stdcall sender_main(void *arg) {
     (void)arg;
     LARGE_INTEGER freq, start, now;
@@ -399,7 +336,7 @@ static unsigned __stdcall sender_main(void *arg) {
     unsigned long long sent = 0;
     int16_t *pcm = xmalloc(MEET_SAMPLE_RATE * sizeof *pcm);
     while (M.sending) {
-        Sleep(40);
+        Sleep(100);
         QueryPerformanceCounter(&now);
         unsigned long long due = (unsigned long long)((now.QuadPart - start.QuadPart) * MEET_SAMPLE_RATE / freq.QuadPart);
         size_t n = due > sent ? (size_t)(due - sent) : 0;
@@ -416,26 +353,41 @@ static unsigned __stdcall sender_main(void *arg) {
     return 0;
 }
 
-/// Connects on a thread of its own, then reads. A meeting left while it connected is not touched again.
-typedef struct { char *key, *setup; LONG gen; } Connect;
+/// Readies the agent, connects on a thread of its own, then reads. A meeting left meanwhile is not touched again.
+/// The thread owns its copies: the meeting may finish while it still readies the agent.
+typedef struct { char *key, *name, *wake_words, *project, *voice; bool introduce, independent; LONG gen; } Connect;
 static unsigned __stdcall connect_main(void *arg) {
     Connect *c = arg;
     LONG gen = c->gen;
-    char *auth = xstrfmt("Bearer %s", c->key);
-    const char *headers[] = { "Authorization", auth, NULL, NULL };
     char *error = NULL;
-    WebSocket *ws = ws_connect("api.openai.com", meet_ws_path(MEET_REALTIME), headers, &error);
-    SecureZeroMemory(auth, strlen(auth)); free(auth);
+    MeetPersona persona = { c->name, c->wake_words, c->project, c->voice, c->introduce, c->independent };
+    char *agent = agent_ready(c->key, &persona, &error);
+    WebSocket *ws = NULL;
+    if (agent) {
+        // A private agent's conversation opens on a signed URL; should that fail, on the key in a header.
+        int status;
+        char *query = xstrfmt("/v1/convai/conversation/get-signed-url?agent_id=%s", agent), *signing_error = NULL;
+        Json *signed_answer = eleven_call("GET", query, NULL, c->key, &status, &signing_error);
+        char *path = meet_signed_ws_path(signed_answer);
+        bool signed_url = path != NULL;
+        if (!path) path = meet_agent_ws_path(agent);
+        json_free(signed_answer); free(query); free(signing_error);
+        const char *headers[] = { signed_url ? NULL : "xi-api-key", c->key, NULL, NULL };
+        char *why = NULL;
+        ws = ws_connect(ELEVEN_HOST, path, headers, &why);
+        debugz("connect", ws ? "open" : why ? why : "failed");
+        if (!ws) error = xstrfmt("ElevenLabs: %s", why ? why : "could not connect.");
+        free(why); free(path); free(agent);
+    }
     SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
-    if (!ws) { free(c->setup); free(c); char *why = xstrfmt("OpenAI: %s", error ? error : "could not connect."); free(error); post(gen, WM_MEET_ENDED, why); return 0; }
+    free(c->name); free(c->wake_words); free(c->project); free(c->voice); free(c);
+    if (!ws) { post(gen, WM_MEET_ENDED, error ? error : xstrdup("The agent could not be readied.")); return 0; }
     EnterCriticalSection(&M.lock);
     bool current = gen == M.gen && M.state == MEETING_CONNECTING;
     if (current) M.ws = ws;
     LeaveCriticalSection(&M.lock);
-    if (!current) { ws_free(ws); free(c->setup); free(c); return 0; }
-    debugz("openai<", c->setup);
-    ws_send(ws, c->setup);
-    free(c->setup); free(c);
+    if (!current) { ws_free(ws); return 0; }
+    send_on(ws, meet_start_event());
     read_events(ws, gen);
     return 0;
 }
@@ -448,9 +400,7 @@ static void lookup_free(Lookup *l) {
     json_free(l->args); free(l->id); free(l);
 }
 static void lookup_answer(Lookup *l, char *output) {
-    char *events[2] = { 0 };
-    size_t n = meet_tool_output_events(l->id, output, events);
-    for (size_t i = 0; i < n; i++) send_owned(events[i]);
+    send_owned(meet_tool_result_event(l->id, output, strstr(output, "\"error\"") == output + 1));
     free(output);
     M.record.answers++;
     M.record.answer_seconds += (GetTickCount() - l->asked) / 1000.0;
@@ -499,27 +449,6 @@ static void on_tool(MeetEvent *e) {
 // MARK: - Events on the UI thread
 
 static void finish(const char *error);
-static void on_event(MeetEvent *e) {
-    if (e->has_usage) meet_usage_merge(&M.record.usage, &e->usage, e->usage_snapshot);
-    switch (e->kind) {
-    case MEET_EV_HEARD_TURN: {
-        char *spaced = xstrfmt(" %s", e->text);
-        log_add(MEET_SPEAKER_MEETING, spaced);
-        free(spaced);
-        if (!M.muted && meet_should_answer(&M.persona, e->text)) send_owned(meet_answer_now_event());
-        break;
-    }
-    case MEET_EV_SAID: log_add(MEET_SPEAKER_ASSISTANT, e->text); break;
-    case MEET_EV_TOOL: on_tool(e); break;
-    case MEET_EV_ERROR:
-        // Before the session took its setup an error ends it; later ones (a refused command) only show.
-        if (!M.ready) finish(e->text);
-        else set_string(&M.error, e->text);
-        break;
-    default: break;
-    }
-    changed();
-}
 static void on_ready(void) {
     if (M.ready || M.state != MEETING_CONNECTING) return;
     M.ready = true;
@@ -527,8 +456,22 @@ static void on_ready(void) {
     M.joined_tick = GetTickCount();
     M.sending = 1;
     M.sender = (HANDLE)_beginthreadex(NULL, 0, sender_main, NULL, 0, NULL);
-    send_owned(meet_greeting_event(&M.persona));
     SetTimer(M.hwnd, TIMER_TICK, 1000, NULL);
+    changed();
+}
+static void on_event(MeetEvent *e) {
+    switch (e->kind) {
+    case MEET_EV_READY: on_ready(); break;
+    case MEET_EV_HEARD_TURN: log_add(MEET_SPEAKER_MEETING, e->text); break;
+    case MEET_EV_SAID: log_add(MEET_SPEAKER_ASSISTANT, e->text); break;
+    case MEET_EV_TOOL: on_tool(e); break;
+    case MEET_EV_ERROR:
+        // Before the conversation started an error ends it; later ones only show.
+        if (!M.ready) finish(e->text);
+        else set_string(&M.error, e->text);
+        break;
+    default: break;
+    }
     changed();
 }
 
@@ -537,27 +480,18 @@ static LRESULT CALLBACK meeting_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     switch (msg) {
     case WM_MEET_EVENT: {
         MeetEvent *e = (MeetEvent *)lp;
-        if (current) {
-            if (e->kind == MEET_EV_READY) on_ready(); else on_event(e);
-        }
+        if (current) on_event(e);
         meet_event_free(e); free(e);
         return 0;
     }
     case WM_MEET_ENDED: {
         char *error = (char *)lp;
-        if (current) finish(M.state == MEETING_LEAVING ? NULL : error ? error : "The connection to OpenAI ended.");
-        free(error);
-        return 0;
-    }
-    case WM_VOICE_ENDED: {
-        // A voice that cannot connect as the meeting starts ends it; later the next answer opens a new socket.
-        char *error = (char *)lp;
-        if (current && error) { if (!M.ready) finish(error); else { set_string(&M.error, error); changed(); } }
+        if (current) finish(M.state == MEETING_LEAVING ? NULL : error ? error : "ElevenLabs ended the conversation.");
         free(error);
         return 0;
     }
     case WM_TIMER:
-        if (wp == TIMER_TICK) { if (++M.ticks % KEEP_ALIVE_SECONDS == 0) voice_keep_alive(); changed(); }
+        if (wp == TIMER_TICK) changed();
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -570,7 +504,6 @@ static void ensure_window(void) {
     M.hwnd = CreateWindowExW(0, L"BriareusMeeting", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
     InitializeCriticalSection(&M.log_lock);
     InitializeCriticalSection(&M.lock);
-    InitializeCriticalSection(&V.lock);
 }
 
 /// Ends the meeting: threads joined, devices closed, the record saved when it got going, and `error` shown.
@@ -591,14 +524,11 @@ static void finish(const char *error) {
     if (ws) ws_abort(ws);
     if (M.reader) { if (ws) WaitForSingleObject(M.reader, INFINITE); CloseHandle(M.reader); M.reader = NULL; }
     ws_free(ws);
-    // The voice's thread plays only while its socket is current, which it no longer is.
-    M.record.usage.spoken_chars = voice_chars();
-    voice_stop();
     meet_audio_stop(M.audio); M.audio = NULL;
     for (size_t i = 0; i < M.lookup_count; i++) lookup_free(M.lookups[i]);
     free(M.lookups); M.lookups = NULL; M.lookup_count = 0;
     if (was_live) {
-        M.record.seconds = (GetTickCount() - M.joined_tick) / 1000.0;
+        M.record.seconds = M.record.usage.seconds = (GetTickCount() - M.joined_tick) / 1000.0;
         history_append(&M.record);
     }
     free(M.repo); M.repo = NULL; free(M.title); M.title = NULL; free(M.source); M.source = NULL;
@@ -615,54 +545,45 @@ static void finish(const char *error) {
 
 bool meeting_join(const Project *project, unsigned pid, const char *source) {
     if (M.state != MEETING_OFF) { app_alert("Meeting assistant", "A meeting is already running. Leave it first."); return false; }
-    bool failed = false;
-    char *key = meeting_key_read(MEETING_KEY_OPENAI, &failed);
-    if (!key || !*key) {
-        free(key);
-        app_alert("Meeting assistant", failed ? "The OpenAI API key could not be read from Credential Manager."
-                                              : "Add your OpenAI API key first: \xE2\x9A\x99 Settings \xE2\x86\x92 Meeting assistant.");
-        return false;
-    }
     ensure_window();
     debug_open();
-    char *error = NULL, *note = NULL;
     meeting_settings_load(&M.settings);
-    // It speaks with the user's ElevenLabs voice when one is set.
-    char *eleven_key = NULL;
-    if (*M.settings.eleven_voice) {
-        eleven_key = meeting_key_read(MEETING_KEY_ELEVENLABS, &failed);
-        if (!eleven_key || !*eleven_key) {
-            free(eleven_key); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);
-            app_alert("Meeting assistant", failed ? "The ElevenLabs API key could not be read from Credential Manager."
-                                                  : "Add your ElevenLabs API key, or clear the ElevenLabs voice: \xE2\x9A\x99 Settings \xE2\x86\x92 Meeting assistant.");
-            return false;
-        }
+    if (!*M.settings.eleven_voice) {
+        meeting_settings_free(&M.settings);
+        app_alert("Meeting assistant", "Add your ElevenLabs voice ID first: \xE2\x9A\x99 Settings \xE2\x86\x92 Meeting assistant.");
+        return false;
     }
+    bool failed = false;
+    char *key = meeting_key_read(MEETING_KEY_ELEVENLABS, &failed);
+    if (!key || !*key) {
+        free(key); meeting_settings_free(&M.settings);
+        app_alert("Meeting assistant", failed ? "The ElevenLabs API key could not be read from Credential Manager."
+                                              : "Add your ElevenLabs API key first: \xE2\x9A\x99 Settings \xE2\x86\x92 Meeting assistant.");
+        return false;
+    }
+    char *error = NULL, *note = NULL;
     MeetAudio *audio = meet_audio_start(pid, &error, &note);
     if (!audio) {
         app_alert("Meeting assistant", error);
         free(error); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);
-        if (eleven_key) { SecureZeroMemory(eleven_key, strlen(eleven_key)); free(eleven_key); }
         return false;
     }
     memset(&M.record, 0, sizeof M.record);
-    M.record.model = MEET_REALTIME; M.record.started = (double)time(NULL);
+    M.record.model = MEET_AGENT; M.record.started = (double)time(NULL);
     M.audio = audio; M.muted = false; M.ready = false;
     M.repo = xstrdup(project->repo);
     const char *title = project_title(project);
     M.title = str_eq(title, project->repo) ? xstrdup(title) : xstrfmt("%s (%s)", title, project->repo);
     M.source = xstrdup(source ? source : "every app");
-    M.persona = (MeetPersona){ M.settings.name, M.settings.voice, M.settings.wake_words, M.title, M.settings.introduce, M.settings.independent,
-                               eleven_key ? M.settings.eleven_voice : NULL };
-    M.ticks = 0;
+    M.persona = (MeetPersona){ M.settings.name, M.settings.wake_words, M.title, M.settings.eleven_voice, M.settings.introduce, M.settings.independent };
     meet_log_free(&M.log); meet_log_init(&M.log);
     M.state = MEETING_CONNECTING;
     set_string(&M.error, note);
     free(note);
     Connect *c = xcalloc(1, sizeof *c);
     c->key = key; c->gen = M.gen;
-    c->setup = meet_setup_event(&M.persona);
-    if (eleven_key) voice_start(eleven_key, M.settings.eleven_voice, M.gen);
+    c->name = xstrdup(M.settings.name); c->wake_words = xstrdup(M.settings.wake_words); c->project = xstrdup(M.title);
+    c->voice = xstrdup(M.settings.eleven_voice); c->introduce = M.settings.introduce; c->independent = M.settings.independent;
     M.reader = (HANDLE)_beginthreadex(NULL, 0, connect_main, c, 0, NULL);
     changed();
     return true;
@@ -680,14 +601,12 @@ void meeting_answer_now(void) { if (M.state == MEETING_LIVE) send_owned(meet_ans
 char *meeting_status(void) {
     if (M.state == MEETING_OFF) return xstrdup("");
     Str s; str_init(&s);
-    str_appendf(&s, "\xF0\x9F\x8E\x99 %s%s \xC2\xB7 %s", meet_model_label(MEET_REALTIME), M.persona.eleven_voice ? " + ElevenLabs" : "", M.source);
+    str_appendf(&s, "\xF0\x9F\x8E\x99 %s \xC2\xB7 %s", meet_model_label(MEET_AGENT), M.source);
     if (M.state == MEETING_CONNECTING) str_appendz(&s, " \xC2\xB7 connecting\xE2\x80\xA6");
-    else if (M.state == MEETING_LEAVING) str_appendz(&s, " \xC2\xB7 leaving\xE2\x80\xA6");
     else {
         unsigned secs = (GetTickCount() - M.joined_tick) / 1000;
-        MeetUsage usage = M.record.usage;
-        usage.spoken_chars = voice_chars();
-        str_appendf(&s, " \xC2\xB7 %u:%02u \xC2\xB7 $%.3f", secs / 60, secs % 60, meet_usage_cost(MEET_REALTIME, &usage));
+        MeetUsage usage = { .seconds = secs };
+        str_appendf(&s, " \xC2\xB7 %u:%02u \xC2\xB7 $%.3f", secs / 60, secs % 60, meet_usage_cost(MEET_AGENT, &usage));
         str_appendz(&s, M.muted ? " \xC2\xB7 muted" : M.lookup_count ? " \xC2\xB7 looking it up\xE2\x80\xA6" : M.audio && meet_audio_speaking(M.audio) ? " \xC2\xB7 speaking" : " \xC2\xB7 listening");
     }
     if (M.error) str_appendf(&s, " \xC2\xB7 %s", M.error);

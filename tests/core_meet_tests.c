@@ -1,5 +1,5 @@
-// meet.c and meet_tools.c: the meeting assistant's events with GPT-Realtime, its project tools, its transcript, its
-// ElevenLabs voice and the costs.
+// meet.c and meet_tools.c: the meeting assistant's ElevenLabs agent and its events, its project tools, its transcript
+// and the costs.
 #include "meet.h"
 #include "meet_tools.h"
 #include "suites.h"
@@ -9,73 +9,79 @@
 #include <string.h>
 
 static MeetPersona persona(bool independent) {
-    MeetPersona p = { "Nadin", "marin", "Nadin, assistant", "Briareus (nadinyamaui/briareus)", true, independent, NULL };
+    MeetPersona p = { "Nadin", "Nadin, assistant", "Briareus (nadinyamaui/briareus)", "zozOsuFj6BSfLStTxdrK", true, independent };
     return p;
 }
 static Json *parsed(char *text) { Json *j = json_parsez(text); free(text); return j; }
 static bool near(double a, double b) { return fabs(a - b) < 1e-9; }
 
-static void test_realtime_offers_the_project_tools_and_answers_only_when_asked_unless_independent(void) {
+static void test_the_agent_speaks_in_the_users_voice_with_the_project_tools(void) {
     MeetPersona p = persona(false);
-    Json *e = parsed(meet_setup_event(&p));
-    CHECK_STR(json_str(json_get(e, "type")), "session.update");
-    const Json *s = json_get(e, "session"), *input = json_get(json_get(s, "audio"), "input"), *turns = json_get(input, "turn_detection");
-    CHECK_STR(json_str(json_get(s, "model")), "gpt-realtime-2.1-mini");
-    CHECK_STR(json_str(json_at(json_get(s, "output_modalities"), 0)), "audio");
-    CHECK_STR(json_str(json_get(json_get(json_get(s, "audio"), "output"), "voice")), "marin");
-    CHECK_STR(json_str(json_get(json_get(input, "format"), "type")), "audio/pcm");
-    CHECK_INT(json_int_or(json_get(json_get(input, "format"), "rate"), 0), 24000);
-    CHECK(json_bool_is(json_get(turns, "create_response"), false));
-    CHECK_STR(json_str(json_get(json_get(input, "transcription"), "model")), "gpt-transcribe");
-    const Json *tools = json_get(s, "tools");
-    CHECK_INT((int)json_count(tools), MEET_TOOL_COUNT);
-    CHECK_STR(json_str(json_get(json_at(tools, 0), "name")), "list_conversations");
-    for (size_t i = 0; i < json_count(tools); i++) {
-        const char *name = json_str(json_get(json_at(tools, i), "name"));
+    char *ids[] = { "tool_1", "tool_2" };
+    Json *body = parsed(meet_agent_body(&p, ids, 2));
+    CHECK_STR(json_str(json_get(body, "name")), "Briareus meeting assistant");
+    const Json *config = json_get(body, "conversation_config"), *tts = json_get(config, "tts"), *agent = json_get(config, "agent"), *prompt = json_get(agent, "prompt");
+    CHECK_STR(json_str(json_get(tts, "voice_id")), "zozOsuFj6BSfLStTxdrK");
+    CHECK_STR(json_str(json_get(tts, "model_id")), "eleven_v4_turbo");
+    CHECK_STR(json_str(json_get(tts, "agent_output_audio_format")), "pcm_24000");
+    CHECK_STR(json_str(json_get(json_get(config, "asr"), "user_input_audio_format")), "pcm_24000");
+    CHECK_INT(json_int_or(json_get(json_get(config, "conversation"), "max_duration_seconds"), 0), 4 * 60 * 60);
+    CHECK_STR(json_str(json_get(agent, "language")), "en");
+    CHECK(strstr(json_str(json_get(agent, "first_message")), "Nadin's AI assistant") != NULL);
+    CHECK_STR(json_str(json_get(prompt, "llm")), MEET_AGENT_LLM);
+    CHECK_INT((int)json_count(json_get(prompt, "tool_ids")), 2);
+    CHECK_STR(json_str(json_at(json_get(prompt, "tool_ids"), 1)), "tool_2");
+    CHECK_STR(json_str(json_get(json_get(json_get(json_get(prompt, "built_in_tools"), "skip_turn"), "params"), "system_tool_type")), "skip_turn");
+    const char *instructions = json_str(json_get(prompt, "prompt"));
+    CHECK(strstr(instructions, "Speak as Nadin, in the first person") != NULL);
+    CHECK(strstr(instructions, "Nadin, assistant") != NULL);
+    CHECK(strstr(instructions, "call skip_turn") != NULL);
+    CHECK(strstr(instructions, "Briareus (nadinyamaui/briareus)") != NULL);
+    CHECK(strstr(instructions, "no tool changes anything") != NULL);
+    json_free(body);
+    p = persona(true);
+    p.introduce = false;
+    body = parsed(meet_agent_body(&p, NULL, 0));
+    agent = json_get(json_get(body, "conversation_config"), "agent");
+    CHECK_STR(json_str(json_get(agent, "first_message")), "");
+    CHECK(strstr(json_str(json_get(json_get(agent, "prompt"), "prompt")), "Act independently on Nadin's behalf") != NULL);
+    json_free(body);
+    CHECK_OWNED_STR(meet_agent_ws_path("agent_01abc"), "/v1/convai/conversation?agent_id=agent_01abc");
+    CHECK_OWNED_STR(meet_agent_ws_path("a&b=c"), "/v1/convai/conversation?agent_id=abc");
+    Json *signed_url = json_parsez("{\"signed_url\":\"wss://api.elevenlabs.io/v1/convai/conversation?agent_id=a1&conversation_signature=s\"}");
+    CHECK_OWNED_STR(meet_signed_ws_path(signed_url), "/v1/convai/conversation?agent_id=a1&conversation_signature=s");
+    json_free(signed_url);
+    signed_url = json_parsez("{\"signed_url\":\"wss://evil.example/x\"}");
+    CHECK(meet_signed_ws_path(signed_url) == NULL);
+    json_free(signed_url);
+    Json *created = json_parsez("{\"agent_id\":\"agent_9\"}");
+    CHECK_OWNED_STR(meet_created_id(created), "agent_9");
+    json_free(created);
+    created = json_parsez("{\"id\":\"tool_9\",\"tool_config\":{}}");
+    CHECK_OWNED_STR(meet_created_id(created), "tool_9");
+    json_free(created);
+    CHECK(meet_created_id(NULL) == NULL);
+}
+
+static void test_tools_are_client_tools_that_wait_for_the_app(void) {
+    Json *t = parsed(meet_tool_body(MEET_TOOL_READ_PULL_REQUEST));
+    const Json *config = json_get(t, "tool_config");
+    CHECK_STR(json_str(json_get(config, "type")), "client");
+    CHECK_STR(json_str(json_get(config, "name")), "read_pull_request");
+    CHECK(json_bool_is(json_get(config, "expects_response"), true));
+    CHECK_STR(json_str(json_get(json_get(json_get(json_get(config, "parameters"), "properties"), "number"), "type")), "integer");
+    CHECK_STR(json_str(json_at(json_get(json_get(config, "parameters"), "required"), 0)), "number");
+    json_free(t);
+    t = parsed(meet_tool_body(MEET_TOOL_LIST_CONVERSATIONS));
+    CHECK_INT((int)json_count(json_get(json_get(json_get(t, "tool_config"), "parameters"), "required")), 0);
+    json_free(t);
+    for (int i = 0; i < MEET_TOOL_COUNT; i++) {
+        const char *name = meet_tool_name((MeetTool)i);
         // Read-only: nothing that starts, messages, merges, closes or deletes.
         CHECK(!strstr(name, "start") && !strstr(name, "send") && !strstr(name, "merge") && !strstr(name, "delete") && !strstr(name, "close"));
     }
-    const Json *read_pr = json_at(tools, MEET_TOOL_READ_PULL_REQUEST);
-    CHECK_STR(json_str(json_at(json_get(json_get(read_pr, "parameters"), "required"), 0)), "number");
-    CHECK(json_bool_is(json_get(json_get(read_pr, "parameters"), "additionalProperties"), false));
-    const char *instructions = json_str(json_get(s, "instructions"));
-    CHECK(strstr(instructions, "Speak only when someone addresses you or Nadin") != NULL);
-    CHECK(strstr(instructions, "Briareus (nadinyamaui/briareus)") != NULL);
-    CHECK(strstr(instructions, "no tool changes anything") != NULL);
-    CHECK(strstr(instructions, "Never claim") == NULL);
-    json_free(e);
-    p = persona(true);
-    e = parsed(meet_setup_event(&p));
-    turns = json_get(json_get(json_get(json_get(e, "session"), "audio"), "input"), "turn_detection");
-    CHECK(json_bool_is(json_get(turns, "create_response"), true));
-    CHECK_STR(json_str(json_get(turns, "type")), "semantic_vad");
-    CHECK(strstr(json_str(json_get(json_get(e, "session"), "instructions")), "Act independently on Nadin's behalf") != NULL);
-    json_free(e);
 }
-static void test_an_elevenlabs_voice_makes_realtime_answer_in_text_as_the_user(void) {
-    MeetPersona p = persona(false);
-    p.eleven_voice = "zozOsuFj6BSfLStTxdrK";
-    CHECK(meet_text_out(&p));
-    Json *e = parsed(meet_setup_event(&p));
-    const Json *s = json_get(e, "session");
-    CHECK_STR(json_str(json_at(json_get(s, "output_modalities"), 0)), "text");
-    CHECK(!json_is_object(json_get(json_get(s, "audio"), "output")));
-    const char *instructions = json_str(json_get(s, "instructions"));
-    CHECK(strstr(instructions, "Speak as Nadin, in the first person") != NULL);
-    CHECK(strstr(instructions, "no Markdown") != NULL);
-    json_free(e);
-    p.eleven_voice = "";
-    CHECK(!meet_text_out(&p));
-}
-static void test_a_greeting_goes_only_when_asked_for(void) {
-    MeetPersona p = persona(false);
-    Json *rt = parsed(meet_greeting_event(&p));
-    CHECK_STR(json_str(json_get(rt, "type")), "response.create");
-    CHECK(strstr(json_str(json_get(json_get(rt, "response"), "instructions")), "Nadin's AI assistant") != NULL);
-    json_free(rt);
-    p.introduce = false;
-    CHECK(meet_greeting_event(&p) == NULL);
-}
+
 static void test_base64_encodes_every_tail_length(void) {
     CHECK_OWNED_STR(base64_encode("", 0), "");
     CHECK_OWNED_STR(base64_encode("f", 1), "Zg==");
@@ -83,64 +89,52 @@ static void test_base64_encodes_every_tail_length(void) {
     CHECK_OWNED_STR(base64_encode("foo", 3), "Zm9v");
     CHECK_OWNED_STR(base64_encode("foobar", 6), "Zm9vYmFy");
 }
-static void test_audio_and_tool_answers_go_out_as_realtime_names_them(void) {
+static void test_audio_pongs_and_tool_results_go_out_as_the_agent_names_them(void) {
     int16_t pcm[2] = { 1, -1 };
-    Json *rt = parsed(meet_audio_event(pcm, 2));
-    CHECK_STR(json_str(json_get(rt, "type")), "input_audio_buffer.append");
-    CHECK_STR(json_str(json_get(rt, "audio")), "AQD//w==");
-    json_free(rt);
-    char *out[2] = { 0 };
-    CHECK_INT((int)meet_tool_output_events("call_9", "{\"total\":0}", out), 2);
-    Json *e = parsed(out[0]);
-    CHECK_STR(json_str(json_get(e, "type")), "conversation.item.create");
-    CHECK_STR(json_str(json_get(json_get(e, "item"), "type")), "function_call_output");
-    CHECK_STR(json_str(json_get(json_get(e, "item"), "call_id")), "call_9");
-    CHECK_STR(json_str(json_get(json_get(e, "item"), "output")), "{\"total\":0}");
+    CHECK_OWNED_STR(meet_audio_event(pcm, 2), "{\"user_audio_chunk\":\"AQD//w==\"}");
+    CHECK_OWNED_STR(meet_pong_event(7), "{\"type\":\"pong\",\"event_id\":7}");
+    CHECK_OWNED_STR(meet_start_event(), "{\"type\":\"conversation_initiation_client_data\"}");
+    Json *e = parsed(meet_tool_result_event("call_9", "{\"total\":0}", false));
+    CHECK_STR(json_str(json_get(e, "type")), "client_tool_result");
+    CHECK_STR(json_str(json_get(e, "tool_call_id")), "call_9");
+    CHECK_STR(json_str(json_get(e, "result")), "{\"total\":0}");
+    CHECK(json_bool_is(json_get(e, "is_error"), false));
     json_free(e);
-    CHECK_OWNED_STR(out[1], "{\"type\":\"response.create\"}");
-    CHECK_OWNED_STR(meet_answer_now_event(), "{\"type\":\"response.create\"}");
+    e = parsed(meet_answer_now_event());
+    CHECK_STR(json_str(json_get(e, "type")), "user_message");
+    json_free(e);
 }
 
 static MeetEvent parse(const char *json) { MeetEvent e; CHECK(meet_event_parse(json, strlen(json), &e)); return e; }
-static void test_realtime_events_are_read(void) {
-    MeetEvent e = parse("{\"type\":\"session.updated\"}");
+static void test_agent_events_are_read(void) {
+    MeetEvent e = parse("{\"type\":\"conversation_initiation_metadata\",\"conversation_initiation_metadata_event\":{\"conversation_id\":\"c\",\"agent_output_audio_format\":\"pcm_24000\",\"user_input_audio_format\":\"pcm_24000\"}}");
     CHECK_INT(e.kind, MEET_EV_READY); meet_event_free(&e);
-    e = parse("{\"type\":\"response.output_audio.delta\",\"delta\":\"AQD//w==\"}");
+    e = parse("{\"type\":\"audio\",\"audio_event\":{\"audio_base_64\":\"AQD//w==\",\"event_id\":3}}");
     CHECK_INT(e.kind, MEET_EV_AUDIO); CHECK_INT((int)e.audio_len, 4); meet_event_free(&e);
-    e = parse("{\"type\":\"input_audio_buffer.speech_started\"}");
-    CHECK_INT(e.kind, MEET_EV_SPEECH_STARTED); meet_event_free(&e);
-    e = parse("{\"type\":\"conversation.item.input_audio_transcription.completed\",\"transcript\":\"Nadin, any news?\",\"usage\":{\"type\":\"duration\",\"seconds\":120}}");
-    CHECK_INT(e.kind, MEET_EV_HEARD_TURN); CHECK_STR(e.text, "Nadin, any news?"); CHECK(e.has_usage && !e.usage_snapshot);
-    CHECK(near(e.usage.transcribed_seconds, 120)); meet_event_free(&e);
-    e = parse("{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"read_pull_request\",\"call_id\":\"call_1\",\"arguments\":\"{\\\"number\\\":12}\"}}");
+    e = parse("{\"type\":\"interruption\",\"interruption_event\":{\"event_id\":4}}");
+    CHECK_INT(e.kind, MEET_EV_INTERRUPTED); meet_event_free(&e);
+    e = parse("{\"type\":\"user_transcript\",\"user_transcription_event\":{\"user_transcript\":\"Nadin, any news?\",\"event_id\":5}}");
+    CHECK_INT(e.kind, MEET_EV_HEARD_TURN); CHECK_STR(e.text, "Nadin, any news?"); meet_event_free(&e);
+    e = parse("{\"type\":\"agent_response\",\"agent_response_event\":{\"agent_response\":\"CI is green.\",\"event_id\":6,\"response_id\":\"r\"}}");
+    CHECK_INT(e.kind, MEET_EV_SAID); CHECK_STR(e.text, "CI is green."); meet_event_free(&e);
+    e = parse("{\"type\":\"ping\",\"ping_event\":{\"event_id\":8,\"ping_ms\":40}}");
+    CHECK_INT(e.kind, MEET_EV_PING); CHECK_INT(e.event_id, 8); meet_event_free(&e);
+    e = parse("{\"type\":\"client_tool_call\",\"client_tool_call\":{\"tool_name\":\"read_pull_request\",\"tool_call_id\":\"call_1\",\"parameters\":{\"number\":12},\"event_id\":9,\"expects_response\":true}}");
     CHECK_INT(e.kind, MEET_EV_TOOL); CHECK_STR(e.id, "call_1"); CHECK_STR(e.text, "read_pull_request"); CHECK_STR(e.request, "{\"number\":12}"); meet_event_free(&e);
-    e = parse("{\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\"}}");
+    e = parse("{\"type\":\"client_error\",\"error_event\":{\"code\":1008,\"error_name\":\"auth\",\"message\":\"Bad key\"}}");
+    CHECK_INT(e.kind, MEET_EV_ERROR); CHECK_STR(e.text, "ElevenLabs: Bad key"); meet_event_free(&e);
+    e = parse("{\"type\":\"vad_score\",\"vad_score_event\":{\"vad_score\":0.4}}");
     CHECK_INT(e.kind, MEET_EV_OTHER); meet_event_free(&e);
-    e = parse("{\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}");
-    CHECK_INT(e.kind, MEET_EV_RESPONSE); meet_event_free(&e);
-    e = parse("{\"type\":\"response.output_text.delta\",\"delta\":\"CI is \"}");
-    CHECK_INT(e.kind, MEET_EV_SAID); CHECK_STR(e.text, "CI is "); meet_event_free(&e);
-    e = parse("{\"type\":\"response.output_text.done\",\"text\":\"CI is green.\"}");
-    CHECK_INT(e.kind, MEET_EV_SAID_DONE); meet_event_free(&e);
-    e = parse("{\"type\":\"error\",\"error\":{\"message\":\"Bad key\"}}");
-    CHECK_INT(e.kind, MEET_EV_ERROR); CHECK_STR(e.text, "Bad key"); meet_event_free(&e);
-    e = parse("{\"type\":\"response.done\",\"response\":{\"usage\":{\"input_token_details\":{\"text_tokens\":119,\"audio_tokens\":13,\"cached_tokens_details\":{\"text_tokens\":64,\"audio_tokens\":0}},\"output_token_details\":{\"text_tokens\":30,\"audio_tokens\":91}}}}");
-    CHECK(e.has_usage); CHECK(near(e.usage.text_in, 55)); CHECK(near(e.usage.text_cached, 64)); CHECK(near(e.usage.audio_in, 13));
-    CHECK(near(e.usage.text_out, 30)); CHECK(near(e.usage.audio_out, 91));
-    meet_event_free(&e);
     MeetEvent bad;
     CHECK(!meet_event_parse("not json", 8, &bad));
 }
 static void test_costs_follow_each_models_rates(void) {
+    MeetUsage agent = { .seconds = 90 };
+    CHECK(near(meet_usage_cost(MEET_AGENT, &agent), 0.12));
     MeetUsage live = { .seconds = 90 };
     CHECK(near(meet_usage_cost(MEET_LIVE, &live), 0.075));
-    MeetUsage rt = { .text_in = 1e6, .text_cached = 1e6, .text_out = 1e6, .audio_in = 1e6, .audio_cached = 1e6, .audio_out = 1e6, .transcribed_seconds = 60 };
-    CHECK(near(meet_usage_cost(MEET_REALTIME, &rt), 0.6 + 0.06 + 2.4 + 10 + 0.3 + 20 + 0.0045));
-    MeetUsage total = { 0 }, snap = { .seconds = 12 }, later = { .seconds = 15 }, tokens = { .audio_out = 5, .transcribed_seconds = 2 };
-    meet_usage_merge(&total, &snap, true); meet_usage_merge(&total, &later, true); meet_usage_merge(&total, &snap, true);
-    CHECK(near(total.seconds, 15));
-    meet_usage_merge(&total, &tokens, false); meet_usage_merge(&total, &tokens, false);
-    CHECK(near(total.audio_out, 10)); CHECK(near(total.transcribed_seconds, 4));
+    MeetUsage rt = { .text_in = 1e6, .text_cached = 1e6, .text_out = 1e6, .audio_in = 1e6, .audio_cached = 1e6, .audio_out = 1e6, .transcribed_seconds = 60, .spoken_chars = 1000 };
+    CHECK(near(meet_usage_cost(MEET_REALTIME, &rt), 0.6 + 0.06 + 2.4 + 10 + 0.3 + 20 + 0.0045 + 0.04));
 }
 static void test_records_round_trip_and_add_up_by_model(void) {
     MeetRecord a = { MEET_LIVE, 1000, 600, { .seconds = 600 }, 0.4, 3, 2, 30 }, b = { MEET_REALTIME, 2000, 300, { .audio_out = 1e5 }, 0.1, 1, 1, 8 }, back;
@@ -173,17 +167,6 @@ static void test_the_log_keeps_speakers_on_their_own_lines_and_its_tail(void) {
     CHECK(str_has_prefix(log.text.data, "Meeting: ") || str_has_prefix(log.text.data, "Assistant: "));
     meet_log_free(&log);
 }
-static void test_wake_words_match_whole_words_and_only_an_addressed_assistant_is_asked(void) {
-    CHECK(meet_wake_word("Hey ASSISTANT, what's up?", "Nadin, assistant"));
-    CHECK(meet_wake_word("nadin?", "Nadin, assistant"));
-    CHECK(!meet_wake_word("the assistants are here", "Nadin, assistant"));
-    CHECK(!meet_wake_word("nothing", ""));
-    CHECK(!meet_wake_word(NULL, "x"));
-    MeetPersona addressed = persona(false), independent = persona(true);
-    CHECK(meet_should_answer(&addressed, "Nadin, how is it going?"));
-    CHECK(!meet_should_answer(&addressed, "How is it going?"));
-    CHECK(!meet_should_answer(&independent, "Nadin, how is it going?"));
-}
 static void test_replies_are_made_fit_to_say(void) {
     CHECK_OWNED_STR(meet_spoken("# Status\n\n- **CI** is `green`\n- PR #12 merged\n```\ncode\n```\n> done", 1000), "Status CI is green PR #12 merged done");
     CHECK_OWNED_STR(meet_spoken("One. Two. Three is long", 12), "One. Two.");
@@ -191,36 +174,13 @@ static void test_replies_are_made_fit_to_say(void) {
     CHECK_OWNED_STR(meet_spoken("abcdefghijkl", 5), "abcde");
     CHECK_OWNED_STR(meet_spoken(NULL, 5), "");
 }
-static void test_elevenlabs_speaks_v4_turbo_pcm_at_24k(void) {
-    CHECK_STR(eleven_ws_path(), "/v1/text-to-dialogue/stream-input?model_id=eleven_v4_turbo&output_format=pcm_24000");
-    Json *open = parsed(eleven_open_event("v1"));
-    CHECK_STR(json_str(json_at(json_get(open, "voices"), 0)), "v1"); CHECK_INT(json_count(json_get(open, "voices")), 1);
-    Json *first = parsed(eleven_text_event("v1", "Hello there", true)), *more = parsed(eleven_text_event("v1", " again", false));
-    const Json *input = json_at(json_get(first, "inputs"), 0);
-    CHECK_STR(json_str(json_get(input, "text")), "Hello there"); CHECK_STR(json_str(json_get(input, "voice_id")), "v1");
-    CHECK(json_bool_is(json_get(input, "new_turn"), true));
-    CHECK(!json_bool_is(json_get(json_at(json_get(more, "inputs"), 0), "new_turn"), true));
-    Json *flush = parsed(eleven_flush_event()), *alive = parsed(eleven_keep_alive_event());
-    CHECK(json_bool_is(json_get(flush, "flush"), true)); CHECK(json_bool_is(json_get(alive, "keep_alive"), true));
-    json_free(open); json_free(first); json_free(more); json_free(flush); json_free(alive);
-    MeetEvent e;
-    const char *audio = "{\"audio\":\"AQD//w==\",\"alignment\":null}";
-    CHECK(eleven_event_parse(audio, strlen(audio), &e)); CHECK_INT(e.kind, MEET_EV_AUDIO); CHECK_INT((int)e.audio_len, 4); meet_event_free(&e);
-    const char *error = "{\"message\":\"Invalid API key\",\"error\":\"authentication_required\",\"code\":1008}";
-    CHECK(eleven_event_parse(error, strlen(error), &e)); CHECK_INT(e.kind, MEET_EV_ERROR); CHECK_STR(e.text, "ElevenLabs: Invalid API key"); meet_event_free(&e);
-    const char *final = "{\"is_final\":true}";
-    CHECK(eleven_event_parse(final, strlen(final), &e)); CHECK_INT(e.kind, MEET_EV_OTHER); meet_event_free(&e);
-    CHECK(!eleven_event_parse("nope", 4, &e));
-    CHECK_INT((int)meet_char_count("caf\xC3\xA9!"), 5);
-    MeetUsage spoken = { .spoken_chars = 1000 };
-    CHECK(near(meet_usage_cost(MEET_REALTIME, &spoken), 0.04));
-}
 static void test_models_are_named(void) {
     CHECK_STR(meet_model_label(MEET_LIVE), "GPT-Live 1");
-    CHECK_STR(meet_ws_path(MEET_REALTIME), "/v1/realtime?model=gpt-realtime-2.1-mini");
+    CHECK_STR(meet_model_label(MEET_AGENT), "ElevenLabs agent");
+    CHECK_STR(meet_model_id(MEET_AGENT), "elevenlabs-agent");
     MeetPersona nameless = { 0 };
     char *i = meet_instructions(&nameless);
-    CHECK(strstr(i, "the user's AI voice assistant") != NULL && strstr(i, "the project this project") != NULL);
+    CHECK(strstr(i, "You speak for the user") != NULL && strstr(i, "the project this project") != NULL);
     free(i);
 }
 
@@ -396,18 +356,15 @@ static void test_issues_are_listed_and_read_with_their_comments(void) {
 }
 
 void meet_tests(void) {
-    test_run("realtime offers the project tools and answers only when asked unless independent", test_realtime_offers_the_project_tools_and_answers_only_when_asked_unless_independent);
-    test_run("an elevenlabs voice makes realtime answer in text as the user", test_an_elevenlabs_voice_makes_realtime_answer_in_text_as_the_user);
-    test_run("a greeting goes only when asked for", test_a_greeting_goes_only_when_asked_for);
+    test_run("the agent speaks in the user's voice with the project tools", test_the_agent_speaks_in_the_users_voice_with_the_project_tools);
+    test_run("tools are client tools that wait for the app", test_tools_are_client_tools_that_wait_for_the_app);
     test_run("base64 encodes every tail length", test_base64_encodes_every_tail_length);
-    test_run("audio and tool answers go out as realtime names them", test_audio_and_tool_answers_go_out_as_realtime_names_them);
-    test_run("realtime events are read", test_realtime_events_are_read);
+    test_run("audio, pongs and tool results go out as the agent names them", test_audio_pongs_and_tool_results_go_out_as_the_agent_names_them);
+    test_run("agent events are read", test_agent_events_are_read);
     test_run("costs follow each model's rates", test_costs_follow_each_models_rates);
     test_run("records round trip and add up by model", test_records_round_trip_and_add_up_by_model);
     test_run("the log keeps speakers on their own lines and its tail", test_the_log_keeps_speakers_on_their_own_lines_and_its_tail);
-    test_run("wake words match whole words and only an addressed assistant is asked", test_wake_words_match_whole_words_and_only_an_addressed_assistant_is_asked);
     test_run("replies are made fit to say", test_replies_are_made_fit_to_say);
-    test_run("elevenlabs speaks v4 turbo pcm at 24k", test_elevenlabs_speaks_v4_turbo_pcm_at_24k);
     test_run("models are named", test_models_are_named);
     test_run("each tool reads the project only", test_each_tool_reads_the_project_only);
     test_run("conversations are listed with their pull requests", test_conversations_are_listed_with_their_pull_requests);

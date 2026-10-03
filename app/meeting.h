@@ -1,7 +1,7 @@
-// The meeting assistant: one meeting at a time, joined from a project, which it can look up with read-only tools (its
-// conversations, pull requests, findings and issues). It runs on until left, whatever screen is shown. Its settings
-// and API keys (OpenAI, and ElevenLabs for the user's own voice) are this computer's, and every meeting is recorded
-// here with its time and costs.
+// The meeting assistant: one meeting at a time, joined from a project, held by an ElevenLabs agent speaking in the user's
+// voice, which looks the project up with read-only tools (its conversations, pull requests, findings and issues). It
+// runs on until left, whatever screen is shown. Its settings and the ElevenLabs API key are this computer's, and every
+// meeting is recorded here with its time and cost.
 #ifndef BRIAREUS_MEETING_H
 #define BRIAREUS_MEETING_H
 #include "meet.h"
@@ -21,11 +21,10 @@ bool meeting_has_key(MeetingKey which);
 
 typedef struct {
     char *name;          // who the assistant speaks for
-    char *wake_words;    // what makes an addressed Realtime assistant answer
-    char *voice;
-    char *eleven_voice;  // the ElevenLabs voice ID GPT-Realtime speaks with; empty for the OpenAI voice
+    char *wake_words;    // what makes an addressed assistant answer
+    char *eleven_voice;  // the ElevenLabs voice ID it speaks with
     bool introduce;      // it says who it is as it joins
-    bool independent;    // it takes part on its own and may have the agent make changes
+    bool independent;    // it takes part on its own
 } MeetingSettings;
 void meeting_settings_load(MeetingSettings *s);
 void meeting_settings_save(const MeetingSettings *s);
@@ -40,7 +39,7 @@ void meeting_history_clear(void);
 // MARK: - The meeting
 
 typedef enum { MEETING_OFF, MEETING_CONNECTING, MEETING_LIVE, MEETING_LEAVING } MeetingState;
-/// Joins a meeting about `project` with GPT-Realtime, listening to app `pid` (0: every app but Briareus) called `source`.
+/// Joins a meeting about `project` with the ElevenLabs agent, listening to app `pid` (0: every app but Briareus) called `source`.
 /// Says why in an alert and returns false when it cannot start.
 bool meeting_join(const Project *project, unsigned pid, const char *source);
 void meeting_leave(void);
@@ -51,7 +50,7 @@ void meeting_set_muted(bool muted);
 bool meeting_muted(void);
 /// Asks the assistant to answer what was just said.
 void meeting_answer_now(void);
-/// "🎙 GPT-Realtime 2.1 mini · Zoom · 3:12 · $0.16 · listening", for the project's header. New string.
+/// "🎙 ElevenLabs agent · Zoom · 3:12 · $0.26 · listening", for the project's header. New string.
 char *meeting_status(void);
 /// The meeting's transcript so far. New string.
 char *meeting_transcript(void);
