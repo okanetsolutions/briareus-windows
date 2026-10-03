@@ -120,7 +120,15 @@ size_t pane_depth(Pane *p) { return p->depth; }
 
 void pane_relayout(Pane *p) { p->dirty = true; InvalidateRect(p->hwnd, NULL, FALSE); }
 void pane_repaint(Pane *p) { InvalidateRect(p->hwnd, NULL, FALSE); }
-void pane_header_changed(Pane *p) { RECT rc = { 0, 0, 10000, p->header_h }; InvalidateRect(p->hwnd, &rc, FALSE); }
+static void refresh_header(Pane *p);
+/// The screen's header is asked again (a button enabled, a subtitle changed); a new height lays the pane out again.
+void pane_header_changed(Pane *p) {
+    int height = p->header_h;
+    refresh_header(p);
+    if (p->header_h != height) { pane_relayout(p); return; }
+    RECT rc = { 0, 0, 10000, p->header_h };
+    InvalidateRect(p->hwnd, &rc, FALSE);
+}
 void pane_footer_changed(Pane *p) { p->dirty = true; InvalidateRect(p->hwnd, NULL, FALSE); }
 void pane_place_control(HWND control, const RECT *rc) {
     RECT now; GetWindowRect(control, &now); MapWindowPoints(NULL, GetParent(control), (POINT *)&now, 2);

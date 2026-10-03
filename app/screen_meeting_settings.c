@@ -1,6 +1,6 @@
-// ⚙ Settings → Meeting assistant: this computer's settings for the assistant that joins meetings from a conversation
-// (🎙 Meet): the OpenAI API key, kept in Windows Credential Manager, who it speaks for and how, whether the virtual
-// microphone is installed, and the two models compared over every meeting recorded here.
+// ⚙ Settings → Meeting assistant: this computer's settings for the assistant that joins meetings from a project
+// (🎙 Meet): the ElevenLabs API key, kept in Windows Credential Manager, the user's ElevenLabs voice, who it speaks for
+// and how, whether the virtual microphone is installed, and the time and cost of every meeting recorded here.
 #include "meet_audio.h"
 #include "meeting.h"
 #include "screens.h"
@@ -10,29 +10,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { F_KEY, F_NAME, F_WAKE, F_VOICE, F_COUNT };
+enum { F_KEY, F_VOICE, F_NAME, F_WAKE, F_COUNT };
 typedef struct { const char *label, *cue, *hint; bool secret, mono; } FieldDef;
 static const FieldDef FIELDS[F_COUNT] = {
-    [F_KEY] = { "OpenAI API key", "sk-\xE2\x80\xA6", "Kept in Windows Credential Manager on this computer only, and sent to api.openai.com alone.", true, true },
-    [F_NAME] = { "Your name", "", "Who the assistant speaks for: it introduces itself as your AI assistant." },
+    [F_KEY] = { "ElevenLabs API key", "sk_\xE2\x80\xA6", "Needs the ElevenLabs Agents and Text to Speech permissions. Kept in Windows Credential Manager on this computer only, and sent to api.elevenlabs.io alone.", true, true },
+    [F_VOICE] = { "ElevenLabs voice ID", "", "The voice it speaks with, yours: ElevenLabs \xE2\x86\x92 Voices \xE2\x86\x92 your voice \xE2\x86\x92 ID.", false, true },
+    [F_NAME] = { "Your name", "", "Who the assistant speaks for." },
     [F_WAKE] = { "Wake words", "Nadin, assistant, Briareus",
-                 "Comma-separated. With GPT-Realtime 2.1 mini, an assistant that does not act independently answers only a turn that says one of them, or \xE2\x80\x9C" "Answer now\xE2\x80\x9D." },
-    [F_VOICE] = { "Voice", "marin", "The OpenAI voice it speaks with, for example marin or cedar." },
+                 "Comma-separated. An assistant that does not act independently answers only when one of them is said, or on \xE2\x80\x9C" "Answer now\xE2\x80\x9D." },
 };
 enum { T_INDEPENDENT, T_INTRODUCE, T_COUNT };
 static const char *const TOGGLES[T_COUNT] = {
-    [T_INDEPENDENT] = "Act independently: take part on my behalf, answer what is asked of me, and let the agent make changes",
+    [T_INDEPENDENT] = "Act independently: take part on my behalf and answer what is asked of me",
     [T_INTRODUCE] = "Introduce itself as my AI assistant when it joins",
 };
 
-enum { ACT_SAVE = 1200, ACT_REMOVE_KEY, ACT_TOGGLE, ACT_FOCUS, ACT_CLEAR_HISTORY, ACT_CHECK_CABLE };
+enum { ACT_SAVE = 1200, ACT_REMOVE_KEY, ACT_TOGGLE, ACT_FOCUS, ACT_CLEAR_HISTORY, ACT_CHECK_CABLE, ACT_REMOVE_OPENAI_KEY };
 enum { ID_FIELD = 2300 };
 
 typedef struct {
     Screen base;
     MeetingSettings saved;
     bool toggles[T_COUNT];
-    bool has_key;
+    bool has_key, has_openai_key;   // the ElevenLabs key, and the OpenAI one kept from before the agent
     char *cable;            // the virtual cable's name, or NULL when it is missing
     MeetTotals totals[MEET_MODEL_COUNT];
     HWND edits[F_COUNT];
@@ -57,7 +57,8 @@ static void reload(MeetingForm *s) {
     meeting_settings_load(&s->saved);
     s->toggles[T_INDEPENDENT] = s->saved.independent;
     s->toggles[T_INTRODUCE] = s->saved.introduce;
-    s->has_key = meeting_has_key();
+    s->has_key = meeting_has_key(MEETING_KEY_ELEVENLABS);
+    s->has_openai_key = meeting_has_key(MEETING_KEY_OPENAI);
     Json *history = meeting_history();
     meet_totals(history, s->totals);
     json_free(history);
@@ -66,9 +67,9 @@ static void form_fill(MeetingForm *s) {
     if (!s->edits[F_KEY]) return;
     s->filling = true;
     set_edit_text(s->edits[F_KEY], "");
+    set_edit_text(s->edits[F_VOICE], s->saved.eleven_voice);
     set_edit_text(s->edits[F_NAME], s->saved.name);
     set_edit_text(s->edits[F_WAKE], s->saved.wake_words);
-    set_edit_text(s->edits[F_VOICE], s->saved.voice);
     // A saved key is never shown back; the box says it is there.
     wchar_t *cue = utf8_to_wide(s->has_key ? "Saved \xE2\x80\x94 type a new key to replace it" : FIELDS[F_KEY].cue);
     SendMessageW(s->edits[F_KEY], EM_SETCUEBANNER, TRUE, (LPARAM)cue);
@@ -136,7 +137,7 @@ static char *duration(double seconds) {
     unsigned s = (unsigned)(seconds + 0.5);
     return s >= 3600 ? xstrfmt("%uh %02um", s / 3600, s / 60 % 60) : xstrfmt("%um %02us", s / 60, s % 60);
 }
-/// One model's column of the comparison: what its meetings took and cost.
+/// One model's meetings: what they took and cost. GPT-Live 1's are those recorded before it was dropped.
 static void layout_model(MeetingForm *s, Doc *doc, int x, int w, MeetModel m) {
     const MeetTotals *t = &s->totals[m];
     int box = doc_box_begin(doc, x, w, px(12), theme.raise, theme.line, px(8));
@@ -147,41 +148,40 @@ static void layout_model(MeetingForm *s, Doc *doc, int x, int w, MeetModel m) {
     char *total = money(t->voice_cost + t->agent_cost);
     double minutes = t->seconds / 60;
     char *rate = minutes > 0 ? money((t->voice_cost + t->agent_cost) / minutes) : xstrdup("\xE2\x80\x94");
-    char *voice_rate = minutes > 0 ? money(t->voice_cost / minutes) : xstrdup("\xE2\x80\x94");
     char *answers = xstrfmt("%d of %d", t->answers, t->requests);
     char *wait = t->answers ? xstrfmt("%.1f s", t->answer_seconds / t->answers) : xstrdup("\xE2\x80\x94");
     doc_labeled(doc, ix, iw, "Meetings", count, theme.ink);
     doc_labeled(doc, ix, iw, "Time in meetings", time_, theme.ink);
-    doc_labeled(doc, ix, iw, "OpenAI voice", voice, theme.ink);
-    doc_labeled(doc, ix, iw, "Voice per minute", voice_rate, theme.ink);
-    doc_labeled(doc, ix, iw, "Briareus agent", agent, theme.ink);
+    doc_labeled(doc, ix, iw, "Voice", voice, theme.ink);
+    // Meetings before the tools asked the conversation's agent, which cost apart.
+    if (t->agent_cost > 0) doc_labeled(doc, ix, iw, "Conversation agent", agent, theme.ink);
     doc_labeled(doc, ix, iw, "Total", total, theme.ink);
-    doc_labeled(doc, ix, iw, "Total per minute", rate, theme.ink);
-    doc_labeled(doc, ix, iw, "Agent questions answered", answers, theme.ink);
-    doc_labeled(doc, ix, iw, "Average answer time", wait, theme.ink);
-    free(count); free(time_); free(voice); free(agent); free(total); free(rate); free(voice_rate); free(answers); free(wait);
+    doc_labeled(doc, ix, iw, "Per minute", rate, theme.ink);
+    doc_labeled(doc, ix, iw, m == MEET_LIVE ? "Agent questions answered" : "Project lookups answered", answers, theme.ink);
+    doc_labeled(doc, ix, iw, m == MEET_LIVE ? "Average answer time" : "Average lookup time", wait, theme.ink);
+    free(count); free(time_); free(voice); free(agent); free(total); free(rate); free(answers); free(wait);
     doc_box_end(doc, box, px(12));
 }
-static void layout_compare(MeetingForm *s, Doc *doc, int x, int w) {
-    heading(doc, x, w, "Compare the models");
-    note(doc, x, w, "Every meeting joined from this computer, from joining to leaving. OpenAI voice is what OpenAI reported using, at the "
-                    "listed rates: GPT-Live 1 at $0.05 a minute; GPT-Realtime 2.1 mini by its text and audio tokens plus $0.0045 a "
-                    "minute of transcription. Briareus agent is what the conversation's agent cost over the meeting.");
+static void layout_history(MeetingForm *s, Doc *doc, int x, int w) {
+    heading(doc, x, w, "Meetings on this computer");
+    note(doc, x, w, "From joining to leaving. Voice is the ElevenLabs agent at $0.08 a minute, its LLM billed apart; for older meetings, what OpenAI reported using at its listed rates (GPT-Realtime 2.1 mini's text and "
+                    "audio tokens plus $0.0045 a minute of transcription), plus ElevenLabs' characters at $0.04 per 1,000.");
     int gap = px(14);
-    if (w >= px(560)) {
+    // GPT-Live 1's box only while meetings recorded with it remain.
+    bool live = s->totals[MEET_LIVE].meetings > 0;
+    if (live && w >= px(560)) {
         int half = (w - gap) / 2, top = doc->y;
-        layout_model(s, doc, x, half, MEET_LIVE);
+        layout_model(s, doc, x, half, MEET_REALTIME);
         int bottom = doc->y;
         doc->y = top;
-        layout_model(s, doc, x + half + gap, half, MEET_REALTIME);
+        layout_model(s, doc, x + half + gap, half, MEET_LIVE);
         if (doc->y < bottom) doc->y = bottom;
     } else {
-        layout_model(s, doc, x, w, MEET_LIVE);
-        doc_space(doc, gap);
         layout_model(s, doc, x, w, MEET_REALTIME);
+        if (live) { doc_space(doc, gap); layout_model(s, doc, x, w, MEET_LIVE); }
     }
     doc_space(doc, px(12));
-    bool any = s->totals[MEET_LIVE].meetings || s->totals[MEET_REALTIME].meetings;
+    bool any = live || s->totals[MEET_REALTIME].meetings;
     doc_button(doc, x, 0, "Clear the history", BUTTON_BORDERED, ACT_CLEAR_HISTORY, 0, any);
 }
 
@@ -195,19 +195,23 @@ static void form_layout(Screen *base, Doc *doc) {
         else doc_notice_box(doc, x, w, s->message);
         doc_space(doc, px(14));
     }
-    note(doc, x, w, "In a conversation, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app and your microphone, "
-                    "speaks through a virtual microphone, and asks the conversation's agent whatever is about the project.");
-    field(s, doc, x, w, F_KEY);
-    field_pair(s, doc, x, w, F_NAME, F_VOICE);
-    field(s, doc, x, w, F_WAKE);
+    note(doc, x, w, "On a project, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app, "
+                    "speaks through a virtual microphone, and looks up the project's conversations, pull requests, findings and issues. It only reads: it never starts, messages, merges or closes anything.");
+    field_pair(s, doc, x, w, F_KEY, F_VOICE);
+    field_pair(s, doc, x, w, F_NAME, F_WAKE);
     check(s, doc, x, w, T_INDEPENDENT);
     check(s, doc, x, w, T_INTRODUCE);
     note(doc, x, w, s->toggles[T_INDEPENDENT]
-        ? "Acting independently, it decides for itself when to speak, and anyone in the meeting can have the agent change code. It still says it is an AI if asked."
-        : "Otherwise it speaks only when you or it are addressed, and asks the agent for answers only, since anyone in the meeting can talk to it.");
+        ? "Acting independently, it decides for itself when to speak. It still says it is an AI if sincerely asked."
+        : "Otherwise it speaks only when you or it are addressed by a wake word, or when you choose \xE2\x80\x9C" "Answer now\xE2\x80\x9D.");
+    if (s->has_openai_key) {
+        note(doc, x, w, "The OpenAI API key saved for the earlier assistant is no longer used.");
+        doc_button(doc, x, 0, "Remove the OpenAI key", BUTTON_BORDERED, ACT_REMOVE_OPENAI_KEY, 0, true);
+        doc_space(doc, px(10));
+    }
     heading(doc, x, w, "Virtual microphone");
     if (s->cable) {
-        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers. The assistant speaks only into the meeting, so you will not hear it yourself: its words are in the meeting transcript (\xF0\x9F\x8E\x99 menu).", s->cable);
+        char *line = xstrfmt("%s is installed. In your meeting app, pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone and keep your usual speakers. The meeting then hears only the assistant, never your microphone: to speak yourself, switch the meeting app back to your microphone. The assistant speaks only into the meeting, so you will not hear it yourself: its words are in the meeting transcript (\xF0\x9F\x8E\x99 menu).", s->cable);
         doc_label(doc, x, w, 0xE73E, line, FONT_FOOTNOTE, theme.ok);
         free(line);
     } else {
@@ -215,20 +219,20 @@ static void form_layout(Screen *base, Doc *doc) {
         doc_space(doc, px(8));
         doc_button(doc, x, 0, "Check again", BUTTON_BORDERED, ACT_CHECK_CABLE, 0, true);
     }
-    layout_compare(s, doc, x, w);
+    layout_history(s, doc, x, w);
     doc_space(doc, px(40));
 }
 
 static void form_header(Screen *base, HeaderInfo *info) {
     MeetingForm *s = (MeetingForm *)base;
     snprintf(info->title, sizeof info->title, "Meeting assistant");
-    snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 settings on this computer", s->has_key ? "OpenAI API key saved" : "no OpenAI API key yet");
+    snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 settings on this computer", s->has_key ? "ElevenLabs API key saved" : "no ElevenLabs API key yet");
     HeaderButton *b = &info->buttons[info->button_count++];
     snprintf(b->label, sizeof b->label, "Save");
     b->glyph = 0xE74E; b->action = ACT_SAVE; b->prominent = true; b->tip = "Save (Ctrl+S)"; b->enabled = s->dirty;
     if (!s->has_key) return;
     HeaderButton *d = &info->buttons[info->button_count++];
-    d->glyph = 0xE74D; d->action = ACT_REMOVE_KEY; d->destructive = true; d->enabled = true; d->tip = "Remove the OpenAI API key from this computer";
+    d->glyph = 0xE74D; d->action = ACT_REMOVE_KEY; d->destructive = true; d->enabled = true; d->tip = "Remove the ElevenLabs API key from this computer";
 }
 
 // MARK: - The edits
@@ -302,15 +306,14 @@ static void form_save(MeetingForm *s) {
     char *key = edit_text(s->edits[F_KEY]), *trimmed_key = str_trim(key);
     SecureZeroMemory(key, strlen(key)); free(key);
     if (*trimmed_key) {
-        if (!str_has_prefix(trimmed_key, "sk-")) { show_message(s, "That does not look like an OpenAI API key: they start with sk-.", false); free(trimmed_key); return; }
-        bool saved = meeting_key_save(trimmed_key);
+        bool saved = meeting_key_save(MEETING_KEY_ELEVENLABS, trimmed_key);
         SecureZeroMemory(trimmed_key, strlen(trimmed_key));
         if (!saved) { show_message(s, "The key could not be saved in Credential Manager.", false); free(trimmed_key); return; }
     }
     free(trimmed_key);
     MeetingSettings next = { 0 };
     char *name = edit_text(s->edits[F_NAME]), *wake = edit_text(s->edits[F_WAKE]), *voice = edit_text(s->edits[F_VOICE]);
-    next.name = str_trim(name); next.wake_words = str_trim(wake); next.voice = str_trim(voice);
+    next.name = str_trim(name); next.wake_words = str_trim(wake); next.eleven_voice = str_trim(voice);
     free(name); free(wake); free(voice);
     next.independent = s->toggles[T_INDEPENDENT]; next.introduce = s->toggles[T_INTRODUCE];
     meeting_settings_save(&next);
@@ -335,9 +338,13 @@ static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
     switch (action) {
     case ACT_SAVE: form_save(s); break;
     case ACT_REMOVE_KEY:
-        if (!app_confirm("Remove the OpenAI API key?", "Meetings cannot be joined from this computer until a key is saved again. The key itself stays valid at OpenAI.", "Remove", true)) break;
-        if (meeting_key_remove()) { reload(s); form_fill(s); show_message(s, "The key was removed from this computer.", true); }
+        if (!app_confirm("Remove the ElevenLabs API key?", "Meetings cannot be joined from this computer until a key is saved again. The key itself stays valid at ElevenLabs.", "Remove", true)) break;
+        if (meeting_key_remove(MEETING_KEY_ELEVENLABS)) { reload(s); form_fill(s); show_message(s, "The key was removed from this computer.", true); }
         else show_message(s, "The key could not be removed from Credential Manager.", false);
+        break;
+    case ACT_REMOVE_OPENAI_KEY:
+        if (meeting_key_remove(MEETING_KEY_OPENAI)) { reload(s); pane_relayout(base->pane); show_message(s, "The OpenAI key was removed from this computer.", true); }
+        else show_message(s, "The OpenAI key could not be removed from Credential Manager.", false);
         break;
     case ACT_TOGGLE: if (arg >= 0 && arg < T_COUNT) { s->toggles[arg] = !s->toggles[arg]; changed(s); pane_relayout(base->pane); } break;
     case ACT_FOCUS: if (arg >= 0 && arg < F_COUNT && s->edits[arg]) SetFocus(s->edits[arg]); break;
