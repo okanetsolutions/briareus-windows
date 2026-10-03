@@ -1,6 +1,8 @@
 # Build output (Makefile and build.bat both write here)
 build/
 build-*/
+# Fetched by the build at the version the Makefile pins.
+third_party/
 *.o
 *.obj
 *.exe

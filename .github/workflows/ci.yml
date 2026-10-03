@@ -26,7 +26,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck curl
       - name: Build the app and run the tests, warnings as errors
         run: mingw32-make WERROR=1
       - name: Static analysis (cppcheck)
@@ -48,7 +48,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-python-gcovr
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-python-gcovr curl
       - name: Measure line coverage of core/ (fails below the floor in the Makefile)
         run: |
           set -o pipefail

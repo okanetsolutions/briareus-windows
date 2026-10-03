@@ -897,5 +897,6 @@ int main(void) {
     vt_tests();
     sftp_tests();
     browser_tests();
+    meet_tests();
     return test_summary();
 }

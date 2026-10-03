@@ -75,6 +75,9 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers and the Forge accounts, each with ＋ New.
 Screen *settings_screen_new(void);
+/// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
+/// and the two models compared over the meetings recorded on this computer.
+Screen *meeting_settings_screen_new(void);
 /// A project's SSH sessions tab, laid out inside its board: the project's SSH servers down the left, its open sessions as
 /// tabs over a terminal on the right. Its items use `PROJECT_SSH_ACTIONS` actions from `action_base` up.
 typedef struct ProjectSsh ProjectSsh;

@@ -8,6 +8,15 @@ set CFLAGS=/nologo /std:c11 /O2 /W4 /wd4100 /external:anglebrackets /external:W0
 rem app\canvas.cpp is C++ in C style (the SDK declares DirectWrite for C++ only): no exceptions, no RTTI.
 set CXXFLAGS=%CFLAGS:/std:c11=/std:c++17% /EHs-c- /GR-
 set LIBS=winhttp.lib advapi32.lib ole32.lib comctl32.lib gdi32.lib user32.lib shell32.lib uuid.lib dwmapi.lib winmm.lib mfplat.lib mfreadwrite.lib mfuuid.lib shlwapi.lib uxtheme.lib comdlg32.lib msimg32.lib d2d1.lib dwrite.lib
+rem miniaudio, the meeting assistant's audio library, is fetched at the version and hash the Makefile pins.
+set MINIAUDIO_VERSION=0.11.25
+set MINIAUDIO_SHA256=ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89
+if not exist third_party\miniaudio\miniaudio.h (
+  if not exist third_party\miniaudio mkdir third_party\miniaudio
+  curl -fsSL https://raw.githubusercontent.com/mackron/miniaudio/%MINIAUDIO_VERSION%/miniaudio.h -o third_party\miniaudio\miniaudio.h.download || exit /b 1
+  powershell -NoProfile -Command "if ((Get-FileHash third_party\miniaudio\miniaudio.h.download -Algorithm SHA256).Hash -ne '%MINIAUDIO_SHA256%') { exit 1 }" || (echo miniaudio.h does not match its pinned SHA-256 & exit /b 1)
+  move /y third_party\miniaudio\miniaudio.h.download third_party\miniaudio\miniaudio.h >nul || exit /b 1
+)
 rc /nologo /Ires /Iapp /fo %OUT%\briareus.res res\briareus.rc || exit /b 1
 cl /c %CXXFLAGS% app\canvas.cpp || exit /b 1
 cl %CFLAGS% core\*.c app\*.c %OUT%\canvas.obj %OUT%\briareus.res /Fe%OUT%\Briareus.exe /link /SUBSYSTEM:WINDOWS /ENTRY:wWinMainCRTStartup %LIBS% || exit /b 1

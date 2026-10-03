@@ -1,6 +1,8 @@
 // One conversation: its transcript, the composer, and the actions on the session.
 #include "attach_list.h"
 #include "dialogs.h"
+#include "meet_audio.h"
+#include "meeting.h"
 #include "screens.h"
 #include "str.h"
 #include "voice.h"
@@ -17,7 +19,7 @@ enum {
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
 enum { ID_COMPOSER = 301 };
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
-enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER };
+enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER, MENU_MEET };
 
 
 typedef struct {
@@ -675,7 +677,9 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
     const Session *ss = session(s);
     snprintf(info->title, sizeof info->title, "%s", session_display_title(ss));
     char *sub = status_line(ss);
-    snprintf(info->subtitle, sizeof info->subtitle, "%s", sub);
+    // A meeting joined from this conversation leads the line: its model, time, cost and what it is doing.
+    if (meeting_for(session_id(ss))) { char *m = meeting_status(); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", m, sub); free(m); }
+    else snprintf(info->subtitle, sizeof info->subtitle, "%s", sub);
     free(sub);
     if (store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
     bool can = !s->busy && !s->uncertain;
@@ -683,6 +687,10 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
     if (browser_offered()) {
         bool running = false, on = browser_session_on(ss->raw, &running);
         header_button(info, 0xE774, on && running ? "\xF0\x9F\x8C\x90 Browser \xE2\x97\x8F" : "\xF0\x9F\x8C\x90 Browser", ACT_MENU_ITEM + MENU_BROWSER, true, false);
+    }
+    if (store_supports("message")) {
+        bool here = meeting_for(session_id(ss));
+        header_button(info, 0xE720, here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet", ACT_MENU_ITEM + MENU_MEET, here || can_message(s), false);
     }
     if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "\xE2\x8F\xB9 Stop", ACT_MENU_ITEM + MENU_STOP, can, false);
     if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "\xE2\x9F\xB3 Reopen", ACT_MENU_ITEM + MENU_REOPEN, can, false);
@@ -716,8 +724,76 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     }
 }
 
+// MARK: - The meeting
+
+enum { MEET_ITEM_JOIN = 100, MEET_ITEM_MUTE = 900, MEET_ITEM_ANSWER, MEET_ITEM_COPY, MEET_ITEM_LEAVE, MEET_ITEM_SETTINGS };
+static void append_menu(HMENU menu, UINT flags, UINT_PTR id, const char *text) { wchar_t *w = utf8_to_wide(text); AppendMenuW(menu, flags, id, w); free(w); }
+static void copy_text(const char *text) {
+    wchar_t *w = utf8_to_wide(text);
+    size_t bytes = (wcslen(w) + 1) * sizeof *w;
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (h && OpenClipboard(app_window())) {
+        memcpy(GlobalLock(h), w, bytes); GlobalUnlock(h);
+        EmptyClipboard();
+        if (SetClipboardData(CF_UNICODETEXT, h)) h = NULL;
+        CloseClipboard();
+    }
+    if (h) GlobalFree(h);
+    free(w);
+}
+/// 🎙 Meet: join with either model, listening to a meeting app; or, in a meeting, mute, answer now, copy or leave.
+static void meet_menu(ConversationScreen *s, POINT pt) {
+    const Session *ss = session(s);
+    HMENU menu = CreatePopupMenu();
+    MeetApp *apps = NULL; size_t app_count = 0;
+    if (meeting_state() != MEETING_OFF) {
+        char *status = meeting_status();
+        append_menu(menu, MF_STRING | MF_GRAYED, 0, meeting_for(session_id(ss)) ? status : "A meeting runs from another conversation");
+        free(status);
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        bool live = meeting_state() == MEETING_LIVE;
+        append_menu(menu, MF_STRING | (meeting_muted() ? MF_CHECKED : 0) | (live ? 0 : MF_GRAYED), MEET_ITEM_MUTE, "Mute the assistant");
+        append_menu(menu, MF_STRING | (live && !meeting_muted() ? 0 : MF_GRAYED), MEET_ITEM_ANSWER, "Answer now");
+        append_menu(menu, MF_STRING, MEET_ITEM_COPY, "Copy the meeting transcript");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        append_menu(menu, MF_STRING, MEET_ITEM_LEAVE, "Leave the meeting");
+    } else {
+        apps = meet_apps_running(&app_count);
+        for (int m = 0; m < MEET_MODEL_COUNT; m++) {
+            HMENU sources = CreatePopupMenu();
+            append_menu(sources, MF_STRING | MF_GRAYED, 0, "Listen to");
+            for (size_t i = 0; i < app_count && i < 50; i++) append_menu(sources, MF_STRING, MEET_ITEM_JOIN + m * 100 + 1 + i, apps[i].label);
+            append_menu(sources, MF_STRING, MEET_ITEM_JOIN + m * 100, "Every app except Briareus");
+            char *label = xstrfmt("Join with %s", meet_model_label((MeetModel)m));
+            append_menu(menu, MF_POPUP, (UINT_PTR)sources, label);
+            free(label);
+        }
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    append_menu(menu, MF_STRING, MEET_ITEM_SETTINGS, "Meeting assistant settings\xE2\x80\xA6");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
+    DestroyMenu(menu);
+    switch (chosen) {
+    case 0: break;
+    case MEET_ITEM_MUTE: meeting_set_muted(!meeting_muted()); break;
+    case MEET_ITEM_ANSWER: meeting_answer_now(); break;
+    case MEET_ITEM_COPY: { char *t = meeting_transcript(); copy_text(t); free(t); break; }
+    case MEET_ITEM_LEAVE: meeting_leave(); break;
+    case MEET_ITEM_SETTINGS: app_show_detail(meeting_settings_screen_new()); break;
+    default:
+        if (chosen >= MEET_ITEM_JOIN && chosen < MEET_ITEM_JOIN + MEET_MODEL_COUNT * 100) {
+            int m = (chosen - MEET_ITEM_JOIN) / 100, i = (chosen - MEET_ITEM_JOIN) % 100 - 1;
+            bool app = i >= 0 && (size_t)i < app_count;
+            meeting_join(ss, (MeetModel)m, app ? apps[i].pid : 0, app ? apps[i].label : "every app");
+        }
+    }
+    meet_apps_free(apps, app_count);
+    pane_header_changed(s->base.pane);
+}
+
 static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
+    if (action == ACT_MENU_ITEM + MENU_MEET) { meet_menu(s, pt); return; }
     if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_BROWSER) { menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
     case ACT_ANSWER: {
