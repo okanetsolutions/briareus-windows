@@ -327,6 +327,10 @@ static const ApiRoute ROUTES[] = {
     { "browser_off", "DELETE", "sessions/{sessionId}/browser" },
     { "browser_input", "POST", "sessions/{sessionId}/browser/input" },
     { "browser_stream", "GET", "sessions/{sessionId}/browser/stream" },
+    // The session's ⚡ Webhook, for an admin token: its settings, URLs and keys, changed, and its keys replaced.
+    { "session_webhook", "GET", "sessions/{sessionId}/webhook" },
+    { "set_session_webhook", "PUT", "sessions/{sessionId}/webhook" },
+    { "rotate_session_webhook", "POST", "sessions/{sessionId}/webhook/rotate" },
     // The Cloudflare Access service token the Run tab's browser sends to ▶ Run preview hosts; a manage token.
     { "preview_access", "GET", "preview/access" },
     // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.

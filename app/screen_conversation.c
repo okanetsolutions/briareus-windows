@@ -19,7 +19,7 @@ enum {
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
 enum { ID_COMPOSER = 301 };
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
-enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER, MENU_MEET };
+enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER, MENU_WEBHOOK, MENU_MEET };
 
 
 typedef struct {
@@ -688,6 +688,11 @@ static void conversation_header(Screen *base, HeaderInfo *info) {
         bool running = false, on = browser_session_on(ss->raw, &running);
         header_button(info, 0xE774, on && running ? "\xF0\x9F\x8C\x90 Browser \xE2\x97\x8F" : "\xF0\x9F\x8C\x90 Browser", ACT_MENU_ITEM + MENU_BROWSER, true, false);
     }
+    // An admin token's; the session record carries the settings, so the button says when deliveries are on.
+    if (store_supports("session_webhook")) {
+        bool armed = json_bool_is(json_get(json_get(ss->raw, "webhook"), "armed"), true);
+        header_button(info, 0xE945, armed ? "\xE2\x9A\xA1 Webhook \xE2\x97\x8F" : "\xE2\x9A\xA1 Webhook", ACT_MENU_ITEM + MENU_WEBHOOK, true, false);
+    }
     if (store_supports("message")) {
         bool here = meeting_for(session_id(ss));
         header_button(info, 0xE720, here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet", ACT_MENU_ITEM + MENU_MEET, here || can_message(s), false);
@@ -708,6 +713,7 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
+    case MENU_WEBHOOK: app_push_detail(webhook_screen_new(ss)); break;
     case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
     case MENU_LOOP_ON: confirm_and_mutate(s, "review_loop"); break;
     case MENU_RENAME: {
@@ -794,7 +800,7 @@ static void meet_menu(ConversationScreen *s, POINT pt) {
 static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (action == ACT_MENU_ITEM + MENU_MEET) { meet_menu(s, pt); return; }
-    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_BROWSER) { menu_choice(s, action - ACT_MENU_ITEM); return; }
+    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_WEBHOOK) { menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
     case ACT_ANSWER: {
         int seq = (int)(arg >> 8), index = (int)(arg & 0xFF);
