@@ -2949,9 +2949,17 @@ static void slack_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(18));
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
     if (s->id && slack_has(s, "hasToken")) slack_connection(s, doc, x, col);
-    slack_field(s, doc, x, col, W_LABEL, NULL);
+    // Label and token side by side, as the Forge form's label and organization; the scopes the token needs across under them.
+    int gap = px(14), half = (col - gap) / 2, top = doc->y;
+    slack_field(s, doc, x, half, W_LABEL, NULL);
+    int bottom = doc->y;
+    doc->y = top;
+    slack_field(s, doc, x + half + gap, col - half - gap, W_TOKEN, NULL);
+    if (doc->y < bottom) doc->y = bottom;
     char *scopes = xstrfmt("Create a Slack app at api.slack.com/apps and give it these user token scopes under OAuth & Permissions: %s. Install it to the workspace, then paste its User OAuth Token.", SLACK_SCOPES);
-    slack_field(s, doc, x, col, W_TOKEN, scopes);
+    doc->y -= px(8);
+    doc_text(doc, x, col, scopes, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    doc_space(doc, px(14));
     free(scopes);
     slack_field(s, doc, x, col, W_SECRET, NULL);
     slack_events(s, doc, x, col);
