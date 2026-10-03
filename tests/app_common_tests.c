@@ -409,7 +409,9 @@ static void test_label_chips_wrap_within_the_width(void) {
     CHECK_INT(doc_height(&doc), 0);
     doc_label_chips(&doc, 0, 600, labels, 2, theme.raise);
     CHECK_INT(doc.count, 1);
-    int chip_h = font_height(NULL, FONT_CAPTION2) + 6;
+    int chip_h = font_height(NULL, FONT_CAPTION2) + 4;
+    int chip_w = draw_chip(NULL, 0, 0, labels[0].name, 0, 0, NULL);
+    CHECK_INT(doc_badges_width(&doc, &(BadgeSpec){ 0, labels[0].name, 0, true }, 1), chip_w);
     CHECK_INT(doc_height(&doc), chip_h);
     doc_begin(&doc, NULL, 40);
     doc_label_chips(&doc, 0, 40, labels, 2, theme.raise);

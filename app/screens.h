@@ -73,7 +73,7 @@ typedef enum { WEB_APP_WHATSAPP, WEB_APP_SLACK, WEB_APP_COUNT } WebApp;
 /// WhatsApp Web or Slack, from the sidebar strip's buttons.
 Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
-/// servers and the Forge accounts, each with ＋ New.
+/// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
 Screen *settings_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
 /// and the two models compared over the meetings recorded on this computer.
