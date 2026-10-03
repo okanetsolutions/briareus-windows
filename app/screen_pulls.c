@@ -1,5 +1,6 @@
 // The project board: open pull requests and issues, one pull request in full, and one issue.
 #include "dialogs.h"
+#include "meeting.h"
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
@@ -41,7 +42,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
@@ -420,8 +421,17 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     str_appendz(&sub, s->project.repo);
     if (s->loaded) str_appendf(&sub, " \xC2\xB7 %zu open pull request%s", s->pull_count, s->pull_count == 1 ? "" : "s");
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
-    snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
+    // A meeting about this project leads the line: its time, cost and what it is doing.
+    if (meeting_for(s->project.repo)) { char *m = meeting_status(); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", m, sub.data); free(m); }
+    else snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     str_free(&sub);
+    // 🎙 Meet: the meeting assistant, on this project.
+    {
+        bool here = meeting_for(s->project.repo);
+        HeaderButton *m = &info->buttons[info->button_count++];
+        snprintf(m->label, sizeof m->label, "%s", here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet");
+        m->action = ACT_MEET; m->enabled = true; m->tip = "Join a meeting with an assistant that can look up this project";
+    }
     if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }
     if (s->tab == TAB_SSH) {
         project_ssh_header(s->ssh, info);
@@ -480,6 +490,7 @@ static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
 static void pulls_refresh(Screen *base);
 static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
+    if (action == ACT_MEET) { meeting_menu(&s->project, pane_hwnd(base->pane), pt); pane_header_changed(base->pane); return; }
     if (project_ssh_action(s->ssh, action, arg, pt)) return;
     if (project_sftp_action(s->sftp, action, arg, pt)) return;
     if (project_run_action(s->run, action, arg, pt)) return;

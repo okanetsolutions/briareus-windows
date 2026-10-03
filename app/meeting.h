@@ -1,11 +1,12 @@
-// The meeting assistant: one meeting at a time, joined from a conversation, whose agent answers what the voice model
-// cannot. It runs on until left, whatever screen is shown. Its settings and API keys (OpenAI, and ElevenLabs for the
-// user's own voice) are this computer's, and every meeting is recorded here with its time and costs so the two models
-// can be compared.
+// The meeting assistant: one meeting at a time, joined from a project, which it can look up with read-only tools (its
+// conversations, pull requests, findings and issues). It runs on until left, whatever screen is shown. Its settings
+// and API keys (OpenAI, and ElevenLabs for the user's own voice) are this computer's, and every meeting is recorded
+// here with its time and costs.
 #ifndef BRIAREUS_MEETING_H
 #define BRIAREUS_MEETING_H
 #include "meet.h"
 #include "models.h"
+#include <windows.h>
 #include <stdbool.h>
 
 // MARK: - Settings
@@ -39,22 +40,24 @@ void meeting_history_clear(void);
 // MARK: - The meeting
 
 typedef enum { MEETING_OFF, MEETING_CONNECTING, MEETING_LIVE, MEETING_LEAVING } MeetingState;
-/// Joins with `model`, listening to app `pid` (0: every app but Briareus) called `source`. Says why in an alert and
-/// returns false when it cannot start.
-bool meeting_join(const Session *session, MeetModel model, unsigned pid, const char *source);
+/// Joins a meeting about `project` with GPT-Realtime, listening to app `pid` (0: every app but Briareus) called `source`.
+/// Says why in an alert and returns false when it cannot start.
+bool meeting_join(const Project *project, unsigned pid, const char *source);
 void meeting_leave(void);
 MeetingState meeting_state(void);
-/// Whether the meeting runs for this conversation.
-bool meeting_for(const char *session_id);
-MeetModel meeting_model(void);
+/// Whether the meeting is about this project.
+bool meeting_for(const char *repo);
 void meeting_set_muted(bool muted);
 bool meeting_muted(void);
 /// Asks the assistant to answer what was just said.
 void meeting_answer_now(void);
-/// "GPT-Live 1 · 3:12 · $0.16 · listening", for the conversation's header. New string.
+/// "🎙 GPT-Realtime 2.1 mini · Zoom · 3:12 · $0.16 · listening", for the project's header. New string.
 char *meeting_status(void);
 /// The meeting's transcript so far. New string.
 char *meeting_transcript(void);
+/// 🎙 Meet's menu at `pt`: join a meeting about `project`, listening to a meeting app; or, in a meeting, mute, answer
+/// now, copy the transcript or leave. Returns whether anything was chosen.
+bool meeting_menu(const Project *project, HWND owner, POINT pt);
 /// The app quits: the meeting is left at once.
 void meeting_shutdown(void);
 

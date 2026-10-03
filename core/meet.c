@@ -1,6 +1,6 @@
 #include "meet.h"
+#include "meet_tools.h"
 #include "browser.h"
-#include "models.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,13 +15,13 @@ const char *meet_ws_path(MeetModel model) { return MODELS[model].path; }
 
 static const char *name_of(const MeetPersona *p) { return p->name && *p->name ? p->name : "the user"; }
 static const char *voice_of(const MeetPersona *p) { return p->voice && *p->voice ? p->voice : "marin"; }
-bool meet_text_out(MeetModel model, const MeetPersona *p) { return model == MEET_REALTIME && p->eleven_voice && *p->eleven_voice; }
+bool meet_text_out(const MeetPersona *p) { return p->eleven_voice && *p->eleven_voice; }
 
 // MARK: - Setup
 
-char *meet_instructions(MeetModel model, const MeetPersona *p) {
-    const char *name = name_of(p);
-    bool own_voice = meet_text_out(model, p);
+char *meet_instructions(const MeetPersona *p) {
+    const char *name = name_of(p), *project = p->project && *p->project ? p->project : "this project";
+    bool own_voice = meet_text_out(p);
     Str s; str_init(&s);
     if (own_voice)
         str_appendf(&s, "You speak for %s in a live meeting, in %s's own voice, through their microphone. Speak as %s, in the "
@@ -31,8 +31,8 @@ char *meet_instructions(MeetModel model, const MeetPersona *p) {
                         "You hear everyone else in the meeting. ", name);
     if (p->independent)
         str_appendf(&s, "Act independently on %s's behalf: join the discussion when you have something useful to add, answer "
-                        "questions put to %s, give updates and agree next steps as %s would. Do not talk over people, and keep "
-                        "quiet when the discussion does not need you. ", name, name, name);
+                        "questions put to %s and give updates as %s would. Do not talk over people, and keep quiet when the "
+                        "discussion does not need you. ", name, name, name);
     else
         str_appendf(&s, "Speak only when someone addresses you or %s with a question or request you can help with; otherwise "
                         "stay silent and keep listening. ", name);
@@ -40,12 +40,12 @@ char *meet_instructions(MeetModel model, const MeetPersona *p) {
     if (own_voice)
         str_appendz(&s, "Your text is read aloud as written: write plain spoken English, with no Markdown, lists, emoji or stage "
                         "directions. ");
-    const char *title = p->conversation && *p->conversation ? p->conversation : "this project";
-    str_appendf(&s, "Questions about the project, its code, its status or work to be done go to the Briareus agent working "
-                    "in the conversation \"%s\": ", title);
-    str_appendz(&s, model == MEET_LIVE ? "delegate them to the backend"
-                                       : "call ask_agent with the request in full, with the details said in the meeting");
-    str_appendz(&s, ". Say briefly that you are checking, then relay its answer in your own words. Never invent project details.");
+    str_appendf(&s, "The meeting is about the project %s: use the tools for anything about its conversations, agents, pull "
+                    "requests, issues or findings, say briefly that you are checking, and say only what they confirm. Never "
+                    "invent project details.\n\n", project);
+    char *tools = meet_tools_instructions(project);
+    str_appendz(&s, tools);
+    free(tools);
     return str_detach(&s);
 }
 
@@ -55,79 +55,49 @@ static Json *pcm_format(void) {
 }
 static char *serialize_free(Json *event) { char *text = json_serialize(event, false); json_free(event); return text; }
 
-char *meet_setup_event(MeetModel model, const MeetPersona *p) {
-    Json *event = json_object(), *session = json_object(), *audio = json_object(), *output = json_object();
-    char *instructions = meet_instructions(model, p);
-    json_set_str(output, "voice", voice_of(p));
-    if (model == MEET_LIVE) {
-        json_set_str(event, "type", "session.start");
-        json_set_str(session, "model", meet_model_id(model));
-        json_set_str(session, "instructions", instructions);
-        json_object_set(audio, "format", pcm_format());
+char *meet_setup_event(const MeetPersona *p) {
+    Json *event = json_object(), *session = json_object(), *audio = json_object();
+    char *instructions = meet_instructions(p);
+    json_set_str(event, "type", "session.update");
+    json_set_str(session, "type", "realtime");
+    json_set_str(session, "model", MEET_MODEL);
+    // With an ElevenLabs voice the answer is text, which ElevenLabs says.
+    bool text_out = meet_text_out(p);
+    Json *modalities = json_array(); json_array_push(modalities, json_string(text_out ? "text" : "audio"));
+    json_object_set(session, "output_modalities", modalities);
+    json_set_str(session, "instructions", instructions);
+    Json *input = json_object(), *transcription = json_object(), *turns = json_object();
+    json_object_set(input, "format", pcm_format());
+    json_set_str(transcription, "model", "gpt-transcribe");
+    json_object_set(input, "transcription", transcription);
+    // An addressed assistant answers only when the app asks, on a wake word; an independent one whenever it judges.
+    json_set_str(turns, "type", p->independent ? "semantic_vad" : "server_vad");
+    json_set_bool(turns, "create_response", p->independent);
+    json_set_bool(turns, "interrupt_response", true);
+    json_object_set(input, "turn_detection", turns);
+    json_object_set(audio, "input", input);
+    if (!text_out) {
+        Json *output = json_object();
+        json_set_str(output, "voice", voice_of(p));
+        json_object_set(output, "format", pcm_format());
         json_object_set(audio, "output", output);
-        json_object_set(session, "audio", audio);
-        // The conversation's agent is the backend: a delegation comes to the app, which asks the agent.
-        Json *delegation = json_object(); json_set_str(delegation, "type", "client");
-        json_object_set(session, "delegation", delegation);
-    } else {
-        json_set_str(event, "type", "session.update");
-        json_set_str(session, "type", "realtime");
-        json_set_str(session, "model", meet_model_id(model));
-        // With an ElevenLabs voice the answer is text, which ElevenLabs says.
-        bool text_out = meet_text_out(model, p);
-        Json *modalities = json_array(); json_array_push(modalities, json_string(text_out ? "text" : "audio"));
-        json_object_set(session, "output_modalities", modalities);
-        json_set_str(session, "instructions", instructions);
-        Json *input = json_object(), *transcription = json_object(), *turns = json_object();
-        json_object_set(input, "format", pcm_format());
-        json_set_str(transcription, "model", "gpt-transcribe");
-        json_object_set(input, "transcription", transcription);
-        // An addressed assistant answers only when the app asks, on a wake word; an independent one whenever it judges.
-        json_set_str(turns, "type", p->independent ? "semantic_vad" : "server_vad");
-        json_set_bool(turns, "create_response", p->independent);
-        json_set_bool(turns, "interrupt_response", true);
-        json_object_set(input, "turn_detection", turns);
-        json_object_set(audio, "input", input);
-        if (text_out) json_free(output);
-        else { json_object_set(output, "format", pcm_format()); json_object_set(audio, "output", output); }
-        json_object_set(session, "audio", audio);
-        Json *tools = json_array(), *tool = json_object(), *params = json_object(), *props = json_object(), *req = json_object();
-        json_set_str(tool, "type", "function");
-        json_set_str(tool, "name", "ask_agent");
-        json_set_str(tool, "description", "Ask the Briareus coding agent working on this project: it has the repository, can "
-                                          "read and run the code, and knows the work in progress. Use it for any question about "
-                                          "the project, its code or its status, or for work to be done.");
-        json_set_str(params, "type", "object");
-        json_set_str(req, "type", "string");
-        json_set_str(req, "description", "The request in full, with every detail said in the meeting that it needs.");
-        json_object_set(props, "request", req);
-        json_object_set(params, "properties", props);
-        Json *required = json_array(); json_array_push(required, json_string("request"));
-        json_object_set(params, "required", required);
-        json_object_set(tool, "parameters", params);
-        json_array_push(tools, tool);
-        json_object_set(session, "tools", tools);
-        json_set_str(session, "tool_choice", "auto");
     }
+    json_object_set(session, "audio", audio);
+    json_object_set(session, "tools", meet_tools_json());
+    json_set_str(session, "tool_choice", "auto");
     free(instructions);
     json_object_set(event, "session", session);
     return serialize_free(event);
 }
 
-char *meet_greeting_event(MeetModel model, const MeetPersona *p) {
+char *meet_greeting_event(const MeetPersona *p) {
     if (!p->introduce) return NULL;
     char *words = xstrfmt("Introduce yourself now in one short sentence: you are %s's AI assistant, joining the meeting for them, "
                           "and people can ask you about the project. Then listen.", name_of(p));
-    Json *event = json_object();
-    if (model == MEET_LIVE) {
-        json_set_str(event, "type", "session.instructions.append");
-        json_object_set(event, "delegation_id", json_null());
-        json_set_str(event, "content", words);
-    } else {
-        Json *response = json_object(); json_set_str(response, "instructions", words);
-        json_set_str(event, "type", "response.create");
-        json_object_set(event, "response", response);
-    }
+    Json *event = json_object(), *response = json_object();
+    json_set_str(response, "instructions", words);
+    json_set_str(event, "type", "response.create");
+    json_object_set(event, "response", response);
     free(words);
     return serialize_free(event);
 }
@@ -153,54 +123,26 @@ char *base64_encode(const void *data, size_t len) {
     return out;
 }
 
-char *meet_audio_event(MeetModel model, const int16_t *pcm, size_t samples) {
+char *meet_audio_event(const int16_t *pcm, size_t samples) {
     // Little-endian samples, as Windows holds them.
     char *audio = base64_encode(pcm, samples * sizeof *pcm);
-    char *event = xstrfmt("{\"type\":\"%s\",\"audio\":\"%s\"}", model == MEET_LIVE ? "session.input_audio.append" : "input_audio_buffer.append", audio);
+    char *event = xstrfmt("{\"type\":\"input_audio_buffer.append\",\"audio\":\"%s\"}", audio);
     free(audio);
     return event;
 }
 
-char *meet_answer_now_event(MeetModel model) {
-    if (model == MEET_REALTIME) return xstrdup("{\"type\":\"response.create\"}");
-    Json *event = json_object();
-    json_set_str(event, "type", "session.instructions.append");
-    json_object_set(event, "delegation_id", json_null());
-    json_set_str(event, "content", "Answer the latest question or request in the meeting now, briefly.");
-    return serialize_free(event);
-}
-char *meet_close_event(MeetModel model) { return model == MEET_LIVE ? xstrdup("{\"type\":\"session.close\"}") : NULL; }
+char *meet_answer_now_event(void) { return xstrdup("{\"type\":\"response.create\"}"); }
 
-size_t meet_result_events(MeetModel model, const char *id, const char *text, char *out[2]) {
-    Json *event = json_object();
-    if (model == MEET_LIVE) {
-        json_set_str(event, "type", "session.commentary.append");
-        json_set_str(event, "delegation_id", id);
-        json_set_str(event, "content", text);
-        out[0] = serialize_free(event);
-        return 1;
-    }
-    Json *item = json_object(), *output = json_object();
-    json_set_str(output, "answer", text);
-    char *output_text = serialize_free(output);
+size_t meet_tool_output_events(const char *call_id, const char *output, char *out[2]) {
+    Json *event = json_object(), *item = json_object();
     json_set_str(item, "type", "function_call_output");
-    json_set_str(item, "call_id", id);
-    json_set_str(item, "output", output_text);
-    free(output_text);
+    json_set_str(item, "call_id", call_id);
+    json_set_str(item, "output", output);
     json_set_str(event, "type", "conversation.item.create");
     json_object_set(event, "item", item);
     out[0] = serialize_free(event);
-    out[1] = xstrdup("{\"type\":\"response.create\"}");
+    out[1] = meet_answer_now_event();
     return 2;
-}
-
-char *meet_progress_event(MeetModel model, const char *id, const char *text) {
-    if (model != MEET_LIVE) return NULL;
-    Json *event = json_object();
-    json_set_str(event, "type", "session.thinking.append");
-    json_set_str(event, "delegation_id", id);
-    json_set_str(event, "content", text);
-    return serialize_free(event);
 }
 
 // MARK: - Usage and cost
@@ -220,16 +162,8 @@ void meet_usage_merge(MeetUsage *into, const MeetUsage *reported, bool snapshot)
     into->spoken_chars += reported->spoken_chars;
 }
 
-static void read_usage(MeetModel model, const char *type, const Json *e, MeetEvent *out) {
+static void read_usage(const char *type, const Json *e, MeetEvent *out) {
     MeetUsage *u = &out->usage;
-    if (model == MEET_LIVE) {
-        // Cumulative voice seconds, the last of them final once the session closed.
-        double seconds;
-        if ((str_eq(type, "session.usage.updated") || str_eq(type, "session.closed")) && json_num(json_get(json_get(e, "usage"), "seconds"), &seconds)) {
-            u->seconds = seconds; out->has_usage = out->usage_snapshot = true;
-        }
-        return;
-    }
     if (str_eq(type, "response.done")) {
         const Json *usage = json_get(json_get(e, "response"), "usage");
         if (!json_is_object(usage)) return;
@@ -261,7 +195,7 @@ static void take_text(MeetEvent *out, MeetEventKind kind, const Json *value) {
     if (!out->text) out->text = xstrdup("");
 }
 
-bool meet_event_parse(MeetModel model, const char *json, size_t len, MeetEvent *out) {
+bool meet_event_parse(const char *json, size_t len, MeetEvent *out) {
     memset(out, 0, sizeof *out);
     Json *e = json_parse(json, len);
     const char *type = json_str(json_get(e, "type"));
@@ -271,49 +205,36 @@ bool meet_event_parse(MeetModel model, const char *json, size_t len, MeetEvent *
     if (str_eq(type, "error")) {
         const Json *err = json_get(e, "error");
         const char *message = json_str_nonempty(json_get(err, "message"));
-        take_text(out, MEET_EV_ERROR, NULL);
-        free(out->text);
+        out->kind = MEET_EV_ERROR;
         out->text = xstrdup(message ? message : json_str_nonempty(err) ? json_str(err) : "OpenAI reported an error.");
-    } else if (model == MEET_LIVE) {
-        if (str_eq(type, "session.started")) out->kind = MEET_EV_READY;
-        else if (str_eq(type, "session.output_audio.delta")) audio = json_str(json_get(e, "delta"));
-        else if (str_eq(type, "session.input_transcript.delta")) take_text(out, MEET_EV_HEARD, json_get(e, "delta"));
-        else if (str_eq(type, "session.output_transcript.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
-        else if (str_eq(type, "session.closed")) out->kind = MEET_EV_CLOSED;
-        else if (str_eq(type, "session.delegation.created")) {
-            const char *id = json_str_nonempty(json_get(json_get(e, "delegation"), "id"));
-            if (id) { out->kind = MEET_EV_ASK; out->id = xstrdup(id); }
-        }
-    } else {
-        if (str_eq(type, "session.updated")) out->kind = MEET_EV_READY;
-        else if (str_eq(type, "response.output_audio.delta")) audio = json_str(json_get(e, "delta"));
-        else if (str_eq(type, "conversation.item.input_audio_transcription.completed")) take_text(out, MEET_EV_HEARD_TURN, json_get(e, "transcript"));
-        else if (str_eq(type, "response.output_audio_transcript.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
-        else if (str_eq(type, "response.output_text.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
-        else if (str_eq(type, "response.output_text.done")) out->kind = MEET_EV_SAID_DONE;
-        else if (str_eq(type, "response.created")) out->kind = MEET_EV_RESPONSE;
-        else if (str_eq(type, "input_audio_buffer.speech_started")) out->kind = MEET_EV_SPEECH_STARTED;
-        else if (str_eq(type, "response.output_item.done")) {
-            const Json *item = json_get(e, "item");
-            const char *call = json_str_nonempty(json_get(item, "call_id"));
-            if (str_eq(json_str(json_get(item, "type")), "function_call") && str_eq(json_str(json_get(item, "name")), "ask_agent") && call) {
-                out->kind = MEET_EV_ASK;
-                out->id = xstrdup(call);
-                const char *arguments = json_str(json_get(item, "arguments"));
-                Json *args = arguments ? json_parsez(arguments) : NULL;
-                out->request = json_dup_str(json_get(args, "request"));
-                json_free(args);
-            }
+    }
+    else if (str_eq(type, "session.updated")) out->kind = MEET_EV_READY;
+    else if (str_eq(type, "response.output_audio.delta")) audio = json_str(json_get(e, "delta"));
+    else if (str_eq(type, "conversation.item.input_audio_transcription.completed")) take_text(out, MEET_EV_HEARD_TURN, json_get(e, "transcript"));
+    else if (str_eq(type, "response.output_audio_transcript.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
+    else if (str_eq(type, "response.output_text.delta")) take_text(out, MEET_EV_SAID, json_get(e, "delta"));
+    else if (str_eq(type, "response.output_text.done")) out->kind = MEET_EV_SAID_DONE;
+    else if (str_eq(type, "response.created")) out->kind = MEET_EV_RESPONSE;
+    else if (str_eq(type, "input_audio_buffer.speech_started")) out->kind = MEET_EV_SPEECH_STARTED;
+    else if (str_eq(type, "response.output_item.done")) {
+        const Json *item = json_get(e, "item");
+        const char *call = json_str_nonempty(json_get(item, "call_id")), *name = json_str_nonempty(json_get(item, "name"));
+        if (str_eq(json_str(json_get(item, "type")), "function_call") && call && name) {
+            out->kind = MEET_EV_TOOL;
+            out->id = xstrdup(call);
+            out->text = xstrdup(name);
+            out->request = xstrdup(json_str_or(json_get(item, "arguments"), "{}"));
         }
     }
     if (audio) {
         out->audio = base64_decode(audio, strlen(audio), &out->audio_len);
         out->kind = out->audio ? MEET_EV_AUDIO : MEET_EV_OTHER;
     }
-    read_usage(model, type, e, out);
+    read_usage(type, e, out);
     json_free(e);
     return true;
 }
+
 // MARK: - ElevenLabs
 
 const char *eleven_ws_path(void) { return "/v1/text-to-dialogue/stream-input?model_id=" ELEVEN_MODEL "&output_format=pcm_24000"; }
@@ -416,25 +337,6 @@ bool meet_wake_word(const char *heard, const char *wake_words) {
 }
 bool meet_should_answer(const MeetPersona *p, const char *heard) { return !p->independent && meet_wake_word(heard, p->wake_words); }
 
-char *meet_agent_marker(int number) { return xstrfmt("\xF0\x9F\x8E\x99 Meeting request %d", number); }
-
-char *meet_agent_message(int number, const MeetPersona *p, const char *request, const char *transcript) {
-    const char *name = name_of(p);
-    char *marker = meet_agent_marker(number);
-    Str s; str_init(&s);
-    str_appendf(&s, "%s, from %s's voice assistant in a live meeting.\n\n", marker, name);
-    free(marker);
-    if (request && *request) str_appendf(&s, "%s\n\n", request);
-    else str_appendz(&s, "The assistant needs your help with what was just said in the meeting (transcript below): answer it.\n\n");
-    str_appendz(&s, "Your reply is read aloud in the meeting: answer in a few short sentences of plain speech, with no Markdown, "
-                    "code, tables or links. ");
-    if (p->independent) str_appendf(&s, "%s lets the meeting ask you for changes as well as answers; say what you did.", name);
-    else str_appendf(&s, "The request may come from anyone in the meeting, not %s: only answer. Do not change files, run commands "
-                         "that change anything, push, merge or comment.", name);
-    if (transcript && *transcript) str_appendf(&s, "\n\nThe meeting so far (speech-to-text, may hold mistakes):\n%s", transcript);
-    return str_detach(&s);
-}
-
 char *meet_spoken(const char *text, size_t max) {
     Str s; str_init(&s);
     bool fence = false, space = false;
@@ -523,22 +425,5 @@ void meet_totals(const Json *records, MeetTotals out[MEET_MODEL_COUNT]) {
         t->voice_cost += json_num(json_get(json_at(records, i), "voiceCost"), &charged) ? charged : meet_usage_cost(r.model, &r.usage);
         t->agent_cost += r.agent_cost;
         t->requests += r.requests; t->answers += r.answers; t->answer_seconds += r.answer_seconds;
-    }
-}
-
-void meet_reply_init(MeetReplyScan *scan) { scan->seen = scan->done = false; str_init(&scan->reply); }
-void meet_reply_free(MeetReplyScan *scan) { str_free(&scan->reply); scan->seen = scan->done = false; }
-void meet_reply_feed(MeetReplyScan *scan, const Json *events, const char *marker) {
-    for (size_t i = 0; i < json_count(events) && !scan->done; i++) {
-        Event e;
-        if (!event_parse(json_at(events, i), &e)) continue;
-        if (!scan->seen) scan->seen = str_eq(e.kind, "user") && e.text && str_has_prefix(e.text, marker);
-        else if (str_eq(e.kind, "text") && e.text) { if (scan->reply.len) str_appendc(&scan->reply, '\n'); str_appendz(&scan->reply, e.text); }
-        else if (str_eq(e.kind, "ask") && e.question) {
-            if (scan->reply.len) str_appendc(&scan->reply, '\n');
-            str_appendf(&scan->reply, "The agent asks: %s", e.question);
-            scan->done = true;
-        } else if (str_eq(e.kind, "result")) scan->done = true;
-        event_free(&e);
     }
 }

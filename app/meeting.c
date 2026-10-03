@@ -1,4 +1,5 @@
 #include "meeting.h"
+#include "meet_tools.h"
 #include "meet_audio.h"
 #include "screens.h"
 #include "str.h"
@@ -140,21 +141,23 @@ void meeting_history_clear(void) { wchar_t *path = history_path(); if (path) Del
 // MARK: - The meeting
 
 enum { WM_MEET_EVENT = WM_APP + 71, WM_MEET_READY, WM_MEET_ENDED, WM_VOICE_ENDED };
-enum { TIMER_POLL_AGENT = 1, TIMER_TICK = 2, TIMER_CLOSE_WAIT = 3 };
-#define ANSWER_TIMEOUT_MS (10 * 60 * 1000)
-#define PROGRESS_AFTER_MS 20000
+enum { TIMER_TICK = 2 };
 /// ElevenLabs closes a socket after 20 s without a message.
 #define KEEP_ALIVE_SECONDS 10
 
-/// One question for the agent, from a delegation or a function call.
-typedef struct { char *id, *request; DWORD asked; } Ask;
+/// One tool call the model made: its calls to the server, made together, and their answers as they come.
+typedef struct {
+    char *id; MeetTool tool; Json *args; DWORD asked;
+    MeetCall calls[MEET_TOOL_MAX_CALLS]; size_t count, done;
+    Json *answers[MEET_TOOL_MAX_CALLS];
+    Request *reqs[MEET_TOOL_MAX_CALLS];
+} Lookup;
 
 static struct {
     MeetingState state;
     HWND hwnd;
-    MeetModel model;
     MeetPersona persona; MeetingSettings settings;
-    char *session_id, *title, *source, *error;
+    char *repo, *title, *source, *error;
     WebSocket *ws;
     MeetAudio *audio;
     HANDLE reader, sender;
@@ -166,14 +169,7 @@ static struct {
     MeetRecord record;
     DWORD joined_tick;
     unsigned ticks;
-    double cost_at_join, cost_now; bool has_cost;
-    // The agent: the questions waiting, the one asked, and where the conversation's events were read up to.
-    Ask *asks; size_t ask_count;
-    bool asking, progress_sent;
-    int number; char *marker;
-    MeetReplyScan scan;
-    int cursor;
-    Request *req_message, *req_poll;
+    Lookup **lookups; size_t lookup_count;   // the tool calls under way
 } M;
 
 static void post(LONG gen, UINT msg, void *payload) { if (!M.hwnd || !PostMessageW(M.hwnd, msg, (WPARAM)gen, (LPARAM)payload)) free(payload); }
@@ -356,7 +352,7 @@ static void read_events(WebSocket *ws, LONG gen) {
         int got = ws_receive(ws, &text, &len);
         if (got <= 0) break;
         MeetEvent *e = xcalloc(1, sizeof *e);
-        bool ok = meet_event_parse(M.model, text, len, e);
+        bool ok = meet_event_parse(text, len, e);
         free(text);
         if (!ok) { free(e); continue; }
         if (e->kind == MEET_EV_AUDIO) {
@@ -387,7 +383,7 @@ static unsigned __stdcall sender_main(void *arg) {
         if (!n) continue;
         meet_audio_take_input(M.audio, pcm, n);
         sent += n;
-        char *event = meet_audio_event(M.model, pcm, n);
+        char *event = meet_audio_event(pcm, n);
         bool ok = ws_send(M.ws, event);
         free(event);
         if (!ok) break;
@@ -404,10 +400,10 @@ static unsigned __stdcall connect_main(void *arg) {
     char *auth = xstrfmt("Bearer %s", c->key);
     const char *headers[] = { "Authorization", auth, NULL, NULL };
     char *error = NULL;
-    WebSocket *ws = ws_connect("api.openai.com", meet_ws_path(M.model), headers, &error);
+    WebSocket *ws = ws_connect("api.openai.com", meet_ws_path(MEET_REALTIME), headers, &error);
     SecureZeroMemory(auth, strlen(auth)); free(auth);
     SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
-    if (!ws) { free(c->setup); free(c); post(gen, WM_MEET_ENDED, error); return 0; }
+    if (!ws) { free(c->setup); free(c); char *why = xstrfmt("OpenAI: %s", error ? error : "could not connect."); free(error); post(gen, WM_MEET_ENDED, why); return 0; }
     EnterCriticalSection(&M.lock);
     bool current = gen == M.gen && M.state == MEETING_CONNECTING;
     if (current) M.ws = ws;
@@ -419,87 +415,59 @@ static unsigned __stdcall connect_main(void *arg) {
     return 0;
 }
 
-// MARK: - Asking the agent
+// MARK: - The project's tools
 
-static void next_ask(void);
-static void finish_ask(const char *answer) {
-    if (!M.ask_count) return;
-    Ask *a = &M.asks[0];
-    char *spoken = meet_spoken(answer, MEET_SPOKEN_MAX);
-    if (!*spoken) { free(spoken); spoken = xstrdup("The agent finished without saying anything."); }
+static void lookup_free(Lookup *l) {
+    for (size_t i = 0; i < l->count; i++) { request_cancel(&l->reqs[i]); json_free(l->answers[i]); }
+    meet_calls_free(l->calls, l->count);
+    json_free(l->args); free(l->id); free(l);
+}
+static void lookup_answer(Lookup *l, char *output) {
     char *events[2] = { 0 };
-    size_t n = meet_result_events(M.model, a->id, spoken, events);
+    size_t n = meet_tool_output_events(l->id, output, events);
     for (size_t i = 0; i < n; i++) send_owned(events[i]);
+    free(output);
     M.record.answers++;
-    M.record.answer_seconds += (GetTickCount() - a->asked) / 1000.0;
-    free(spoken); free(a->id); free(a->request);
-    memmove(M.asks, M.asks + 1, (M.ask_count - 1) * sizeof *M.asks);
-    M.ask_count--;
-    M.asking = false;
-    KillTimer(M.hwnd, TIMER_POLL_AGENT);
-    request_cancel(&M.req_poll); request_cancel(&M.req_message);
-    meet_reply_free(&M.scan);
+    M.record.answer_seconds += (GetTickCount() - l->asked) / 1000.0;
+    for (size_t i = 0; i < M.lookup_count; i++) if (M.lookups[i] == l) { memmove(M.lookups + i, M.lookups + i + 1, (M.lookup_count - i - 1) * sizeof *M.lookups); M.lookup_count--; break; }
+    lookup_free(l);
     changed();
-    next_ask();
 }
-static void read_cost(const Json *session) {
-    double cost;
-    if (!json_num(json_get(session, "costUsd"), &cost)) return;
-    if (!M.has_cost) { M.cost_at_join = cost; M.has_cost = true; }
-    M.cost_now = cost;
-}
-static void poll_done(void *owner, Request *req) {
-    (void)owner;
-    if (M.state == MEETING_OFF || !M.asking) return;
-    if (req->ok) {
-        const Json *events = json_get(req->result, "events");
-        read_cost(json_get(req->result, "session"));
-        for (size_t i = 0; i < json_count(events); i++) { int seq = json_int_or(json_get(json_at(events, i), "seq"), 0); if (seq > M.cursor) M.cursor = seq; }
-        meet_reply_feed(&M.scan, events, M.marker);
-        if (M.scan.done) { finish_ask(M.scan.reply.data ? M.scan.reply.data : ""); return; }
-    }
-    DWORD waited = GetTickCount() - M.asks[0].asked;
-    if (waited > ANSWER_TIMEOUT_MS) { finish_ask("The agent has not answered after ten minutes; it may still be working on it."); return; }
-    if (!M.progress_sent && waited > PROGRESS_AFTER_MS) {
-        M.progress_sent = true;
-        send_owned(meet_progress_event(M.model, M.asks[0].id, "The agent is still working on it. Nothing has been answered yet."));
-    }
-    SetTimer(M.hwnd, TIMER_POLL_AGENT, 1500, NULL);
-}
-static void poll_agent(void) {
-    if (M.req_poll) return;
-    Json *args = json_object();
-    json_set_str(args, "sessionId", M.session_id);
-    json_set_num(args, "since", M.cursor);
-    store_call("session", args, 0, NULL, poll_done, 0, &M.req_poll);
-}
-static void message_done(void *owner, Request *req) {
-    (void)owner;
-    if (M.state == MEETING_OFF || !M.asking) return;
-    if (!req->ok) {
+static void lookup_done(void *owner, Request *req) {
+    Lookup *l = owner;
+    size_t i = (size_t)req->tag;
+    if (M.state == MEETING_OFF || i >= l->count) return;
+    // Only the first call's answer is needed; a later one that failed is left out.
+    if (req->ok) l->answers[i] = json_clone(req->result);
+    else if (i == 0) {
         char *why = request_error_text(req);
-        char *answer = xstrfmt("I could not reach the agent: %s", why);
-        finish_ask(answer);
-        free(answer); free(why);
+        lookup_answer(l, meet_tool_error(why));
+        free(why);
         return;
     }
-    poll_agent();
+    if (++l->done < l->count) return;
+    lookup_answer(l, meet_tool_summary(l->tool, l->args, M.repo, (const Json *const *)l->answers, l->count));
 }
-static void next_ask(void) {
-    if (M.asking || !M.ask_count || M.state != MEETING_LIVE) return;
-    M.asking = true; M.progress_sent = false;
-    M.number++;
-    free(M.marker); M.marker = meet_agent_marker(M.number);
-    meet_reply_init(&M.scan);
-    char *transcript = log_tail(4000);
-    char *text = meet_agent_message(M.number, &M.persona, M.asks[0].request, transcript);
-    free(transcript);
-    Json *args = json_object();
-    json_set_str(args, "sessionId", M.session_id);
-    json_set_str(args, "text", text);
-    free(text);
+static void on_tool(MeetEvent *e) {
     M.record.requests++;
-    store_call("message", args, 0, NULL, message_done, 0, &M.req_message);
+    Lookup *l = xcalloc(1, sizeof *l);
+    l->id = e->id; e->id = NULL;
+    l->asked = GetTickCount();
+    l->args = json_parsez(e->request ? e->request : "{}");
+    if (!l->args) l->args = json_object();
+    M.lookups = xrealloc(M.lookups, (M.lookup_count + 1) * sizeof *M.lookups);
+    M.lookups[M.lookup_count++] = l;
+    char *refusal = NULL;
+    if (!meet_tool_find(e->text, &l->tool)) { lookup_answer(l, meet_tool_error("No such tool: only the project's read-only tools are offered.")); return; }
+    l->count = meet_tool_calls(l->tool, l->args, M.repo, l->calls, &refusal);
+    if (!l->count) { lookup_answer(l, refusal ? refusal : meet_tool_error("Nothing to read.")); return; }
+    if (!store_supports(l->calls[0].op)) { lookup_answer(l, meet_tool_error("This device's token cannot read that on the server.")); return; }
+    for (size_t i = 0; i < l->count; i++) {
+        // The call's arguments go to the request; the plan keeps none.
+        Json *args = l->calls[i].args; l->calls[i].args = NULL;
+        if (!store_supports(l->calls[i].op)) { json_free(args); l->done++; continue; }
+        store_call(l->calls[i].op, args, 0, l, lookup_done, (int)i, &l->reqs[i]);
+    }
     changed();
 }
 
@@ -509,28 +477,20 @@ static void finish(const char *error);
 static void on_event(MeetEvent *e) {
     if (e->has_usage) meet_usage_merge(&M.record.usage, &e->usage, e->usage_snapshot);
     switch (e->kind) {
-    case MEET_EV_HEARD: log_add(MEET_SPEAKER_MEETING, e->text); break;
     case MEET_EV_HEARD_TURN: {
         char *spaced = xstrfmt(" %s", e->text);
         log_add(MEET_SPEAKER_MEETING, spaced);
         free(spaced);
-        if (!M.muted && meet_should_answer(&M.persona, e->text)) send_owned(meet_answer_now_event(M.model));
+        if (!M.muted && meet_should_answer(&M.persona, e->text)) send_owned(meet_answer_now_event());
         break;
     }
     case MEET_EV_SAID: log_add(MEET_SPEAKER_ASSISTANT, e->text); break;
-    case MEET_EV_ASK:
-        M.asks = xrealloc(M.asks, (M.ask_count + 1) * sizeof *M.asks);
-        M.asks[M.ask_count].id = e->id; M.asks[M.ask_count].request = e->request; M.asks[M.ask_count].asked = GetTickCount();
-        e->id = e->request = NULL;
-        M.ask_count++;
-        next_ask();
-        break;
+    case MEET_EV_TOOL: on_tool(e); break;
     case MEET_EV_ERROR:
         // Before the session took its setup an error ends it; later ones (a refused command) only show.
         if (!M.ready) finish(e->text);
         else set_string(&M.error, e->text);
         break;
-    case MEET_EV_CLOSED: if (M.state == MEETING_LEAVING) finish(NULL); break;
     default: break;
     }
     changed();
@@ -542,7 +502,7 @@ static void on_ready(void) {
     M.joined_tick = GetTickCount();
     M.sending = 1;
     M.sender = (HANDLE)_beginthreadex(NULL, 0, sender_main, NULL, 0, NULL);
-    send_owned(meet_greeting_event(M.model, &M.persona));
+    send_owned(meet_greeting_event(&M.persona));
     SetTimer(M.hwnd, TIMER_TICK, 1000, NULL);
     changed();
 }
@@ -572,9 +532,7 @@ static LRESULT CALLBACK meeting_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         return 0;
     }
     case WM_TIMER:
-        if (wp == TIMER_POLL_AGENT) { KillTimer(hwnd, TIMER_POLL_AGENT); if (M.asking) poll_agent(); }
-        else if (wp == TIMER_TICK) { if (++M.ticks % KEEP_ALIVE_SECONDS == 0) voice_keep_alive(); changed(); }
-        else if (wp == TIMER_CLOSE_WAIT) { KillTimer(hwnd, TIMER_CLOSE_WAIT); if (M.state == MEETING_LEAVING) finish(NULL); }
+        if (wp == TIMER_TICK) { if (++M.ticks % KEEP_ALIVE_SECONDS == 0) voice_keep_alive(); changed(); }
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
@@ -600,7 +558,7 @@ static void finish(const char *error) {
     WebSocket *ws = M.ws;
     M.ws = NULL;
     LeaveCriticalSection(&M.lock);
-    KillTimer(M.hwnd, TIMER_POLL_AGENT); KillTimer(M.hwnd, TIMER_TICK); KillTimer(M.hwnd, TIMER_CLOSE_WAIT);
+    KillTimer(M.hwnd, TIMER_TICK);
     InterlockedExchange(&M.sending, 0);
     if (M.sender) { WaitForSingleObject(M.sender, INFINITE); CloseHandle(M.sender); M.sender = NULL; }
     // A connected reader ends as its socket is cut, and is waited for, since it plays into the devices; one still
@@ -612,17 +570,13 @@ static void finish(const char *error) {
     M.record.usage.spoken_chars = voice_chars();
     voice_stop();
     meet_audio_stop(M.audio); M.audio = NULL;
-    request_cancel(&M.req_message); request_cancel(&M.req_poll);
+    for (size_t i = 0; i < M.lookup_count; i++) lookup_free(M.lookups[i]);
+    free(M.lookups); M.lookups = NULL; M.lookup_count = 0;
     if (was_live) {
         M.record.seconds = (GetTickCount() - M.joined_tick) / 1000.0;
-        M.record.agent_cost = M.has_cost && M.cost_now > M.cost_at_join ? M.cost_now - M.cost_at_join : 0;
         history_append(&M.record);
     }
-    for (size_t i = 0; i < M.ask_count; i++) { free(M.asks[i].id); free(M.asks[i].request); }
-    free(M.asks); M.asks = NULL; M.ask_count = 0; M.asking = false;
-    meet_reply_free(&M.scan);
-    free(M.marker); M.marker = NULL;
-    free(M.session_id); M.session_id = NULL; free(M.title); M.title = NULL; free(M.source); M.source = NULL;
+    free(M.repo); M.repo = NULL; free(M.title); M.title = NULL; free(M.source); M.source = NULL;
     free(M.error); M.error = NULL;
     meeting_settings_free(&M.settings);
     memset(&M.persona, 0, sizeof M.persona);
@@ -634,7 +588,7 @@ static void finish(const char *error) {
     }
 }
 
-bool meeting_join(const Session *session, MeetModel model, unsigned pid, const char *source) {
+bool meeting_join(const Project *project, unsigned pid, const char *source) {
     if (M.state != MEETING_OFF) { app_alert("Meeting assistant", "A meeting is already running. Leave it first."); return false; }
     bool failed = false;
     char *key = meeting_key_read(MEETING_KEY_OPENAI, &failed);
@@ -647,9 +601,9 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
     ensure_window();
     char *error = NULL, *note = NULL;
     meeting_settings_load(&M.settings);
-    // GPT-Realtime speaks with the user's ElevenLabs voice when one is set.
+    // It speaks with the user's ElevenLabs voice when one is set.
     char *eleven_key = NULL;
-    if (model == MEET_REALTIME && *M.settings.eleven_voice) {
+    if (*M.settings.eleven_voice) {
         eleven_key = meeting_key_read(MEETING_KEY_ELEVENLABS, &failed);
         if (!eleven_key || !*eleven_key) {
             free(eleven_key); SecureZeroMemory(key, strlen(key)); free(key); meeting_settings_free(&M.settings);
@@ -666,71 +620,111 @@ bool meeting_join(const Session *session, MeetModel model, unsigned pid, const c
         return false;
     }
     memset(&M.record, 0, sizeof M.record);
-    M.model = model; M.record.model = model; M.record.started = (double)time(NULL);
+    M.record.model = MEET_REALTIME; M.record.started = (double)time(NULL);
     M.audio = audio; M.muted = false; M.ready = false;
-    M.session_id = xstrdup(session_id(session));
-    M.title = xstrdup(session_display_title(session));
+    M.repo = xstrdup(project->repo);
+    const char *title = project_title(project);
+    M.title = str_eq(title, project->repo) ? xstrdup(title) : xstrfmt("%s (%s)", title, project->repo);
     M.source = xstrdup(source ? source : "every app");
-    M.has_cost = false; read_cost(session->raw);
-    M.number = 0;
     M.persona = (MeetPersona){ M.settings.name, M.settings.voice, M.settings.wake_words, M.title, M.settings.introduce, M.settings.independent,
                                eleven_key ? M.settings.eleven_voice : NULL };
     M.ticks = 0;
     meet_log_free(&M.log); meet_log_init(&M.log);
-    // The agent's reply is looked for from where the saved transcript ends.
-    Transcript saved; transcript_init(&saved);
-    char *cache_key = xstrfmt("transcript:%s", M.session_id);
-    Json *lines = cache_lines(g_store.cache, cache_key);
-    transcript_append(&saved, lines);
-    M.cursor = saved.cursor;
-    json_free(lines); free(cache_key); transcript_free(&saved);
     M.state = MEETING_CONNECTING;
     set_string(&M.error, note);
     free(note);
     Connect *c = xcalloc(1, sizeof *c);
     c->key = key; c->gen = M.gen;
-    c->setup = meet_setup_event(model, &M.persona);
+    c->setup = meet_setup_event(&M.persona);
     if (eleven_key) voice_start(eleven_key, M.settings.eleven_voice, M.gen);
     M.reader = (HANDLE)_beginthreadex(NULL, 0, connect_main, c, 0, NULL);
     changed();
     return true;
 }
 
-void meeting_leave(void) {
-    if (M.state == MEETING_OFF || M.state == MEETING_LEAVING) return;
-    if (M.state == MEETING_CONNECTING || !M.ready) { finish(NULL); return; }
-    M.state = MEETING_LEAVING;
-    InterlockedExchange(&M.sending, 0);
-    meet_audio_set_muted(M.audio, true);
-    // GPT-Live finalizes its usage on session.close; Realtime has nothing to wait for.
-    char *close = meet_close_event(M.model);
-    if (close) { ws_send(M.ws, close); free(close); SetTimer(M.hwnd, TIMER_CLOSE_WAIT, 5000, NULL); changed(); }
-    else finish(NULL);
-}
+void meeting_leave(void) { if (M.state != MEETING_OFF) finish(NULL); }
 void meeting_shutdown(void) { if (M.state != MEETING_OFF) finish(NULL); }
 
 MeetingState meeting_state(void) { return M.state; }
-bool meeting_for(const char *session_id_) { return M.state != MEETING_OFF && str_eq(M.session_id, session_id_); }
-MeetModel meeting_model(void) { return M.model; }
+bool meeting_for(const char *repo) { return M.state != MEETING_OFF && str_eq(M.repo, repo); }
 void meeting_set_muted(bool muted) { M.muted = muted; if (M.audio) meet_audio_set_muted(M.audio, muted); changed(); }
 bool meeting_muted(void) { return M.muted; }
-void meeting_answer_now(void) { if (M.state == MEETING_LIVE) send_owned(meet_answer_now_event(M.model)); }
+void meeting_answer_now(void) { if (M.state == MEETING_LIVE) send_owned(meet_answer_now_event()); }
 
 char *meeting_status(void) {
     if (M.state == MEETING_OFF) return xstrdup("");
     Str s; str_init(&s);
-    str_appendf(&s, "\xF0\x9F\x8E\x99 %s%s \xC2\xB7 %s", meet_model_label(M.model), M.persona.eleven_voice ? " + ElevenLabs" : "", M.source);
+    str_appendf(&s, "\xF0\x9F\x8E\x99 %s%s \xC2\xB7 %s", meet_model_label(MEET_REALTIME), M.persona.eleven_voice ? " + ElevenLabs" : "", M.source);
     if (M.state == MEETING_CONNECTING) str_appendz(&s, " \xC2\xB7 connecting\xE2\x80\xA6");
     else if (M.state == MEETING_LEAVING) str_appendz(&s, " \xC2\xB7 leaving\xE2\x80\xA6");
     else {
         unsigned secs = (GetTickCount() - M.joined_tick) / 1000;
         MeetUsage usage = M.record.usage;
         usage.spoken_chars = voice_chars();
-        double cost = meet_usage_cost(M.model, &usage) + (M.has_cost && M.cost_now > M.cost_at_join ? M.cost_now - M.cost_at_join : 0);
-        str_appendf(&s, " \xC2\xB7 %u:%02u \xC2\xB7 $%.3f", secs / 60, secs % 60, cost);
-        str_appendz(&s, M.muted ? " \xC2\xB7 muted" : M.asking ? " \xC2\xB7 asking the agent\xE2\x80\xA6" : M.audio && meet_audio_speaking(M.audio) ? " \xC2\xB7 speaking" : " \xC2\xB7 listening");
+        str_appendf(&s, " \xC2\xB7 %u:%02u \xC2\xB7 $%.3f", secs / 60, secs % 60, meet_usage_cost(MEET_REALTIME, &usage));
+        str_appendz(&s, M.muted ? " \xC2\xB7 muted" : M.lookup_count ? " \xC2\xB7 looking it up\xE2\x80\xA6" : M.audio && meet_audio_speaking(M.audio) ? " \xC2\xB7 speaking" : " \xC2\xB7 listening");
     }
     if (M.error) str_appendf(&s, " \xC2\xB7 %s", M.error);
     return str_detach(&s);
 }
 char *meeting_transcript(void) { return M.hwnd ? log_tail(1 << 20) : xstrdup(""); }
+
+// MARK: - The menu
+
+enum { MEET_ITEM_JOIN = 100, MEET_ITEM_MUTE = 900, MEET_ITEM_ANSWER, MEET_ITEM_COPY, MEET_ITEM_LEAVE, MEET_ITEM_SETTINGS };
+static void append_menu(HMENU menu, UINT flags, UINT_PTR id, const char *text) { wchar_t *w = utf8_to_wide(text); AppendMenuW(menu, flags, id, w); free(w); }
+static void copy_text(HWND owner, const char *text) {
+    wchar_t *w = utf8_to_wide(text);
+    size_t bytes = (wcslen(w) + 1) * sizeof *w;
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (h && OpenClipboard(owner)) {
+        void *dst = GlobalLock(h);
+        if (dst) { memcpy(dst, w, bytes); GlobalUnlock(h); }
+        EmptyClipboard();
+        if (SetClipboardData(CF_UNICODETEXT, h)) h = NULL;
+        CloseClipboard();
+    }
+    if (h) GlobalFree(h);
+    free(w);
+}
+bool meeting_menu(const Project *project, HWND owner, POINT pt) {
+    HMENU menu = CreatePopupMenu();
+    MeetApp *apps = NULL; size_t app_count = 0;
+    if (M.state != MEETING_OFF) {
+        char *status = meeting_status();
+        append_menu(menu, MF_STRING | MF_GRAYED, 0, meeting_for(project->repo) ? status : "A meeting about another project is running");
+        free(status);
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        bool live = M.state == MEETING_LIVE;
+        append_menu(menu, MF_STRING | (M.muted ? MF_CHECKED : 0) | (live ? 0 : MF_GRAYED), MEET_ITEM_MUTE, "Mute the assistant");
+        append_menu(menu, MF_STRING | (live && !M.muted ? 0 : MF_GRAYED), MEET_ITEM_ANSWER, "Answer now");
+        append_menu(menu, MF_STRING, MEET_ITEM_COPY, "Copy the meeting transcript");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        append_menu(menu, MF_STRING, MEET_ITEM_LEAVE, "Leave the meeting");
+    } else {
+        apps = meet_apps_running(&app_count);
+        append_menu(menu, MF_STRING | MF_GRAYED, 0, "Join, listening to");
+        for (size_t i = 0; i < app_count && i < 50; i++) append_menu(menu, MF_STRING, MEET_ITEM_JOIN + 1 + i, apps[i].label);
+        append_menu(menu, MF_STRING, MEET_ITEM_JOIN, "Every app except Briareus");
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    append_menu(menu, MF_STRING, MEET_ITEM_SETTINGS, "Meeting assistant settings\xE2\x80\xA6");
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, owner, NULL);
+    DestroyMenu(menu);
+    switch (chosen) {
+    case 0: break;
+    case MEET_ITEM_MUTE: meeting_set_muted(!M.muted); break;
+    case MEET_ITEM_ANSWER: meeting_answer_now(); break;
+    case MEET_ITEM_COPY: { char *t = meeting_transcript(); copy_text(owner, t); free(t); break; }
+    case MEET_ITEM_LEAVE: meeting_leave(); break;
+    case MEET_ITEM_SETTINGS: app_show_detail(meeting_settings_screen_new()); break;
+    default:
+        if (chosen >= MEET_ITEM_JOIN && chosen <= MEET_ITEM_JOIN + 50) {
+            int i = chosen - MEET_ITEM_JOIN - 1;
+            bool app = i >= 0 && (size_t)i < app_count;
+            meeting_join(project, app ? apps[i].pid : 0, app ? apps[i].label : "every app");
+        }
+    }
+    meet_apps_free(apps, app_count);
+    return chosen != 0;
+}

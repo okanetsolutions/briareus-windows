@@ -1,7 +1,6 @@
 // ⚙ Settings → Meeting assistant: this computer's settings for the assistant that joins meetings from a conversation
 // (🎙 Meet): the OpenAI API key, kept in Windows Credential Manager, who it speaks for and how, the user's own
-// ElevenLabs voice for GPT-Realtime, whether the virtual microphone is installed, and the two models compared over every
-// meeting recorded here.
+// ElevenLabs voice, whether the virtual microphone is installed, and the time and cost of every meeting recorded here.
 #include "meet_audio.h"
 #include "meeting.h"
 #include "screens.h"
@@ -24,7 +23,7 @@ static const FieldDef FIELDS[F_COUNT] = {
 };
 enum { T_INDEPENDENT, T_INTRODUCE, T_COUNT };
 static const char *const TOGGLES[T_COUNT] = {
-    [T_INDEPENDENT] = "Act independently: take part on my behalf, answer what is asked of me, and let the agent make changes",
+    [T_INDEPENDENT] = "Act independently: take part on my behalf and answer what is asked of me",
     [T_INTRODUCE] = "Introduce itself as my AI assistant when it joins",
 };
 
@@ -146,7 +145,7 @@ static char *duration(double seconds) {
     unsigned s = (unsigned)(seconds + 0.5);
     return s >= 3600 ? xstrfmt("%uh %02um", s / 3600, s / 60 % 60) : xstrfmt("%um %02us", s / 60, s % 60);
 }
-/// One model's column of the comparison: what its meetings took and cost.
+/// One model's meetings: what they took and cost. GPT-Live 1's are those recorded before it was dropped.
 static void layout_model(MeetingForm *s, Doc *doc, int x, int w, MeetModel m) {
     const MeetTotals *t = &s->totals[m];
     int box = doc_box_begin(doc, x, w, px(12), theme.raise, theme.line, px(8));
@@ -157,41 +156,40 @@ static void layout_model(MeetingForm *s, Doc *doc, int x, int w, MeetModel m) {
     char *total = money(t->voice_cost + t->agent_cost);
     double minutes = t->seconds / 60;
     char *rate = minutes > 0 ? money((t->voice_cost + t->agent_cost) / minutes) : xstrdup("\xE2\x80\x94");
-    char *voice_rate = minutes > 0 ? money(t->voice_cost / minutes) : xstrdup("\xE2\x80\x94");
     char *answers = xstrfmt("%d of %d", t->answers, t->requests);
     char *wait = t->answers ? xstrfmt("%.1f s", t->answer_seconds / t->answers) : xstrdup("\xE2\x80\x94");
     doc_labeled(doc, ix, iw, "Meetings", count, theme.ink);
     doc_labeled(doc, ix, iw, "Time in meetings", time_, theme.ink);
-    doc_labeled(doc, ix, iw, "OpenAI voice", voice, theme.ink);
-    doc_labeled(doc, ix, iw, "Voice per minute", voice_rate, theme.ink);
-    doc_labeled(doc, ix, iw, "Briareus agent", agent, theme.ink);
+    doc_labeled(doc, ix, iw, "Voice", voice, theme.ink);
+    // Meetings before the tools asked the conversation's agent, which cost apart.
+    if (t->agent_cost > 0) doc_labeled(doc, ix, iw, "Conversation agent", agent, theme.ink);
     doc_labeled(doc, ix, iw, "Total", total, theme.ink);
-    doc_labeled(doc, ix, iw, "Total per minute", rate, theme.ink);
-    doc_labeled(doc, ix, iw, "Agent questions answered", answers, theme.ink);
-    doc_labeled(doc, ix, iw, "Average answer time", wait, theme.ink);
-    free(count); free(time_); free(voice); free(agent); free(total); free(rate); free(voice_rate); free(answers); free(wait);
+    doc_labeled(doc, ix, iw, "Per minute", rate, theme.ink);
+    doc_labeled(doc, ix, iw, m == MEET_LIVE ? "Agent questions answered" : "Project lookups answered", answers, theme.ink);
+    doc_labeled(doc, ix, iw, m == MEET_LIVE ? "Average answer time" : "Average lookup time", wait, theme.ink);
+    free(count); free(time_); free(voice); free(agent); free(total); free(rate); free(answers); free(wait);
     doc_box_end(doc, box, px(12));
 }
-static void layout_compare(MeetingForm *s, Doc *doc, int x, int w) {
-    heading(doc, x, w, "Compare the models");
-    note(doc, x, w, "Every meeting joined from this computer, from joining to leaving. OpenAI voice is what OpenAI reported using, at the "
-                    "listed rates: GPT-Live 1 at $0.05 a minute; GPT-Realtime 2.1 mini by its text and audio tokens plus $0.0045 a "
-                    "minute of transcription. Briareus agent is what the conversation's agent cost over the meeting.");
+static void layout_history(MeetingForm *s, Doc *doc, int x, int w) {
+    heading(doc, x, w, "Meetings on this computer");
+    note(doc, x, w, "From joining to leaving. Voice is what OpenAI reported using at its listed rates (GPT-Realtime 2.1 mini's text and "
+                    "audio tokens plus $0.0045 a minute of transcription), plus ElevenLabs' characters at $0.04 per 1,000.");
     int gap = px(14);
-    if (w >= px(560)) {
+    // GPT-Live 1's box only while meetings recorded with it remain.
+    bool live = s->totals[MEET_LIVE].meetings > 0;
+    if (live && w >= px(560)) {
         int half = (w - gap) / 2, top = doc->y;
-        layout_model(s, doc, x, half, MEET_LIVE);
+        layout_model(s, doc, x, half, MEET_REALTIME);
         int bottom = doc->y;
         doc->y = top;
-        layout_model(s, doc, x + half + gap, half, MEET_REALTIME);
+        layout_model(s, doc, x + half + gap, half, MEET_LIVE);
         if (doc->y < bottom) doc->y = bottom;
     } else {
-        layout_model(s, doc, x, w, MEET_LIVE);
-        doc_space(doc, gap);
         layout_model(s, doc, x, w, MEET_REALTIME);
+        if (live) { doc_space(doc, gap); layout_model(s, doc, x, w, MEET_LIVE); }
     }
     doc_space(doc, px(12));
-    bool any = s->totals[MEET_LIVE].meetings || s->totals[MEET_REALTIME].meetings;
+    bool any = live || s->totals[MEET_REALTIME].meetings;
     doc_button(doc, x, 0, "Clear the history", BUTTON_BORDERED, ACT_CLEAR_HISTORY, 0, any);
 }
 
@@ -205,19 +203,19 @@ static void form_layout(Screen *base, Doc *doc) {
         else doc_notice_box(doc, x, w, s->message);
         doc_space(doc, px(14));
     }
-    note(doc, x, w, "In a conversation, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app, "
-                    "speaks through a virtual microphone, and asks the conversation's agent whatever is about the project.");
+    note(doc, x, w, "On a project, \xF0\x9F\x8E\x99 Meet joins your meeting: the assistant hears the meeting app, "
+                    "speaks through a virtual microphone, and looks up the project's conversations, pull requests, findings and issues. It only reads: it never starts, messages, merges or closes anything.");
     field(s, doc, x, w, F_KEY);
     field_pair(s, doc, x, w, F_NAME, F_VOICE);
     field(s, doc, x, w, F_WAKE);
     check(s, doc, x, w, T_INDEPENDENT);
     check(s, doc, x, w, T_INTRODUCE);
     note(doc, x, w, s->toggles[T_INDEPENDENT]
-        ? "Acting independently, it decides for itself when to speak, and anyone in the meeting can have the agent change code. It still says it is an AI if asked."
-        : "Otherwise it speaks only when you or it are addressed, and asks the agent for answers only, since anyone in the meeting can talk to it.");
+        ? "Acting independently, it decides for itself when to speak. It still says it is an AI if sincerely asked."
+        : "Otherwise it speaks only when you or it are addressed by a wake word, or when you choose \xE2\x80\x9C" "Answer now\xE2\x80\x9D.");
     heading(doc, x, w, "Your voice");
-    note(doc, x, w, "With an ElevenLabs voice ID, GPT-Realtime 2.1 mini speaks in that voice: it answers in text, which Eleven v4 Turbo "
-                    "says as it is written, and it speaks as you. ElevenLabs costs $0.04 per 1,000 characters said. GPT-Live 1 keeps the OpenAI voice.");
+    note(doc, x, w, "With an ElevenLabs voice ID, the assistant speaks in that voice: GPT-Realtime 2.1 mini answers in text, which Eleven v4 Turbo "
+                    "says as it is written, and it speaks as you. ElevenLabs costs $0.04 per 1,000 characters said. Without one it uses the OpenAI voice above.");
     field_pair(s, doc, x, w, F_ELEVEN_KEY, F_ELEVEN_VOICE);
     if (s->has_eleven_key) { doc_button(doc, x, 0, "Remove the ElevenLabs key", BUTTON_BORDERED, ACT_REMOVE_ELEVEN_KEY, 0, true); doc_space(doc, px(10)); }
     heading(doc, x, w, "Virtual microphone");
@@ -230,7 +228,7 @@ static void form_layout(Screen *base, Doc *doc) {
         doc_space(doc, px(8));
         doc_button(doc, x, 0, "Check again", BUTTON_BORDERED, ACT_CHECK_CABLE, 0, true);
     }
-    layout_compare(s, doc, x, w);
+    layout_history(s, doc, x, w);
     doc_space(doc, px(40));
 }
 
