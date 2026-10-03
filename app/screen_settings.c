@@ -3,6 +3,7 @@
 // sections as tabs, or an SSH server's, a Forge account's or a Slack workspace's on one tab, saved through
 // /settings/projects, /settings/ssh/servers, /settings/forge/accounts and /settings/slack/workspaces. The provider form is screen_provider_settings.c and a
 // database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
+#include "meeting.h"
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -25,11 +26,12 @@ static double ssh_row_id(const Json *row) { double id; return json_num(json_get(
 static char *forge_form_id(double id) { return id > 0 ? xstrfmt("settings-forge:%.0f", id) : xstrdup("settings-forge:new"); }
 /// A Slack workspace's id is also the time it was added in milliseconds.
 static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:%.0f", id) : xstrdup("settings-slack:new"); }
-/// A settings form in the detail pane: a project's, a provider's, a database server's, an SSH server's, a Forge account's or
-/// a Slack workspace's.
+/// A settings form in the detail pane: a project's, a provider's, a database server's, an SSH server's, a Forge account's,
+/// a Slack workspace's or the meeting assistant's.
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
-                  || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:"));
+                  || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:")
+                  || str_eq(id, "settings-meeting"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -48,7 +50,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -487,6 +489,15 @@ static void settings_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(8));
     doc_custom(doc, 0, w, px(24), paint_back, NULL, NULL, ACT_BACK, 0);
     doc_space(doc, px(16));
+    // This computer's own settings come first: they need no Admin token.
+    section_title(doc, w, "This computer", NULL, 0);
+    ProjectRowData *meeting = xcalloc(1, sizeof *meeting);
+    meeting->label = xstrdup("\xF0\x9F\x8E\x99 Meeting assistant");
+    meeting->repo = xstrdup(meeting_has_key() ? "OpenAI API key saved" : "add an OpenAI API key");
+    meeting->enabled = meeting_has_key();
+    meeting->selected = str_eq(selected, "settings-meeting");
+    doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
+    doc_space(doc, px(16));
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); doc_space(doc, px(8)); return; }
@@ -638,6 +649,7 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_FORGE: forge_open_row(s, (size_t)arg); break;
     case ACT_NEW_SLACK: app_show_detail(slack_settings_screen_new(NULL, json_get(s->slack, "defaults"))); break;
     case ACT_OPEN_SLACK: slack_open_row(s, (size_t)arg); break;
+    case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {

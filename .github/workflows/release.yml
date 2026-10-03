@@ -51,7 +51,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make zip
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make zip curl
       - name: Build the app and run the core tests
         run: mingw32-make
       - name: Strip and package
