@@ -201,15 +201,12 @@ static void confirm_and_mutate(ConversationScreen *s, const char *action) {
     if (str_eq(action, "delete")) title = "Permanently delete this conversation and its transcript?";
     else if (str_eq(action, "cancel")) title = "Stop the running agent?";
     else if (str_eq(action, "close")) title = "Close this conversation?";
-    else if (str_eq(action, "review_loop")) title = "Turn on the review loop? Each push gets a paid review round, and may start one now.";
     else title = "Reopen this conversation?";
     s->dialog_open = true;
     bool ok = app_confirm(title, NULL, "Confirm", str_eq(action, "delete") || str_eq(action, "cancel"));
     s->dialog_open = false;
     if (!ok) return;
-    Json *extra = NULL;
-    if (str_eq(action, "review_loop")) { extra = json_object(); json_set_bool(extra, "on", true); }
-    mutate(s, action, extra);
+    mutate(s, action, NULL);
 }
 
 // MARK: - Voice
@@ -708,7 +705,7 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_BROWSER: browser_open(ss); break;
     case MENU_WEBHOOK: app_push_detail(webhook_screen_new(ss)); break;
     case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
-    case MENU_LOOP_ON: confirm_and_mutate(s, "review_loop"); break;
+    case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", true); mutate(s, "review_loop", extra); break; }
     case MENU_RENAME: {
         s->renaming = true; s->dialog_open = true;
         char *title = dialog_rename(app_window(), session_display_title(ss));
