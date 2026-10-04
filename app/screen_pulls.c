@@ -941,7 +941,8 @@ static void issue_projects_next(PullScreen *s) {
 static void issue_projects_load(PullScreen *s) {
     if (s->issues_read || s->req_issue || !store_supports("issue")) return;
     int numbers[LINKED_ISSUES_MAX]; size_t n = linked_issues(s, numbers, LINKED_ISSUES_MAX);
-    if (!n) return;
+    // A pull request that no longer links any issue drops the projects it showed.
+    if (!n) { if (s->issue_projects) { json_free(s->issue_projects); s->issue_projects = NULL; pane_relayout(s->base.pane); } return; }
     if (!s->issue_projects) {
         Json *saved_all = json_array();
         for (size_t i = 0; i < n; i++) {
