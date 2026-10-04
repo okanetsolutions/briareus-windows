@@ -50,7 +50,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_MOVE_UP, ACT_MOVE_DOWN };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -92,16 +92,35 @@ static void paint_back(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, "\xE2\x86\x90 Back to sessions", &t, FONT_CAPTION, hovered ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
-typedef struct { char *label, *repo; bool enabled, db, selected; } ProjectRowData;
+typedef struct { char *label, *repo; bool enabled, db, selected, movable; } ProjectRowData;   // movable: ↑ and ↓ lie over it
 static void project_row_free(void *p) { ProjectRowData *d = p; free(d->label); free(d->repo); free(d); }
+/// A project row's ↑ or ↓, laid over the right end of its first line; `row` is the row's item.
+typedef struct { int row; bool up, enabled, selected; } MoveData;
+static void paint_move(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
+/// Whether the mouse is on the row or on one of its arrows.
+static bool row_hovered(Doc *doc, Item *it) {
+    if (doc_item_hovered(doc, it)) return true;
+    Item *h = doc->hover >= 0 ? doc_item(doc, doc->hover) : NULL;
+    return h && h->paint == paint_move && doc_item(doc, ((MoveData *)h->data)->row) == it;
+}
+static void paint_move(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    MoveData *d = it->data;
+    // Shown on the row under the mouse and on the open one, as the dashboard's row actions are.
+    if (!d->selected && !row_hovered(doc, doc_item(doc, d->row))) return;
+    bool hovered = d->enabled && doc_item_hovered(doc, it);
+    fill_round_rect(cv, rc, px(4), hovered ? theme.sidebar : theme.raise, hovered ? theme.accent_dim : theme.raise);
+    draw_glyph(cv, d->up ? 0xE70E : 0xE70D, rc, FONT_ICON_SMALL, !d->enabled ? blend(theme.muted, theme.raise, 0.5) : hovered ? theme.ink : theme.muted);
+}
 static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ProjectRowData *d = it->data;
-    bool hovered = doc_item_hovered(doc, it);
+    bool hovered = row_hovered(doc, it);
     if (hovered || d->selected) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
     int x = rc->left + px(8), top = rc->top + px(6), lh = px(22);
     // `.dot.idle` for a project sessions can start on, the plain grey dot for one switched off.
     draw_status_dot(cv, x + px(3), top + lh / 2, d->enabled ? "idle" : "");
-    RECT t = { x + px(7) + px(7), top, rc->right - px(8), top + lh };
+    // The label stops short of the arrows while they show.
+    int label_right = d->movable && (hovered || d->selected) ? rc->right - px(6) - px(22) * 2 - px(2) - px(6) : rc->right - px(8);
+    RECT t = { x + px(7) + px(7), top, label_right, top + lh };
     draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     int y2 = top + lh, right = rc->right - px(8);
     if (d->db) {
@@ -353,6 +372,7 @@ static void settings_move(SettingsScreen *s, size_t index, int delta) {
     }
     Json *args = json_object(); json_object_set(args, "ids", ids);
     store_call("order_projects", args, 0, s, order_done, 0, &s->req_order);
+    pane_relayout(s->base.pane);   // the arrows are off until the server answers
 }
 
 static void settings_destroy(Screen *base) {
@@ -577,9 +597,27 @@ static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *sel
     if (!s->providers_loaded) doc_loading(doc, 0, w, "Loading providers\xE2\x80\xA6");
     doc_space(doc, px(8));
 }
+/// The ↑ and ↓ that move project `i` of `n` up and down the list, at the right end of its row's first line.
+static void layout_move_arrows(SettingsScreen *s, Doc *doc, int row, size_t i, size_t n, bool selected) {
+    RECT rc = doc_item(doc, row)->rc;
+    int size = px(22), right = rc.right - px(6), top = rc.top + px(6);
+    for (int k = 0; k < 2; k++) {
+        bool up = k == 0, enabled = !s->req_order && (up ? i > 0 : i + 1 < n);
+        RECT b = { right - (2 - k) * size - (1 - k) * px(2), top, right - (1 - k) * (size + px(2)), top + size };
+        Item *it = doc_item(doc, doc_add(doc, &b, paint_move));
+        MoveData *d = xcalloc(1, sizeof *d);
+        d->row = row; d->up = up; d->enabled = enabled; d->selected = selected;
+        it->data = d; it->free_data = free;
+        // A disabled arrow still takes the click, so the end of the list does not open the project under it.
+        it->action = enabled ? (up ? ACT_MOVE_UP : ACT_MOVE_DOWN) : ACTION_TIP; it->arg = (intptr_t)i; it->hand = enabled;
+        it->tip = xstrdup(up ? "Move up" : "Move down");
+    }
+}
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     const Json *rows = settings_rows(s);
+    // The order is the dashboard sidebar's and the composer's, so it is moved from here.
+    bool movable = json_count(rows) > 1 && store_supports("order_projects");
     for (size_t i = 0; i < json_count(rows); i++) {
         const Json *row = json_at(rows, i);
         ProjectRowData *d = xcalloc(1, sizeof *d);
@@ -591,7 +629,10 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         char *id = form_id(row_id(row));
         d->selected = str_eq(selected, id);
         free(id);
-        doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, d, project_row_free, ACT_OPEN_PROJECT, (intptr_t)i);
+        d->movable = movable;
+        bool opened = d->selected;
+        int item = doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, d, project_row_free, ACT_OPEN_PROJECT, (intptr_t)i);
+        if (movable) layout_move_arrows(s, doc, item, i, json_count(rows), opened);
     }
     // A project being added shows as its own row until it is saved.
     if (str_eq(selected, "settings-project:new")) {
@@ -650,6 +691,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_NEW_SLACK: app_show_detail(slack_settings_screen_new(NULL, json_get(s->slack, "defaults"))); break;
     case ACT_OPEN_SLACK: slack_open_row(s, (size_t)arg); break;
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
+    case ACT_MOVE_UP: settings_move(s, (size_t)arg, -1); break;
+    case ACT_MOVE_DOWN: settings_move(s, (size_t)arg, 1); break;
     }
 }
 static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
