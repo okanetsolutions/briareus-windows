@@ -162,7 +162,8 @@ static void mutate_done(void *owner, Request *req) {
     const char *name = req->operation;
     if (!req->ok) {
         request_error_into(&s->write_error, req);
-        s->uncertain = true;
+        // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable.
+        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
     }
@@ -704,8 +705,8 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
     case MENU_WEBHOOK: app_push_detail(webhook_screen_new(ss)); break;
-    case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
-    case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", true); mutate(s, "review_loop", extra); break; }
+    case MENU_LOOP_OFF:
+    case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); mutate(s, "review_loop", extra); break; }
     case MENU_RENAME: {
         s->renaming = true; s->dialog_open = true;
         char *title = dialog_rename(app_window(), session_display_title(ss));
@@ -921,10 +922,13 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
             if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
-    // `#composer-note`: what a message sent now does.
+    // `#composer-note`: what a message sent now does; otherwise what the loop chip costs, since it asks nothing first.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
-                      : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files" : "";
+                      : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files"
+                      : !chip_shown(s, CHIP_LOOP) ? ""
+                      : session_review_loop_on(ss) ? "Review loop: each push gets a paid review round; turning it off does not stop one already running"
+                      : "Turning on the review loop may start a paid review round now, then one per push";
     draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 static void conversation_footer_click(Screen *base, POINT pt) {
