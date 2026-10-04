@@ -12,7 +12,7 @@
 
 enum {
     ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
-    ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_FINDING_LINK,
+    ACT_REFRESH_OUTCOME, ACT_DISMISS_ERROR, ACT_REOPEN, ACT_FINDING_LINK,
     ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
@@ -162,8 +162,10 @@ static void mutate_done(void *owner, Request *req) {
     const char *name = req->operation;
     if (!req->ok) {
         request_error_into(&s->write_error, req);
-        // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable.
+        // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable; it is read again, since a
+        // refusal often means what it shows is out of date.
         if (!api_error_is_refusal(&req->error)) s->uncertain = true;
+        else refresh(s, false);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
     }
@@ -526,10 +528,16 @@ static void conversation_layout(Screen *base, Doc *doc) {
         int box = doc_box_begin(doc, x, w, px(10), blend(theme.danger, theme.canvas, 0.15), theme.danger, px(8));
         doc_item(doc, box)->hover_fill = false;
         doc_notice(doc, x + px(12), w - px(24), s->write_error);
-        doc_space(doc, px(4));
-        doc_text(doc, x + px(12), w - px(24), "The action may have completed. Check the latest conversation before trying again.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-        doc_space(doc, px(8));
-        doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, ACT_REFRESH_OUTCOME, 0, !s->loading && !s->busy);
+        // Only a failure that is not a refusal leaves the outcome unknown; a refusal changed nothing.
+        if (s->uncertain) {
+            doc_space(doc, px(4));
+            doc_text(doc, x + px(12), w - px(24), "The action may have completed. Check the latest conversation before trying again.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+            doc_space(doc, px(8));
+            doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, ACT_REFRESH_OUTCOME, 0, !s->loading && !s->busy);
+        } else {
+            doc_space(doc, px(8));
+            doc_button(doc, x + px(12), 0, "Dismiss", BUTTON_BORDERED, ACT_DISMISS_ERROR, 0, true);
+        }
         doc_box_end(doc, box, px(10));
         doc_space(doc, px(12));
     }
@@ -760,6 +768,7 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
         break;
     }
     case ACT_REFRESH_OUTCOME: s->uncertain = false; set_string(&s->write_error, NULL); refresh(s, false); pane_relayout(base->pane); break;
+    case ACT_DISMISS_ERROR: set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_REOPEN: confirm_and_mutate(s, "reopen"); break;
     }
 }
@@ -794,6 +803,17 @@ static bool chip_shown(ConversationScreen *s, int chip) {
     return shown;
 }
 static bool chip_live(int chip) { return chip == CHIP_LOOP; }
+/// What the loop chip costs, since it asks nothing first: under the composer whatever else its note says.
+static const char *loop_cost(ConversationScreen *s) {
+    if (!chip_shown(s, CHIP_LOOP)) return NULL;
+    return session_review_loop_on(session(s)) ? "Review loop: a paid review round per push; turning it off won't stop a running round"
+                                              : "Turning on the review loop may start a paid review round now, then one per push";
+}
+/// The cost wraps rather than ellipsizes, so a narrow pane still shows all of it.
+static int loop_cost_height(ConversationScreen *s, Canvas *cv, int width) {
+    const char *cost = loop_cost(s);
+    return cost ? measure_text(cv, cost, width, FONT_FOOTNOTE, DT_CENTER | DT_WORDBREAK) : 0;
+}
 static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (int c = 0; c < CHIP_COUNT; c++) {
@@ -822,7 +842,8 @@ static int conversation_footer_height(Screen *base, int width) {
     int chips = chips_layout(s, cv, inner, NULL);
     int files = can_message(s) ? attach_list_height(s->files, cv, inner - px(24)) : 0;
     int box = can_message(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
-    int h = px(8) + chips + px(8) + box + px(6) + px(16) + px(14);
+    int cost = can_message(s) ? loop_cost_height(s, cv, inner) : 0;
+    int h = px(8) + chips + px(8) + box + px(6) + px(16) + cost + px(14);
     return h;
 }
 static void conversation_footer_layout(Screen *base, const RECT *rc) {
@@ -922,14 +943,14 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
             if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
-    // `#composer-note`: what a message sent now does; otherwise what the loop chip costs, since it asks nothing first.
+    // `#composer-note`: what a message sent now does, then what the loop chip costs; the cost moves up when there is none.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
                       : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files"
-                      : !chip_shown(s, CHIP_LOOP) ? ""
-                      : session_review_loop_on(ss) ? "Review loop: each push gets a paid review round; turning it off does not stop one already running"
-                      : "Turning on the review loop may start a paid review round now, then one per push";
-    draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                      : "";
+    if (*text) { draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); note.top = note.bottom; }
+    const char *cost = loop_cost(s);
+    if (cost) { RECT cr = { note.left, note.top, note.right, note.top + loop_cost_height(s, cv, width) }; draw_text(cv, cost, &cr, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
 }
 static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
