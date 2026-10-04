@@ -313,6 +313,21 @@ static void test_request_error_helpers(void) {
     api_error_clear(&req.error);
 }
 
+static void test_only_a_refusal_leaves_the_outcome_known(void) {
+    Request req; memset(&req, 0, sizeof req);
+    api_error_init(&req.error);
+    req.ok = true;
+    CHECK(!request_outcome_unknown(&req));
+    req.ok = false;
+    api_error_set(&req.error, API_HTTP, 409, "Draining", -1);
+    CHECK(!request_outcome_unknown(&req));
+    api_error_set(&req.error, API_HTTP, 503, NULL, -1);
+    CHECK(request_outcome_unknown(&req));
+    api_error_set(&req.error, API_NETWORK, 0, "Connection reset", -1);
+    CHECK(request_outcome_unknown(&req));
+    api_error_clear(&req.error);
+}
+
 void app_store_tests(void) {
     test_run("poll delay is the base without failures", test_poll_delay_is_the_base_without_failures);
     test_run("poll delay doubles per failure", test_poll_delay_doubles_per_failure);
@@ -332,4 +347,5 @@ void app_store_tests(void) {
     test_run("a cancelled request is never answered", test_a_cancelled_request_is_never_answered);
     test_run("a new request in the slot replaces the old one", test_a_new_request_in_the_slot_replaces_the_old_one);
     test_run("request error helpers", test_request_error_helpers);
+    test_run("only a refusal leaves the outcome known", test_only_a_refusal_leaves_the_outcome_known);
 }

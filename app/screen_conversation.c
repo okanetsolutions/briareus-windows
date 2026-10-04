@@ -26,12 +26,14 @@ typedef struct {
     Session initial, snapshot; bool has_snapshot;
     Transcript transcript;
     bool loaded, restored, unsaved, retimed;
-    bool busy, loading, uncertain, pending_full, renaming, dialog_open;
+    bool busy, loading, uncertain, pending_full, pending_refresh, renaming, dialog_open;
+    bool reloading;   // a mutation landed and the session it changed is not read yet
     char *error, *write_error;
     char *pending_mutation;   // the operation a confirmation is up for
     Request *req_refresh, *req_mutate;
     Poller poller;
     HWND composer; int composer_lines; RECT composer_rc;
+    const char *cost_text; int cost_width, cost_unit, cost_h;   // the loop cost last measured
     bool composer_focused_once;
     int *expanded; size_t expanded_count;   // tool rows opened
     char **decisions; size_t decision_count;  // triage picks, "key=decision"
@@ -125,11 +127,13 @@ static void refresh_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
     pane_header_changed(s->base.pane);
-    if (s->pending_full) { s->pending_full = false; refresh(s, true); }
+    // A read asked for while this one was out goes now; the session a mutation changed is current once it lands.
+    if (s->pending_full || s->pending_refresh) { bool f = s->pending_full; s->pending_full = s->pending_refresh = false; refresh(s, f); }
+    else s->reloading = false;
 }
 static void refresh(ConversationScreen *s, bool full) {
     // A poll already reading must not swallow a refresh, which waits its turn.
-    if (s->loading) { if (full) s->pending_full = true; return; }
+    if (s->loading) { if (full) s->pending_full = true; else s->pending_refresh = true; return; }
     s->loading = true;
     if (!s->restored) {
         // Saved events show at once and move the cursor, so only what happened since is downloaded.
@@ -164,8 +168,8 @@ static void mutate_done(void *owner, Request *req) {
         request_error_into(&s->write_error, req);
         // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable; it is read again, since a
         // refusal often means what it shows is out of date.
-        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
-        else refresh(s, false);
+        if (request_outcome_unknown(req)) s->uncertain = true;
+        else { s->reloading = true; refresh(s, false); }
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
     }
@@ -186,6 +190,8 @@ static void mutate_done(void *owner, Request *req) {
     }
     if (str_eq(name, "complete_findings")) { str_array_free(s->decisions, s->decision_count); s->decisions = NULL; s->decision_count = 0; set_string(&s->triage_note, NULL); }
     pane_header_changed(s->base.pane);
+    // Until the session is read again the loop chip would act on the old one, and a second click resend the same `on`.
+    s->reloading = true;
     // A Clear or a compaction hides lines already on screen, so the transcript is read again whole.
     refresh(s, str_eq(name, "clear") || str_eq(name, "compact"));
 }
@@ -810,9 +816,15 @@ static const char *loop_cost(ConversationScreen *s) {
                                               : "Turning on the review loop may start a paid review round now, then one per push";
 }
 /// The cost wraps rather than ellipsizes, so a narrow pane still shows all of it.
+/// Measured once per text, width and scale: the footer's height is asked for on every keystroke.
 static int loop_cost_height(ConversationScreen *s, Canvas *cv, int width) {
     const char *cost = loop_cost(s);
-    return cost ? measure_text(cv, cost, width, FONT_FOOTNOTE, DT_CENTER | DT_WORDBREAK) : 0;
+    if (!cost) return 0;
+    if (cost != s->cost_text || width != s->cost_width || px(16) != s->cost_unit) {
+        s->cost_text = cost; s->cost_width = width; s->cost_unit = px(16);
+        s->cost_h = measure_text(cv, cost, width, FONT_FOOTNOTE, DT_CENTER | DT_WORDBREAK);
+    }
+    return s->cost_h;
 }
 static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
@@ -873,12 +885,13 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
         SetRectEmpty(&g_chip_rc[c]);
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
-        if (chip_live(c) && can) g_chip_rc[c] = r;
+        bool live = chip_live(c) && can && !(c == CHIP_LOOP && s->reloading);
+        if (live) g_chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
         fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
-        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : chip_live(c) && can ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : live ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label);
     }
     int top = y0 + chips + px(8);
@@ -943,14 +956,15 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
             if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
-    // `#composer-note`: what a message sent now does, then what the loop chip costs; the cost moves up when there is none.
+    // `#composer-note`: what a message sent now does, then on its own row what the loop chip costs, so it stays put.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
                       : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files"
                       : "";
-    if (*text) { draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); note.top = note.bottom; }
+    if (*text) draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The footer's height already holds the cost, so it is drawn to the bottom margin without measuring it again.
     const char *cost = loop_cost(s);
-    if (cost) { RECT cr = { note.left, note.top, note.right, note.top + loop_cost_height(s, cv, width) }; draw_text(cv, cost, &cr, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
+    if (cost) { RECT cr = { note.left, note.bottom, note.right, rc->bottom - px(14) }; draw_text(cv, cost, &cr, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
 }
 static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;

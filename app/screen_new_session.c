@@ -145,7 +145,7 @@ static void start_done(void *owner, Request *req) {
     }
     char *text = request_error_or_unexpected(req);
     set_string(&s->error, text); free(text);
-    if (!req->ok && !api_error_is_refusal(&req->error)) s->uncertain = true;
+    if (request_outcome_unknown(req)) s->uncertain = true;
     pane_footer_changed(s->base.pane);
 }
 static void start(NewSessionScreen *s) {

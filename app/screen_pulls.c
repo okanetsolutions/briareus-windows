@@ -200,7 +200,7 @@ static void board_start_done(void *owner, Request *req) {
     } else {
         request_error_into(&s->write_error, req);
         // A refusal is definite; anything else may have started the session.
-        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
+        if (request_outcome_unknown(req)) s->uncertain = true;
     }
     pane_relayout(s->base.pane);
 }
@@ -222,7 +222,7 @@ static void board_merge_done(void *owner, Request *req) {
     s->merging_number = 0;
     if (!req->ok) {
         char *t = request_error_text(req);
-        if (api_error_is_refusal(&req->error)) set_string(&s->write_error, t);
+        if (!request_outcome_unknown(req)) set_string(&s->write_error, t);
         else { char *m = xstrfmt("%s The merge may still have completed; refresh before trying again.", t); set_string(&s->write_error, m); free(m); }
         free(t);
     } else {
@@ -2149,7 +2149,7 @@ static void start_done(void *owner, Request *req) {
     } else {
         request_error_into(&s->write_error, req);
         // A refusal is definite; anything else may have started the session.
-        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
+        if (request_outcome_unknown(req)) s->uncertain = true;
     }
     pane_relayout(s->base.pane);
 }
@@ -2168,7 +2168,7 @@ static void merge_done(void *owner, Request *req) {
     s->merging = false;
     if (!req->ok) {
         char *t = request_error_text(req);
-        if (api_error_is_refusal(&req->error)) set_string(&s->merge_error, t);
+        if (!request_outcome_unknown(req)) set_string(&s->merge_error, t);
         else { char *m = xstrfmt("%s The merge may still have completed; check the state above before trying again.", t); set_string(&s->merge_error, m); free(m); }
         free(t);
     } else set_string(&s->merge_error, NULL);
@@ -3092,7 +3092,7 @@ static void issue_start_done(void *owner, Request *req) {
         if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
     } else {
         request_error_into(&s->write_error, req);
-        if (!api_error_is_refusal(&req->error)) s->uncertain = true;
+        if (request_outcome_unknown(req)) s->uncertain = true;
     }
     pane_relayout(s->base.pane);
 }

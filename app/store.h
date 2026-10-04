@@ -77,6 +77,8 @@ void request_cancel(Request **slot);
 char *request_error_text(const Request *req);
 /// Replaces the string in `slot` with the request's error text.
 void request_error_into(char **slot, const Request *req);
+/// Whether a failed request may still have done its work: anything but a refusal (a 4xx), which changed nothing.
+bool request_outcome_unknown(const Request *req);
 /// The error text, or "unexpected response" for a request that succeeded with an answer the caller could not read.
 char *request_error_or_unexpected(const Request *req);
 
