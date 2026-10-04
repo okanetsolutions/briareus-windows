@@ -155,14 +155,16 @@ static void status_next(PullsScreen *s);
 static void status_done(void *owner, Request *req) {
     PullsScreen *s = owner;
     int number = json_int_or(json_get(req->args, "issue"), 0);
+    // Throttling stops the round and leaves this issue unread, so it and the remaining reads wait for the
+    // next poll rather than hitting the limit again.
+    if (req->error.kind == API_HTTP && req->error.status == 429) return;
     char *k = number_key(number); json_set_bool(s->status_read, k, true); free(k);
     if (req->ok) {
         status_note(s, number, json_get(req->result, "issue"));
         char *key = saved_issue_key(s->project.repo, number); cache_store(g_store.cache, req->result, key); free(key);
         pane_relayout(s->base.pane);
     }
-    // Throttling stops the round, so the remaining reads wait for the next poll rather than hitting the limit again.
-    if (!(req->error.kind == API_HTTP && req->error.status == 429)) status_next(s);
+    status_next(s);
 }
 /// Reads the next linked issue not read this visit: those of the rows the filters show first, then the rest.
 static void status_next(PullsScreen *s) {
