@@ -313,6 +313,10 @@ static void test_project_copy_is_independent(void) {
     CHECK(project_parse(j, &p)); CHECK(p.has_local); project_copy(&c, &p); CHECK(c.has_local);
     one = project_json(&c); Project back; CHECK(project_parse(one, &back)); CHECK(back.has_local); project_free(&back); json_free(one);
     project_free(&c); project_free(&p); json_free(j);
+    j = json_parsez("{\"repo\":\"o/b\",\"hasBoard\":true}");
+    CHECK(project_parse(j, &p)); CHECK(p.has_board && !p.has_local); project_copy(&c, &p); CHECK(c.has_board);
+    one = project_json(&c); CHECK(project_parse(one, &back)); CHECK(back.has_board); project_free(&back); json_free(one);
+    project_free(&c); project_free(&p); json_free(j);
     j = json_parsez("{\"repo\":\"o/n\",\"hasLocal\":\"yes\"}"); CHECK(project_parse(j, &p)); CHECK(!p.has_local); project_free(&p); json_free(j);
 }
 

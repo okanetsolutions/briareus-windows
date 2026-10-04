@@ -191,4 +191,48 @@ bool run_log_add_events(RunLog *log, const Json *events);
 /// Empties the log and rewinds its cursor.
 void run_log_clear(RunLog *log);
 
+// MARK: - Projects board
+
+/// One field set on a card: a single-select (with its option's colour), text, number, date or iteration, as text.
+typedef struct { char *name, *value, *color; } ProjectField;
+/// One card of a GitHub Projects v2 board. `type` is issue, pull, draft or redacted; a draft has no repo, number or url.
+typedef struct {
+    char *type, *repo, *title, *url, *state, *author;
+    int number;
+    bool has_created; time_t created_at;
+    char **assignees; size_t assignee_count;
+    PullLabel *labels; size_t label_count;
+    bool has_parent; BoardLink parent;   // the epic it is a sub-issue of
+    ProjectField *fields; size_t field_count;
+} ProjectCard;
+/// A number field totalled over a column, such as Story Points.
+typedef struct { char *name; double value; } ProjectSum;
+typedef struct {
+    char *name, *color;   // color: GitHub's name for a single-select option's colour (GRAY, BLUE, …); NULL for none
+    int count;
+    ProjectSum *sums; size_t sum_count;
+    ProjectCard *cards; size_t card_count;
+} ProjectColumn;
+/// What `project_board` answers: a project's board, filtered and grouped the way its view is on GitHub.
+typedef struct {
+    char *title, *url, *view_name, *view_url, *filter, *group_by;
+    ProjectColumn *columns; size_t column_count;
+    bool truncated;
+    char *error;   // `projectsError`: why GitHub would not show the board, when it would not
+} ProjectBoard;
+bool project_board_parse(const Json *value, ProjectBoard *out);
+void project_board_free(ProjectBoard *board);
+/// A card's field by name, or NULL.
+const ProjectField *project_card_field(const ProjectCard *card, const char *name);
+/// GitHub's named colours for single-select options as red, green and blue; false for a name it does not use.
+bool project_color_rgb(const char *name, int rgb[3]);
+/// A number as a column's total shows it: whole numbers without decimals, the rest with up to two. New string.
+char *project_sum_text(double value);
+
+/// The project setting that names a board, `{ owner, ownerType, number, view }`, from its address on GitHub
+/// (https://github.com/orgs/<org>/projects/<n>[/views/<v>] or …/users/<login>/projects/<n>…). NULL when it is not one.
+Json *project_board_setting_from_url(const char *url);
+/// The board's address on GitHub, from the setting; NULL when the setting names none.
+char *project_board_setting_url(const Json *setting);
+
 #endif

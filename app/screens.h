@@ -144,6 +144,24 @@ void project_db_refresh(ProjectDb *p);
 void project_db_layout(ProjectDb *p, Doc *doc, int w);
 /// True when the action was the tab's.
 bool project_db_action(ProjectDb *p, int action, intptr_t arg, POINT pt);
+/// A project's Board tab, after Issues: the GitHub Projects board its settings name, read with `project_board` and laid
+/// out as GitHub's board view, columns side by side. Read-only. Its items and header buttons use `BOARD_TAB_ACTIONS`
+/// actions from `action_base` up.
+typedef struct BoardTab BoardTab;
+enum { BOARD_TAB_ACTIONS = 8 };
+BoardTab *board_tab_new(const Project *project, Screen *host, int action_base);
+void board_tab_free(BoardTab *p);
+/// Whether the project names a board and the server can read it.
+bool board_tab_offered(const Project *project);
+/// Reads the board the first time the tab is shown, the saved copy first; the refresh reads it past the server's cache.
+void board_tab_open(BoardTab *p);
+void board_tab_refresh(BoardTab *p);
+/// Lays the board out from `doc->y` down; columns that do not fit `w` run on past it, scrolled sideways.
+void board_tab_layout(BoardTab *p, Doc *doc, int w);
+/// The board and view in the line under the title, and a button that opens the view on GitHub.
+void board_tab_header(BoardTab *p, HeaderInfo *info);
+/// True when the action was the tab's.
+bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt);
 /// A project's Forge tab, laid out inside its board: the servers of the Laravel Forge accounts available to the project
 /// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
 /// actions from `action_base` up.

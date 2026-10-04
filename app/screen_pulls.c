@@ -48,7 +48,8 @@ enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
 enum { ACT_DB_BASE = 1160 };    // the Database tab's, PROJECT_DB_ACTIONS of them
 enum { ACT_FORGE_BASE = 1180 }; // the Forge tab's, PROJECT_FORGE_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING };
+enum { ACT_BOARD_BASE = 1200 }; // the Board tab's, BOARD_TAB_ACTIONS of them
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD };
 enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -58,12 +59,13 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB or TAB_FORGE
+    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
     ProjectRun *run;   // the Run tab, on the default branch
     ProjectDb *db;     // the Database tab
     ProjectForge *forge; // the Forge tab: the project's Forge servers and their sites
+    BoardTab *board_tab; // the Board tab: the project's GitHub Projects board
     bool shown;
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
@@ -280,6 +282,7 @@ static void pulls_destroy(Screen *base) {
     project_run_free(s->run);
     project_db_free(s->db);
     project_forge_free(s->forge);
+    board_tab_free(s->board_tab);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
@@ -355,9 +358,12 @@ static void pulls_layout(Screen *base, Doc *doc) {
     char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
     char *sftp_label = files ? xstrfmt("\xE2\x87\xB5 SFTP sessions %zu", files) : xstrdup("\xE2\x87\xB5 SFTP sessions");
     // Run, on the default branch, for a token that may serve one.
-    const char *tabs[8] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    int ids[8] = { TAB_PULLS, TAB_ISSUES };
+    const char *tabs[9] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
+    int ids[9] = { TAB_PULLS, TAB_ISSUES };
     size_t n = 2;
+    // Board, after Issues, for a project that names a GitHub Projects board.
+    if (board_tab_offered(&s->project)) { tabs[n] = "\xE2\x96\xA6 Board"; ids[n++] = TAB_BOARD; }
+    else if (s->tab == TAB_BOARD) s->tab = TAB_PULLS;
     if (project_run_offered()) { tabs[n] = "\xE2\x96\xB6 Run"; ids[n++] = TAB_RUN; }
     if (project_ssh_offered()) { tabs[n] = ssh_label; ids[n++] = TAB_SSH; tabs[n] = sftp_label; ids[n++] = TAB_SFTP; }
     if (project_db_offered()) { tabs[n] = "\xE2\x9B\x81 Database"; ids[n++] = TAB_DB; }
@@ -369,6 +375,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
     doc_tabs(doc, w, tabs, ids, n, s->tab);
     free(ssh_label); free(sftp_label);
     doc_space(doc, px(14));
+    if (s->tab == TAB_BOARD) { board_tab_layout(s->board_tab, doc, w); free(transcript); return; }
     if (s->tab == TAB_RUN) { project_run_layout(s->run, doc, w); return; }
     if (s->tab == TAB_SSH) { project_ssh_layout(s->ssh, doc, w); return; }
     if (s->tab == TAB_SFTP) { project_sftp_layout(s->sftp, doc, w); return; }
@@ -478,6 +485,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     }
     if (s->tab == TAB_MEETING) return;
     if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }
+    if (s->tab == TAB_BOARD) {
+        board_tab_header(s->board_tab, info);
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the board from GitHub again";
+        return;
+    }
     if (s->tab == TAB_SSH) {
         project_ssh_header(s->ssh, info);
         HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read the project's SSH servers again";
@@ -541,6 +553,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (project_run_action(s->run, action, arg, pt)) return;
     if (project_db_action(s->db, action, arg, pt)) return;
     if (project_forge_action(s->forge, action, arg, pt)) return;
+    if (board_tab_action(s->board_tab, action, arg, pt)) return;
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
@@ -549,8 +562,9 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
-        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || arg == TAB_MEETING ? (int)arg : TAB_PULLS;
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || arg == TAB_MEETING ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
+        if (s->tab == TAB_BOARD) board_tab_open(s->board_tab);
         // The transcript, like a conversation's, keeps to its latest line.
         pane_stick_to_bottom(base->pane, s->tab == TAB_MEETING);
         if (s->tab == TAB_MEETING) pane_scroll_to_bottom(base->pane);
@@ -626,6 +640,7 @@ static void pulls_refresh(Screen *base) {
     if (s->tab == TAB_DB) { project_db_refresh(s->db); pane_relayout(base->pane); return; }
     if (s->tab == TAB_FORGE) { project_forge_refresh(s->forge); pane_relayout(base->pane); return; }
     if (s->tab == TAB_RUN) { project_run_refresh(s->run); return; }
+    if (s->tab == TAB_BOARD) { board_tab_refresh(s->board_tab); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     pulls_load(s, true);
@@ -648,6 +663,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->run = project_run_new(project->repo, &s->base, ACT_RUN_BASE, TIMER_BOARD_RUN_LOG);
     s->db = project_db_new(project->repo, &s->base, ACT_DB_BASE);
     s->forge = project_forge_new(project->repo, &s->base, ACT_FORGE_BASE);
+    s->board_tab = board_tab_new(project, &s->base, ACT_BOARD_BASE);
     return &s->base;
 }
 

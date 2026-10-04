@@ -1071,6 +1071,74 @@ static void test_the_run_log_keeps_its_latest_lines(void) {
     run_log_clear(&log);
 }
 
+// MARK: - Projects board
+
+static void test_project_boards_read_columns_cards_and_sums(void) {
+    Json *j = json_parsez("{\"project\":{\"title\":\"HQ\",\"url\":\"https://github.com/orgs/o/projects/1\"},"
+        "\"view\":{\"name\":\"This Iteration\",\"number\":42,\"filter\":\"is:issue\",\"url\":\"https://github.com/orgs/o/projects/1/views/42\"},"
+        "\"groupBy\":\"Status\",\"truncated\":true,\"unsupportedFilters\":[],\"projectsError\":null,\"columns\":["
+        "{\"id\":null,\"name\":\"No Status\",\"color\":null,\"count\":0,\"sums\":{\"Story Points\":0},\"items\":[]},"
+        "{\"id\":\"a\",\"name\":\"In Progress\",\"color\":\"YELLOW\",\"count\":2,\"sums\":{\"Story Points\":5.5,\"Bad\":\"x\"},\"items\":["
+        "{\"id\":\"i1\",\"type\":\"issue\",\"repo\":\"o/r\",\"number\":7,\"title\":\"Fix it\",\"url\":\"https://github.com/o/r/issues/7\",\"state\":\"open\","
+        "\"createdAt\":\"2026-10-01T10:00:00Z\",\"author\":\"ana\",\"assignees\":[{\"login\":\"ana\",\"avatarUrl\":\"u\"},{\"avatarUrl\":\"v\"}],"
+        "\"labels\":[{\"name\":\"bug\",\"color\":\"d73a4a\"}],\"parent\":{\"repo\":\"o/r\",\"number\":3,\"title\":\"Epic\",\"url\":\"https://github.com/o/r/issues/3\"},"
+        "\"fields\":[{\"name\":\"Priority\",\"value\":\"High\",\"color\":\"RED\"},{\"name\":\"Story Points\",\"value\":3},{\"name\":\"\",\"value\":\"x\"},{\"name\":\"Bad\",\"value\":null}]},"
+        "{\"id\":\"i2\",\"type\":\"draft\",\"repo\":null,\"number\":null,\"title\":\"Idea\",\"assignees\":[],\"labels\":[],\"parent\":null,\"fields\":[]},"
+        "7]},{\"name\":null}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    CHECK_STR(b.title, "HQ"); CHECK_STR(b.view_name, "This Iteration"); CHECK_STR(b.group_by, "Status"); CHECK_STR(b.filter, "is:issue");
+    CHECK(b.truncated); CHECK(b.error == NULL);
+    CHECK_INT((int)b.column_count, 2);
+    CHECK_STR(b.columns[0].name, "No Status"); CHECK(b.columns[0].color == NULL); CHECK_INT((int)b.columns[0].card_count, 0);
+    const ProjectColumn *c = &b.columns[1];
+    CHECK_STR(c->color, "YELLOW"); CHECK_INT(c->count, 2); CHECK_INT((int)c->card_count, 2);
+    CHECK_INT((int)c->sum_count, 1); CHECK_STR(c->sums[0].name, "Story Points"); CHECK(c->sums[0].value == 5.5);
+    const ProjectCard *k = &c->cards[0];
+    CHECK_STR(k->type, "issue"); CHECK_STR(k->repo, "o/r"); CHECK_INT(k->number, 7); CHECK_STR(k->title, "Fix it"); CHECK(k->has_created);
+    CHECK_INT((int)k->assignee_count, 1); CHECK_STR(k->assignees[0], "ana");
+    CHECK_INT((int)k->label_count, 1); CHECK(k->has_parent); CHECK_INT(k->parent.number, 3);
+    CHECK_INT((int)k->field_count, 2); CHECK_STR(project_card_field(k, "priority")->color, "RED");
+    CHECK_STR(project_card_field(k, "Story Points")->value, "3"); CHECK(project_card_field(k, "Type") == NULL);
+    CHECK_STR(c->cards[1].type, "draft"); CHECK(c->cards[1].repo == NULL); CHECK_INT(c->cards[1].number, 0); CHECK(!c->cards[1].has_parent);
+    project_board_free(&b); json_free(j);
+}
+static void test_project_boards_carry_why_github_refused(void) {
+    Json *j = json_parsez("{\"project\":null,\"view\":null,\"columns\":[],\"projectsError\":\"Resource not accessible\"}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    CHECK_STR(b.error, "Resource not accessible"); CHECK(b.title == NULL && b.view_name == NULL); CHECK_INT((int)b.column_count, 0); CHECK(!b.truncated);
+    project_board_free(&b); json_free(j);
+    j = json_parsez("{\"columns\":[],\"projectsError\":\"\"}"); CHECK(project_board_parse(j, &b)); CHECK(b.error == NULL); project_board_free(&b); json_free(j);
+    j = json_parsez("[]"); CHECK(!project_board_parse(j, &b)); json_free(j);
+}
+static void test_project_option_colours_are_githubs_names(void) {
+    int rgb[3];
+    CHECK(project_color_rgb("GREEN", rgb)); CHECK(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
+    CHECK(project_color_rgb("purple", rgb));
+    CHECK(!project_color_rgb("TEAL", rgb)); CHECK(!project_color_rgb(NULL, rgb));
+}
+static void test_column_sums_drop_needless_decimals(void) {
+    char *t = project_sum_text(21); CHECK_STR(t, "21"); free(t);
+    t = project_sum_text(5.5); CHECK_STR(t, "5.5"); free(t);
+    t = project_sum_text(0.126); CHECK_STR(t, "0.13"); free(t);
+    t = project_sum_text(-2); CHECK_STR(t, "-2"); free(t);
+}
+static void test_board_settings_are_read_from_their_github_address(void) {
+    Json *j = project_board_setting_from_url(" https://github.com/orgs/hq/projects/1/views/42?filterQuery=x ");
+    CHECK(j != NULL);
+    CHECK_STR(json_str(json_get(j, "owner")), "hq"); CHECK_STR(json_str(json_get(j, "ownerType")), "organization");
+    CHECK_INT(json_int_or(json_get(j, "number"), 0), 1); CHECK_INT(json_int_or(json_get(j, "view"), 0), 42);
+    char *url = project_board_setting_url(j); CHECK_STR(url, "https://github.com/orgs/hq/projects/1/views/42"); free(url); json_free(j);
+    j = project_board_setting_from_url("github.com/users/ana/projects/3/");
+    CHECK(j != NULL); CHECK_STR(json_str(json_get(j, "ownerType")), "user"); CHECK(json_is_null(json_get(j, "view")));
+    url = project_board_setting_url(j); CHECK_STR(url, "https://github.com/users/ana/projects/3"); free(url); json_free(j);
+    const char *bad[] = { NULL, "", "hq/1", "https://github.com/hq/projects/1", "https://github.com/orgs/hq/projects/x", "https://github.com/orgs/hq/projects/0",
+                          "https://github.com/orgs//projects/1", "https://github.com/orgs/hq/projects/1/views/", "https://github.com/orgs/hq/projects/1/settings",
+                          "https://gitlab.com/orgs/hq/projects/1" };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { j = project_board_setting_from_url(bad[i]); if (j) printf("  read %s\n", bad[i]); CHECK(j == NULL); json_free(j); }
+    j = json_parsez("{\"owner\":\"\",\"number\":1}"); CHECK(project_board_setting_url(j) == NULL); json_free(j);
+    CHECK(project_board_setting_url(NULL) == NULL);
+}
+
 void board_tests(void) {
     test_run("labels read from an object or a bare name", test_labels_read_from_an_object_or_a_bare_name);
     test_run("label colours read as six hex digits", test_label_colours_read_as_six_hex_digits);
@@ -1127,4 +1195,9 @@ void board_tests(void) {
     test_run("a branch run is a preview with no pull request", test_a_branch_run_is_a_preview_with_no_pull_request);
     test_run("the run log reads log lines past its cursor", test_the_run_log_reads_log_lines_past_its_cursor);
     test_run("the run log keeps its latest lines", test_the_run_log_keeps_its_latest_lines);
+    test_run("project boards read columns, cards and sums", test_project_boards_read_columns_cards_and_sums);
+    test_run("project boards carry why GitHub refused", test_project_boards_carry_why_github_refused);
+    test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
+    test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
+    test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
 }

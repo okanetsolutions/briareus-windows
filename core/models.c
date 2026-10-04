@@ -179,16 +179,18 @@ bool project_parse(const Json *value, Project *out) {
     if (!repo) return false;
     out->repo = xstrdup(repo); out->label = json_dup_str(json_get(value, "label"));
     out->has_local = json_bool_is(json_get(value, "hasLocal"), true);
+    out->has_board = json_bool_is(json_get(value, "hasBoard"), true);
     return true;
 }
 Json *project_json(const Project *p) {
     Json *o = json_object(); json_set_str(o, "repo", p->repo);
     json_object_set(o, "label", json_string_or_null(p->label));
     if (p->has_local) json_set_bool(o, "hasLocal", true);
+    if (p->has_board) json_set_bool(o, "hasBoard", true);
     return o;
 }
 void project_free(Project *p) { if (!p) return; free(p->repo); free(p->label); memset(p, 0, sizeof *p); }
-void project_copy(Project *into, const Project *from) { into->repo = xstrdup(from->repo); into->label = xstrdup(from->label); into->has_local = from->has_local; }
+void project_copy(Project *into, const Project *from) { into->repo = xstrdup(from->repo); into->label = xstrdup(from->label); into->has_local = from->has_local; into->has_board = from->has_board; }
 const char *project_title(const Project *p) { return str_empty(p->label) ? p->repo : p->label; }
 static DEFINE_LIST_PARSE(Project, project_list_parse, project_parse)
 bool projects_parse(const Json *value, Project **out, size_t *count) {
