@@ -707,3 +707,170 @@ void run_log_clear(RunLog *log) {
     free(log->lines); free(log->errors);
     memset(log, 0, sizeof *log);
 }
+
+// MARK: - Projects board
+
+static bool project_field_parse(const Json *value, ProjectField *out) {
+    memset(out, 0, sizeof *out);
+    const char *name = json_str_nonempty(json_get(value, "name"));
+    const Json *v = json_get(value, "value");
+    double n;
+    if (!name) return false;
+    if (json_str(v)) out->value = xstrdup(json_str(v));
+    else if (json_num(v, &n)) out->value = project_sum_text(n);
+    else return false;
+    out->name = xstrdup(name); out->color = json_dup_str(json_get(value, "color"));
+    return true;
+}
+static void project_field_free(ProjectField *f) { free(f->name); free(f->value); free(f->color); memset(f, 0, sizeof *f); }
+static DEFINE_LIST_PARSE(ProjectField, project_fields_parse, project_field_parse)
+static DEFINE_LIST_FREE(ProjectField, project_fields_free, project_field_free)
+
+static bool project_card_parse(const Json *value, ProjectCard *out) {
+    memset(out, 0, sizeof *out);
+    if (!json_is_object(value)) return false;
+    out->type = xstrdup(json_str_or(json_get(value, "type"), "issue"));
+    out->repo = json_dup_str(json_get(value, "repo"));
+    out->number = json_int_or(json_get(value, "number"), 0);
+    out->title = json_dup_str(json_get(value, "title"));
+    out->url = json_dup_str(json_get(value, "url")); out->state = json_dup_str(json_get(value, "state"));
+    out->author = json_dup_str(json_get(value, "author"));
+    out->has_created = board_date_parse(json_str(json_get(value, "createdAt")), &out->created_at);
+    const Json *people = json_get(value, "assignees");
+    out->assignees = xcalloc(json_count(people) + 1, sizeof *out->assignees);
+    for (size_t i = 0; i < json_count(people); i++) {
+        const char *login = json_str_nonempty(json_get(json_at(people, i), "login"));
+        if (!login) login = json_str_nonempty(json_at(people, i));
+        if (login) out->assignees[out->assignee_count++] = xstrdup(login);
+    }
+    out->labels = labels_parse(json_get(value, "labels"), &out->label_count);
+    out->has_parent = board_link_parse(json_get(value, "parent"), &out->parent);
+    out->fields = project_fields_parse(json_get(value, "fields"), &out->field_count);
+    return true;
+}
+static void project_card_free(ProjectCard *c) {
+    free(c->type); free(c->repo); free(c->title); free(c->url); free(c->state); free(c->author);
+    str_array_free(c->assignees, c->assignee_count);
+    labels_free(c->labels, c->label_count);
+    if (c->has_parent) board_link_free(&c->parent);
+    project_fields_free(c->fields, c->field_count);
+    memset(c, 0, sizeof *c);
+}
+static DEFINE_LIST_PARSE(ProjectCard, project_cards_parse, project_card_parse)
+static DEFINE_LIST_FREE(ProjectCard, project_cards_free, project_card_free)
+
+static bool project_column_parse(const Json *value, ProjectColumn *out) {
+    memset(out, 0, sizeof *out);
+    const char *name = json_str(json_get(value, "name"));
+    if (!name) return false;
+    out->name = xstrdup(name); out->color = json_dup_str(json_get(value, "color"));
+    out->cards = project_cards_parse(json_get(value, "items"), &out->card_count);
+    out->count = json_int_or(json_get(value, "count"), (int)out->card_count);
+    const Json *sums = json_get(value, "sums");
+    out->sums = xcalloc(json_count(sums) + 1, sizeof *out->sums);
+    for (size_t i = 0; i < json_count(sums); i++) {
+        double n;
+        if (!json_key(sums, i) || !json_num(json_get(sums, json_key(sums, i)), &n)) continue;
+        out->sums[out->sum_count].name = xstrdup(json_key(sums, i)); out->sums[out->sum_count++].value = n;
+    }
+    return true;
+}
+static void project_column_free(ProjectColumn *c) {
+    free(c->name); free(c->color);
+    for (size_t i = 0; i < c->sum_count; i++) free(c->sums[i].name);
+    free(c->sums);
+    project_cards_free(c->cards, c->card_count);
+    memset(c, 0, sizeof *c);
+}
+static DEFINE_LIST_PARSE(ProjectColumn, project_columns_parse, project_column_parse)
+static DEFINE_LIST_FREE(ProjectColumn, project_columns_free, project_column_free)
+
+bool project_board_parse(const Json *value, ProjectBoard *out) {
+    memset(out, 0, sizeof *out);
+    if (!json_is_object(value)) return false;
+    const Json *project = json_get(value, "project"), *view = json_get(value, "view");
+    out->title = json_dup_str(json_get(project, "title")); out->url = json_dup_str(json_get(project, "url"));
+    out->view_name = json_dup_str(json_get(view, "name")); out->view_url = json_dup_str(json_get(view, "url"));
+    out->filter = json_dup_str(json_get(view, "filter"));
+    out->group_by = json_dup_str(json_get(value, "groupBy"));
+    out->columns = project_columns_parse(json_get(value, "columns"), &out->column_count);
+    out->truncated = json_bool_is(json_get(value, "truncated"), true);
+    out->error = json_str_nonempty(json_get(value, "projectsError")) ? xstrdup(json_str(json_get(value, "projectsError"))) : NULL;
+    return true;
+}
+void project_board_free(ProjectBoard *b) {
+    if (!b) return;
+    free(b->title); free(b->url); free(b->view_name); free(b->view_url); free(b->filter); free(b->group_by); free(b->error);
+    project_columns_free(b->columns, b->column_count);
+    memset(b, 0, sizeof *b);
+}
+const ProjectField *project_card_field(const ProjectCard *card, const char *name) {
+    for (size_t i = 0; i < card->field_count; i++) if (str_ieq(card->fields[i].name, name)) return &card->fields[i];
+    return NULL;
+}
+bool project_color_rgb(const char *name, int rgb[3]) {
+    // GitHub's Primer colours behind the option colours, as its board draws them.
+    static const struct { const char *name; int rgb[3]; } colors[] = {
+        { "GRAY", { 0x9A, 0xA0, 0xA6 } }, { "BLUE", { 0x40, 0x8C, 0xFF } }, { "GREEN", { 0x3F, 0xB9, 0x50 } },
+        { "YELLOW", { 0xD2, 0x99, 0x22 } }, { "ORANGE", { 0xDB, 0x6D, 0x28 } }, { "RED", { 0xF8, 0x51, 0x49 } },
+        { "PINK", { 0xDB, 0x61, 0xA2 } }, { "PURPLE", { 0xA3, 0x71, 0xF7 } },
+    };
+    for (size_t i = 0; name && i < sizeof colors / sizeof *colors; i++) {
+        if (!str_ieq(colors[i].name, name)) continue;
+        memcpy(rgb, colors[i].rgb, sizeof colors[i].rgb);
+        return true;
+    }
+    return false;
+}
+char *project_sum_text(double value) {
+    if (value == (double)(long long)value) return xstrfmt("%lld", (long long)value);
+    char *text = xstrfmt("%.2f", value);
+    size_t n = strlen(text);
+    while (n && text[n - 1] == '0') text[--n] = 0;
+    if (n && text[n - 1] == '.') text[--n] = 0;
+    return text;
+}
+
+/// A run of digits that is the whole of [p, end), as a positive int; 0 otherwise.
+static int whole_number(const char *p, const char *end) {
+    if (p == end || end - p > 9) return 0;
+    int n = 0;
+    for (; p < end; p++) { if (!isdigit((unsigned char)*p)) return 0; n = n * 10 + (*p - '0'); }
+    return n;
+}
+Json *project_board_setting_from_url(const char *url) {
+    if (!url) return NULL;
+    while (isspace((unsigned char)*url)) url++;
+    const char *p = url;
+    if (str_has_prefix(p, "https://")) p += 8; else if (str_has_prefix(p, "http://")) p += 7;
+    if (!str_has_prefix(p, "github.com/")) return NULL;
+    p += 11;
+    const char *type;
+    if (str_has_prefix(p, "orgs/")) { type = "organization"; p += 5; }
+    else if (str_has_prefix(p, "users/")) { type = "user"; p += 6; }
+    else return NULL;
+    // orgs/<owner>/projects/<n>[/views/<v>], with anything after a ? or # left alone.
+    size_t n;
+    char *path = xstrndup(p, strcspn(p, "?# \t\r\n"));
+    char **parts = str_split(path, '/', &n);
+    free(path);
+    Json *out = NULL;
+    int number = n >= 3 && str_eq(parts[1], "projects") ? whole_number(parts[2], parts[2] + strlen(parts[2])) : 0;
+    int view = n >= 5 && str_eq(parts[3], "views") ? whole_number(parts[4], parts[4] + strlen(parts[4])) : 0;
+    if (n && *parts[0] && number && (n == 3 || (n == 4 && !*parts[3]) || (view && (n == 5 || (n == 6 && !*parts[5]))))) {
+        out = json_object();
+        json_set_str(out, "owner", parts[0]); json_set_str(out, "ownerType", type);
+        json_set_num(out, "number", number);
+        if (view) json_set_num(out, "view", view); else json_object_set(out, "view", json_null());
+    }
+    str_array_free(parts, n);
+    return out;
+}
+char *project_board_setting_url(const Json *setting) {
+    const char *owner = json_str_nonempty(json_get(setting, "owner"));
+    int number = json_int_or(json_get(setting, "number"), 0), view = json_int_or(json_get(setting, "view"), 0);
+    if (!owner || number < 1) return NULL;
+    const char *kind = str_eq(json_str(json_get(setting, "ownerType")), "user") ? "users" : "orgs";
+    return view > 0 ? xstrfmt("https://github.com/%s/%s/projects/%d/views/%d", kind, owner, number, view)
+                    : xstrfmt("https://github.com/%s/%s/projects/%d", kind, owner, number);
+}

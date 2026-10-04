@@ -298,6 +298,7 @@ static const ApiRoute ROUTES[] = {
     { "issue", "GET", "issues/{issue}" },                  // one issue in full: body, type, projects, sub-issues, linked pulls
     { "issue_timeline", "GET", "issues/{issue}/timeline" }, // its comments and events, a `page` of 100 at a time
     { "close_issue", "POST", "issues/{issue}/close" },      // `reason` completed or not_planned, and an optional `comment` posted first
+    { "project_board", "GET", "project-board" },           // the project's GitHub Projects board as its view groups it; `fresh` skips the cache
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
     { "start_session", "POST", "sessions" },

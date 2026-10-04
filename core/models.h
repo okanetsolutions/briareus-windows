@@ -55,7 +55,8 @@ void connection_free(Connection *connection);
 
 // MARK: - Projects and sessions
 
-typedef struct { char *repo; char *label; bool has_local; } Project;   // has_local: a local checkout a session can work in
+/// has_local: a local checkout a session can work in; has_board: a GitHub Projects board `project_board` reads.
+typedef struct { char *repo; char *label; bool has_local, has_board; } Project;
 bool project_parse(const Json *value, Project *out);
 Json *project_json(const Project *project);
 void project_free(Project *project);

@@ -747,12 +747,12 @@ Screen *settings_screen_new(void) {
 
 // MARK: - The project form
 
-typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL } FieldKind;
+typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD } FieldKind;   // K_BOARD: the Projects board, edited as its address
 /// One of the form's fields: the Project key it edits, how, and the words around it. `rows` sizes a multi-line box.
 typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; } FieldDef;
 
 enum {
-    F_REPO, F_LABEL, F_LOCAL_DIR,
+    F_REPO, F_LABEL, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT, F_DB_POOL, F_DB_RESTORE,
     F_REVIEW_AUTHOR, F_PUBLISH, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
@@ -766,6 +766,8 @@ static const FieldDef FIELDS[F_COUNT] = {
     [F_LABEL] = { "label", K_TEXT, "Label", "shown in the project dropdown", NULL, 0, false },
     [F_LOCAL_DIR] = { "localDir", K_TEXT, "Local checkout", "/home/you/www/your-checkout",
         "This machine's own checkout of the repo. A session started in Local mode works directly in it: no clone, no setup steps, no pooled database, and the tree is used exactly as it stands. Leave empty to keep Local mode off for this project.", 0, true },
+    [F_BOARD] = { "projectBoard", K_BOARD, "GitHub Projects board", "https://github.com/orgs/acme/projects/1/views/2",
+        "The board the project's \xE2\x96\xA6 Board tab shows: its address on GitHub, with the view whose filter and columns it follows. The server's GitHub token needs Projects: read. Leave empty for no Board tab.", 0, true },
     [F_SETUP] = { "setupCommands", K_LIST, "Setup commands", NULL,
         "One shell command per line, run in the checkout in order before the session starts. The first failure aborts the session.", 6, true },
     [F_PHP] = { "phpBinDir", K_TEXT, "PHP bin directory", "/usr/bin (or ~/.phpenv/versions/8.4/bin)",
@@ -902,6 +904,7 @@ static char *field_text(const Json *row, int f) {
     }
     double n;
     if (FIELDS[f].kind == K_NUMBER) return json_num(v, &n) && isfinite(n) ? xstrfmt("%.10g", n) : xstrdup("");
+    if (FIELDS[f].kind == K_BOARD) { char *url = project_board_setting_url(v); return url ? url : xstrdup(""); }
     return xstrdup(json_str(v) ? json_str(v) : "");
 }
 /// A picker's runtime as the row has it saved.
@@ -967,6 +970,19 @@ static Json *form_body(FormScreen *s, char **why, int *tab) {
                 json_set_num(body, key, n);
             }
             free(t);
+            break;
+        }
+        case K_BOARD: {
+            char *t = str_trim(text);
+            Json *board = *t ? project_board_setting_from_url(t) : json_null();
+            free(t);
+            if (!board) {
+                *tab = field_tab(f);
+                *why = xstrfmt("%s must be the board's address on GitHub, such as https://github.com/orgs/acme/projects/1/views/2, or empty for none.", FIELDS[f].label);
+                free(text); json_free(body);
+                return NULL;
+            }
+            json_object_set(body, key, board);
             break;
         }
         case K_BOOL: break;
@@ -1171,6 +1187,7 @@ static void form_layout(Screen *base, Doc *doc) {
         field(s, doc, x + half + gap, col - half - gap, F_LABEL);
         if (doc->y < left_bottom) doc->y = left_bottom;
         field(s, doc, x, col, F_LOCAL_DIR);
+        field(s, doc, x, col, F_BOARD);
         field(s, doc, x, col, F_SETUP);
         field(s, doc, x, col, F_PHP);
         note(doc, x, col, "This project's own prompt wording is edited under Prompts on the web dashboard; saving here keeps it as it is.");
