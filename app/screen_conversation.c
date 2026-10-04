@@ -12,7 +12,7 @@
 
 enum {
     ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
-    ACT_REFRESH_OUTCOME, ACT_REOPEN, ACT_FINDING_LINK,
+    ACT_REFRESH_OUTCOME, ACT_DISMISS_ERROR, ACT_REOPEN, ACT_FINDING_LINK,
     ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
 enum { TIMER_POLL = 1, TIMER_WORKING = 2, TIMER_VOICE = 3 };
@@ -26,12 +26,14 @@ typedef struct {
     Session initial, snapshot; bool has_snapshot;
     Transcript transcript;
     bool loaded, restored, unsaved, retimed;
-    bool busy, loading, uncertain, pending_full, renaming, dialog_open;
+    bool busy, loading, uncertain, pending_full, pending_refresh, renaming, dialog_open;
+    bool reloading;   // a mutation landed and the session it changed is not read yet
     char *error, *write_error;
     char *pending_mutation;   // the operation a confirmation is up for
     Request *req_refresh, *req_mutate;
     Poller poller;
     HWND composer; int composer_lines; RECT composer_rc;
+    const char *cost_text; int cost_width, cost_unit, cost_h;   // the loop cost last measured
     bool composer_focused_once;
     int *expanded; size_t expanded_count;   // tool rows opened
     char **decisions; size_t decision_count;  // triage picks, "key=decision"
@@ -100,6 +102,7 @@ static void refresh_done(void *owner, Request *req) {
     ConversationScreen *s = owner;
     s->loading = false;
     bool full = req->arg != 0;
+    bool read = false;
     if (!req->ok) {
         request_error_into(&s->error, req);
         s->loaded = true;
@@ -109,7 +112,7 @@ static void refresh_done(void *owner, Request *req) {
         Session next;
         if (session_parse(json_get(req->result, "session"), &next)) {
             if (s->has_snapshot) session_free(&s->snapshot);
-            s->snapshot = next; s->has_snapshot = true;
+            s->snapshot = next; s->has_snapshot = true; read = true;
         }
         if (full) { transcript_free(&s->transcript); transcript_init(&s->transcript); }
         transcript_append(&s->transcript, events);
@@ -125,11 +128,16 @@ static void refresh_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
     pane_header_changed(s->base.pane);
-    if (s->pending_full) { s->pending_full = false; refresh(s, true); }
+    // A read asked for while this one was out goes now; after a failed one it waits for the poller's retry and its backoff.
+    if (req->ok && (s->pending_full || s->pending_refresh)) { bool f = s->pending_full; s->pending_full = s->pending_refresh = false; refresh(s, f); }
+    // The session a mutation changed is current only once a read of it lands.
+    else if (read) s->reloading = false;
 }
 static void refresh(ConversationScreen *s, bool full) {
     // A poll already reading must not swallow a refresh, which waits its turn.
-    if (s->loading) { if (full) s->pending_full = true; return; }
+    if (s->loading) { if (full) s->pending_full = true; else s->pending_refresh = true; return; }
+    // A read still queued (after a failed one, or one the hidden screen cancelled) is this one, not a second after it.
+    full = full || s->pending_full; s->pending_full = s->pending_refresh = false;
     s->loading = true;
     if (!s->restored) {
         // Saved events show at once and move the cursor, so only what happened since is downloaded.
@@ -162,7 +170,10 @@ static void mutate_done(void *owner, Request *req) {
     const char *name = req->operation;
     if (!req->ok) {
         request_error_into(&s->write_error, req);
-        s->uncertain = true;
+        // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable; it is read again, since a
+        // refusal often means what it shows is out of date.
+        if (request_outcome_unknown(req)) s->uncertain = true;
+        else { s->reloading = true; refresh(s, false); }
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
     }
@@ -183,6 +194,8 @@ static void mutate_done(void *owner, Request *req) {
     }
     if (str_eq(name, "complete_findings")) { str_array_free(s->decisions, s->decision_count); s->decisions = NULL; s->decision_count = 0; set_string(&s->triage_note, NULL); }
     pane_header_changed(s->base.pane);
+    // Until the session is read again the loop chip would act on the old one, and a second click resend the same `on`.
+    s->reloading = true;
     // A Clear or a compaction hides lines already on screen, so the transcript is read again whole.
     refresh(s, str_eq(name, "clear") || str_eq(name, "compact"));
 }
@@ -201,15 +214,12 @@ static void confirm_and_mutate(ConversationScreen *s, const char *action) {
     if (str_eq(action, "delete")) title = "Permanently delete this conversation and its transcript?";
     else if (str_eq(action, "cancel")) title = "Stop the running agent?";
     else if (str_eq(action, "close")) title = "Close this conversation?";
-    else if (str_eq(action, "review_loop")) title = "Turn on the review loop? Each push gets a paid review round, and may start one now.";
     else title = "Reopen this conversation?";
     s->dialog_open = true;
     bool ok = app_confirm(title, NULL, "Confirm", str_eq(action, "delete") || str_eq(action, "cancel"));
     s->dialog_open = false;
     if (!ok) return;
-    Json *extra = NULL;
-    if (str_eq(action, "review_loop")) { extra = json_object(); json_set_bool(extra, "on", true); }
-    mutate(s, action, extra);
+    mutate(s, action, NULL);
 }
 
 // MARK: - Voice
@@ -528,10 +538,16 @@ static void conversation_layout(Screen *base, Doc *doc) {
         int box = doc_box_begin(doc, x, w, px(10), blend(theme.danger, theme.canvas, 0.15), theme.danger, px(8));
         doc_item(doc, box)->hover_fill = false;
         doc_notice(doc, x + px(12), w - px(24), s->write_error);
-        doc_space(doc, px(4));
-        doc_text(doc, x + px(12), w - px(24), "The action may have completed. Check the latest conversation before trying again.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-        doc_space(doc, px(8));
-        doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, ACT_REFRESH_OUTCOME, 0, !s->loading && !s->busy);
+        // Only a failure that is not a refusal leaves the outcome unknown; a refusal changed nothing.
+        if (s->uncertain) {
+            doc_space(doc, px(4));
+            doc_text(doc, x + px(12), w - px(24), "The action may have completed. Check the latest conversation before trying again.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+            doc_space(doc, px(8));
+            doc_button(doc, x + px(12), 0, "Refresh and check outcome", BUTTON_BORDERED, ACT_REFRESH_OUTCOME, 0, !s->loading && !s->busy);
+        } else {
+            doc_space(doc, px(8));
+            doc_button(doc, x + px(12), 0, "Dismiss", BUTTON_BORDERED, ACT_DISMISS_ERROR, 0, true);
+        }
         doc_box_end(doc, box, px(10));
         doc_space(doc, px(12));
     }
@@ -707,8 +723,8 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
     case MENU_WEBHOOK: app_push_detail(webhook_screen_new(ss)); break;
-    case MENU_LOOP_OFF: { Json *extra = json_object(); json_set_bool(extra, "on", false); mutate(s, "review_loop", extra); break; }
-    case MENU_LOOP_ON: confirm_and_mutate(s, "review_loop"); break;
+    case MENU_LOOP_OFF:
+    case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); mutate(s, "review_loop", extra); break; }
     case MENU_RENAME: {
         s->renaming = true; s->dialog_open = true;
         char *title = dialog_rename(app_window(), session_display_title(ss));
@@ -761,7 +777,8 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
         open_web_url(url);
         break;
     }
-    case ACT_REFRESH_OUTCOME: s->uncertain = false; set_string(&s->write_error, NULL); refresh(s, false); pane_relayout(base->pane); break;
+    case ACT_REFRESH_OUTCOME: s->uncertain = false; s->reloading = true; set_string(&s->write_error, NULL); refresh(s, false); pane_relayout(base->pane); break;
+    case ACT_DISMISS_ERROR: set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_REOPEN: confirm_and_mutate(s, "reopen"); break;
     }
 }
@@ -796,6 +813,23 @@ static bool chip_shown(ConversationScreen *s, int chip) {
     return shown;
 }
 static bool chip_live(int chip) { return chip == CHIP_LOOP; }
+/// What the loop chip costs, since it asks nothing first: under the composer whatever else its note says.
+static const char *loop_cost(ConversationScreen *s) {
+    if (!chip_shown(s, CHIP_LOOP)) return NULL;
+    return session_review_loop_on(session(s)) ? "Review loop: a paid review round per push; turning it off won't stop a running round"
+                                              : "Turning on the review loop may start a paid review round now, then one per push";
+}
+/// The cost wraps rather than ellipsizes, so a narrow pane still shows all of it.
+/// Measured once per text, width and scale: the footer's height is asked for on every keystroke.
+static int loop_cost_height(ConversationScreen *s, Canvas *cv, int width) {
+    const char *cost = loop_cost(s);
+    if (!cost) return 0;
+    if (cost != s->cost_text || width != s->cost_width || px(16) != s->cost_unit) {
+        s->cost_text = cost; s->cost_width = width; s->cost_unit = px(16);
+        s->cost_h = measure_text(cv, cost, width, FONT_FOOTNOTE, DT_CENTER | DT_WORDBREAK);
+    }
+    return s->cost_h;
+}
 static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
     int x = 0, y = 0, h = px(24), gap = px(4);
     for (int c = 0; c < CHIP_COUNT; c++) {
@@ -824,7 +858,8 @@ static int conversation_footer_height(Screen *base, int width) {
     int chips = chips_layout(s, cv, inner, NULL);
     int files = can_message(s) ? attach_list_height(s->files, cv, inner - px(24)) : 0;
     int box = can_message(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
-    int h = px(8) + chips + px(8) + box + px(6) + px(16) + px(14);
+    int cost = can_message(s) ? loop_cost_height(s, cv, inner) : 0;
+    int h = px(8) + chips + px(8) + box + px(6) + px(16) + cost + px(14);
     return h;
 }
 static void conversation_footer_layout(Screen *base, const RECT *rc) {
@@ -854,12 +889,14 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
         SetRectEmpty(&g_chip_rc[c]);
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
-        if (chip_live(c) && can) g_chip_rc[c] = r;
+        bool live = chip_live(c) && can && !(c == CHIP_LOOP && s->reloading);
+        if (live) g_chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
-        fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
+        // A held chip looks held whatever the loop's state: an accent one would seem to take the click it ignores.
+        fill_round_rect(cv, &r, px(6), theme.raise, on && live ? theme.accent : theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
-        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : chip_live(c) && can ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, live ? (on ? theme.accent : theme.ink) : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label);
     }
     int top = y0 + chips + px(8);
@@ -924,11 +961,15 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
             if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
-    // `#composer-note`: what a message sent now does.
+    // `#composer-note`: what a message sent now does, then on its own row what the loop chip costs, so it stays put.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
-                      : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files" : "";
-    draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                      : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files"
+                      : "";
+    if (*text) draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    // The footer's height already holds the cost, so it is drawn to the bottom margin without measuring it again.
+    const char *cost = loop_cost(s);
+    if (cost) { RECT cr = { note.left, note.bottom, note.right, rc->bottom - px(14) }; draw_text(cv, cost, &cr, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
 }
 static void conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
