@@ -65,26 +65,18 @@ struct MeetAudio {
     ma_context context;
     bool has_context;
     Loopback *loopback;
-    ma_device mic, cable;
-    bool has_mic, has_cable;
-    Ring heard_meeting, heard_mic;   // what the assistant hears
-    Ring mic_to_cable;               // the user's voice on its way into the meeting
+    ma_device cable;
+    bool has_cable;
+    Ring heard_meeting;              // what the assistant hears
     Ring said_cable;                 // the assistant's voice
     volatile LONG muted;
 };
 
 static void on_loopback(void *ctx, const int16_t *pcm, size_t samples) { ring_write(&((MeetAudio *)ctx)->heard_meeting, pcm, samples); }
-static void on_mic(ma_device *d, void *out, const void *in, ma_uint32 frames) {
-    (void)out;
-    MeetAudio *a = d->pUserData;
-    ring_write(&a->heard_mic, in, frames);
-    ring_write(&a->mic_to_cable, in, frames);
-}
 static void on_cable(ma_device *d, void *out, const void *in, ma_uint32 frames) {
     (void)in;
     MeetAudio *a = d->pUserData;
     memset(out, 0, frames * sizeof(int16_t));
-    ring_mix(&a->mic_to_cable, out, frames);
     ring_mix(&a->said_cable, out, frames);
 }
 
@@ -92,9 +84,8 @@ static void on_cable(ma_device *d, void *out, const void *in, ma_uint32 frames) 
 
 static bool names_cable(const char *name) { return name && strstr(name, "CABLE") && strstr(name, "VB-Audio"); }
 
-/// Finds the cable's input among the playback devices, and the first real microphone (the default one unless that is
-/// the cable's output, which would feed the assistant its own voice).
-static bool find_devices(ma_context *ctx, ma_device_id *cable, char **cable_name, ma_device_id *mic, bool *has_mic) {
+/// Finds the cable's input among the playback devices.
+static bool find_cable(ma_context *ctx, ma_device_id *cable, char **cable_name) {
     ma_device_info *playback = NULL, *capture = NULL;
     ma_uint32 np = 0, nc = 0;
     if (ma_context_get_devices(ctx, &playback, &np, &capture, &nc) != MA_SUCCESS) return false;
@@ -103,11 +94,6 @@ static bool find_devices(ma_context *ctx, ma_device_id *cable, char **cable_name
         if (!names_cable(playback[i].name) || !strstr(playback[i].name, "Input")) continue;
         *cable = playback[i].id; found = true;
         if (cable_name) *cable_name = xstrdup(playback[i].name);
-    }
-    *has_mic = false;
-    if (mic) {
-        for (ma_uint32 i = 0; i < nc && !*has_mic; i++) if (capture[i].isDefault && !names_cable(capture[i].name)) { *mic = capture[i].id; *has_mic = true; }
-        for (ma_uint32 i = 0; i < nc && !*has_mic; i++) if (!names_cable(capture[i].name)) { *mic = capture[i].id; *has_mic = true; }
     }
     return found;
 }
@@ -120,9 +106,9 @@ static bool open_context(ma_context *ctx) {
 char *meet_cable_name(void) {
     ma_context ctx;
     if (!open_context(&ctx)) return NULL;
-    ma_device_id cable; char *name = NULL; bool has_mic;
+    ma_device_id cable; char *name = NULL;
     memset(&cable, 0, sizeof cable);
-    find_devices(&ctx, &cable, &name, NULL, &has_mic);
+    find_cable(&ctx, &cable, &name);
     ma_context_uninit(&ctx);
     return name;
 }
@@ -142,14 +128,12 @@ MeetAudio *meet_audio_start(unsigned pid, char **error, char **note) {
     *error = NULL; *note = NULL;
     MeetAudio *a = xcalloc(1, sizeof *a);
     ring_init(&a->heard_meeting, MS(5000), MS(2000));
-    ring_init(&a->heard_mic, MS(5000), MS(2000));
-    ring_init(&a->mic_to_cable, MS(1000), MS(150));
     ring_init(&a->said_cable, MS(120000), MS(120000));
     if (!open_context(&a->context)) { *error = xstrdup("Windows audio (WASAPI) could not be opened."); goto fail; }
     a->has_context = true;
-    ma_device_id cable, mic; bool has_mic = false;
-    memset(&cable, 0, sizeof cable); memset(&mic, 0, sizeof mic);
-    if (!find_devices(&a->context, &cable, NULL, &mic, &has_mic)) {
+    ma_device_id cable;
+    memset(&cable, 0, sizeof cable);
+    if (!find_cable(&a->context, &cable, NULL)) {
         *error = xstrdup("The virtual microphone was not found. Install VB-Cable (free, from vb-audio.com), restart Windows, then pick \xE2\x80\x9C" "CABLE Output\xE2\x80\x9D as the microphone in your meeting app.");
         goto fail;
     }
@@ -157,17 +141,10 @@ MeetAudio *meet_audio_start(unsigned pid, char **error, char **note) {
     c.playback.pDeviceID = &cable;
     if (ma_device_init(&a->context, &c, &a->cable) != MA_SUCCESS) { *error = xstrdup("The virtual cable could not be opened for playback."); goto fail; }
     a->has_cable = true;
-    if (has_mic) {
-        c = device_config(ma_device_type_capture, on_mic, a);
-        c.capture.pDeviceID = &mic;
-        a->has_mic = ma_device_init(&a->context, &c, &a->mic) == MA_SUCCESS;
-    }
-    if (!a->has_mic) *note = xstrdup("No microphone could be opened: the meeting hears only the assistant.");
     if (ma_device_start(&a->cable) != MA_SUCCESS) { *error = xstrdup("The virtual cable could not start."); goto fail; }
     // Per-app loopback: the meeting app's tree, or every app but this one.
     a->loopback = loopback_start(pid ? pid : GetCurrentProcessId(), pid == 0, on_loopback, a, error);
     if (!a->loopback) goto fail;
-    if (a->has_mic) ma_device_start(&a->mic);
     return a;
 fail:
     meet_audio_stop(a);
@@ -177,17 +154,15 @@ fail:
 void meet_audio_stop(MeetAudio *a) {
     if (!a) return;
     loopback_stop(a->loopback);
-    if (a->has_mic) ma_device_uninit(&a->mic);
     if (a->has_cable) ma_device_uninit(&a->cable);
     if (a->has_context) ma_context_uninit(&a->context);
-    ring_free(&a->heard_meeting); ring_free(&a->heard_mic); ring_free(&a->mic_to_cable); ring_free(&a->said_cable);
+    ring_free(&a->heard_meeting); ring_free(&a->said_cable);
     free(a);
 }
 
 void meet_audio_take_input(MeetAudio *a, int16_t *out, size_t samples) {
     memset(out, 0, samples * sizeof *out);
     ring_mix(&a->heard_meeting, out, samples);
-    ring_mix(&a->heard_mic, out, samples);
 }
 void meet_audio_play(MeetAudio *a, const int16_t *pcm, size_t samples) {
     if (a->muted) return;

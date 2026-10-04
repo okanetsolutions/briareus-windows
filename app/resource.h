@@ -46,6 +46,13 @@
 #define IDC_INPUT               501
 #define IDC_HINT                502
 
+#define IDD_MEET_PROMPT         600
+#define IDC_MEET_PROMPT         601
+#define IDC_MEET_FIRST          602
+#define IDC_MEET_RESET          603
+#define IDC_MEET_PROMPT_LABEL   604
+#define IDC_MEET_FIRST_LABEL    605
+
 #define IDS_APP_TITLE           1000
 
 #endif

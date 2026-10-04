@@ -25,9 +25,13 @@ static char *refusal(HINTERNET request, DWORD status) {
     char buffer[4096]; DWORD n = 0;
     while (body.len < 65536 && WinHttpReadData(request, buffer, sizeof buffer, &n) && n) str_append(&body, buffer, n);
     Json *j = body.len ? json_parse(body.data, body.len) : NULL;
+    // OpenAI says why in error.message, ElevenLabs in detail.message or detail.
+    const Json *detail = json_get(j, "detail");
     const char *message = json_str_nonempty(json_get(json_get(j, "error"), "message"));
+    if (!message) message = json_str_nonempty(json_get(detail, "message"));
+    if (!message) message = json_str_nonempty(detail);
     char *text = message ? xstrfmt("HTTP %lu: %s", (unsigned long)status, message)
-                         : status == 401 ? xstrdup("HTTP 401: the OpenAI API key was refused.")
+                         : status == 401 ? xstrdup("HTTP 401: the API key was refused.")
                          : xstrfmt("HTTP %lu: the server refused the connection.", (unsigned long)status);
     json_free(j); str_free(&body);
     return text;
@@ -54,7 +58,7 @@ WebSocket *ws_connect(const char *host, const char *path, const char *const *hea
     BOOL sent = WinHttpSendRequest(request, wh, (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) && WinHttpReceiveResponse(request, NULL);
     SecureZeroMemory(wh, wcslen(wh) * sizeof *wh);
     free(wh);
-    if (!sent) { *error = last_error("Connecting to OpenAI"); goto fail; }
+    if (!sent) { *error = last_error("Connecting"); goto fail; }
     DWORD status = 0, size = sizeof status;
     WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
     if (status != 101) { *error = refusal(request, status); goto fail; }

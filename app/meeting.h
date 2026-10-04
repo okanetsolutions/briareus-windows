@@ -1,27 +1,32 @@
-// The meeting assistant: one meeting at a time, joined from a conversation, whose agent answers what the voice model
-// cannot. It runs on until left, whatever screen is shown. Its settings and OpenAI API key are this computer's, and
-// every meeting is recorded here with its time and costs so the two models can be compared.
+// The meeting assistant: one meeting at a time, joined from a project, held by an ElevenLabs agent speaking in the user's
+// voice, which looks the project up with read-only tools (its conversations, pull requests, findings and issues). It
+// runs on until left, whatever screen is shown. Its settings and the ElevenLabs API key are this computer's, and every
+// meeting is recorded here with its time and cost.
 #ifndef BRIAREUS_MEETING_H
 #define BRIAREUS_MEETING_H
 #include "meet.h"
 #include "models.h"
+#include <windows.h>
 #include <stdbool.h>
 
 // MARK: - Settings
 
-/// The OpenAI API key, in Windows Credential Manager; NULL without one (`*failed` when the store could not be read).
-char *meeting_key_read(bool *failed);
-bool meeting_key_save(const char *key);
-bool meeting_key_remove(void);
+typedef enum { MEETING_KEY_OPENAI, MEETING_KEY_ELEVENLABS } MeetingKey;
+/// An API key, in Windows Credential Manager; NULL without one (`*failed` when the store could not be read).
+char *meeting_key_read(MeetingKey which, bool *failed);
+bool meeting_key_save(MeetingKey which, const char *key);
+bool meeting_key_remove(MeetingKey which);
 /// Whether a key is saved, without reading it out.
-bool meeting_has_key(void);
+bool meeting_has_key(MeetingKey which);
 
 typedef struct {
     char *name;          // who the assistant speaks for
-    char *wake_words;    // what makes an addressed Realtime assistant answer
-    char *voice;
+    char *wake_words;    // what makes an addressed assistant answer
+    char *eleven_voice;  // the ElevenLabs voice ID it speaks with
     bool introduce;      // it says who it is as it joins
-    bool independent;    // it takes part on its own and may have the agent make changes
+    bool independent;    // it takes part on its own
+    char *prompt;        // the system prompt the user wrote, with placeholders; empty for the default
+    char *first_message; // what it says as it joins, as the user wrote it; NULL for the default
 } MeetingSettings;
 void meeting_settings_load(MeetingSettings *s);
 void meeting_settings_save(const MeetingSettings *s);
@@ -36,22 +41,30 @@ void meeting_history_clear(void);
 // MARK: - The meeting
 
 typedef enum { MEETING_OFF, MEETING_CONNECTING, MEETING_LIVE, MEETING_LEAVING } MeetingState;
-/// Joins with `model`, listening to app `pid` (0: every app but Briareus) called `source`. Says why in an alert and
-/// returns false when it cannot start.
-bool meeting_join(const Session *session, MeetModel model, unsigned pid, const char *source);
+/// Joins a meeting about `project` with the ElevenLabs agent, listening to app `pid` (0: every app but Briareus) called `source`.
+/// Says why in an alert and returns false when it cannot start.
+bool meeting_join(const Project *project, unsigned pid, const char *source);
 void meeting_leave(void);
 MeetingState meeting_state(void);
-/// Whether the meeting runs for this conversation.
-bool meeting_for(const char *session_id);
-MeetModel meeting_model(void);
+/// Whether the meeting is about this project.
+bool meeting_for(const char *repo);
 void meeting_set_muted(bool muted);
 bool meeting_muted(void);
 /// Asks the assistant to answer what was just said.
 void meeting_answer_now(void);
-/// "GPT-Live 1 · 3:12 · $0.16 · listening", for the conversation's header. New string.
+/// "🎙 ElevenLabs agent · Zoom · 3:12 · $0.26 · listening", for the project's header. New string.
 char *meeting_status(void);
 /// The meeting's transcript so far. New string.
 char *meeting_transcript(void);
+/// The transcript of the meeting about `repo`, running or the last one left, as lines of "Meeting: …", "Assistant: …"
+/// and "Lookup: …"; NULL when there is none. New string.
+char *meeting_transcript_for(const char *repo);
+/// Shows the agent's system prompt and first message to write before joining, from what was written last or the
+/// default; saves them and returns true on Join.
+bool meeting_prompt_edit(HWND owner, const Project *project);
+/// 🎙 Meet's menu at `pt`: join a meeting about `project`, listening to a meeting app; or, in a meeting, mute, answer
+/// now, copy the transcript or leave. Returns whether anything was chosen.
+bool meeting_menu(const Project *project, HWND owner, POINT pt);
 /// The app quits: the meeting is left at once.
 void meeting_shutdown(void);
 
