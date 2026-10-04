@@ -102,6 +102,7 @@ static void refresh_done(void *owner, Request *req) {
     ConversationScreen *s = owner;
     s->loading = false;
     bool full = req->arg != 0;
+    bool read = false;
     if (!req->ok) {
         request_error_into(&s->error, req);
         s->loaded = true;
@@ -111,7 +112,7 @@ static void refresh_done(void *owner, Request *req) {
         Session next;
         if (session_parse(json_get(req->result, "session"), &next)) {
             if (s->has_snapshot) session_free(&s->snapshot);
-            s->snapshot = next; s->has_snapshot = true;
+            s->snapshot = next; s->has_snapshot = true; read = true;
         }
         if (full) { transcript_free(&s->transcript); transcript_init(&s->transcript); }
         transcript_append(&s->transcript, events);
@@ -127,13 +128,16 @@ static void refresh_done(void *owner, Request *req) {
     }
     pane_relayout(s->base.pane);
     pane_header_changed(s->base.pane);
-    // A read asked for while this one was out goes now; the session a mutation changed is current once it lands.
-    if (s->pending_full || s->pending_refresh) { bool f = s->pending_full; s->pending_full = s->pending_refresh = false; refresh(s, f); }
-    else s->reloading = false;
+    // A read asked for while this one was out goes now; after a failed one it waits for the poller's retry and its backoff.
+    if (req->ok && (s->pending_full || s->pending_refresh)) { bool f = s->pending_full; s->pending_full = s->pending_refresh = false; refresh(s, f); }
+    // The session a mutation changed is current only once a read of it lands.
+    else if (read) s->reloading = false;
 }
 static void refresh(ConversationScreen *s, bool full) {
     // A poll already reading must not swallow a refresh, which waits its turn.
     if (s->loading) { if (full) s->pending_full = true; else s->pending_refresh = true; return; }
+    // A read still queued (after a failed one, or one the hidden screen cancelled) is this one, not a second after it.
+    full = full || s->pending_full; s->pending_full = s->pending_refresh = false;
     s->loading = true;
     if (!s->restored) {
         // Saved events show at once and move the cursor, so only what happened since is downloaded.
@@ -773,7 +777,7 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
         open_web_url(url);
         break;
     }
-    case ACT_REFRESH_OUTCOME: s->uncertain = false; set_string(&s->write_error, NULL); refresh(s, false); pane_relayout(base->pane); break;
+    case ACT_REFRESH_OUTCOME: s->uncertain = false; s->reloading = true; set_string(&s->write_error, NULL); refresh(s, false); pane_relayout(base->pane); break;
     case ACT_DISMISS_ERROR: set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_REOPEN: confirm_and_mutate(s, "reopen"); break;
     }
@@ -888,10 +892,11 @@ static void conversation_footer_paint(Screen *base, Canvas *cv, const RECT *rc) 
         bool live = chip_live(c) && can && !(c == CHIP_LOOP && s->reloading);
         if (live) g_chip_rc[c] = r;
         bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
-        fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
+        // A held chip looks held whatever the loop's state: an accent one would seem to take the click it ignores.
+        fill_round_rect(cv, &r, px(6), theme.raise, on && live ? theme.accent : theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
-        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : live ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, live ? (on ? theme.accent : theme.ink) : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label);
     }
     int top = y0 + chips + px(8);
