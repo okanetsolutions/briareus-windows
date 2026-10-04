@@ -5,6 +5,7 @@
 #include "str.h"
 #include "ws.h"
 #include "api.h"
+#include "dialogs.h"
 #include <process.h>
 #include <shlobj.h>
 #include <stdio.h>
@@ -54,9 +55,13 @@ bool meeting_has_key(MeetingKey which) {
 #define SETTINGS_KEY L"Software\\Okanet\\Briareus\\Meeting"
 
 static char *reg_string(const wchar_t *name) {
-    wchar_t buffer[1024]; DWORD size = sizeof buffer, type = 0;
-    if (RegGetValueW(HKEY_CURRENT_USER, SETTINGS_KEY, name, RRF_RT_REG_SZ, &type, buffer, &size) != ERROR_SUCCESS) return NULL;
-    return wide_to_utf8(buffer);
+    // Asked for its size first: a prompt runs to thousands of characters.
+    DWORD size = 0;
+    if (RegGetValueW(HKEY_CURRENT_USER, SETTINGS_KEY, name, RRF_RT_REG_SZ, NULL, NULL, &size) != ERROR_SUCCESS || !size) return NULL;
+    wchar_t *buffer = xmalloc(size + sizeof *buffer);
+    char *value = RegGetValueW(HKEY_CURRENT_USER, SETTINGS_KEY, name, RRF_RT_REG_SZ, NULL, buffer, &size) == ERROR_SUCCESS ? wide_to_utf8(buffer) : NULL;
+    free(buffer);
+    return value;
 }
 static bool reg_bool(const wchar_t *name, bool fallback) {
     DWORD value = 0, size = sizeof value;
@@ -84,6 +89,9 @@ void meeting_settings_load(MeetingSettings *s) {
     if (!s->eleven_voice) s->eleven_voice = xstrdup("");
     s->introduce = reg_bool(L"introduce", true);
     s->independent = reg_bool(L"independent", false);
+    s->prompt = reg_string(L"prompt");
+    if (!s->prompt) s->prompt = xstrdup("");
+    s->first_message = reg_string(L"firstMessage");
 }
 void meeting_settings_save(const MeetingSettings *s) {
     HKEY key;
@@ -93,9 +101,12 @@ void meeting_settings_save(const MeetingSettings *s) {
     reg_set_string(key, L"elevenVoice", s->eleven_voice);
     reg_set_bool(key, L"introduce", s->introduce);
     reg_set_bool(key, L"independent", s->independent);
+    reg_set_string(key, L"prompt", s->prompt);
+    if (s->first_message) reg_set_string(key, L"firstMessage", s->first_message);
+    else RegDeleteValueW(key, L"firstMessage");
     RegCloseKey(key);
 }
-void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->eleven_voice); memset(s, 0, sizeof *s); }
+void meeting_settings_free(MeetingSettings *s) { free(s->name); free(s->wake_words); free(s->eleven_voice); free(s->prompt); free(s->first_message); memset(s, 0, sizeof *s); }
 
 // MARK: - History
 
@@ -361,12 +372,12 @@ static unsigned __stdcall sender_main(void *arg) {
 
 /// Readies the agent, connects on a thread of its own, then reads. A meeting left meanwhile is not touched again.
 /// The thread owns its copies: the meeting may finish while it still readies the agent.
-typedef struct { char *key, *name, *wake_words, *project, *voice; bool introduce, independent; LONG gen; } Connect;
+typedef struct { char *key, *name, *wake_words, *project, *voice, *prompt, *first_message; bool introduce, independent; LONG gen; } Connect;
 static unsigned __stdcall connect_main(void *arg) {
     Connect *c = arg;
     LONG gen = c->gen;
     char *error = NULL;
-    MeetPersona persona = { c->name, c->wake_words, c->project, c->voice, c->introduce, c->independent };
+    MeetPersona persona = { c->name, c->wake_words, c->project, c->voice, c->introduce, c->independent, c->prompt, c->first_message };
     char *agent = agent_ready(c->key, &persona, &error);
     WebSocket *ws = NULL;
     if (agent) {
@@ -386,7 +397,7 @@ static unsigned __stdcall connect_main(void *arg) {
         free(why); free(path); free(agent);
     }
     SecureZeroMemory(c->key, strlen(c->key)); free(c->key);
-    free(c->name); free(c->wake_words); free(c->project); free(c->voice); free(c);
+    free(c->name); free(c->wake_words); free(c->project); free(c->voice); free(c->prompt); free(c->first_message); free(c);
     if (!ws) { post(gen, WM_MEET_ENDED, error ? error : xstrdup("The agent could not be readied.")); return 0; }
     EnterCriticalSection(&M.lock);
     bool current = gen == M.gen && M.state == MEETING_CONNECTING;
@@ -595,7 +606,8 @@ bool meeting_join(const Project *project, unsigned pid, const char *source) {
     const char *title = project_title(project);
     M.title = str_eq(title, project->repo) ? xstrdup(title) : xstrfmt("%s (%s)", title, project->repo);
     M.source = xstrdup(source ? source : "every app");
-    M.persona = (MeetPersona){ M.settings.name, M.settings.wake_words, M.title, M.settings.eleven_voice, M.settings.introduce, M.settings.independent };
+    M.persona = (MeetPersona){ M.settings.name, M.settings.wake_words, M.title, M.settings.eleven_voice, M.settings.introduce, M.settings.independent,
+                               M.settings.prompt, M.settings.first_message };
     EnterCriticalSection(&M.log_lock);
     meet_log_free(&M.log); meet_log_init(&M.log);
     set_string(&M.log_repo, project->repo);
@@ -607,6 +619,7 @@ bool meeting_join(const Project *project, unsigned pid, const char *source) {
     c->key = key; c->gen = M.gen;
     c->name = xstrdup(M.settings.name); c->wake_words = xstrdup(M.settings.wake_words); c->project = xstrdup(M.title);
     c->voice = xstrdup(M.settings.eleven_voice); c->introduce = M.settings.introduce; c->independent = M.settings.independent;
+    c->prompt = xstrdup(M.settings.prompt); c->first_message = M.settings.first_message ? xstrdup(M.settings.first_message) : NULL;
     M.reader = (HANDLE)_beginthreadex(NULL, 0, connect_main, c, 0, NULL);
     changed();
     return true;
@@ -663,6 +676,24 @@ static void copy_text(HWND owner, const char *text) {
     if (h) GlobalFree(h);
     free(w);
 }
+bool meeting_prompt_edit(HWND owner, const Project *project) {
+    MeetingSettings s;
+    meeting_settings_load(&s);
+    char *made_prompt = meet_default_prompt(s.independent), *made_first = meet_default_first_message(s.introduce);
+    // What the user wrote last, or the default to start from.
+    char *prompt = xstrdup(*s.prompt ? s.prompt : made_prompt), *first = xstrdup(s.first_message ? s.first_message : made_first);
+    bool join = dialog_meeting_prompt(owner, project_title(project), made_prompt, made_first, &prompt, &first);
+    if (join) {
+        // Kept as written only when it differs from the default, which follows the settings.
+        free(s.prompt); s.prompt = str_eq(prompt, made_prompt) ? xstrdup("") : xstrdup(prompt);
+        free(s.first_message); s.first_message = str_eq(first, made_first) ? NULL : xstrdup(first);
+        meeting_settings_save(&s);
+    }
+    free(prompt); free(first); free(made_prompt); free(made_first);
+    meeting_settings_free(&s);
+    return join;
+}
+
 bool meeting_menu(const Project *project, HWND owner, POINT pt) {
     HMENU menu = CreatePopupMenu();
     MeetApp *apps = NULL; size_t app_count = 0;
@@ -698,7 +729,7 @@ bool meeting_menu(const Project *project, HWND owner, POINT pt) {
         if (chosen >= MEET_ITEM_JOIN && chosen <= MEET_ITEM_JOIN + 50) {
             int i = chosen - MEET_ITEM_JOIN - 1;
             bool app = i >= 0 && (size_t)i < app_count;
-            meeting_join(project, app ? apps[i].pid : 0, app ? apps[i].label : "every app");
+            if (meeting_prompt_edit(owner, project)) meeting_join(project, app ? apps[i].pid : 0, app ? apps[i].label : "every app");
         }
     }
     meet_apps_free(apps, app_count);

@@ -16,6 +16,10 @@ char *dialog_text(HWND owner, const char *caption, const char *label, const char
 char *dialog_password(HWND owner, const char *caption, const char *label);
 /// What an errand needs to be told; true with the text (possibly empty when optional) when started.
 bool dialog_action_input(HWND owner, const BoardAction *action, int number, char **input);
+/// The meeting assistant's system prompt and first message, written before joining a meeting about `project`, from
+/// `*prompt` and `*first_message`; Reset puts the defaults back. True with the texts on Join.
+bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_prompt, const char *default_first,
+                           char **prompt, char **first_message);
 /// Applies the theme to a dialog and its controls.
 void dialog_theme(HWND dialog);
 /// Paints dialog backgrounds and static text in the theme; call from WM_CTLCOLOR* handlers.

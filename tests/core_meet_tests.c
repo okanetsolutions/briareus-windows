@@ -63,6 +63,33 @@ static void test_the_agent_speaks_in_the_users_voice_with_the_project_tools(void
     CHECK(meet_created_id(NULL) == NULL);
 }
 
+static void test_a_prompt_the_user_wrote_replaces_the_default_with_its_placeholders_filled(void) {
+    MeetPersona p = persona(false);
+    char *made = meet_default_prompt(false);
+    CHECK(strstr(made, "You speak for {name}") != NULL && strstr(made, "{wake_words}") != NULL && strstr(made, "{project}") != NULL);
+    CHECK(strstr(made, "list_conversations") != NULL);
+    MeetPersona filled = p;
+    filled.prompt = made;
+    char *same = meet_instructions(&filled), *ours = meet_instructions(&p);
+    CHECK_STR(same, ours);
+    free(same); free(ours); free(made);
+    p.prompt = "Be {name} on {project}; answer to {wake_words}.";
+    p.first_message = "Hello, {name} here.";
+    char *body = meet_agent_body(&p, NULL, 0);
+    Json *j = json_parsez(body);
+    const Json *agent = json_get(json_get(j, "conversation_config"), "agent");
+    CHECK_STR(json_str(json_get(json_get(agent, "prompt"), "prompt")), "Be Nadin on Briareus (nadinyamaui/briareus); answer to Nadin, assistant.");
+    CHECK_STR(json_str(json_get(agent, "first_message")), "Hello, Nadin here.");
+    json_free(j); free(body);
+    // A first message written empty joins silently, whatever introduce says.
+    p.first_message = "";
+    CHECK_OWNED_STR(meet_first_message(&p), "");
+    CHECK_OWNED_STR(meet_default_first_message(false), "");
+    char *first = meet_default_first_message(true);
+    CHECK(strstr(first, "{name}'s AI assistant") != NULL);
+    free(first);
+}
+
 static void test_tools_are_client_tools_that_wait_for_the_app(void) {
     Json *t = parsed(meet_tool_body(MEET_TOOL_READ_PULL_REQUEST));
     const Json *config = json_get(t, "tool_config");
@@ -364,6 +391,7 @@ static void test_issues_are_listed_and_read_with_their_comments(void) {
 
 void meet_tests(void) {
     test_run("the agent speaks in the user's voice with the project tools", test_the_agent_speaks_in_the_users_voice_with_the_project_tools);
+    test_run("a prompt the user wrote replaces the default with its placeholders filled", test_a_prompt_the_user_wrote_replaces_the_default_with_its_placeholders_filled);
     test_run("tools are client tools that wait for the app", test_tools_are_client_tools_that_wait_for_the_app);
     test_run("base64 encodes every tail length", test_base64_encodes_every_tail_length);
     test_run("audio, pongs and tool results go out as the agent names them", test_audio_pongs_and_tool_results_go_out_as_the_agent_names_them);

@@ -18,8 +18,29 @@ static char *serialize_free(Json *j) { char *text = json_serialize(j, false); js
 
 // MARK: - The agent
 
-char *meet_instructions(const MeetPersona *p) {
-    const char *name = name_of(p), *project = p->project && *p->project ? p->project : "this project";
+static char *made_instructions(const MeetPersona *p);
+char *meet_instructions(const MeetPersona *p) { return p->prompt && *p->prompt ? meet_fill(p->prompt, p) : made_instructions(p); }
+
+static const char *project_of(const MeetPersona *p) { return p->project && *p->project ? p->project : "this project"; }
+static const char *wake_words_of(const MeetPersona *p) { return p->wake_words && *p->wake_words ? p->wake_words : name_of(p); }
+char *meet_fill(const char *text, const MeetPersona *p) {
+    char *a = str_replace(text ? text : "", "{name}", name_of(p));
+    char *b = str_replace(a, "{project}", project_of(p));
+    char *c = str_replace(b, "{wake_words}", wake_words_of(p));
+    free(a); free(b);
+    return c;
+}
+char *meet_default_prompt(bool independent) {
+    MeetPersona p = { "{name}", "{wake_words}", "{project}", NULL, true, independent, NULL, NULL };
+    return made_instructions(&p);
+}
+char *meet_default_first_message(bool introduce) {
+    MeetPersona p = { "{name}", NULL, NULL, NULL, introduce, false, NULL, NULL };
+    return meet_first_message(&p);
+}
+
+static char *made_instructions(const MeetPersona *p) {
+    const char *name = name_of(p), *project = project_of(p);
     Str s; str_init(&s);
     str_appendf(&s, "You speak for %s in a live meeting, in %s's own voice, through their microphone. Speak as %s, in the "
                     "first person. You hear everyone else in the meeting. ", name, name, name);
@@ -28,7 +49,7 @@ char *meet_instructions(const MeetPersona *p) {
                         "questions put to %s and give updates as %s would. Do not talk over people. When the discussion does "
                         "not need you, call skip_turn and stay silent. ", name, name, name);
     else {
-        const char *words = p->wake_words && *p->wake_words ? p->wake_words : name;
+        const char *words = wake_words_of(p);
         str_appendf(&s, "Speak only when someone addresses you by one of these names: %s, or asks you to answer. Everything "
                         "else said in the meeting is not for you: call skip_turn and stay silent, without a word. ", words);
     }
@@ -44,6 +65,7 @@ char *meet_instructions(const MeetPersona *p) {
 }
 
 char *meet_first_message(const MeetPersona *p) {
+    if (p->first_message) return meet_fill(p->first_message, p);
     if (!p->introduce) return xstrdup("");
     return xstrfmt("Hi everyone, I'm %s's AI assistant, joining for them. Ask me anything about the project.", name_of(p));
 }

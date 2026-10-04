@@ -33,11 +33,23 @@ const char *meet_model_label(MeetModel model);
 /// Who the assistant speaks for and how, in a meeting about `project`, with ElevenLabs voice `voice`. An `independent`
 /// assistant takes part on its own: it speaks when it judges it useful. Otherwise it speaks only when addressed: when a
 /// turn says one of the comma-separated `wake_words`, and stays silent otherwise.
-typedef struct { const char *name, *wake_words, *project, *voice; bool introduce, independent; } MeetPersona;
+/// A `prompt` or `first_message` the user wrote replaces the one made from these, its placeholders filled.
+typedef struct {
+    const char *name, *wake_words, *project, *voice; bool introduce, independent;
+    const char *prompt, *first_message;
+} MeetPersona;
 
+/// The agent's system prompt: the user's, or the one made from the persona.
 char *meet_instructions(const MeetPersona *p);
-/// What the assistant says as it joins, when `introduce` is set; "" otherwise.
+/// What the assistant says as it joins: the user's, or when `introduce` is set the one made for it; "" otherwise.
 char *meet_first_message(const MeetPersona *p);
+/// The placeholders a prompt the user writes may hold, each filled from the persona.
+#define MEET_PLACEHOLDERS "{name}, {project} and {wake_words}"
+/// The default prompt and first message with their placeholders unfilled, as the user starts writing from. New strings.
+char *meet_default_prompt(bool independent);
+char *meet_default_first_message(bool introduce);
+/// `text` with {name}, {project} and {wake_words} filled from the persona. New string.
+char *meet_fill(const char *text, const MeetPersona *p);
 /// The agent's settings, the body that creates it (POST /v1/convai/agents/create) and brings it up to date (PATCH
 /// /v1/convai/agents/{id}): its name, prompt, LLM, the project's tools by id, skip_turn, the voice and PCM both ways.
 char *meet_agent_body(const MeetPersona *p, char *const *tool_ids, size_t tool_count);

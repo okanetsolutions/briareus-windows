@@ -555,3 +555,65 @@ bool dialog_action_input(HWND owner, const BoardAction *action, int number, char
     *input = s.input ? s.input : xstrdup("");
     return true;
 }
+
+// MARK: - Meeting prompt
+
+typedef struct { const char *project, *default_prompt, *default_first; char **prompt, **first; } MeetPromptState;
+static INT_PTR CALLBACK meet_prompt_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
+    MeetPromptState *s = (MeetPromptState *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    switch (msg) {
+    case WM_INITDIALOG: {
+        s = (MeetPromptState *)lp; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
+        dialog_theme(dialog);
+        dialog_prepare_edit(dialog, IDC_MEET_PROMPT);
+        dialog_prepare_edit(dialog, IDC_MEET_FIRST);
+        SendMessageW(dialog, DM_SETDEFID, IDC_START, 0);
+        SendDlgItemMessageW(dialog, IDC_MEET_PROMPT, EM_SETLIMITTEXT, 60000, 0);
+        char *title = xstrfmt("Meeting assistant \xC2\xB7 %s", s->project);
+        { wchar_t *w = utf8_to_wide(title); SetWindowTextW(dialog, w); free(w); }
+        free(title);
+        set_control_text(dialog, IDC_MEET_PROMPT_LABEL, "System prompt: what the ElevenLabs agent is told. The project's tools and how to use them are part of it.");
+        set_control_text(dialog, IDC_MEET_FIRST_LABEL, "First message: what it says as it joins. Empty: it joins silently.");
+        set_control_text(dialog, IDC_NOTE, "{name}, {project} and {wake_words} are filled in as it joins. Saved for the next meeting.");
+        set_control_text(dialog, IDC_MEET_PROMPT, *s->prompt);
+        set_control_text(dialog, IDC_MEET_FIRST, *s->first);
+        SetFocus(GetDlgItem(dialog, IDC_MEET_PROMPT));
+        SendDlgItemMessageW(dialog, IDC_MEET_PROMPT, EM_SETSEL, 0, 0);
+        return FALSE;
+    }
+    case WM_CTLCOLORSTATIC: return dialog_static_color(dialog, wp, lp, theme.secondary);
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_MEET_PROMPT, IDC_MEET_FIRST }; dialog_paint_frames(dialog, ids, 2); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDC_START) ? TRUE : FALSE;
+    case WM_COMMAND:
+        if (!s) return FALSE;
+        switch (LOWORD(wp)) {
+        case IDC_MEET_PROMPT: case IDC_MEET_FIRST:
+            if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, LOWORD(wp));
+            return TRUE;
+        case IDC_MEET_RESET:
+            set_control_text(dialog, IDC_MEET_PROMPT, s->default_prompt);
+            set_control_text(dialog, IDC_MEET_FIRST, s->default_first);
+            return TRUE;
+        case IDC_START: {
+            char *prompt = control_text(dialog, IDC_MEET_PROMPT), *first = control_text(dialog, IDC_MEET_FIRST);
+            free(*s->prompt); *s->prompt = str_trim(prompt);
+            free(*s->first); *s->first = str_trim(first);
+            free(prompt); free(first);
+            // An empty prompt is the default.
+            if (!**s->prompt) { free(*s->prompt); *s->prompt = xstrdup(s->default_prompt); }
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL: EndDialog(dialog, IDCANCEL); return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE: EndDialog(dialog, IDCANCEL); return TRUE;
+    }
+    return FALSE;
+}
+bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_prompt, const char *default_first,
+                           char **prompt, char **first_message) {
+    MeetPromptState s = { project, default_prompt, default_first, prompt, first_message };
+    return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_MEET_PROMPT), owner, meet_prompt_proc, (LPARAM)&s) == IDOK;
+}

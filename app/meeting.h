@@ -25,6 +25,8 @@ typedef struct {
     char *eleven_voice;  // the ElevenLabs voice ID it speaks with
     bool introduce;      // it says who it is as it joins
     bool independent;    // it takes part on its own
+    char *prompt;        // the system prompt the user wrote, with placeholders; empty for the default
+    char *first_message; // what it says as it joins, as the user wrote it; NULL for the default
 } MeetingSettings;
 void meeting_settings_load(MeetingSettings *s);
 void meeting_settings_save(const MeetingSettings *s);
@@ -57,6 +59,9 @@ char *meeting_transcript(void);
 /// The transcript of the meeting about `repo`, running or the last one left, as lines of "Meeting: …", "Assistant: …"
 /// and "Lookup: …"; NULL when there is none. New string.
 char *meeting_transcript_for(const char *repo);
+/// Shows the agent's system prompt and first message to write before joining, from what was written last or the
+/// default; saves them and returns true on Join.
+bool meeting_prompt_edit(HWND owner, const Project *project);
 /// 🎙 Meet's menu at `pt`: join a meeting about `project`, listening to a meeting app; or, in a meeting, mute, answer
 /// now, copy the transcript or leave. Returns whether anything was chosen.
 bool meeting_menu(const Project *project, HWND owner, POINT pt);
