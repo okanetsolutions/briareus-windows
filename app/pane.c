@@ -360,6 +360,16 @@ static BOOL CALLBACK retheme_child(HWND child, LPARAM lp) {
     return TRUE;
 }
 
+/// The HWND render target presents a new frame even when an Edit has not moved. WS_CLIPCHILDREN keeps the Edit out
+/// of the pane's GDI update region, so it needs its own paint after the Direct2D frame has been presented.
+static BOOL CALLBACK repaint_edit(HWND child, LPARAM lp) {
+    (void)lp;
+    wchar_t cls[16]; GetClassNameW(child, cls, 16);
+    if (IsWindowVisible(child) && _wcsicmp(cls, L"Edit") == 0)
+        RedrawWindow(child, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    return TRUE;
+}
+
 static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
     // `::-webkit-scrollbar { width: 10px }` with the palette's thumb and no track.
     int m = max_scroll(p);
@@ -586,7 +596,11 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (!p) return DefWindowProcW(hwnd, msg, wp, lp);
     Screen *s = pane_top(p);
     switch (msg) {
-    case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps); return 0; }
+    case WM_PAINT: {
+        PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps);
+        EnumChildWindows(hwnd, repaint_edit, 0);
+        return 0;
+    }
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
