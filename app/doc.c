@@ -648,15 +648,14 @@ static void paint_task_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 
 // MARK: - Tables
 
-typedef struct { Rich **cells; size_t rows, cols; int *col_x, *col_w, *row_y, *row_h; char *aligns; } TableData;
+// The table item paints the grid; each cell is a text item over it, so it selects and copies like any other text.
+typedef struct { size_t rows, cols; int *col_x, *row_y, *row_h; } TableData;
 static void table_free(void *p) {
     TableData *t = p;
-    for (size_t i = 0; i < t->rows * t->cols; i++) rich_free(t->cells[i]);
-    free(t->cells); free(t->col_x); free(t->col_w); free(t->row_y); free(t->row_h); free(t->aligns); free(t);
+    free(t->col_x); free(t->row_y); free(t->row_h); free(t);
 }
 static void paint_table(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     TableData *t = it->data;
-    int pad = px(8);
     // Header tint, zebra rows and a grid.
     for (size_t r = 0; r < t->rows; r++) {
         RECT row = { rc->left, rc->top + t->row_y[r], rc->right, rc->top + t->row_y[r] + t->row_h[r] };
@@ -667,21 +666,6 @@ static void paint_table(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     for (size_t c = 0; c <= t->cols; c++) {
         int x = c < t->cols ? rc->left + t->col_x[c] : rc->right - 1;
         draw_line(cv, x, rc->top, x, rc->bottom, theme.border);
-    }
-    for (size_t r = 0; r < t->rows; r++) {
-        for (size_t c = 0; c < t->cols; c++) {
-            Rich *cell = t->cells[r * t->cols + c];
-            int cell_w = t->col_w[c] - 2 * pad;
-            int shift = 0;
-            if (t->aligns[c] != 'l') {
-                int widest = 0;
-                for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].x + cell->runs[k].w > widest) widest = cell->runs[k].x + cell->runs[k].w;
-                shift = t->aligns[c] == 'r' ? cell_w - widest : (cell_w - widest) / 2;
-                if (shift < 0) shift = 0;
-            }
-            RECT cr = { rc->left + t->col_x[c] + pad + shift, rc->top + t->row_y[r] + px(5), rc->left + t->col_x[c] + t->col_w[c] - pad, rc->top + t->row_y[r] + t->row_h[r] };
-            rich_paint(doc, NULL, cell, cv, &cr);
-        }
     }
 }
 static void paint_table_copy(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -695,9 +679,10 @@ static void paint_table_copy(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 /// button above its right edge copies it as Markdown.
 static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     TableData *t = xcalloc(1, sizeof *t);
-    t->rows = b->rows; t->cols = b->cols; t->aligns = xstrdup(b->aligns);
-    t->cells = xcalloc(t->rows * t->cols, sizeof *t->cells);
-    t->col_x = xcalloc(t->cols, sizeof *t->col_x); t->col_w = xcalloc(t->cols, sizeof *t->col_w);
+    t->rows = b->rows; t->cols = b->cols;
+    Rich **cells = xcalloc(t->rows * t->cols, sizeof *cells);
+    int *col_w = xcalloc(t->cols, sizeof *col_w);
+    t->col_x = xcalloc(t->cols, sizeof *t->col_x);
     t->row_y = xcalloc(t->rows, sizeof *t->row_y); t->row_h = xcalloc(t->rows, sizeof *t->row_h);
     int pad = px(8);
     FontId cell_font = base == FONT_BODY ? FONT_CALLOUT : base;
@@ -726,15 +711,15 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
         total = 0; for (size_t c = 0; c < t->cols; c++) total += want[c];
     }
     int cx = 0;
-    for (size_t c = 0; c < t->cols; c++) { t->col_x[c] = cx; t->col_w[c] = want[c]; cx += want[c]; }
+    for (size_t c = 0; c < t->cols; c++) { t->col_x[c] = cx; col_w[c] = want[c]; cx += want[c]; }
     int table_w = cx < w ? cx : w;
     int y = 1;
     for (size_t r = 0; r < t->rows; r++) {
         int h = 0;
         for (size_t c = 0; c < t->cols; c++) {
-            int cell_w = t->col_w[c] - 2 * pad; if (cell_w < px(16)) cell_w = px(16);
+            int cell_w = col_w[c] - 2 * pad; if (cell_w < px(16)) cell_w = px(16);
             Rich *cell = rich_layout(doc->cv, b->cells[r * t->cols + c], cell_w, r == 0 ? rich_font(cell_font, SPAN_BOLD) : cell_font, theme.text, false, px(3), ALIGN_LEFT, 0);
-            t->cells[r * t->cols + c] = cell;
+            cells[r * t->cols + c] = cell;
             if (cell->height > h) h = cell->height;
         }
         t->row_y[r] = y; t->row_h[r] = h + px(10);
@@ -755,6 +740,24 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     int i = doc_add(doc, &rc, paint_table);
     Item *it = &doc->items[i];
     it->data = t; it->free_data = table_free;
+    for (size_t r = 0; r < t->rows; r++) {
+        for (size_t c = 0; c < t->cols; c++) {
+            Rich *cell = cells[r * t->cols + c];
+            int cell_w = col_w[c] - 2 * pad;
+            int shift = 0;
+            if (b->aligns[c] != 'l') {
+                int widest = 0;
+                for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].x + cell->runs[k].w > widest) widest = cell->runs[k].x + cell->runs[k].w;
+                shift = b->aligns[c] == 'r' ? cell_w - widest : (cell_w - widest) / 2;
+                if (shift < 0) shift = 0;
+            }
+            RECT cr = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r] + px(5), rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
+            Item *ci = &doc->items[doc_add(doc, &cr, paint_rich)];
+            ci->data = cell; ci->free_data = rich_free; ci->sel = cell; ci->cell = c > 0;
+            for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].link) { ci->action = ACTION_OPEN_LINK; ci->hand = true; break; }
+        }
+    }
+    free(cells); free(col_w);
     doc->y += y;
 }
 
@@ -1174,8 +1177,8 @@ char *doc_selection_text(Doc *doc) {
         if (!it->sel) continue;
         size_t from = i == a.item ? (size_t)a.offset : 0, to = i == b.item ? (size_t)b.offset : it->sel->plain_len;
         if (from >= to) continue;
-        // Items side by side (a bullet and its text) join with a space; stacked ones take a line each.
-        const wchar_t *sep = !any ? L"" : it->rc.top < prev_bottom - px(2) ? L" " : L"\n";
+        // Items side by side (a bullet and its text) join with a space, table cells with a tab; stacked ones take a line each.
+        const wchar_t *sep = !any ? L"" : it->rc.top < prev_bottom - px(2) ? (it->cell ? L"\t" : L" ") : L"\n";
         size_t need = len + wcslen(sep) + (to - from) + 1;
         if (need > cap) { cap = need * 2; out = xrealloc(out, cap * sizeof *out); }
         wcscpy(out + len, sep); len += wcslen(sep);

@@ -27,6 +27,7 @@ struct Item {
     int id;               // a screen's own marker, such as the bottom anchor
     Rich *sel;            // the item's text in runs, relative to rc, when it can be selected
     bool sel_owned;       // `sel` is freed with the item (otherwise it is `data`)
+    bool cell;            // a table cell after its row's first, joined to the one before it with a tab when copied
     char *tip;            // shown in a tooltip while the item is hovered; freed with the item
 };
 
