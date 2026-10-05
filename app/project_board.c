@@ -378,8 +378,9 @@ BoardTab *board_tab_new(const Project *project, Screen *host, int action_base) {
 void board_tab_free(BoardTab *p) {
     if (!p) return;
     request_cancel(&p->req);
-    // The side panel showed one of this board's cards.
-    app_set_overlay(NULL);
+    // The side panel showed one of this board's cards. A board that was never
+    // shown (a duplicate `app_show_detail` throws away) owns no panel.
+    if (p->host->pane) app_set_overlay(NULL);
     project_board_free(&p->board);
     project_free(&p->project); free(p->error); free(p->assignee);
     free(p);
