@@ -1128,6 +1128,37 @@ static void test_project_boards_carry_why_github_refused(void) {
     j = json_parsez("{\"columns\":[],\"projectsError\":\"\"}"); CHECK(project_board_parse(j, &b)); CHECK(b.error == NULL); project_board_free(&b); json_free(j);
     j = json_parsez("[]"); CHECK(!project_board_parse(j, &b)); json_free(j);
 }
+static void test_project_board_cards_list_their_pull_requests(void) {
+    Json *j = json_parsez("{\"columns\":[{\"name\":\"Todo\",\"count\":4,\"items\":["
+        "{\"type\":\"issue\",\"repo\":\"O/R\",\"number\":7,\"title\":\"a\"},"
+        "{\"type\":\"issue\",\"repo\":\"o/other\",\"number\":7,\"title\":\"b\"},"
+        "{\"type\":\"pull\",\"repo\":\"o/r\",\"number\":7,\"title\":\"c\"},"
+        "{\"type\":\"issue\",\"repo\":\"o/r\",\"number\":9,\"title\":\"d\"}]}]}");
+    Json *issues = json_parsez("[{\"number\":7,\"title\":\"a\",\"pulls\":["
+        "{\"number\":20,\"title\":\"Fix a\",\"url\":\"https://github.com/o/r/pull/20\",\"state\":\"open\"},"
+        "{\"number\":5,\"title\":\"Elsewhere\",\"repo\":\"o/other\",\"state\":\"open\"}]}]");
+    Json *pulls = json_parsez("[{\"number\":20,\"title\":\"Fix a\",\"issues\":[{\"number\":7,\"title\":\"a\"}]},"
+        "{\"number\":21,\"title\":\"Also a\",\"draft\":true,\"url\":\"https://github.com/o/r/pull/21\",\"issues\":[{\"number\":7,\"title\":\"a\"}]},"
+        "{\"number\":22,\"title\":\"Other 7\",\"issues\":[{\"number\":7,\"title\":\"b\",\"repo\":\"o/other\"}]}]");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    size_t in, pn; IssueSummary *is = issue_summaries_parse(issues, &in); PullSummary *ps = pull_summaries_parse(pulls, &pn);
+    const ProjectCard *cards = b.columns[0].cards;
+    // Those the issue row names first, then the open pull requests naming it that it does not.
+    size_t n; BoardLink *l = project_card_pulls(&cards[0], "o/r", is, in, ps, pn, &n);
+    CHECK_INT((int)n, 3);
+    CHECK_INT(l[0].number, 20); CHECK_INT(l[1].number, 5); CHECK_STR(l[1].repo, "o/other");
+    CHECK_INT(l[2].number, 21); CHECK_STR(l[2].title, "Also a"); CHECK(l[2].draft); CHECK_STR(l[2].state, "open"); CHECK(l[2].repo == NULL);
+    for (size_t i = 0; i < n; i++) board_link_free(&l[i]);
+    free(l);
+    // Another repository's issue, a pull request card, and an issue nothing closes have none.
+    l = project_card_pulls(&cards[1], "o/r", is, in, ps, pn, &n); CHECK_INT((int)n, 0); free(l);
+    l = project_card_pulls(&cards[2], "o/r", is, in, ps, pn, &n); CHECK_INT((int)n, 0); free(l);
+    l = project_card_pulls(&cards[3], "o/r", is, in, ps, pn, &n); CHECK_INT((int)n, 0); free(l);
+    // Without the pulls read yet, nothing.
+    l = project_card_pulls(&cards[0], "o/r", NULL, 0, NULL, 0, &n); CHECK_INT((int)n, 0); free(l);
+    issue_summaries_free(is, in); pull_summaries_free(ps, pn);
+    project_board_free(&b); json_free(j); json_free(issues); json_free(pulls);
+}
 static void test_project_boards_filter_by_assignee(void) {
     Json *j = json_parsez("{\"columns\":["
         "{\"name\":\"Todo\",\"count\":3,\"sums\":{\"Story Points\":9},\"items\":["
@@ -1316,6 +1347,7 @@ void board_tests(void) {
     test_run("project boards read columns, cards and sums", test_project_boards_read_columns_cards_and_sums);
     test_run("project boards carry why GitHub refused", test_project_boards_carry_why_github_refused);
     test_run("project boards filter by assignee", test_project_boards_filter_by_assignee);
+    test_run("project board cards list their pull requests", test_project_board_cards_list_their_pull_requests);
     test_run("project boards keep only the project's cards", test_project_boards_keep_only_the_projects_cards);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);

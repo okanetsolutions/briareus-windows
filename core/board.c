@@ -830,6 +830,25 @@ bool project_card_assigned(const ProjectCard *card, const char *assignee) {
     for (size_t i = 0; i < card->assignee_count; i++) if (str_ieq(card->assignees[i], assignee)) return true;
     return false;
 }
+BoardLink *project_card_pulls(const ProjectCard *card, const char *repo, const IssueSummary *issues, size_t issue_count,
+                              const PullSummary *pulls, size_t pull_count, size_t *count) {
+    *count = 0;
+    if (!str_eq(card->type, "issue") || !card->repo || !fold_eq(card->repo, repo) || card->number < 1) return NULL;
+    const IssueSummary *row = issues_find(issues, issue_count, card->number);
+    BoardLink *out = xcalloc((row ? row->pull_count : 0) + pull_count + 1, sizeof *out);
+    for (size_t i = 0; row && i < row->pull_count; i++) board_link_copy(&out[(*count)++], &row->pulls[i]);
+    for (size_t i = 0; i < pull_count; i++) {
+        const PullSummary *pull = &pulls[i];
+        bool closes = false, listed = false;
+        for (size_t k = 0; k < pull->issue_count && !closes; k++) closes = pull->issues[k].number == card->number && !board_link_is_foreign(&pull->issues[k], repo);
+        for (size_t k = 0; k < *count && !listed; k++) listed = out[k].number == pull->number && !board_link_is_foreign(&out[k], repo);
+        if (!closes || listed) continue;
+        BoardLink *l = &out[(*count)++];
+        l->number = pull->number; l->title = xstrdup(pull->title); l->url = xstrdup(pull->url);
+        l->state = xstrdup("open"); l->draft = pull->draft;
+    }
+    return out;
+}
 FilterOption *project_board_assignees(const ProjectBoard *board, const char *pick, size_t *count) {
     FilterOption *options = NULL; size_t n = 0, cap = 0;
     int nobody = 0;
