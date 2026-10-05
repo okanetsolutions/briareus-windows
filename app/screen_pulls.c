@@ -730,10 +730,15 @@ static void pulls_refresh(Screen *base) {
     pulls_load(s, true);
 }
 static void pulls_activated(Screen *base, bool active) { if (active) pulls_visible(base, true); }
+/// The Board tab's cards are carried between its columns.
+static void pulls_drag(Screen *base, int action, intptr_t arg, POINT pt, DragPhase phase) {
+    PullsScreen *s = (PullsScreen *)base;
+    if (s->tab == TAB_BOARD) board_tab_drag(s->board_tab, action, arg, pt, phase);
+}
 static const ScreenVTable pulls_vt = {
     .destroy = pulls_destroy, .layout = pulls_layout, .header = pulls_header, .action = pulls_action, .timer = pulls_timer,
     .visible = pulls_visible, .refresh = pulls_refresh, .activated = pulls_activated, .place = pulls_place, .context = pulls_context,
-    .command = pulls_command, .key = pulls_key, .can_leave = pulls_can_leave,
+    .command = pulls_command, .key = pulls_key, .can_leave = pulls_can_leave, .drag = pulls_drag,
 };
 Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);

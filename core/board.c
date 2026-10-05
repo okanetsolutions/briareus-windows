@@ -745,6 +745,7 @@ static DEFINE_LIST_FREE(ProjectField, project_fields_free, project_field_free)
 static bool project_card_parse(const Json *value, ProjectCard *out) {
     memset(out, 0, sizeof *out);
     if (!json_is_object(value)) return false;
+    out->id = json_dup_str(json_get(value, "id"));
     out->type = xstrdup(json_str_or(json_get(value, "type"), "issue"));
     out->repo = json_dup_str(json_get(value, "repo"));
     out->number = json_int_or(json_get(value, "number"), 0);
@@ -765,7 +766,7 @@ static bool project_card_parse(const Json *value, ProjectCard *out) {
     return true;
 }
 static void project_card_free(ProjectCard *c) {
-    free(c->type); free(c->repo); free(c->title); free(c->url); free(c->state); free(c->author);
+    free(c->id); free(c->type); free(c->repo); free(c->title); free(c->url); free(c->state); free(c->author);
     str_array_free(c->assignees, c->assignee_count);
     labels_free(c->labels, c->label_count);
     if (c->has_parent) board_link_free(&c->parent);
@@ -779,6 +780,7 @@ static bool project_column_parse(const Json *value, ProjectColumn *out) {
     memset(out, 0, sizeof *out);
     const char *name = json_str(json_get(value, "name"));
     if (!name) return false;
+    out->id = json_dup_str(json_get(value, "id"));
     out->name = xstrdup(name); out->color = json_dup_str(json_get(value, "color"));
     out->cards = project_cards_parse(json_get(value, "items"), &out->card_count);
     out->count = json_int_or(json_get(value, "count"), (int)out->card_count);
@@ -792,7 +794,7 @@ static bool project_column_parse(const Json *value, ProjectColumn *out) {
     return true;
 }
 static void project_column_free(ProjectColumn *c) {
-    free(c->name); free(c->color);
+    free(c->id); free(c->name); free(c->color);
     for (size_t i = 0; i < c->sum_count; i++) free(c->sums[i].name);
     free(c->sums);
     project_cards_free(c->cards, c->card_count);
@@ -819,6 +821,26 @@ void project_board_free(ProjectBoard *b) {
     free(b->title); free(b->url); free(b->view_name); free(b->view_url); free(b->filter); free(b->group_by); free(b->error);
     project_columns_free(b->columns, b->column_count);
     memset(b, 0, sizeof *b);
+}
+/// Adds a card's number fields to a column's totals, or takes them away for a `sign` of -1.
+static void project_column_add(ProjectColumn *column, const ProjectCard *card, int sign) {
+    column->count += sign;
+    for (size_t s = 0; s < column->sum_count; s++) {
+        const ProjectField *f = project_card_field(card, column->sums[s].name);
+        if (f && f->value) column->sums[s].value += sign * strtod(f->value, NULL);
+    }
+}
+bool project_board_move(ProjectBoard *board, size_t from, size_t card, size_t to) {
+    if (from == to || from >= board->column_count || to >= board->column_count || card >= board->columns[from].card_count) return false;
+    ProjectColumn *source = &board->columns[from], *target = &board->columns[to];
+    ProjectCard moved = source->cards[card];
+    memmove(&source->cards[card], &source->cards[card + 1], (source->card_count - card - 1) * sizeof *source->cards);
+    source->card_count--;
+    target->cards = xrealloc(target->cards, (target->card_count + 1) * sizeof *target->cards);
+    target->cards[target->card_count++] = moved;
+    project_column_add(source, &moved, -1);
+    project_column_add(target, &moved, 1);
+    return true;
 }
 const ProjectField *project_card_field(const ProjectCard *card, const char *name) {
     for (size_t i = 0; i < card->field_count; i++) if (str_ieq(card->fields[i].name, name)) return &card->fields[i];

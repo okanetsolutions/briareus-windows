@@ -27,6 +27,7 @@ void doc_begin(Doc *doc, Canvas *cv, int width) {
     doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
     doc->pin_last = doc->pin_bottom = doc->pin_shift = 0;
     doc->regions_kept = doc->region_count; doc->region_count = 0;
+    doc->drag_first = doc->drag_last = 0;
 }
 void doc_end(Doc *doc) { doc->cv = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
@@ -975,7 +976,40 @@ static void paint_item(Doc *doc, Item *it, Canvas *cv, int scroll_x, int scroll_
     RECT rc = { it->rc.left - scroll_x, it->rc.top - scroll_y, it->rc.right - scroll_x, it->rc.bottom - scroll_y };
     if (rc.bottom < clip->top - px(4) || rc.top > clip->bottom + px(4)) return;
     if (rc.right < clip->left || rc.left > clip->right) return;
+    // A carried box leaves an empty slot behind.
+    int i = (int)(it - doc->items);
+    if (i >= doc->drag_first && i < doc->drag_last) { if (i == doc->drag_first) fill_round_rect(cv, &rc, it->radius, theme.sunken, theme.line); return; }
     if (it->paint) it->paint(doc, it, cv, &rc);
+}
+
+// MARK: - Carrying a box
+
+void doc_drag(Doc *doc, int box) {
+    doc->drag_first = doc->drag_last = 0;
+    if (box < 0 || (size_t)box >= doc->count) return;
+    const RECT *b = &doc->items[box].rc;
+    int last = box + 1;
+    while ((size_t)last < doc->count) {
+        const RECT *r = &doc->items[last].rc;
+        if (r->left < b->left || r->right > b->right || r->top < b->top || r->bottom > b->bottom) break;
+        last++;
+    }
+    doc->drag_first = box; doc->drag_last = last;
+}
+void doc_paint_dragged(Doc *doc, Canvas *cv, int x, int y) {
+    if (doc->drag_first >= doc->drag_last) return;
+    Item *box = &doc->items[doc->drag_first];
+    int dx = x - box->rc.left, dy = y - box->rc.top;
+    // Lifted off the page: a shadow under it and the accent round it.
+    RECT shadow = box->rc; OffsetRect(&shadow, dx + px(3), dy + px(4));
+    COLORREF shade = blend(RGB(0, 0, 0), theme.canvas, 0.35);
+    fill_round_rect(cv, &shadow, box->radius, shade, shade);
+    for (int i = doc->drag_first; i < doc->drag_last; i++) {
+        Item *it = &doc->items[i];
+        RECT rc = it->rc; OffsetRect(&rc, dx, dy);
+        if (i == doc->drag_first) { fill_round_rect(cv, &rc, it->radius, it->fill, theme.accent); continue; }
+        if (it->paint) it->paint(doc, it, cv, &rc);
+    }
 }
 /// The items in [first, last) that scroll with the page; the regions' own are painted through their windows.
 static void paint_items(Doc *doc, Canvas *cv, int first, int last, int scroll_x, int scroll_y, const RECT *clip) {

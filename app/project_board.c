@@ -4,8 +4,9 @@
 // with the bar at the bottom, or Shift and the wheel. An assignee picker narrows the cards, as GitHub's filter bar does.
 // Only this project's cards are shown, so a board shared by several repositories reads as this one's. A card opens its
 // issue or pull request in a side panel over the board, as GitHub's board does. An issue card lists the pull requests
-// that close it, from the host's `pulls` read; this project's open the same way, others on GitHub. Read-only: cards are
-// moved on GitHub.
+// that close it, from the host's `pulls` read; this project's open the same way, others on GitHub. A card dragged to
+// another column moves there at once and on GitHub through `project_board_move`, as dragging it on GitHub's board
+// does; a refusal puts the board back as GitHub has it.
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
@@ -29,6 +30,13 @@ struct BoardTab {
     const IssueSummary *issues; size_t issue_count;
     const PullSummary *pulls; size_t pull_count;
     Request *req;
+    // Dragging a card: where the columns are, the one under the carried card, and the move the server is making.
+    int columns_top, column_w, column_step;
+    int drop_column;       // -1 for none
+    char *move_error;      // why the last move failed
+    Request *move_req;
+    // The card the last move carried and where it was, until a board read shows it as GitHub has it.
+    char *moved_id; size_t moved_from, moved_at;
 };
 
 bool board_tab_offered(const Project *project) { return project->has_board && store_supports("project_board"); }
@@ -64,11 +72,19 @@ static void show(BoardTab *p, const Json *answer) {
 
 // MARK: - Loading
 
+static void undo_move(BoardTab *p);
 static void board_done(void *owner, Request *req) {
     BoardTab *p = owner;
     p->loaded = true;
-    if (!req->ok) { request_error_into(&p->error, req); relayout(p); return; }
+    if (!req->ok) {
+        // A move GitHub refused and no board to show instead: the card goes back by hand.
+        if (!p->move_req) undo_move(p);
+        request_error_into(&p->error, req); relayout(p); return;
+    }
+    if (!p->move_req) set_string(&p->moved_id, NULL);
     set_string(&p->error, NULL);
+    // A carried card's arg is its place on the board shown: dropped after the new one replaces it, it would name another card.
+    if (p->host->pane && pane_top(p->host->pane) == p->host) pane_cancel_carry(p->host->pane, p->base + A_CARD);
     show(p, req->result);
     // A refusal is not saved: the board last read stays the one shown the next time.
     if (p->has_board && !p->board.error) { char *key = cache_key(p); cache_store(g_store.cache, req->result, key); free(key); }
@@ -90,8 +106,9 @@ static void load(BoardTab *p, bool fresh) {
 void board_tab_set_pulls(BoardTab *p, const IssueSummary *issues, size_t issue_count, const PullSummary *pulls, size_t pull_count) {
     p->issues = issues; p->issue_count = issue_count; p->pulls = pulls; p->pull_count = pull_count;
 }
-void board_tab_open(BoardTab *p) { if (!p->loaded && !p->req) load(p, false); }
-void board_tab_refresh(BoardTab *p) { load(p, true); relayout(p); }
+// While a card is moving, the read after the move is the first.
+void board_tab_open(BoardTab *p) { if (!p->loaded && !p->req && !p->move_req) load(p, false); }
+void board_tab_refresh(BoardTab *p) { set_string(&p->move_error, NULL); load(p, true); relayout(p); }
 
 // MARK: - Painting
 
@@ -99,7 +116,14 @@ static COLORREF option_color(const char *name, COLORREF fallback) {
     int rgb[3];
     return project_color_rgb(name, rgb) ? RGB(rgb[0], rgb[1], rgb[2]) : fallback;
 }
-static void paint_column(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_round_rect(cv, rc, px(10), theme.sidebar, theme.line); }
+/// A column's frame, lit while a card carried over it would land there.
+typedef struct { const BoardTab *p; int index; } ColumnData;
+static void paint_column(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc;
+    const ColumnData *d = it->data;
+    if (d->p->drop_column == d->index) fill_round_rect(cv, rc, px(10), blend(theme.accent, theme.sidebar, 0.08), theme.accent);
+    else fill_round_rect(cv, rc, px(10), theme.sidebar, theme.line);
+}
 
 /// A column's heading: its option's colour as a ring, its name and how many cards it holds.
 typedef struct { char *name, *count; COLORREF color; } HeadData;
@@ -162,6 +186,11 @@ static BoardLink *card_pulls(const BoardTab *p, const ProjectCard *card, size_t 
 static void card_pulls_free(BoardLink *links, size_t count) { for (size_t i = 0; i < count; i++) board_link_free(&links[i]); free(links); }
 /// Whether a click on the card leads anywhere: to the app's own screen or to GitHub.
 static bool card_opens(const ProjectCard *card) { return card->number > 0 && (card->repo || safe_web_url(card->url)); }
+/// Whether the card can be dragged to another column: the server moves cards, none is on its way already, and no
+/// failed move waits for the read that puts its card back (a second move would cancel that read).
+static bool card_moves(const BoardTab *p, const ProjectCard *card) {
+    return !p->move_req && !p->moved_id && !str_empty(card->id) && !str_eq(card->type, "redacted") && store_supports("project_board_move");
+}
 
 static void layout_card(BoardTab *p, Doc *doc, int x, int w, const ProjectCard *card, intptr_t arg) {
     bool opens = card_opens(card);
@@ -204,6 +233,12 @@ static void layout_card(BoardTab *p, Doc *doc, int x, int w, const ProjectCard *
     str_free(&meta);
     doc_box_end(doc, box, px(10));
     if (opens) doc_box_action(doc, box, p->base + A_CARD, arg);
+    if (card_moves(p, card)) {
+        Item *it = doc_item(doc, box);
+        it->drag = true;
+        // A card that opens nothing still needs an action to be pressed, and so carried.
+        if (!opens) { it->action = p->base + A_CARD; it->arg = arg; }
+    }
 }
 
 /// A column down to `bottom`: its heading stays put and its cards scroll beneath it on their own.
@@ -257,6 +292,7 @@ void board_tab_layout(BoardTab *p, Doc *doc, int w) {
     board_tab_open(p);
     const ProjectBoard *b = &p->board;
     if (p->error) { doc_notice(doc, 0, w, p->error); doc_space(doc, px(10)); }
+    if (p->move_error) { doc_notice(doc, 0, w, p->move_error); doc_space(doc, px(10)); }
     if (!p->has_board) {
         if (!p->error) doc_loading(doc, 0, w, "Loading the board\xE2\x80\xA6");
         return;
@@ -304,10 +340,14 @@ void board_tab_layout(BoardTab *p, Doc *doc, int w) {
     if (p->host->pane) { RECT v = pane_content_rect(p->host->pane); view_h = v.bottom - v.top; }
     int bottom = view_h - px(26);
     if (bottom < top + px(COL_MIN_H)) bottom = top + px(COL_MIN_H);
+    p->columns_top = top; p->column_w = cw; p->column_step = cw + gap;
     for (size_t i = 0; i < n; i++) {
         int x = (int)i * (cw + gap);
         RECT rc = { x, top, x + cw, bottom };
-        doc_add(doc, &rc, paint_column);
+        ColumnData *data = xcalloc(1, sizeof *data);
+        data->p = p; data->index = (int)i;
+        Item *frame = doc_item(doc, doc_add(doc, &rc, paint_column));
+        frame->data = data; frame->free_data = free;
         doc->y = top;
         layout_column(p, doc, x, cw, i, bottom);
     }
@@ -402,22 +442,80 @@ bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt) {
     return true;
 }
 
+// MARK: - Moving cards
+
+/// The column under a content point, or -1 above the columns or between them.
+static int column_at(const BoardTab *p, POINT pt) {
+    if (pt.y < p->columns_top || pt.x < 0 || p->column_step <= 0) return -1;
+    int k = pt.x / p->column_step;
+    if (k >= (int)p->board.column_count || pt.x - k * p->column_step >= p->column_w) return -1;
+    return k;
+}
+static void move_done(void *owner, Request *req) {
+    BoardTab *p = owner;
+    // Moved or not, the board is read again as GitHub has it now: the server has dropped its saved copy.
+    if (!req->ok) request_error_into(&p->move_error, req); else set_string(&p->moved_id, NULL);
+    load(p, !req->ok);
+    relayout(p);
+}
+/// The card shows in its new column at once, at its end; the board read after the server answers puts it in its place.
+static void move_card(BoardTab *p, size_t from, size_t card, size_t to) {
+    if (from >= p->board.column_count || to >= p->board.column_count || card >= p->board.columns[from].card_count) return;
+    Json *args = json_object();
+    json_set_str(args, "repo", p->project.repo);
+    json_set_str(args, "itemId", p->board.columns[from].cards[card].id);
+    const char *column = p->board.columns[to].id;
+    if (column) json_set_str(args, "columnId", column); else json_object_set(args, "columnId", json_null());
+    if (!project_board_move(&p->board, from, card, to)) { json_free(args); return; }
+    set_string(&p->moved_id, json_str_nonempty(json_get(args, "itemId")));
+    p->moved_from = from; p->moved_at = card;
+    set_string(&p->move_error, NULL);
+    // A read on its way would show the card back where it was; the one after the move replaces it.
+    request_cancel(&p->req);
+    store_call("project_board_move", args, 0, p, move_done, 0, &p->move_req);
+    relayout(p);
+}
+/// Puts the card a failed move carried back where it was, when no board read has replaced the guess.
+static void undo_move(BoardTab *p) {
+    if (!p->moved_id || p->moved_from >= p->board.column_count) { set_string(&p->moved_id, NULL); return; }
+    for (size_t k = 0; k < p->board.column_count; k++) {
+        ProjectColumn *c = &p->board.columns[k];
+        for (size_t i = 0; k != p->moved_from && i < c->card_count; i++) {
+            if (!str_eq(c->cards[i].id, p->moved_id) || !project_board_move(&p->board, k, i, p->moved_from)) continue;
+            ProjectColumn *back = &p->board.columns[p->moved_from];
+            size_t at = p->moved_at < back->card_count ? p->moved_at : back->card_count - 1;
+            ProjectCard card = back->cards[back->card_count - 1];
+            memmove(&back->cards[at + 1], &back->cards[at], (back->card_count - 1 - at) * sizeof *back->cards);
+            back->cards[at] = card;
+            k = p->board.column_count; break;
+        }
+    }
+    set_string(&p->moved_id, NULL);
+}
+void board_tab_drag(BoardTab *p, int action, intptr_t arg, POINT pt, DragPhase phase) {
+    if (action != p->base + A_CARD) return;
+    int from = (int)((size_t)arg >> 16), to = phase == DRAG_CANCEL ? -1 : column_at(p, pt);
+    if (to == from) to = -1;
+    p->drop_column = phase == DRAG_MOVE ? to : -1;
+    if (phase == DRAG_DROP && to >= 0) move_card(p, (size_t)from, (size_t)arg & 0xFFFF, (size_t)to);
+}
+
 // MARK: - Lifetime
 
 BoardTab *board_tab_new(const Project *project, Screen *host, int action_base) {
     BoardTab *p = xcalloc(1, sizeof *p);
     project_copy(&p->project, project);
-    p->host = host; p->base = action_base;
+    p->host = host; p->base = action_base; p->drop_column = -1;
     filter_restore(p);
     return p;
 }
 void board_tab_free(BoardTab *p) {
     if (!p) return;
-    request_cancel(&p->req);
+    request_cancel(&p->req); request_cancel(&p->move_req);
     // The side panel showed one of this board's cards. A board that was never
     // shown (a duplicate `app_show_detail` throws away) owns no panel.
     if (p->host->pane) app_set_overlay(NULL);
     project_board_free(&p->board);
-    project_free(&p->project); free(p->error); free(p->assignee);
+    project_free(&p->project); free(p->error); free(p->move_error); free(p->moved_id); free(p->assignee);
     free(p);
 }

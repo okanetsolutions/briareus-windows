@@ -198,6 +198,7 @@ void run_log_clear(RunLog *log);
 typedef struct { char *name, *value, *color; } ProjectField;
 /// One card of a GitHub Projects v2 board. `type` is issue, pull, draft or redacted; a draft has no repo, number or url.
 typedef struct {
+    char *id;   // the project item's node id, what `project_board_move` moves
     char *type, *repo, *title, *url, *state, *author;
     int number;
     bool has_created; time_t created_at;
@@ -209,6 +210,7 @@ typedef struct {
 /// A number field totalled over a column, such as Story Points.
 typedef struct { char *name; double value; } ProjectSum;
 typedef struct {
+    char *id;             // the single-select option or iteration it stands for; NULL for the "No <field>" column
     char *name, *color;   // color: GitHub's name for a single-select option's colour (GRAY, BLUE, …); NULL for none
     int count;
     ProjectSum *sums; size_t sum_count;
@@ -223,6 +225,9 @@ typedef struct {
 } ProjectBoard;
 bool project_board_parse(const Json *value, ProjectBoard *out);
 void project_board_free(ProjectBoard *board);
+/// Moves card `card` of column `from` to the end of column `to`, as a drop shows it before the server answers: both
+/// columns' counts and number fields' totals follow it. False when an index is out of range or the columns are one.
+bool project_board_move(ProjectBoard *board, size_t from, size_t card, size_t to);
 /// A card's field by name, or NULL.
 const ProjectField *project_card_field(const ProjectCard *card, const char *name);
 /// The assignee filter's pick for the cards nobody has; GitHub logins never start with a hyphen.
