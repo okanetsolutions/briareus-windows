@@ -95,6 +95,9 @@ void pane_stick_to_bottom(Pane *pane, bool stick);
 void pane_show_bottom_button(Pane *pane, bool show);
 /// In one column the root screen shows a back button that returns to the sidebar.
 void pane_set_root_back(Pane *pane, bool show, void (*callback)(void *ctx), void *ctx);
+/// The pane floats over the main column as a side panel, as GitHub's board opens an item: a line down its left edge,
+/// and at its root a ✕ (or Escape) that calls `close`.
+void pane_set_overlay(Pane *pane, void (*close)(void *ctx), void *ctx);
 /// The row the sidebar highlights: the detail pane's root screen id.
 void pane_set_selected_id(Pane *pane, const char *id);
 const char *pane_selected_id(Pane *pane);

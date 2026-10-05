@@ -639,6 +639,8 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
+        // The side panel belongs to the Board tab's cards.
+        if (s->tab == TAB_BOARD && arg != TAB_BOARD) app_set_overlay(NULL);
         s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || arg == TAB_MEETING ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
         if (s->tab == TAB_BOARD) board_tab_open(s->board_tab);

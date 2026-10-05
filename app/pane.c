@@ -23,6 +23,7 @@ struct Pane {
     RECT title_action_rect;
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
+    bool overlay;           // a side panel over the main column: ✕ at its root, a line down its left edge
     char *selected_id;
     bool tracking;
     HBRUSH edit_brush;
@@ -60,7 +61,8 @@ Pane *pane_create(HWND parent, bool sidebar) {
     Pane *p = xcalloc(1, sizeof *p);
     p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1; p->tip_item = -1; p->dragging_region = -1;
     doc_init(&p->doc);
-    p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
+    // WS_CLIPSIBLINGS: a side panel's pane lies over the detail's, which must not paint through it.
+    p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
     p->canvas = canvas_for_window(p->hwnd);
     all_panes = xrealloc(all_panes, (pane_count + 1) * sizeof *all_panes);
     all_panes[pane_count++] = p;
@@ -224,6 +226,7 @@ void pane_scroll_to(Pane *p, int content_y) { set_scroll(p, content_y - px(8)); 
 void pane_stick_to_bottom(Pane *p, bool stick) { p->stick_bottom = stick; }
 void pane_show_bottom_button(Pane *p, bool show) { if (p->show_bottom_button != show) { p->show_bottom_button = show; InvalidateRect(p->hwnd, NULL, FALSE); } }
 void pane_set_root_back(Pane *p, bool show, void (*callback)(void *), void *ctx) { p->root_back = show; p->root_back_cb = callback; p->root_back_ctx = ctx; pane_relayout(p); }
+void pane_set_overlay(Pane *p, void (*close)(void *), void *ctx) { p->overlay = true; pane_set_root_back(p, true, close, ctx); }
 void pane_set_selected_id(Pane *p, const char *id) {
     if (str_eq(p->selected_id, id)) return;
     free(p->selected_id); p->selected_id = xstrdup(id);
@@ -310,7 +313,8 @@ static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
         RECT br = { x, cy - size / 2, x + size, cy + size / 2 };
         p->back_rect = br;
         paint_icon_button(cv, &br, p->hover_button == -2);
-        draw_text(cv, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (p->overlay && p->depth <= 1) draw_glyph(cv, 0xE711, &br, FONT_ICON_SMALL, theme.ink);   // ✕ closes the side panel
+        else draw_text(cv, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += size + px(8);
     }
     int right = hr.right - px(18);
@@ -442,6 +446,7 @@ static void paint(Pane *p) {
     } else memset(&p->bottom_button_rect, 0, sizeof p->bottom_button_rect);
     if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, cv, &fr); }
     paint_header(p, cv, &rc);
+    if (p->overlay) draw_line(cv, rc.left, rc.top, rc.left, rc.bottom, theme.line);
     canvas_end(cv);
 }
 

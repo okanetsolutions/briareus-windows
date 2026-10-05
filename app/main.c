@@ -21,6 +21,9 @@
 #define SIDEBAR_WIDTH 268
 #define PANEL_WIDTH 272
 #define NARROW_WIDTH 1024
+// The side panel a board's card opens in covers this share of the main column, at least OVERLAY_MIN_WIDTH.
+#define OVERLAY_SHARE 62
+#define OVERLAY_MIN_WIDTH 560
 // A session's browser docks as a column of its own on the right, beside the conversation, with a divider to drag.
 #define BROWSER_MIN_WIDTH 360
 #define DETAIL_MIN_WIDTH 380
@@ -29,7 +32,7 @@
 static HWND g_main;
 typedef HRESULT (WINAPI *TaskDialogIndirectFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
 static TaskDialogIndirectFn g_task_dialog;
-static Pane *g_pairing, *g_sidebar, *g_detail, *g_panel, *g_browser;
+static Pane *g_pairing, *g_sidebar, *g_detail, *g_panel, *g_browser, *g_overlay;
 static int g_browser_width;    // the docked browser's width once the divider was dragged; 0 for the default
 static bool g_browser_expanded, g_dragging_splitter;
 static bool g_connected_layout;
@@ -45,6 +48,7 @@ static bool is_narrow(void) { RECT rc; GetClientRect(g_main, &rc); return rc.rig
 static bool browser_docked(void) { return g_browser && pane_root(g_browser) != NULL; }
 // The browser column takes the pull request panel's place while it is open.
 static bool panel_shown(void) { return g_panel && pane_root(g_panel) != NULL && !browser_docked(); }
+static bool overlay_shown(void) { return g_overlay && pane_root(g_overlay) != NULL; }
 bool app_browser_dockable(void) { return g_main && !is_narrow() && !IsIconic(g_main); }
 bool app_browser_expanded(void) { return g_browser_expanded; }
 /// The docked browser's left edge, and the divider before it; false when it is not beside the detail.
@@ -71,6 +75,7 @@ static void layout(void) {
         if (g_detail) pane_show(g_detail, false);
         if (g_panel) pane_show(g_panel, false);
         if (g_browser) pane_show(g_browser, false);
+        if (g_overlay) pane_show(g_overlay, false);
         return;
     }
     if (g_pairing) pane_show(g_pairing, false);
@@ -83,6 +88,7 @@ static void layout(void) {
         else { pane_set_bounds(g_sidebar, &rc); pane_show(g_sidebar, true); pane_show(g_detail, false); }
         if (g_panel) pane_show(g_panel, false);
         if (g_browser) pane_show(g_browser, false);
+        if (g_overlay && overlay_shown()) pane_set_bounds(g_overlay, &rc);
     } else {
         pane_set_root_back(g_detail, false, NULL, NULL);
         int sw = px(SIDEBAR_WIDTH), pw = panel_shown() ? px(PANEL_WIDTH) : 0;
@@ -98,6 +104,17 @@ static void layout(void) {
             if (g_browser_expanded) pane_show(g_detail, false);
             else { main.right = splitter.left; pane_set_bounds(g_detail, &main); }
         } else if (g_browser) pane_show(g_browser, false);
+        if (g_overlay && overlay_shown()) {
+            int mw = main.right - main.left, ow = mw * OVERLAY_SHARE / 100;
+            if (ow < px(OVERLAY_MIN_WIDTH)) ow = px(OVERLAY_MIN_WIDTH);
+            if (ow > mw) ow = mw;
+            RECT over = { main.right - ow, main.top, main.right, main.bottom };
+            pane_set_bounds(g_overlay, &over);
+        }
+    }
+    if (g_overlay) {
+        pane_show(g_overlay, overlay_shown());
+        if (overlay_shown()) SetWindowPos(pane_hwnd(g_overlay), HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
 
@@ -126,6 +143,18 @@ void app_set_panel(Screen *screen) {
     if (root && screen && screen->id && str_eq(root->id, screen->id)) { screen->vt->destroy(screen); return; }
     pane_set_root(g_panel, screen);
     layout();
+    InvalidateRect(g_main, NULL, TRUE);
+}
+
+static void close_overlay(void *ctx) { (void)ctx; app_set_overlay(NULL); }
+void app_set_overlay(Screen *screen) {
+    if (!g_overlay) { if (screen) screen->vt->destroy(screen); return; }
+    Screen *root = pane_root(g_overlay);
+    if (root && screen && screen->id && str_eq(root->id, screen->id) && pane_depth(g_overlay) == 1) { screen->vt->destroy(screen); return; }
+    if (!screen && !root) return;
+    pane_set_root(g_overlay, screen);
+    layout();
+    if (screen) SetFocus(pane_hwnd(g_overlay));
     InvalidateRect(g_main, NULL, TRUE);
 }
 
@@ -168,11 +197,12 @@ static void rebuild_for_connection(void) {
         pane_set_root(g_detail, placeholder_screen_new());
         pane_set_root(g_panel, NULL);
         pane_set_root(g_browser, NULL);
+        pane_set_root(g_overlay, NULL);
         pane_set_selected_id(g_sidebar, NULL);
         g_narrow_detail = false;
     } else {
         browser_windows_close_all();
-        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL); pane_set_root(g_browser, NULL);
+        pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL); pane_set_root(g_browser, NULL); pane_set_root(g_overlay, NULL);
         pane_set_root(g_pairing, pairing_screen_new());
     }
     layout();
@@ -188,6 +218,7 @@ void app_show_detail(Screen *screen) {
         screen->vt->destroy(screen);
     } else {
         pane_set_root(g_panel, NULL);
+        pane_set_root(g_overlay, NULL);
         drop_browser_unless(screen->id);
         pane_set_root(g_detail, screen);
     }
@@ -196,11 +227,13 @@ void app_show_detail(Screen *screen) {
     layout();
     InvalidateRect(g_main, NULL, TRUE);
 }
-void app_push_detail(Screen *screen) { pane_push(g_detail, screen); g_narrow_detail = true; layout(); }
+// From the side panel, what an item links to opens in the panel, as GitHub's does.
+void app_push_detail(Screen *screen) { pane_push(overlay_shown() ? g_overlay : g_detail, screen); g_narrow_detail = true; layout(); }
 void app_clear_detail(void) {
     Screen *root = pane_root(g_detail);
     if (root && root->vt->can_leave && !root->vt->can_leave(root)) return;
     pane_set_root(g_panel, NULL);
+    pane_set_root(g_overlay, NULL);
     app_set_browser(NULL);
     pane_set_root(g_detail, placeholder_screen_new());
     pane_set_selected_id(g_sidebar, NULL);
@@ -276,6 +309,8 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_detail = pane_create(hwnd, false);
         g_panel = pane_create(hwnd, true);
         g_browser = pane_create(hwnd, true);
+        g_overlay = pane_create(hwnd, false);   // last, so it lies over the detail
+        pane_set_overlay(g_overlay, close_overlay, NULL);
         store_init(hwnd);
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
@@ -309,6 +344,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_detail) { SendMessageW(pane_hwnd(g_detail), WM_THEMECHANGED, 0, 0); pane_relayout(g_detail); }
         if (g_panel) { SendMessageW(pane_hwnd(g_panel), WM_THEMECHANGED, 0, 0); pane_relayout(g_panel); }
         if (g_browser) { SendMessageW(pane_hwnd(g_browser), WM_THEMECHANGED, 0, 0); pane_relayout(g_browser); }
+        if (g_overlay) { SendMessageW(pane_hwnd(g_overlay), WM_THEMECHANGED, 0, 0); pane_relayout(g_overlay); }
         browser_windows_themed();
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
@@ -321,6 +357,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_detail) pane_relayout(g_detail);
         if (g_panel) pane_relayout(g_panel);
         if (g_browser) pane_relayout(g_browser);
+        if (g_overlay) pane_relayout(g_overlay);
         layout();
         return 0;
     }
@@ -363,8 +400,10 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         term_shutdown();
         sftp_shutdown();
         media_stop();
+        // The overlay goes first, and its pointer with it: the board's tab, freed with the detail, closes it.
+        pane_destroy(g_overlay); g_overlay = NULL;
         pane_destroy(g_pairing); pane_destroy(g_sidebar); pane_destroy(g_detail); pane_destroy(g_panel); pane_destroy(g_browser);
-        g_pairing = g_sidebar = g_detail = g_panel = g_browser = NULL;
+        g_pairing = g_sidebar = g_detail = g_panel = g_browser = g_overlay = NULL;
         store_shutdown();
         PostQuitMessage(0);
         return 0;

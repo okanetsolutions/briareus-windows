@@ -2,8 +2,8 @@
 // the way its view is on GitHub (`project_board`). Columns run side by side, each with its count and its number fields
 // totalled (Story Points). The columns reach the view's bottom and each scrolls on its own; a wide board scrolls sideways
 // with the bar at the bottom, or Shift and the wheel. An assignee picker narrows the cards, as GitHub's filter bar does.
-// A card opens its issue or pull request in the app when it is this project's, and on GitHub otherwise. Read-only:
-// cards are moved on GitHub.
+// A card opens its issue or pull request in a side panel over the board when it is this project's, as GitHub's board
+// does, and on GitHub otherwise. Read-only: cards are moved on GitHub.
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
@@ -325,10 +325,10 @@ static void open_card(BoardTab *p, const ProjectCard *card) {
         issue.labels = card->labels; issue.label_count = card->label_count;
         issue.has_created = card->has_created; issue.created_at = card->created_at;
         if (card->has_parent) { issue.has_parent = true; issue.parent = card->parent; }
-        app_push_detail(issue_detail_screen_new(&p->project, &issue));
+        app_set_overlay(issue_detail_screen_new(&p->project, &issue));
         return;
     }
-    if (here && str_eq(card->type, "pull") && store_supports("pull")) { app_push_detail(pull_detail_screen_new(&p->project, card->number, NULL, NULL)); return; }
+    if (here && str_eq(card->type, "pull") && store_supports("pull")) { app_set_overlay(pull_detail_screen_new(&p->project, card->number, NULL, NULL)); return; }
     if (safe_web_url(card->url)) open_web_url(card->url);
 }
 
@@ -378,6 +378,8 @@ BoardTab *board_tab_new(const Project *project, Screen *host, int action_base) {
 void board_tab_free(BoardTab *p) {
     if (!p) return;
     request_cancel(&p->req);
+    // The side panel showed one of this board's cards.
+    app_set_overlay(NULL);
     project_board_free(&p->board);
     project_free(&p->project); free(p->error); free(p->assignee);
     free(p);
