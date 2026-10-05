@@ -156,9 +156,10 @@ bool board_tab_offered(const Project *project);
 /// Reads the board the first time the tab is shown, the saved copy first; the refresh reads it past the server's cache.
 void board_tab_open(BoardTab *p);
 void board_tab_refresh(BoardTab *p);
-/// Lays the board out from `doc->y` down; columns that do not fit `w` run on past it, scrolled sideways.
+/// Lays the board out from `doc->y` down to the view's bottom, each column scrolling on its own; columns that do not fit
+/// `w` run on past it, scrolled sideways.
 void board_tab_layout(BoardTab *p, Doc *doc, int w);
-/// The board and view in the line under the title, and a button that opens the view on GitHub.
+/// The board and view in the line under the title, the assignee picker, and a button that opens the view on GitHub.
 void board_tab_header(BoardTab *p, HeaderInfo *info);
 /// True when the action was the tab's.
 bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt);
@@ -265,6 +266,9 @@ Pane *app_detail_pane(void);
 /// The column on the right of a conversation, the dashboard's pull request panel; NULL takes it away.
 Pane *app_panel_pane(void);
 void app_set_panel(Screen *screen);
+/// A side panel over the right of the main column, as GitHub's board opens an item beside it: the board's cards open
+/// their issue or pull request there. While it is open, app_push_detail pushes onto it; NULL (or its ✕) closes it.
+void app_set_overlay(Screen *screen);
 /// The column a session's browser docks in, on the right of its conversation; NULL takes it away.
 Pane *app_browser_pane(void);
 void app_set_browser(Screen *screen);

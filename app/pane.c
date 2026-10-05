@@ -23,13 +23,16 @@ struct Pane {
     RECT title_action_rect;
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
+    bool overlay;           // a side panel over the main column: ✕ at its root, a line down its left edge
     char *selected_id;
     bool tracking;
     HBRUSH edit_brush;
     // scrollbar drag
     bool dragging_thumb; int drag_offset;
+    bool dragging_hthumb;   // the sideways bar at the bottom, while the content is wider than the pane
+    int dragging_region;    // a document region's own bar (a board's column), or -1
     bool dragging_footer;   // the top screen's footer_drag follows the mouse
-    RECT thumb_rect;
+    RECT thumb_rect, hthumb_rect;
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
     HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
     int tip_item;           // the item it shows for, or -1
@@ -56,9 +59,10 @@ static void register_class(void) {
 Pane *pane_create(HWND parent, bool sidebar) {
     register_class();
     Pane *p = xcalloc(1, sizeof *p);
-    p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1; p->tip_item = -1;
+    p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1; p->tip_item = -1; p->dragging_region = -1;
     doc_init(&p->doc);
-    p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
+    // WS_CLIPSIBLINGS: a side panel's pane lies over the detail's, which must not paint through it.
+    p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
     p->canvas = canvas_for_window(p->hwnd);
     all_panes = xrealloc(all_panes, (pane_count + 1) * sizeof *all_panes);
     all_panes[pane_count++] = p;
@@ -155,6 +159,15 @@ static int max_scroll(Pane *p) {
     return m > 0 ? m : 0;
 }
 bool pane_at_bottom(Pane *p) { return p->scroll_y >= max_scroll(p) - px(24); }
+static int max_scroll_x(Pane *p) { int m = p->doc.content_width - pane_content_width(p); return m > 0 ? m : 0; }
+static void set_scroll_x(Pane *p, int x) {
+    int m = max_scroll_x(p);
+    if (x > m) x = m;
+    if (x < 0) x = 0;
+    if (x == p->scroll_x) return;
+    p->scroll_x = x;
+    InvalidateRect(p->hwnd, NULL, FALSE);
+}
 
 // MARK: - Tooltip
 
@@ -213,6 +226,7 @@ void pane_scroll_to(Pane *p, int content_y) { set_scroll(p, content_y - px(8)); 
 void pane_stick_to_bottom(Pane *p, bool stick) { p->stick_bottom = stick; }
 void pane_show_bottom_button(Pane *p, bool show) { if (p->show_bottom_button != show) { p->show_bottom_button = show; InvalidateRect(p->hwnd, NULL, FALSE); } }
 void pane_set_root_back(Pane *p, bool show, void (*callback)(void *), void *ctx) { p->root_back = show; p->root_back_cb = callback; p->root_back_ctx = ctx; pane_relayout(p); }
+void pane_set_overlay(Pane *p, void (*close)(void *), void *ctx) { p->overlay = true; pane_set_root_back(p, true, close, ctx); }
 void pane_set_selected_id(Pane *p, const char *id) {
     if (str_eq(p->selected_id, id)) return;
     free(p->selected_id); p->selected_id = xstrdup(id);
@@ -299,7 +313,8 @@ static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
         RECT br = { x, cy - size / 2, x + size, cy + size / 2 };
         p->back_rect = br;
         paint_icon_button(cv, &br, p->hover_button == -2);
-        draw_text(cv, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (p->overlay && p->depth <= 1) draw_glyph(cv, 0xE711, &br, FONT_ICON_SMALL, theme.ink);   // ✕ closes the side panel
+        else draw_text(cv, "\xE2\x80\xB9", &br, FONT_BODY, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += size + px(8);
     }
     int right = hr.right - px(18);
@@ -387,6 +402,22 @@ static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
     fill_round_rect(cv, &r, px(6), c, c);
 }
 
+/// The sideways bar along the content's bottom while it is wider than the pane, as the dashboard's board has.
+static void paint_hscrollbar(Pane *p, Canvas *cv, const RECT *content) {
+    int m = max_scroll_x(p);
+    memset(&p->hthumb_rect, 0, sizeof p->hthumb_rect);
+    if (m <= 0) return;
+    int left = content->left + margin(p), track = content->right - margin(p) - left;
+    int total = p->doc.content_width;
+    int thumb = total > 0 ? track * (total - m) / total : track;
+    if (thumb < px(28)) thumb = px(28);
+    int x = left + (track - thumb) * p->scroll_x / m;
+    RECT r = { x, content->bottom - px(10), x + thumb, content->bottom - px(2) };
+    p->hthumb_rect = r;
+    COLORREF c = p->dragging_hthumb ? blend(theme.ink, theme.thumb, 0.15) : theme.thumb;
+    fill_round_rect(cv, &r, px(4), c, c);
+}
+
 static void paint(Pane *p) {
     RECT rc = client(p);
     int w = rc.right - rc.left, h = rc.bottom - rc.top;
@@ -405,6 +436,7 @@ static void paint(Pane *p) {
     canvas_offset(cv, 0, 0);
     canvas_unclip(cv);
     paint_scrollbar(p, cv, &content);
+    paint_hscrollbar(p, cv, &content);
     if (p->show_bottom_button && !pane_at_bottom(p) && p->doc.count) {
         int size = px(32);
         RECT b = { (content.left + content.right) / 2 - size / 2, content.bottom - size - px(10), (content.left + content.right) / 2 + size / 2, content.bottom - px(10) };
@@ -414,6 +446,7 @@ static void paint(Pane *p) {
     } else memset(&p->bottom_button_rect, 0, sizeof p->bottom_button_rect);
     if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, cv, &fr); }
     paint_header(p, cv, &rc);
+    if (p->overlay) draw_line(cv, rc.left, rc.top, rc.left, rc.bottom, theme.line);
     canvas_end(cv);
 }
 
@@ -503,6 +536,18 @@ static void mouse_move(Pane *p, int x, int y) {
         if (s && s->vt->footer_drag) s->vt->footer_drag(s, pt);
         return;
     }
+    if (p->dragging_hthumb) {
+        RECT content = pane_content_rect(p);
+        int track = content.right - content.left - 2 * margin(p), thumb = p->hthumb_rect.right - p->hthumb_rect.left;
+        if (track - thumb > 0) set_scroll_x(p, (x - p->drag_offset - content.left - margin(p)) * max_scroll_x(p) / (track - thumb));
+        return;
+    }
+    if (p->dragging_region >= 0) {
+        POINT c = to_content(p, x, y);
+        doc_region_drag(&p->doc, p->dragging_region, c.y - p->drag_offset);
+        InvalidateRect(p->hwnd, NULL, FALSE);
+        return;
+    }
     if (p->dragging_thumb) {
         RECT content = pane_content_rect(p);
         int track = content.bottom - content.top;
@@ -524,8 +569,14 @@ static void mouse_move(Pane *p, int x, int y) {
 static void mouse_down(Pane *p, int x, int y, bool right) {
     SetFocus(p->hwnd);
     if (!right && in_rect(&p->thumb_rect, x, y)) { p->dragging_thumb = true; p->drag_offset = y - p->thumb_rect.top; SetCapture(p->hwnd); InvalidateRect(p->hwnd, NULL, FALSE); return; }
+    if (!right && in_rect(&p->hthumb_rect, x, y)) { p->dragging_hthumb = true; p->drag_offset = x - p->hthumb_rect.left; SetCapture(p->hwnd); InvalidateRect(p->hwnd, NULL, FALSE); return; }
     int button = header_hit(p, x, y);
     RECT content = pane_content_rect(p);
+    if (!right && button == -1 && in_rect(&content, x, y)) {
+        POINT c = to_content(p, x, y);
+        int thumb_top, region = doc_region_thumb_at(&p->doc, c.x, c.y, &thumb_top);
+        if (region >= 0) { hide_tip(p); p->dragging_region = region; p->drag_offset = c.y - thumb_top; SetCapture(p->hwnd); return; }
+    }
     if (button != -1) { p->pressed_button = button; SetCapture(p->hwnd); return; }
     if (in_rect(&content, x, y)) {
         POINT c = to_content(p, x, y);
@@ -560,6 +611,8 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
 static void mouse_up(Pane *p, int x, int y) {
     if (p->doc.selecting) { end_selection(p); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
+    if (p->dragging_hthumb) { p->dragging_hthumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
+    if (p->dragging_region >= 0) { p->dragging_region = -1; ReleaseCapture(); return; }
     if (p->dragging_footer) { p->dragging_footer = false; ReleaseCapture(); return; }
     if (GetCapture() == p->hwnd) ReleaseCapture();
     Screen *s = pane_top(p);
@@ -609,7 +662,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
     // A footer drag the mouse was taken from (another window, Alt+Tab) ends where it was.
-    case WM_CAPTURECHANGED: p->dragging_footer = false; return 0;
+    case WM_CAPTURECHANGED: p->dragging_footer = false; p->dragging_hthumb = false; p->dragging_region = -1; return 0;
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         RECT content = pane_content_rect(p);
@@ -627,12 +680,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        if (GetKeyState(VK_SHIFT) & 0x8000) {
-            int max_x = p->doc.content_width - pane_content_width(p); if (max_x < 0) max_x = 0;
-            int x = p->scroll_x - delta / 2; if (x < 0) x = 0; if (x > max_x) x = max_x;
-            if (x != p->scroll_x) { p->scroll_x = x; InvalidateRect(hwnd, NULL, FALSE); }
-            return 0;
-        }
+        if (GetKeyState(VK_SHIFT) & 0x8000) { set_scroll_x(p, p->scroll_x - delta / 2); return 0; }
         // Over a sticky sidebar that overflows, such as the file tree, the wheel scrolls it and not the page.
         POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) }; ScreenToClient(hwnd, &pt);
         RECT content = pane_content_rect(p);
@@ -641,15 +689,14 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (in_rect(&content, pt.x, pt.y)) {
             POINT c = to_content(p, pt.x, pt.y);
             if (doc_sticky_wheel(&p->doc, c.x, c.y, dy)) { InvalidateRect(hwnd, NULL, FALSE); return 0; }
+            // Over a region that overflows, such as a board's column, the wheel scrolls it; the hover follows the cards.
+            if (doc_region_wheel(&p->doc, c.x, c.y, dy)) { hide_tip(p); p->doc.hover = doc_hit(&p->doc, c.x, c.y); InvalidateRect(hwnd, NULL, FALSE); return 0; }
         }
         set_scroll(p, p->scroll_y + dy);
         return 0;
     }
     case WM_MOUSEHWHEEL: {
-        int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        int max_x = p->doc.content_width - pane_content_width(p); if (max_x < 0) max_x = 0;
-        int x = p->scroll_x + delta / 2; if (x < 0) x = 0; if (x > max_x) x = max_x;
-        if (x != p->scroll_x) { p->scroll_x = x; InvalidateRect(hwnd, NULL, FALSE); }
+        set_scroll_x(p, p->scroll_x + GET_WHEEL_DELTA_WPARAM(wp) / 2);
         return 0;
     }
     case WM_SETCURSOR: {

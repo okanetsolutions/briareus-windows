@@ -1110,6 +1110,44 @@ static void test_project_boards_carry_why_github_refused(void) {
     j = json_parsez("{\"columns\":[],\"projectsError\":\"\"}"); CHECK(project_board_parse(j, &b)); CHECK(b.error == NULL); project_board_free(&b); json_free(j);
     j = json_parsez("[]"); CHECK(!project_board_parse(j, &b)); json_free(j);
 }
+static void test_project_boards_filter_by_assignee(void) {
+    Json *j = json_parsez("{\"columns\":["
+        "{\"name\":\"Todo\",\"count\":3,\"sums\":{\"Story Points\":9},\"items\":["
+        "{\"title\":\"a\",\"assignees\":[{\"login\":\"Ana\"},{\"login\":\"bo\"}],\"fields\":[{\"name\":\"Story Points\",\"value\":2}]},"
+        "{\"title\":\"b\",\"assignees\":[\"ana\"],\"fields\":[{\"name\":\"Story Points\",\"value\":5.5}]},"
+        "{\"title\":\"c\",\"assignees\":[],\"fields\":[{\"name\":\"Story Points\",\"value\":1.5}]}]},"
+        "{\"name\":\"Done\",\"count\":1,\"sums\":{\"Story Points\":0},\"items\":[{\"title\":\"d\",\"assignees\":[{\"login\":\"cy\"},{\"login\":\"CY\"}]}]}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    const ProjectCard *a = &b.columns[0].cards[0], *c = &b.columns[0].cards[2];
+    CHECK(project_card_assigned(a, NULL)); CHECK(project_card_assigned(a, "")); CHECK(project_card_assigned(a, "ANA")); CHECK(project_card_assigned(a, "bo"));
+    CHECK(!project_card_assigned(a, "cy")); CHECK(!project_card_assigned(a, PROJECT_NO_ASSIGNEE));
+    CHECK(project_card_assigned(c, PROJECT_NO_ASSIGNEE)); CHECK(!project_card_assigned(c, "ana"));
+    // Everyone by name, counted once a card however their login is written, and the unassigned last.
+    size_t n; FilterOption *o = project_board_assignees(&b, NULL, &n);
+    CHECK_INT((int)n, 4);
+    CHECK_STR(o[0].text, "Ana"); CHECK_INT(o[0].count, 2);
+    CHECK_STR(o[1].text, "bo"); CHECK_INT(o[1].count, 1);
+    CHECK_STR(o[2].text, "cy"); CHECK_INT(o[2].count, 1);
+    CHECK_STR(o[3].value, PROJECT_NO_ASSIGNEE); CHECK_STR(o[3].text, "No assignee"); CHECK_INT(o[3].count, 1);
+    filter_options_free(o, n);
+    // A pick the board has lost stays listed, so it can be seen and cleared.
+    o = project_board_assignees(&b, "dee", &n); CHECK_INT((int)n, 5); CHECK_STR(o[3].text, "dee"); CHECK_INT(o[3].count, 0); filter_options_free(o, n);
+    o = project_board_assignees(&b, "ANA", &n); CHECK_INT((int)n, 4); filter_options_free(o, n);
+    // The columns count and total only what passes.
+    double sums[1];
+    CHECK_INT(project_column_matching(&b.columns[0], "ana", sums), 2); CHECK(sums[0] == 7.5);
+    CHECK_INT(project_column_matching(&b.columns[0], PROJECT_NO_ASSIGNEE, sums), 1); CHECK(sums[0] == 1.5);
+    CHECK_INT(project_column_matching(&b.columns[0], "", sums), 3); CHECK(sums[0] == 9);
+    CHECK_INT(project_column_matching(&b.columns[1], "ana", sums), 0); CHECK(sums[0] == 0);
+    CHECK_INT(project_column_matching(&b.columns[1], "cy", NULL), 1);
+    project_board_free(&b); json_free(j);
+    // A board with everyone assigned offers no "No assignee", unless it is the pick.
+    j = json_parsez("{\"columns\":[{\"name\":\"Todo\",\"items\":[{\"assignees\":[\"ana\"]}]}]}");
+    CHECK(project_board_parse(j, &b));
+    o = project_board_assignees(&b, "", &n); CHECK_INT((int)n, 1); filter_options_free(o, n);
+    o = project_board_assignees(&b, PROJECT_NO_ASSIGNEE, &n); CHECK_INT((int)n, 2); CHECK_INT(o[1].count, 0); filter_options_free(o, n);
+    project_board_free(&b); json_free(j);
+}
 static void test_project_option_colours_are_githubs_names(void) {
     int rgb[3];
     CHECK(project_color_rgb("GREEN", rgb)); CHECK(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
@@ -1197,6 +1235,7 @@ void board_tests(void) {
     test_run("the run log keeps its latest lines", test_the_run_log_keeps_its_latest_lines);
     test_run("project boards read columns, cards and sums", test_project_boards_read_columns_cards_and_sums);
     test_run("project boards carry why GitHub refused", test_project_boards_carry_why_github_refused);
+    test_run("project boards filter by assignee", test_project_boards_filter_by_assignee);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
