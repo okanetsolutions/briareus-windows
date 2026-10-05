@@ -319,7 +319,12 @@ static void layout_tree(ProjectDb *p, Doc *doc, int x, int w) {
 
 // MARK: - The grid
 
-static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_rect(cv, rc, theme.line); }
+/// The rule beside the tree spans the tree's window, wherever the page and the tree have scrolled it.
+static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    int dy = rc->top - it->rc.top;
+    RECT r = { rc->left, doc->sticky_view.top + dy, rc->right, doc->sticky_view.bottom + dy };
+    fill_rect(cv, &r, theme.line);
+}
 
 typedef struct { ProjectDb *p; size_t row; } GridRowData;
 static void paint_grid_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -405,21 +410,31 @@ void project_db_layout(ProjectDb *p, Doc *doc, int w) {
         return;
     }
     project_db_load(p);
+    // The tabs stay at the top; beneath them the tree and the grid scroll apart: the grid with the page, the tree on
+    // its own inside a window the view's height, as the Files tab's tree does.
+    doc_pin(doc, (int)doc->count, doc->y);
     RECT view = pane_content_rect(p->host->pane);
-    int top = doc->y, bottom = top + (view.bottom - view.top) - top - px(14);
-    if (bottom < top + px(240)) bottom = top + px(240);
+    int top = doc->y, room = (view.bottom - view.top) - top - px(14);
+    if (room < 0) room = 0;
     int lw = px(LIST_W);
     if (lw > w / 3) lw = w / 3;
+    int tree_first = (int)doc->count;
     layout_tree(p, doc, 0, lw);
-    int tree_bottom = doc->y;
+    // An unpainted spacer keeps the tree's window the view's height when the tree is shorter. It takes the unclamped
+    // room, so in a short pane the group never outgrows its window; the px(240) minimum applies to the page alone.
+    RECT spacer = { lw + px(8), top, lw + px(9), top + room };
+    doc_add(doc, &spacer, NULL);
+    int tree_last = (int)doc->count;
     doc->y = top;
     int rx = lw + px(18), rw = w - rx;
     layout_grid(p, doc, rx, rw);
-    if (doc->y < bottom) doc->y = bottom;
-    if (doc->y < tree_bottom) doc->y = tree_bottom;
-    // A rule between the tree and the grid, as tall as the longer of the two.
+    int least = room < px(240) ? px(240) : room;
+    if (doc->y < top + least) doc->y = top + least;
+    // A rule between the tree and the grid, outside the tree's group so it does not scroll with the tree: it spans
+    // the whole page and paints only the tree's window.
     RECT rule = { lw + px(8), top, lw + px(9), doc->y };
     doc_add(doc, &rule, paint_rule);
+    doc_sticky(doc, tree_first, tree_last, doc->y);
 }
 
 // MARK: - Actions
