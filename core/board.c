@@ -274,6 +274,7 @@ bool board_filter_passes(const BoardFilter *f, const BoardRow *row, int skipping
         const char *pick = board_filter_get(f, (FilterKind)kind);
         if (str_empty(pick)) continue;
         const char *values[MAX_CARRIED]; size_t n = carried((FilterKind)kind, row, values, MAX_CARRIED);
+        if (kind == FILTER_ASSIGNEE && str_eq(pick, PROJECT_NO_ASSIGNEE)) { if (n) return false; continue; }
         bool found = false;
         for (size_t i = 0; i < n && !found; i++) found = fold_eq(values[i], pick);
         if (!found) return false;
@@ -287,9 +288,11 @@ static int compare_options(const void *a, const void *b) {
 }
 FilterOption *board_filter_options(const BoardFilter *f, FilterKind kind, const BoardRow *rows, size_t count, size_t *option_count) {
     FilterOption *options = NULL; size_t n = 0, cap = 0;
+    int nobody = 0;
     for (size_t r = 0; r < count; r++) {
         if (!board_filter_passes(f, &rows[r], (int)kind)) continue;
         const char *values[MAX_CARRIED]; size_t m = carried(kind, &rows[r], values, MAX_CARRIED);
+        if (!m) nobody++;
         const char *seen[MAX_CARRIED]; size_t seen_count = 0;
         for (size_t i = 0; i < m; i++) {
             bool dup = false;
@@ -306,7 +309,8 @@ FilterOption *board_filter_options(const BoardFilter *f, FilterKind kind, const 
         }
     }
     const char *pick = board_filter_get(f, kind);
-    if (!str_empty(pick)) {
+    bool no_assignee = kind == FILTER_ASSIGNEE && str_eq(pick, PROJECT_NO_ASSIGNEE);
+    if (!str_empty(pick) && !no_assignee) {
         bool listed = false;
         for (size_t k = 0; k < n && !listed; k++) listed = str_eq(options[k].value, pick);
         if (!listed) {
@@ -315,6 +319,10 @@ FilterOption *board_filter_options(const BoardFilter *f, FilterKind kind, const 
         }
     }
     if (n > 1) qsort(options, n, sizeof *options, compare_options);
+    if (kind == FILTER_ASSIGNEE && (nobody || no_assignee)) {
+        options = xrealloc(options, (n + 1) * sizeof *options);
+        options[n].value = xstrdup(PROJECT_NO_ASSIGNEE); options[n].text = xstrdup("No assignee"); options[n].count = nobody; n++;
+    }
     *option_count = n;
     return options;
 }
