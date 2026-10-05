@@ -386,6 +386,7 @@ static void test_board_rows_carry_what_the_pickers_filter_on(void) {
     CHECK(issue_of("{\"number\":2,\"author\":\"bo\",\"assignees\":[\"x\"],\"labels\":[\"bug\"]}", &i));
     r = issue_board_row(&i);
     CHECK(r.author == i.author && r.reviewers == NULL && r.reviewer_count == 0 && r.labels == i.labels && r.label_count == 1);
+    CHECK(r.assignees == i.assignees && r.assignee_count == 1);
     pull_summary_free(&p); issue_summary_free(&i);
 }
 static void test_board_filters_keep_their_picks_folded(void) {
@@ -394,12 +395,15 @@ static void test_board_filters_keep_their_picks_folded(void) {
     board_filter_set(&f, FILTER_AUTHOR, "TheBot"); CHECK_STR(board_filter_get(&f, FILTER_AUTHOR), "thebot"); CHECK(board_filter_is_on(&f));
     board_filter_set(&f, FILTER_REVIEWER, "Ana"); CHECK_STR(board_filter_get(&f, FILTER_REVIEWER), "ana");
     board_filter_set(&f, FILTER_LABEL, "Has-Conflicts"); CHECK_STR(board_filter_get(&f, FILTER_LABEL), "has-conflicts");
+    board_filter_set(&f, FILTER_ASSIGNEE, "Bo"); CHECK_STR(board_filter_get(&f, FILTER_ASSIGNEE), "bo");
     board_filter_set(&f, FILTER_AUTHOR, NULL); CHECK_STR(f.author, "");
     board_filter_set(&f, FILTER_REVIEWER, ""); board_filter_set(&f, FILTER_LABEL, "");
+    CHECK(board_filter_is_on(&f)); board_filter_set(&f, FILTER_ASSIGNEE, "");
     CHECK(!board_filter_is_on(&f));
     board_filter_set(&f, FILTER_LABEL, "x"); CHECK(board_filter_is_on(&f));
     CHECK_STR(filter_kind_name(FILTER_AUTHOR), "author"); CHECK_STR(filter_kind_name(FILTER_REVIEWER), "reviewer"); CHECK_STR(filter_kind_name(FILTER_LABEL), "label");
-    board_filter_free(&f); CHECK(f.author == NULL && f.reviewer == NULL && f.label == NULL);
+    CHECK_STR(filter_kind_name(FILTER_ASSIGNEE), "assignee");
+    board_filter_free(&f); CHECK(f.author == NULL && f.reviewer == NULL && f.assignee == NULL && f.label == NULL);
     board_filter_free(NULL);
 }
 static void test_board_filter_copies_compare_equal_and_are_independent(void) {
@@ -411,7 +415,8 @@ static void test_board_filter_copies_compare_equal_and_are_independent(void) {
     CHECK(!board_filter_equal(&a, &b)); CHECK_STR(b.author, "ana");
     board_filter_set(&b, FILTER_AUTHOR, "LUIS"); CHECK(board_filter_equal(&a, &b));
     board_filter_set(&b, FILTER_REVIEWER, "x"); CHECK(!board_filter_equal(&a, &b));
-    board_filter_set(&b, FILTER_REVIEWER, ""); board_filter_set(&b, FILTER_LABEL, "ui"); CHECK(!board_filter_equal(&a, &b));
+    board_filter_set(&b, FILTER_REVIEWER, ""); board_filter_set(&b, FILTER_ASSIGNEE, "x"); CHECK(!board_filter_equal(&a, &b));
+    board_filter_set(&b, FILTER_ASSIGNEE, ""); board_filter_set(&b, FILTER_LABEL, "ui"); CHECK(!board_filter_equal(&a, &b));
     board_filter_free(&a); board_filter_free(&b);
 }
 // Three pull requests and two issues the filter tests share.
@@ -486,6 +491,19 @@ static void test_a_pick_the_others_empty_still_lists_itself(void) {
     size_t n = 99; FilterOption *o = board_filter_options(&f, FILTER_LABEL, NULL, 0, &n); CHECK_INT(n, 0); filter_options_free(o, n);
     filter_options_free(NULL, 0);
     board_filter_free(&f); rows_free(&r);
+}
+static void test_issues_filter_by_assignee(void) {
+    Json *j = json_parsez("[{\"number\":1,\"author\":\"ana\",\"assignees\":[\"Bo\",\"luis\"]},{\"number\":2,\"author\":\"ana\",\"assignees\":[\"bo\"]},{\"number\":3,\"author\":\"luis\"}]");
+    size_t n; IssueSummary *issues = issue_summaries_parse(j, &n);
+    BoardRow rows[3]; for (size_t i = 0; i < n; i++) rows[i] = issue_board_row(&issues[i]);
+    BoardFilter f; board_filter_init(&f);
+    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=Bo 2,luis=luis 1");
+    board_filter_set(&f, FILTER_ASSIGNEE, "BO");
+    CHECK(board_filter_passes(&f, &rows[0], -1)); CHECK(board_filter_passes(&f, &rows[1], -1)); CHECK(!board_filter_passes(&f, &rows[2], -1));
+    CHECK_OWNED_STR(options(&f, FILTER_AUTHOR, rows, n), "ana=ana 2");
+    board_filter_set(&f, FILTER_AUTHOR, "luis");
+    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=bo 0");
+    board_filter_free(&f); issue_summaries_free(issues, n); json_free(j);
 }
 static void test_issue_rows_offer_no_reviewers(void) {
     Json *j = json_parsez("[{\"number\":1,\"author\":\"ana\",\"labels\":[\"bug\"]},{\"number\":2,\"author\":\"bo\"}]");
@@ -1265,6 +1283,7 @@ void board_tests(void) {
     test_run("board filters pass rows folding case", test_board_filters_pass_rows_folding_case);
     test_run("board filter options are counted against the other pickers", test_board_filter_options_are_counted_against_the_other_pickers);
     test_run("a pick the others empty still lists itself", test_a_pick_the_others_empty_still_lists_itself);
+    test_run("issues filter by assignee", test_issues_filter_by_assignee);
     test_run("issue rows offer no reviewers", test_issue_rows_offer_no_reviewers);
     test_run("the board opens on the author only while they have rows", test_the_board_opens_on_the_author_only_while_they_have_rows);
     test_run("known errands are listed in the dashboard's order", test_known_errands_are_listed_in_the_dashboards_order);
