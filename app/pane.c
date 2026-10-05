@@ -574,6 +574,10 @@ static void end_carry(Pane *p, POINT at, DragPhase phase) {
     if (s && action && s->vt->drag) s->vt->drag(s, action, arg, c, phase);
     InvalidateRect(p->hwnd, NULL, FALSE);
 }
+void pane_cancel_carry(Pane *p, int action) {
+    Item *it = doc_item(&p->doc, p->doc.pressed);
+    if (p->carrying && it && it->action == action) end_carry(p, p->carry_at, DRAG_CANCEL);
+}
 
 static void mouse_move(Pane *p, int x, int y) {
     if (!p->tracking) { TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, p->hwnd, 0 }; TrackMouseEvent(&tme); p->tracking = true; }

@@ -83,6 +83,8 @@ static void board_done(void *owner, Request *req) {
     }
     if (!p->move_req) set_string(&p->moved_id, NULL);
     set_string(&p->error, NULL);
+    // A carried card's arg is its place on the board shown: dropped after the new one replaces it, it would name another card.
+    if (p->host->pane && pane_top(p->host->pane) == p->host) pane_cancel_carry(p->host->pane, p->base + A_CARD);
     show(p, req->result);
     // A refusal is not saved: the board last read stays the one shown the next time.
     if (p->has_board && !p->board.error) { char *key = cache_key(p); cache_store(g_store.cache, req->result, key); free(key); }
@@ -184,9 +186,10 @@ static BoardLink *card_pulls(const BoardTab *p, const ProjectCard *card, size_t 
 static void card_pulls_free(BoardLink *links, size_t count) { for (size_t i = 0; i < count; i++) board_link_free(&links[i]); free(links); }
 /// Whether a click on the card leads anywhere: to the app's own screen or to GitHub.
 static bool card_opens(const ProjectCard *card) { return card->number > 0 && (card->repo || safe_web_url(card->url)); }
-/// Whether the card can be dragged to another column: the server moves cards, and none is on its way already.
+/// Whether the card can be dragged to another column: the server moves cards, none is on its way already, and no
+/// failed move waits for the read that puts its card back (a second move would cancel that read).
 static bool card_moves(const BoardTab *p, const ProjectCard *card) {
-    return !p->move_req && !str_empty(card->id) && !str_eq(card->type, "redacted") && store_supports("project_board_move");
+    return !p->move_req && !p->moved_id && !str_empty(card->id) && !str_eq(card->type, "redacted") && store_supports("project_board_move");
 }
 
 static void layout_card(BoardTab *p, Doc *doc, int x, int w, const ProjectCard *card, intptr_t arg) {

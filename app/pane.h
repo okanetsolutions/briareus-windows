@@ -87,6 +87,8 @@ size_t pane_depth(Pane *pane);
 /// The document is stale: lay out and paint again.
 void pane_relayout(Pane *pane);
 void pane_repaint(Pane *pane);
+/// Puts back an item with this action the mouse is carrying, at once: the screen is about to change what its args point at.
+void pane_cancel_carry(Pane *pane, int action);
 void pane_header_changed(Pane *pane);
 void pane_footer_changed(Pane *pane);
 /// Shows a child control (a footer's composer) at `rc`. A move redraws the control instead of keeping the pixels it had:
