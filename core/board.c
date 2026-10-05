@@ -933,3 +933,44 @@ char *project_board_setting_url(const Json *setting) {
     return view > 0 ? xstrfmt("https://github.com/%s/%s/projects/%d/views/%d", kind, owner, number, view)
                     : xstrfmt("https://github.com/%s/%s/projects/%d", kind, owner, number);
 }
+
+// MARK: - Edits
+
+static bool names_have(const Json *names, const char *name) {
+    for (size_t i = 0; i < json_count(names); i++) if (fold_eq(json_str(json_at(names, i)), name)) return true;
+    return false;
+}
+Json *board_names_parse(const char *text, bool logins) {
+    Json *out = json_array();
+    for (const char *p = text ? text : ""; *p;) {
+        size_t n = strcspn(p, ",\r\n");
+        char *raw = xstrndup(p, n), *name = str_trim(raw);
+        const char *kept = logins && *name == '@' ? name + 1 : name;
+        if (*kept && !names_have(out, kept)) json_array_push(out, json_string(kept));
+        free(raw); free(name);
+        p += n;
+        if (*p) p++;
+    }
+    return out;
+}
+char *board_names_join(char *const *names, size_t count) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < count; i++) str_appendf(&out, "%s%s", i ? ", " : "", names[i]);
+    return str_detach(&out);
+}
+char *board_label_names_join(const PullLabel *labels, size_t count) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < count; i++) str_appendf(&out, "%s%s", i ? ", " : "", labels[i].name ? labels[i].name : "");
+    return str_detach(&out);
+}
+Json *board_assignees_toggle(char *const *assignees, size_t count, const char *login, bool *added) {
+    Json *out = json_array();
+    bool had = false;
+    for (size_t i = 0; i < count; i++) {
+        if (fold_eq(assignees[i], login)) { had = true; continue; }
+        json_array_push(out, json_string(assignees[i]));
+    }
+    if (!had && login && *login) json_array_push(out, json_string(login));
+    if (added) *added = !had;
+    return out;
+}

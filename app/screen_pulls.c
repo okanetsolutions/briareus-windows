@@ -1,4 +1,5 @@
 // The project board: open pull requests and issues, one pull request in full, and one issue.
+#include "credentials.h"
 #include "dialogs.h"
 #include "meeting.h"
 #include "screens.h"
@@ -747,16 +748,116 @@ Screen *pulls_screen_new(const Project *project) {
     return &s->base;
 }
 
+// MARK: - Edits, shared by one pull request and one issue
+
+// The user's own GitHub login, which "Assign me" adds: asked the first time and kept in the registry, since the API does
+// not say whose the token is.
+static char *my_login;
+static bool my_login_read;
+static const char *github_login(void) {
+    if (!my_login_read) { my_login = settings_read_github_login(); my_login_read = true; }
+    return my_login;
+}
+/// Asks for the login, the saved one filled in; false when cancelled or left blank.
+static bool github_login_ask(void) {
+    char *typed = dialog_text(app_window(), "Your GitHub login", "The GitHub user \xE2\x80\x9C" "Assign me\xE2\x80\x9D adds", "Save", github_login() ? github_login() : "");
+    if (!typed) return false;
+    Json *names = board_names_parse(typed, true);
+    const char *login = json_str(json_at(names, 0));
+    if (login) { set_string(&my_login, login); settings_write_github_login(login); }
+    free(typed); json_free(names);
+    return login != NULL;
+}
+/// "Assign me" or "Unassign me" as the item's assignees stand.
+static const char *assign_me_label(char *const *assignees, size_t count) {
+    const char *me = github_login();
+    for (size_t i = 0; me && i < count; i++) if (str_ieq(assignees[i], me)) return "Unassign me";
+    return "Assign me";
+}
+enum { EDIT_ASSIGN_ME = 1, EDIT_ASSIGNEES, EDIT_LOGIN };
+/// The ▾ beside the assignees: assign or unassign the user, edit the list, or change which login "me" is.
+static int assignees_menu(HWND hwnd, POINT pt, char *const *assignees, size_t count) {
+    HMENU menu = CreatePopupMenu();
+    wchar_t *me = utf8_to_wide(assign_me_label(assignees, count));
+    AppendMenuW(menu, MF_STRING, EDIT_ASSIGN_ME, me); free(me);
+    AppendMenuW(menu, MF_STRING, EDIT_ASSIGNEES, L"Edit assignees\x2026");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    char *change = github_login() ? xstrfmt("Change my GitHub login (%s)\xE2\x80\xA6", github_login()) : xstrdup("Set my GitHub login\xE2\x80\xA6");
+    wchar_t *w = utf8_to_wide(change); AppendMenuW(menu, MF_STRING, EDIT_LOGIN, w); free(w); free(change);
+    int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(menu);
+    return chosen;
+}
+/// What a pick from that menu sends as `assignees`, or NULL for nothing to send. The list replaces GitHub's whole.
+static Json *assignees_chosen(int chosen, char *const *assignees, size_t count, int number) {
+    if (chosen == EDIT_LOGIN) { github_login_ask(); return NULL; }
+    if (chosen == EDIT_ASSIGN_ME) {
+        if (!github_login() && !github_login_ask()) return NULL;
+        return board_assignees_toggle(assignees, count, github_login(), NULL);
+    }
+    if (chosen != EDIT_ASSIGNEES) return NULL;
+    char *current = board_names_join(assignees, count), *caption = xstrfmt("Assignees of #%d", number);
+    char *typed = dialog_text(app_window(), caption, "GitHub logins, comma separated (ten at most)", "Save", current);
+    free(current); free(caption);
+    if (!typed) return NULL;
+    Json *names = board_names_parse(typed, true);
+    free(typed);
+    return names;
+}
+/// The menu, then what its pick sends. The assignees are copied first: the screen may read them again while it is up.
+static Json *assignees_edit(HWND hwnd, POINT pt, char *const *assignees, size_t count, int number) {
+    char **mine = xcalloc(count + 1, sizeof *mine);
+    for (size_t i = 0; i < count; i++) mine[i] = xstrdup(assignees[i]);
+    Json *out = assignees_chosen(assignees_menu(hwnd, pt, mine, count), mine, count, number);
+    str_array_free(mine, count);
+    return out;
+}
+/// The labels typed over the current ones (read before the dialog opens), or NULL when cancelled.
+static Json *labels_edit(const PullLabel *labels, size_t count, int number) {
+    char *current = board_label_names_join(labels, count), *caption = xstrfmt("Labels of #%d", number);
+    char *typed = dialog_text(app_window(), caption, "Label names, comma separated", "Save", current);
+    free(current); free(caption);
+    if (!typed) return NULL;
+    Json *names = board_names_parse(typed, false);
+    free(typed);
+    return names;
+}
+/// The title and description after the edit dialog, as only the fields that changed; NULL when cancelled or unchanged.
+static Json *details_edit(const char *what, int number, const char *title, const char *body) {
+    char *caption = xstrfmt("Edit %s #%d", what, number);
+    char *t = xstrdup(title ? title : ""), *b = xstrdup(body ? body : "");
+    bool ok = dialog_edit_item(app_window(), caption, &t, &b);
+    free(caption);
+    Json *fields = NULL;
+    if (ok) {
+        char *was = str_replace(body ? body : "", "\r\n", "\n");
+        fields = json_object();
+        if (!str_eq(t, title)) json_set_str(fields, "title", t);
+        if (!str_eq(b, was)) json_set_str(fields, "body", b);
+        free(was);
+        if (!json_count(fields)) { json_free(fields); fields = NULL; }
+    }
+    free(t); free(b);
+    return fields;
+}
+/// A small ▾ button row under the sidebar's assignees or labels.
+static void side_edit_button(Doc *doc, Col c, const char *text, int action, bool enabled) {
+    doc_space(doc, px(8));
+    ButtonSpec b = { 0, text, BUTTON_BORDERED, action, 0, enabled };
+    doc_button_row(doc, c.x, c.w, &b, 1);
+}
+
 // MARK: - Pull request
 
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
+    ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
@@ -782,6 +883,11 @@ typedef struct {
     ConvFeed conv[CONV_FEEDS];   // the Conversation tab
     char *error, *findings_error, *write_error, *merge_error;
     bool busy, uncertain, merging;
+    // An edit of its title, description, labels or assignees, and an update of its branch from its base: `branch_note`
+    // says GitHub took the update, which it makes on its own a moment later.
+    bool editing, updating_branch;
+    char *edit_error, *branch_note;
+    Request *req_edit, *req_update_branch;
     bool runs_read;     // the Sessions list was read once
     // The Run tab: opening it serves the pull request (▶ Run) and shows it in an embedded browser laid over the tab's area
     // (`web_rc`, in document coordinates). `run_session` is the session serving it, `run_profile` the run profile it
@@ -1091,6 +1197,7 @@ static void pull_destroy(Screen *base) {
     request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_body);
     request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
     request_cancel(&s->req_issue); json_free(s->issue_projects); json_free(s->issue_incoming);
+    request_cancel(&s->req_edit); request_cancel(&s->req_update_branch); free(s->edit_error); free(s->branch_note);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -1304,13 +1411,22 @@ static const char *pull_author(PullScreen *s) {
 }
 static int pull_commit_count(PullScreen *s) { return json_int_or(json_get(s->pr, "commits"), (int)json_count(json_get(s->pr, "commitList"))); }
 
+/// The description as last read, NULL until it is: an edit starts from it.
+static const char *pull_body(PullScreen *s) {
+    const char *body = json_str(json_get(s->pr, "body"));
+    return body ? body : s->body;
+}
 /// `gh-header`: the title with its muted number and the buttons beside it, then the state and `author wants to merge N commits into base from head`.
 static void layout_header(PullScreen *s, Doc *doc, Col c) {
     const PullSummary *row = board_row(s);
     bool can_merge = store_supports("merge_pull") && str_eq(json_str(json_get(s->pr, "state")), "open") && json_bool_tristate(json_get(s->pr, "draft")) != 1
         && json_str(json_get(s->pr, "headSha")) && json_str(json_get(s->pr, "baseRef"));
-    ButtonSpec buttons[3]; size_t bn = 0;
+    bool can_update_branch = store_supports("update_pull_branch") && str_eq(json_str(json_get(s->pr, "state")), "open")
+        && json_str(json_get(s->pr, "headSha")) && json_str(json_get(s->pr, "baseRef"));
+    ButtonSpec buttons[5]; size_t bn = 0;
     { ButtonSpec b = { 0, "\xE2\x9F\xB3 Refresh", BUTTON_BORDERED, ACT_RELOAD, 0, !s->req_pull }; buttons[bn++] = b; }
+    if (store_supports("update_pull") && is_open(s)) { ButtonSpec b = { 0, s->editing ? "Saving\xE2\x80\xA6" : "Edit", BUTTON_BORDERED, ACT_EDIT, 0, !s->editing && pull_body(s) }; buttons[bn++] = b; }
+    if (can_update_branch) { ButtonSpec b = { 0, s->updating_branch ? "Updating\xE2\x80\xA6" : "Update branch", BUTTON_BORDERED, ACT_UPDATE_BRANCH, 0, !s->updating_branch && !s->merging }; buttons[bn++] = b; }
     if (can_merge) { ButtonSpec b = { 0, s->merging ? "Merging\xE2\x80\xA6" : "Merge", BUTTON_PROMINENT, ACT_MERGE, 0, !s->merging && !s->busy }; buttons[bn++] = b; }
     if (safe_web_url(json_str(json_get(s->pr, "url")))) { ButtonSpec b = { 0, "Open in GitHub \xE2\x86\x97", BUTTON_BORDERED, ACT_OPEN_URL, 0, true }; buttons[bn++] = b; }
     int tw = toolbar_width(doc->cv, buttons, bn) + px(2);
@@ -1361,6 +1477,8 @@ static void layout_header(PullScreen *s, Doc *doc, Col c) {
     if (doc->y < y + px(26)) doc->y = y + px(26);
     if (s->has_stack && s->stack_open) { doc_space(doc, px(10)); layout_stack_overview(s, doc, c); }
     if (s->merge_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->merge_error); }
+    if (s->edit_error) { doc_space(doc, px(8)); doc_notice(doc, c.ix, c.iw, s->edit_error); }
+    if (s->branch_note) { doc_space(doc, px(8)); doc_label(doc, c.ix, c.iw, 0xE895, s->branch_note, FONT_FOOTNOTE, theme.secondary); }
 }
 
 /// Whether every list the server offers has been read once.
@@ -2024,6 +2142,7 @@ static void side_assignees(PullScreen *s, Doc *doc, Col c, int *count) {
     side_heading(doc, c, count, "Assignees");
     for (size_t i = 0; i < row->assignee_count; i++) { if (i) doc_space(doc, px(4)); doc_text(doc, c.x, c.w, row->assignees[i], FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS); }
     if (!row->assignee_count) doc_text(doc, c.x, c.w, "No one", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    if (store_supports("update_pull") && is_open(s)) side_edit_button(doc, c, "Edit assignees \xE2\x96\xBE", ACT_EDIT_ASSIGNEES, !s->editing);
 }
 static void side_milestone(PullScreen *s, Doc *doc, Col c, int *count) {
     const PullSummary *row = board_row(s);
@@ -2038,6 +2157,7 @@ static void side_labels(PullScreen *s, Doc *doc, Col c, int *count) {
     side_heading(doc, c, count, "Labels");
     if (row->label_count) doc_label_chips(doc, c.x, c.w, row->labels, row->label_count, theme.canvas);
     else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    if (store_supports("update_pull") && is_open(s)) side_edit_button(doc, c, "Edit labels\xE2\x80\xA6", ACT_EDIT_LABELS, !s->editing);
 }
 static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
     const PullSummary *row = board_row(s);
@@ -2433,6 +2553,68 @@ static void merge(PullScreen *s, const char *method) {
     store_call("merge_pull", args, 0, s, merge_done, TAG_MERGE, &s->req_merge);
     pane_relayout(s->base.pane);
 }
+static void edit_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    s->editing = false;
+    if (req->ok) {
+        set_string(&s->edit_error, NULL);
+        // The title and description show as saved at once; the labels and assignees come back with the board's row.
+        const Json *pr = json_get(req->result, "pr");
+        const char *title = json_str(json_get(pr, "title")), *body = json_str(json_get(pr, "body"));
+        if (title && json_is_object(s->pr)) json_set_str(s->pr, "title", title);
+        if (body && json_get(req->args, "body")) { set_string(&s->body, body); if (json_str(json_get(s->pr, "body"))) json_set_str(s->pr, "body", body); }
+        save_pull(s);
+    } else request_error_into(&s->edit_error, req);   // an edit sets what it names, so trying again is safe
+    request_cancel(&s->req_pull); pull_load(s);
+    pane_relayout(s->base.pane);
+}
+/// Sends `fields` (taken) as an edit of this pull request.
+static void pull_edit(PullScreen *s, Json *fields) {
+    if (!fields) return;
+    if (s->editing) { json_free(fields); return; }
+    s->editing = true; set_string(&s->edit_error, NULL);
+    json_set_str(fields, "repo", s->project.repo); json_set_num(fields, "pr", s->number);
+    store_call("update_pull", fields, 0, s, edit_done, TAG_EDIT, &s->req_edit);
+    pane_relayout(s->base.pane);
+}
+static void update_branch_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    s->updating_branch = false;
+    if (req->ok) {
+        set_string(&s->merge_error, NULL);
+        const char *base_ref = json_str(json_get(req->args, "baseRef"));
+        char *note = xstrfmt("GitHub is merging %s into this branch; its new commit and checks show once it has.", base_ref ? base_ref : "the base");
+        set_string(&s->branch_note, note); free(note);
+    } else {
+        set_string(&s->branch_note, NULL);
+        char *t = request_error_text(req);
+        if (!request_outcome_unknown(req)) set_string(&s->merge_error, t);
+        else { char *m = xstrfmt("%s The update may still have been made; refresh before trying again.", t); set_string(&s->merge_error, m); free(m); }
+        free(t);
+    }
+    request_cancel(&s->req_pull); pull_load(s);
+    pane_relayout(s->base.pane);
+}
+/// Merges the base into the branch on GitHub, at the head and base last read, once asked.
+static void update_branch(PullScreen *s) {
+    const char *head = json_str(json_get(s->pr, "headSha")), *base_ref = json_str(json_get(s->pr, "baseRef")), *head_ref = json_str(json_get(s->pr, "headRef"));
+    if (s->updating_branch || s->merging || !head || !base_ref) return;
+    char *title = xstrfmt("Update the branch of #%d?", s->number);
+    char *message = xstrfmt("GitHub merges the latest changes from %s into %s, as a new commit on the branch. A session working on it needs to pull before it pushes again.", base_ref, head_ref ? head_ref : "its branch");
+    s->dialog_open = true;
+    bool ok = app_confirm(title, message, "Update branch", false);
+    s->dialog_open = false;
+    free(title); free(message);
+    // The pull request may have been read again while the dialog was open.
+    head = json_str(json_get(s->pr, "headSha")); base_ref = json_str(json_get(s->pr, "baseRef"));
+    if (!ok || s->updating_branch || !head || !base_ref) return;
+    s->updating_branch = true; set_string(&s->merge_error, NULL); set_string(&s->branch_note, NULL);
+    Json *args = json_object();
+    json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
+    json_set_str(args, "headSha", head); json_set_str(args, "baseRef", base_ref);
+    store_call("update_pull_branch", args, 0, s, update_branch_done, TAG_UPDATE_BRANCH, &s->req_update_branch);
+    pane_relayout(s->base.pane);
+}
 static void decide_done(void *owner, Request *req) {
     PullScreen *s = owner;
     set_string(&s->deciding, NULL);
@@ -2510,6 +2692,30 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_PR_PROJECT: open_web_url(json_str(json_get(json_at(json_get(json_at(s->issue_projects, (size_t)(arg >> 16)), "projects"), (size_t)(arg & 0xFFFF)), "url"))); break;
     case ACT_MERGE: merge(s, "squash"); break;
+    case ACT_UPDATE_BRANCH: update_branch(s); break;
+    case ACT_EDIT: {
+        const char *title = json_str(json_get(s->pr, "title"));
+        if (!title && board_row(s)) title = board_row(s)->title;
+        if (s->editing || !pull_body(s)) break;
+        char *t = xstrdup(title ? title : ""), *b = xstrdup(pull_body(s));
+        s->dialog_open = true;
+        Json *fields = details_edit("pull request", s->number, t, b);
+        s->dialog_open = false;
+        free(t); free(b);
+        pull_edit(s, fields);
+        break;
+    }
+    case ACT_EDIT_ASSIGNEES: case ACT_EDIT_LABELS: {
+        const PullSummary *row = board_row(s);
+        if (!row || s->editing) break;
+        s->dialog_open = true;
+        Json *list = action == ACT_EDIT_LABELS ? labels_edit(row->labels, row->label_count, s->number)
+                                               : assignees_edit(pane_hwnd(base->pane), pt, row->assignees, row->assignee_count, s->number);
+        s->dialog_open = false;
+        if (list) { Json *fields = json_object(); json_object_set(fields, action == ACT_EDIT_LABELS ? "labels" : "assignees", list); pull_edit(s, fields); }
+        pane_relayout(base->pane);
+        break;
+    }
     case ACT_RELOAD: pull_refresh(base); break;
     case ACT_START_ACTION: {
         if ((size_t)arg >= s->action_count) break;
@@ -2586,7 +2792,7 @@ static void pull_timer(Screen *base, UINT id) {
     if (pull_files_timer(s->files, id)) return;
     if (id == TIMER_RUN_LOG) { run_log_tick(s); return; }
     if (poller_fired(&s->poller, id)) {
-        bool enabled = !s->busy && !s->merging && !s->deciding && !s->dialog_open;
+        bool enabled = !s->busy && !s->merging && !s->deciding && !s->editing && !s->updating_branch && !s->dialog_open;
         if (enabled) pull_load(s); else poller_finished(&s->poller, false, -1);
     }
 }
@@ -2606,7 +2812,7 @@ static void pull_refresh(Screen *base) {
     // F5 on the Run tab reloads the page, as in a browser.
     if (s->tab == PR_TAB_RUN && s->web) { webview_reload(s->web); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
-    s->uncertain = false; set_string(&s->write_error, NULL);
+    s->uncertain = false; set_string(&s->write_error, NULL); set_string(&s->edit_error, NULL); set_string(&s->branch_note, NULL);
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_issue); s->issues_read = false; json_free(s->issue_incoming); s->issue_incoming = NULL;
     request_cancel(&s->req_pull); pull_load(s);
@@ -2641,7 +2847,7 @@ static void board_open_run(PullsScreen *s, size_t index) {
 // MARK: - Issue
 
 enum { ACT_ISSUE_OPEN = 1200, ACT_ISSUE_PARENT, ACT_ISSUE_PULL, ACT_ISSUE_START, ACT_ISSUE_CHECKED, ACT_ISSUE_SUB, ACT_ISSUE_RUN, ACT_ISSUE_COPY, ACT_ISSUE_REFRESH, ACT_ISSUE_CLOSE,
-       ACT_ISSUE_SUB_LINK, ACT_ISSUE_EVENT, ACT_ISSUE_PROJECT, ACT_ISSUE_MORE };
+       ACT_ISSUE_SUB_LINK, ACT_ISSUE_EVENT, ACT_ISSUE_PROJECT, ACT_ISSUE_MORE, ACT_ISSUE_EDIT, ACT_ISSUE_ASSIGNEES, ACT_ISSUE_LABELS };
 
 // The issue as GitHub has it (`issue`): its body, type, projects, every sub-issue and linked pull request, and its
 // timeline a page at a time. The board is still read beside it, on a timer, for the rows of the open sub-issues and
@@ -2666,7 +2872,8 @@ typedef struct {
     char *write_error;
     bool closing, closed;           // closed: this screen closed it; the board no longer lists it
     char *closed_reason;            // completed or not_planned, as the server answered
-    Request *req, *req_board, *req_runs, *req_close, *req_detail, *req_timeline;
+    bool editing;                   // its title, description, labels or assignees are being saved
+    Request *req, *req_board, *req_runs, *req_close, *req_detail, *req_timeline, *req_edit;
     Poller poller;
 } IssueScreen;
 
@@ -2678,7 +2885,7 @@ static void issue_destroy(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_close);
     request_cancel(&s->req_detail); request_cancel(&s->req_timeline); poller_stop(&s->poller);
-    free(s->closed_reason);
+    request_cancel(&s->req_edit); free(s->closed_reason);
     issue_summaries_free(s->board_issues, s->board_issue_count); pull_summaries_free(s->board_pulls, s->board_pull_count);
     sessions_free(s->runs, s->run_count);
     json_free(s->detail); json_free(s->events); issue_subs_free(s);
@@ -2859,10 +3066,13 @@ static const char *issue_state(const IssueScreen *s, COLORREF *color) {
 }
 static bool issue_is_closed(const IssueScreen *s) { COLORREF c; return str_eq(issue_state(s, &c), "closed"); }
 
+static bool issue_editable(const IssueScreen *s) { return store_supports("update_issue") && !s->closed; }
 /// The title with its number, then the state pill and GitHub's sentence beside it: who opened it, when, its comments.
 static void issue_layout_header(IssueScreen *s, Doc *doc, Col c) {
     const IssueSummary *issue = &s->issue;
-    ButtonSpec buttons[1]; size_t bn = 0;
+    ButtonSpec buttons[2]; size_t bn = 0;
+    // The description is the issue's own read; without it an edit would start from nothing.
+    if (issue_editable(s)) { ButtonSpec b = { 0, s->editing ? "Saving\xE2\x80\xA6" : "Edit", BUTTON_BORDERED, ACT_ISSUE_EDIT, 0, !s->editing && json_str(json_get(s->detail, "body")) }; buttons[bn++] = b; }
     if (safe_web_url(issue->url)) { ButtonSpec b = { 0, "Open in GitHub \xE2\x86\x97", BUTTON_BORDERED, ACT_ISSUE_OPEN, 0, true }; buttons[bn++] = b; }
     int tw = bn ? toolbar_width(doc->cv, buttons, bn) + px(2) : 0;
     bool beside = !bn || c.iw - tw - px(16) >= px(320);
@@ -3224,9 +3434,11 @@ static void issue_layout_sidebar(IssueScreen *s, Doc *doc, Col c) {
     side_heading(doc, c, &count, "Assignees");
     for (size_t i = 0; i < issue->assignee_count; i++) { if (i) doc_space(doc, px(4)); doc_text(doc, c.x, c.w, issue->assignees[i], FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS); }
     if (!issue->assignee_count) doc_text(doc, c.x, c.w, "No one", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    if (issue_editable(s)) side_edit_button(doc, c, "Edit assignees \xE2\x96\xBE", ACT_ISSUE_ASSIGNEES, !s->editing);
     side_heading(doc, c, &count, "Labels");
     if (issue->label_count) doc_label_chips(doc, c.x, c.w, issue->labels, issue->label_count, theme.canvas);
     else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    if (issue_editable(s)) side_edit_button(doc, c, "Edit labels\xE2\x80\xA6", ACT_ISSUE_LABELS, !s->editing);
     if (s->detail) {
         const char *type = json_str(json_get(s->detail, "type"));
         side_heading(doc, c, &count, "Type");
@@ -3337,6 +3549,29 @@ static void issue_close_done(void *owner, Request *req) {
     } else request_error_into(&s->write_error, req);   // closing twice only restates the reason, so trying again is safe
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
+static void issue_edit_done(void *owner, Request *req) {
+    IssueScreen *s = owner;
+    s->editing = false;
+    if (req->ok) {
+        set_string(&s->write_error, NULL);
+        // The title and description show as saved at once; reading it again brings the rest.
+        const Json *issue = json_get(req->result, "issue");
+        const char *title = json_str(json_get(issue, "title")), *body = json_str(json_get(issue, "body"));
+        if (title) set_string(&s->issue.title, title);
+        if (body && s->detail && json_get(req->args, "body")) json_set_str(s->detail, "body", body);
+        issue_load(s, true);
+    } else request_error_into(&s->write_error, req);   // an edit sets what it names, so trying again is safe
+    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+}
+/// Sends `fields` (taken) as an edit of this issue.
+static void issue_edit(IssueScreen *s, Json *fields) {
+    if (!fields) return;
+    if (s->editing) { json_free(fields); return; }
+    s->editing = true; set_string(&s->write_error, NULL);
+    json_set_num(fields, "issue", s->issue.number); json_set_str(fields, "repo", s->project.repo);
+    store_call("update_issue", fields, 0, s, issue_edit_done, 0, &s->req_edit);
+    pane_relayout(s->base.pane);
+}
 /// The ▾ menu: why it is closed, and whether a comment goes first. Then a confirmation naming what stays open.
 static void issue_close(IssueScreen *s, POINT pt) {
     if (s->closing || s->closed) return;
@@ -3390,6 +3625,23 @@ static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_ISSUE_COPY: if (safe_web_url(s->issue.url)) copy_to_clipboard(pane_hwnd(base->pane), s->issue.url); break;
     case ACT_ISSUE_REFRESH: issue_refresh(base); break;
     case ACT_ISSUE_CLOSE: issue_close(s, pt); break;
+    case ACT_ISSUE_EDIT: {
+        const char *body = json_str(json_get(s->detail, "body"));
+        if (s->editing || !body) break;
+        char *t = xstrdup(s->issue.title ? s->issue.title : ""), *b = xstrdup(body);
+        issue_edit(s, details_edit("issue", s->issue.number, t, b));
+        free(t); free(b);
+        break;
+    }
+    case ACT_ISSUE_ASSIGNEES: case ACT_ISSUE_LABELS: {
+        if (s->editing) break;
+        int number = s->issue.number;
+        Json *list = action == ACT_ISSUE_LABELS ? labels_edit(s->issue.labels, s->issue.label_count, number)
+                                                : assignees_edit(pane_hwnd(base->pane), pt, s->issue.assignees, s->issue.assignee_count, number);
+        if (list) { Json *fields = json_object(); json_object_set(fields, action == ACT_ISSUE_LABELS ? "labels" : "assignees", list); issue_edit(s, fields); }
+        pane_relayout(base->pane);
+        break;
+    }
     case ACT_ISSUE_PARENT: if (s->issue.has_parent) issue_open_link(s, &s->issue.parent); break;
     case ACT_ISSUE_SUB_LINK: if ((size_t)arg < s->sub_count) issue_open_link(s, &s->subs[arg]); break;
     case ACT_ISSUE_EVENT: if ((size_t)arg < json_count(s->events)) event_open(s, json_at(s->events, (size_t)arg)); break;

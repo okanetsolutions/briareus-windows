@@ -240,6 +240,16 @@ bool project_color_rgb(const char *name, int rgb[3]);
 /// A number as a column's total shows it: whole numbers without decimals, the rest with up to two. New string.
 char *project_sum_text(double value);
 
+/// What an edit box of labels or assignees holds, as the list `update_pull` and `update_issue` send: split at commas and
+/// line breaks, trimmed, empty ones dropped and each name once, compared without case as GitHub does. `logins` also
+/// drops a leading `@`. Always an array; an empty one clears the list.
+Json *board_names_parse(const char *text, bool logins);
+/// The names as such a box shows them, comma separated. New string.
+char *board_names_join(char *const *names, size_t count);
+char *board_label_names_join(const PullLabel *labels, size_t count);
+/// The assignees with `login` added, or taken off when it is one of them already (`*added` says which).
+Json *board_assignees_toggle(char *const *assignees, size_t count, const char *login, bool *added);
+
 /// The project setting that names a board, `{ owner, ownerType, number, view }`, from its address on GitHub
 /// (https://github.com/orgs/<org>/projects/<n>[/views/<v>] or …/users/<login>/projects/<n>…). NULL when it is not one.
 Json *project_board_setting_from_url(const char *url);

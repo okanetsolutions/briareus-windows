@@ -286,8 +286,10 @@ static const Expected ROUTE_TABLE[] = {
     { "pull_files", "GET", "pulls/{pr}/files" }, { "pull_comments", "GET", "pulls/{pr}/comments" }, { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" }, { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" }, { "merge_pull", "POST", "pulls/{pr}/merge" },
+    { "update_pull", "PATCH", "pulls/{pr}" }, { "update_pull_branch", "POST", "pulls/{pr}/update-branch" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" },
     { "issue", "GET", "issues/{issue}" }, { "issue_timeline", "GET", "issues/{issue}/timeline" }, { "close_issue", "POST", "issues/{issue}/close" },
+    { "update_issue", "PATCH", "issues/{issue}" },
     { "project_board", "GET", "project-board" },
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" }, { "start_session", "POST", "sessions" },
     { "review", "POST", "sessions", "review" }, { "qa", "POST", "sessions", "qa" },
@@ -508,6 +510,15 @@ static void test_json_bodies_of_writes(void) {
     // The path argument is taken out; everything else stays.
     r = call(c, "rename", "{\"sessionId\":\"abc\",\"autoCompact\":true}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "sessions/abc"); CHECK_STR(stub.last_method, "PATCH"); CHECK_STR(stub.last_body, "{\"autoCompact\":true}");
+    // An edit sends its lists whole, an empty one included, since each replaces what GitHub has.
+    r = call(c, "update_pull", "{\"pr\":7,\"repo\":\"o/r\",\"labels\":[\"bug\",\"good first issue\"],\"assignees\":[]}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7"); CHECK_STR(stub.last_method, "PATCH");
+    CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"labels\":[\"bug\",\"good first issue\"],\"assignees\":[]}");
+    r = call(c, "update_issue", "{\"issue\":9,\"repo\":\"o/r\",\"title\":\"T\",\"body\":\"\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "issues/9"); CHECK_STR(stub.last_method, "PATCH"); CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"title\":\"T\",\"body\":\"\"}");
+    r = call(c, "update_pull_branch", "{\"pr\":7,\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7/update-branch"); CHECK_STR(stub.last_method, "POST");
+    CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}");
     r = call(c, "compact", "{\"sessionId\":\"abc\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "sessions/abc/compact"); CHECK_STR(stub.last_body, "{}");
     r = call(c, "clear", "{\"sessionId\":\"abc\"}", &e); json_free(r);
