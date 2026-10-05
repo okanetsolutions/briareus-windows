@@ -319,7 +319,12 @@ static void layout_tree(ProjectDb *p, Doc *doc, int x, int w) {
 
 // MARK: - The grid
 
-static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_rect(cv, rc, theme.line); }
+/// The rule beside the tree spans the tree's window, wherever the page and the tree have scrolled it.
+static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    int dy = rc->top - it->rc.top;
+    RECT r = { rc->left, doc->sticky_view.top + dy, rc->right, doc->sticky_view.bottom + dy };
+    fill_rect(cv, &r, theme.line);
+}
 
 typedef struct { ProjectDb *p; size_t row; } GridRowData;
 static void paint_grid_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -415,14 +420,18 @@ void project_db_layout(ProjectDb *p, Doc *doc, int w) {
     if (lw > w / 3) lw = w / 3;
     int tree_first = (int)doc->count;
     layout_tree(p, doc, 0, lw);
-    // A rule between the tree and the grid, the window's height, so it stays beside the grid.
-    RECT rule = { lw + px(8), top, lw + px(9), top + room };
-    doc_add(doc, &rule, paint_rule);
+    // An unpainted spacer keeps the tree's window the view's height when the tree is shorter.
+    RECT spacer = { lw + px(8), top, lw + px(9), top + room };
+    doc_add(doc, &spacer, NULL);
     int tree_last = (int)doc->count;
     doc->y = top;
     int rx = lw + px(18), rw = w - rx;
     layout_grid(p, doc, rx, rw);
     if (doc->y < top + room) doc->y = top + room;
+    // A rule between the tree and the grid, outside the tree's group so it does not scroll with the tree: it spans
+    // the whole page and paints only the tree's window.
+    RECT rule = { lw + px(8), top, lw + px(9), doc->y };
+    doc_add(doc, &rule, paint_rule);
     doc_sticky(doc, tree_first, tree_last, doc->y);
 }
 
