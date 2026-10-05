@@ -2869,7 +2869,7 @@ typedef struct {
     char *timeline_seen, *timeline_want; // the issue's updatedAt the timeline was read at, and is being read at
     Session *runs; size_t run_count;   // the conversations started on this issue or on a pull request closing it
     bool busy, uncertain;
-    char *write_error;
+    char *write_error, *edit_error;   // edit_error is its own, so an edit leaves an uncertain start's notice up
     bool closing, closed;           // closed: this screen closed it; the board no longer lists it
     char *closed_reason;            // completed or not_planned, as the server answered
     bool editing;                   // its title, description, labels or assignees are being saved
@@ -2890,7 +2890,7 @@ static void issue_destroy(Screen *base) {
     sessions_free(s->runs, s->run_count);
     json_free(s->detail); json_free(s->events); issue_subs_free(s);
     free(s->timeline_error); free(s->timeline_seen); free(s->timeline_want); free(s->detail_error);
-    project_free(&s->project); issue_summary_free(&s->issue); free(s->write_error); free(s->load_error);
+    project_free(&s->project); issue_summary_free(&s->issue); free(s->write_error); free(s->edit_error); free(s->load_error);
     screen_release(base);
 }
 /// Takes the board's answer: its rows, and this issue's own row when it is still there and its full read is not.
@@ -3475,6 +3475,7 @@ static void issue_layout(Screen *base, Doc *doc) {
         doc_box_end(doc, b, px(12));
         doc_space(doc, px(10));
     }
+    if (s->edit_error) { doc_notice(doc, 0, w, s->edit_error); doc_space(doc, px(10)); }
     if (s->detail_error) { doc_notice(doc, 0, w, s->detail_error); doc_space(doc, px(10)); }
     if (s->load_error && !str_eq(s->load_error, s->detail_error)) { doc_notice(doc, 0, w, s->load_error); doc_space(doc, px(10)); }
     if (s->closed) {
@@ -3553,21 +3554,22 @@ static void issue_edit_done(void *owner, Request *req) {
     IssueScreen *s = owner;
     s->editing = false;
     if (req->ok) {
-        set_string(&s->write_error, NULL);
+        set_string(&s->edit_error, NULL);
         // The title and description show as saved at once; reading it again brings the rest.
         const Json *issue = json_get(req->result, "issue");
         const char *title = json_str(json_get(issue, "title")), *body = json_str(json_get(issue, "body"));
         if (title) set_string(&s->issue.title, title);
         if (body && s->detail && json_get(req->args, "body")) json_set_str(s->detail, "body", body);
+        request_cancel(&s->req_detail);   // one already under way may have been read before the edit
         issue_load(s, true);
-    } else request_error_into(&s->write_error, req);   // an edit sets what it names, so trying again is safe
+    } else request_error_into(&s->edit_error, req);   // an edit sets what it names, so trying again is safe
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 /// Sends `fields` (taken) as an edit of this issue.
 static void issue_edit(IssueScreen *s, Json *fields) {
     if (!fields) return;
     if (s->editing) { json_free(fields); return; }
-    s->editing = true; set_string(&s->write_error, NULL);
+    s->editing = true; set_string(&s->edit_error, NULL);
     json_set_num(fields, "issue", s->issue.number); json_set_str(fields, "repo", s->project.repo);
     store_call("update_issue", fields, 0, s, issue_edit_done, 0, &s->req_edit);
     pane_relayout(s->base.pane);

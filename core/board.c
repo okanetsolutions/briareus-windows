@@ -943,24 +943,38 @@ static bool names_have(const Json *names, const char *name) {
 Json *board_names_parse(const char *text, bool logins) {
     Json *out = json_array();
     for (const char *p = text ? text : ""; *p;) {
+        while (*p == ' ' || *p == '\t') p++;
+        Str raw; str_init(&raw);
+        if (*p == '"') {   // a quoted name keeps its commas; "" inside it is one quote
+            for (p++; *p && !(*p == '"' && p[1] != '"'); p++) { str_appendc(&raw, *p); if (*p == '"') p++; }
+            if (*p) p++;
+        }
         size_t n = strcspn(p, ",\r\n");
-        char *raw = xstrndup(p, n), *name = str_trim(raw);
+        str_appendf(&raw, "%.*s", (int)n, p);
+        char *joined = str_detach(&raw), *name = str_trim(joined);
         const char *kept = logins && *name == '@' ? name + 1 : name;
         if (*kept && !names_have(out, kept)) json_array_push(out, json_string(kept));
-        free(raw); free(name);
+        free(joined); free(name);
         p += n;
         if (*p) p++;
     }
     return out;
 }
+/// A name as an edit box holds it: quoted when a comma, a line break or a leading quote would split or change it.
+static void names_append(Str *out, const char *name) {
+    if (!name[strcspn(name, ",\r\n")] && *name != '"') { str_appendz(out, name); return; }
+    str_appendc(out, '"');
+    for (const char *c = name; *c; c++) { if (*c == '"') str_appendc(out, '"'); str_appendc(out, *c); }
+    str_appendc(out, '"');
+}
 char *board_names_join(char *const *names, size_t count) {
     Str out; str_init(&out);
-    for (size_t i = 0; i < count; i++) str_appendf(&out, "%s%s", i ? ", " : "", names[i]);
+    for (size_t i = 0; i < count; i++) { if (i) str_appendz(&out, ", "); names_append(&out, names[i]); }
     return str_detach(&out);
 }
 char *board_label_names_join(const PullLabel *labels, size_t count) {
     Str out; str_init(&out);
-    for (size_t i = 0; i < count; i++) str_appendf(&out, "%s%s", i ? ", " : "", labels[i].name ? labels[i].name : "");
+    for (size_t i = 0; i < count; i++) { if (i) str_appendz(&out, ", "); names_append(&out, labels[i].name ? labels[i].name : ""); }
     return str_detach(&out);
 }
 Json *board_assignees_toggle(char *const *assignees, size_t count, const char *login, bool *added) {

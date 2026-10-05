@@ -241,10 +241,11 @@ bool project_color_rgb(const char *name, int rgb[3]);
 char *project_sum_text(double value);
 
 /// What an edit box of labels or assignees holds, as the list `update_pull` and `update_issue` send: split at commas and
-/// line breaks, trimmed, empty ones dropped and each name once, compared without case as GitHub does. `logins` also
-/// drops a leading `@`. Always an array; an empty one clears the list.
+/// line breaks, trimmed, empty ones dropped and each name once, compared without case as GitHub does. A name in double
+/// quotes keeps its commas (`""` is a quote inside it), so a label such as `needs: review, qa` makes the round trip. `logins`
+/// also drops a leading `@`. Always an array; an empty one clears the list.
 Json *board_names_parse(const char *text, bool logins);
-/// The names as such a box shows them, comma separated. New string.
+/// The names as such a box shows them, comma separated, quoting those with a comma. New string.
 char *board_names_join(char *const *names, size_t count);
 char *board_label_names_join(const PullLabel *labels, size_t count);
 /// The assignees with `login` added, or taken off when it is one of them already (`*added` says which).

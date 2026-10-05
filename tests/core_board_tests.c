@@ -1194,6 +1194,9 @@ static void test_edited_names_are_split_trimmed_and_listed_once(void) {
     // A login may be typed with its @; a label keeps one.
     check_names("@nadin, Nadin, @, octocat", true, "[\"nadin\",\"octocat\"]");
     check_names("@release", false, "[\"@release\"]");
+    // A quoted name keeps its commas, and "" in it is a quote.
+    check_names("bug, \"needs: review, qa\" ,\"say \"\"hi\"\"\"", false, "[\"bug\",\"needs: review, qa\",\"say \\\"hi\\\"\"]");
+    check_names("\"open, ", false, "[\"open,\"]");
 }
 static void test_names_join_as_the_edit_box_shows_them(void) {
     char *names[] = { "a", "b c" };
@@ -1201,6 +1204,10 @@ static void test_names_join_as_the_edit_box_shows_them(void) {
     j = board_names_join(NULL, 0); CHECK_STR(j, ""); free(j);
     PullLabel labels[] = { { "bug", "d73a4a" }, { NULL, NULL }, { "ui", NULL } };
     j = board_label_names_join(labels, 3); CHECK_STR(j, "bug, , ui"); free(j);
+    // A label with a comma is quoted, so saving the box unchanged sends it back as it was.
+    PullLabel odd[] = { { "needs: review, qa", NULL }, { "\"x\"", NULL }, { "ui", NULL } };
+    j = board_label_names_join(odd, 3); CHECK_STR(j, "\"needs: review, qa\", \"\"\"x\"\"\", ui");
+    check_names(j, false, "[\"needs: review, qa\",\"\\\"x\\\"\",\"ui\"]"); free(j);
 }
 static void test_assign_me_adds_or_takes_off_the_login(void) {
     char *assignees[] = { "octocat", "Nadin" };
