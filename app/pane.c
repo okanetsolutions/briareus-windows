@@ -579,10 +579,12 @@ void pane_cancel_carry(Pane *p, int action) {
     if (p->carrying && it && it->action == action) end_carry(p, p->carry_at, DRAG_CANCEL);
 }
 
-static void mouse_move(Pane *p, int x, int y) {
+static void mouse_move(Pane *p, int x, int y, bool left_down) {
     if (!p->tracking) { TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, p->hwnd, 0 }; TrackMouseEvent(&tme); p->tracking = true; }
     if (p->doc.selecting) { drag_selection(p, x, y); return; }
-    if (p->carrying || (p->doc.pressed >= 0 && carry_begins(p, x, y))) { carry_to(p, x, y); return; }
+    // A press whose capture was lost (Alt+Tab, another window) never sees its button up: with the button
+    // no longer held, it must not start a carry.
+    if (p->carrying || (p->doc.pressed >= 0 && left_down && carry_begins(p, x, y))) { carry_to(p, x, y); return; }
     if (p->dragging_footer) {
         Screen *s = pane_top(p);
         POINT pt = { x, y };
@@ -710,7 +712,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
-    case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
+    case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), (wp & MK_LBUTTON) != 0); return 0;
     case WM_MOUSELEAVE: p->tracking = false; hide_tip(p); if (p->hover_button != -1 || p->doc.hover != -1) { p->hover_button = -1; p->doc.hover = -1; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_LBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), false); return 0;
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
