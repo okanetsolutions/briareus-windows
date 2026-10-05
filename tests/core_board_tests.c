@@ -497,12 +497,20 @@ static void test_issues_filter_by_assignee(void) {
     size_t n; IssueSummary *issues = issue_summaries_parse(j, &n);
     BoardRow rows[3]; for (size_t i = 0; i < n; i++) rows[i] = issue_board_row(&issues[i]);
     BoardFilter f; board_filter_init(&f);
-    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=Bo 2,luis=luis 1");
+    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=Bo 2,luis=luis 1,-=No assignee 1");
+    // "No assignee" keeps only the issues nobody has.
+    board_filter_set(&f, FILTER_ASSIGNEE, PROJECT_NO_ASSIGNEE);
+    CHECK(!board_filter_passes(&f, &rows[0], -1)); CHECK(!board_filter_passes(&f, &rows[1], -1)); CHECK(board_filter_passes(&f, &rows[2], -1));
+    CHECK(board_filter_is_on(&f));
+    CHECK_OWNED_STR(options(&f, FILTER_AUTHOR, rows, n), "luis=luis 1");
+    board_filter_set(&f, FILTER_AUTHOR, "ana");
+    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=Bo 2,luis=luis 1,-=No assignee 0");
+    board_filter_set(&f, FILTER_AUTHOR, "");
     board_filter_set(&f, FILTER_ASSIGNEE, "BO");
     CHECK(board_filter_passes(&f, &rows[0], -1)); CHECK(board_filter_passes(&f, &rows[1], -1)); CHECK(!board_filter_passes(&f, &rows[2], -1));
     CHECK_OWNED_STR(options(&f, FILTER_AUTHOR, rows, n), "ana=ana 2");
     board_filter_set(&f, FILTER_AUTHOR, "luis");
-    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=bo 0");
+    CHECK_OWNED_STR(options(&f, FILTER_ASSIGNEE, rows, n), "bo=bo 0,-=No assignee 1");
     board_filter_free(&f); issue_summaries_free(issues, n); json_free(j);
 }
 static void test_issue_rows_offer_no_reviewers(void) {

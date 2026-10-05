@@ -595,7 +595,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         HeaderButton *b;
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(author) ? "All authors" : author); b->action = ACT_FILTER_AUTHOR; b->enabled = s->loaded;
         if (s->tab == 0) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(reviewer) ? "All reviewers" : reviewer); b->action = ACT_FILTER_REVIEWER; b->enabled = s->loaded; }
-        if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
+        if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : str_eq(assignee, PROJECT_NO_ASSIGNEE) ? "No assignee" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(label) ? "All labels" : label); b->action = ACT_FILTER_LABEL; b->enabled = s->loaded;
     }
     HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the pull requests from GitHub again";

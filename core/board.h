@@ -97,6 +97,8 @@ typedef struct {
 BoardRow pull_board_row(const PullSummary *pull);
 BoardRow issue_board_row(const IssueSummary *issue);
 
+/// The assignee filter's pick for the rows and cards nobody has; GitHub logins never start with a hyphen.
+#define PROJECT_NO_ASSIGNEE "-"
 typedef enum { FILTER_AUTHOR, FILTER_REVIEWER, FILTER_ASSIGNEE, FILTER_LABEL, FILTER_KIND_COUNT } FilterKind;
 /// One author, reviewer, assignee and label the board is narrowed to; empty means all. Values are kept folded.
 typedef struct { char *author, *reviewer, *assignee, *label; } BoardFilter;
@@ -112,7 +114,8 @@ const char *board_filter_get(const BoardFilter *filter, FilterKind kind);
 void board_filter_set(BoardFilter *filter, FilterKind kind, const char *value);
 /// `skipping` (or -1) leaves one picker out, which is how each counts what it would show without counting itself.
 bool board_filter_passes(const BoardFilter *filter, const BoardRow *row, int skipping);
-/// What one picker offers, each counted against the others. A pick they have emptied still lists itself.
+/// What one picker offers, each counted against the others. A pick they have emptied still lists itself. The assignee
+/// picker ends with "No assignee" (PROJECT_NO_ASSIGNEE) when some row has nobody, which passes only those rows.
 FilterOption *board_filter_options(const BoardFilter *filter, FilterKind kind, const BoardRow *rows, size_t count, size_t *option_count);
 void filter_options_free(FilterOption *options, size_t count);
 const char *filter_kind_name(FilterKind kind);
@@ -230,8 +233,6 @@ void project_board_free(ProjectBoard *board);
 bool project_board_move(ProjectBoard *board, size_t from, size_t card, size_t to);
 /// A card's field by name, or NULL.
 const ProjectField *project_card_field(const ProjectCard *card, const char *name);
-/// The assignee filter's pick for the cards nobody has; GitHub logins never start with a hyphen.
-#define PROJECT_NO_ASSIGNEE "-"
 /// Whether a card passes the assignee filter: an empty pick passes every card, PROJECT_NO_ASSIGNEE the unassigned ones,
 /// and a login (in any case) the cards assigned to it.
 bool project_card_assigned(const ProjectCard *card, const char *assignee);
