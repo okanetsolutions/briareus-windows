@@ -235,6 +235,9 @@ FilterOption *project_board_assignees(const ProjectBoard *board, const char *pic
 /// How many of a column's cards pass the assignee filter, and each of its number fields totalled over them into `sums`
 /// (`sum_count` long; may be NULL).
 int project_column_matching(const ProjectColumn *column, const char *assignee, double *sums);
+/// Drops the cards that are not `repo`'s (drafts and private items among them), as a board shared by several
+/// repositories shows one project only its own. A column that lost cards has its count and totals redone over the rest.
+void project_board_keep_repo(ProjectBoard *board, const char *repo);
 /// GitHub's named colours for single-select options as red, green and blue; false for a name it does not use.
 bool project_color_rgb(const char *name, int rgb[3]);
 /// A number as a column's total shows it: whole numbers without decimals, the rest with up to two. New string.

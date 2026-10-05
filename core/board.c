@@ -867,6 +867,23 @@ int project_column_matching(const ProjectColumn *column, const char *assignee, d
     }
     return matching;
 }
+void project_board_keep_repo(ProjectBoard *board, const char *repo) {
+    if (str_empty(repo)) return;
+    for (size_t c = 0; c < board->column_count; c++) {
+        ProjectColumn *column = &board->columns[c];
+        size_t kept = 0;
+        for (size_t k = 0; k < column->card_count; k++) {
+            if (column->cards[k].repo && str_ieq(column->cards[k].repo, repo)) column->cards[kept++] = column->cards[k];
+            else project_card_free(&column->cards[k]);
+        }
+        if (kept == column->card_count) continue;
+        column->card_count = kept;
+        double *sums = xcalloc(column->sum_count + 1, sizeof *sums);
+        column->count = project_column_matching(column, NULL, sums);
+        for (size_t s = 0; s < column->sum_count; s++) column->sums[s].value = sums[s];
+        free(sums);
+    }
+}
 bool project_color_rgb(const char *name, int rgb[3]) {
     // GitHub's Primer colours behind the option colours, as its board draws them.
     static const struct { const char *name; int rgb[3]; } colors[] = {

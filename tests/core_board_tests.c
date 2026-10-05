@@ -1148,6 +1148,24 @@ static void test_project_boards_filter_by_assignee(void) {
     o = project_board_assignees(&b, PROJECT_NO_ASSIGNEE, &n); CHECK_INT((int)n, 2); CHECK_INT(o[1].count, 0); filter_options_free(o, n);
     project_board_free(&b); json_free(j);
 }
+static void test_project_boards_keep_only_the_projects_cards(void) {
+    Json *j = json_parsez("{\"columns\":["
+        "{\"name\":\"Todo\",\"count\":4,\"sums\":{\"Story Points\":10},\"items\":["
+        "{\"repo\":\"hq/core\",\"number\":1,\"fields\":[{\"name\":\"Story Points\",\"value\":2}]},"
+        "{\"repo\":\"hq/app\",\"number\":2,\"fields\":[{\"name\":\"Story Points\",\"value\":5}]},"
+        "{\"type\":\"draft\",\"title\":\"idea\"},"
+        "{\"repo\":\"HQ/Core\",\"number\":3,\"fields\":[{\"name\":\"Story Points\",\"value\":3}]}]},"
+        "{\"name\":\"Done\",\"count\":9,\"sums\":{\"Story Points\":40},\"items\":[{\"repo\":\"hq/core\",\"number\":4}]}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    project_board_keep_repo(&b, "hq/core");
+    CHECK_INT((int)b.column_count, 2);
+    CHECK_INT((int)b.columns[0].card_count, 2); CHECK_INT(b.columns[0].count, 2);
+    CHECK_INT(b.columns[0].cards[0].number, 1); CHECK_INT(b.columns[0].cards[1].number, 3);
+    CHECK(b.columns[0].sums[0].value == 5);
+    // A column that lost nothing keeps the server's count and totals, which reach past the cards it was sent.
+    CHECK_INT((int)b.columns[1].card_count, 1); CHECK_INT(b.columns[1].count, 9); CHECK(b.columns[1].sums[0].value == 40);
+    project_board_free(&b); json_free(j);
+}
 static void test_project_option_colours_are_githubs_names(void) {
     int rgb[3];
     CHECK(project_color_rgb("GREEN", rgb)); CHECK(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
@@ -1279,6 +1297,7 @@ void board_tests(void) {
     test_run("project boards read columns, cards and sums", test_project_boards_read_columns_cards_and_sums);
     test_run("project boards carry why GitHub refused", test_project_boards_carry_why_github_refused);
     test_run("project boards filter by assignee", test_project_boards_filter_by_assignee);
+    test_run("project boards keep only the project's cards", test_project_boards_keep_only_the_projects_cards);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
