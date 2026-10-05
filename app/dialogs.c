@@ -617,3 +617,64 @@ bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_
     MeetPromptState s = { project, default_prompt, default_first, prompt, first_message };
     return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_MEET_PROMPT), owner, meet_prompt_proc, (LPARAM)&s) == IDOK;
 }
+
+// MARK: - Edit an issue or pull request
+
+typedef struct { const char *caption; char **title, **body; } EditItemState;
+static void edit_item_update(HWND dialog) {
+    char *text = control_text(dialog, IDC_EDIT_TITLE), *trimmed = str_trim(text);
+    EnableWindow(GetDlgItem(dialog, IDOK), *trimmed != 0);
+    free(text); free(trimmed);
+}
+static INT_PTR CALLBACK edit_item_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
+    EditItemState *s = (EditItemState *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    switch (msg) {
+    case WM_INITDIALOG: {
+        s = (EditItemState *)lp; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
+        dialog_theme(dialog);
+        dialog_prepare_edit(dialog, IDC_EDIT_TITLE);
+        dialog_prepare_edit(dialog, IDC_EDIT_BODY);
+        SendMessageW(dialog, DM_SETDEFID, IDOK, 0);
+        // GitHub takes a body of up to 65,536 characters.
+        SendDlgItemMessageW(dialog, IDC_EDIT_BODY, EM_SETLIMITTEXT, 65536, 0);
+        { wchar_t *w = utf8_to_wide(s->caption); SetWindowTextW(dialog, w); free(w); }
+        set_control_text(dialog, IDC_EDIT_TITLE, *s->title);
+        // GitHub keeps a body as it was typed, often with CRLF; the box adds its own CR to each line.
+        { char *body = str_replace(*s->body ? *s->body : "", "\r\n", "\n"); set_control_text(dialog, IDC_EDIT_BODY, body); free(body); }
+        edit_item_update(dialog);
+        SetFocus(GetDlgItem(dialog, IDC_EDIT_TITLE));
+        SendDlgItemMessageW(dialog, IDC_EDIT_TITLE, EM_SETSEL, 0, -1);
+        return FALSE;
+    }
+    case WM_CTLCOLORSTATIC: return dialog_static_color(dialog, wp, lp, theme.secondary);
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_EDIT_TITLE, IDC_EDIT_BODY }; dialog_paint_frames(dialog, ids, 2); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDOK) ? TRUE : FALSE;
+    case WM_COMMAND:
+        if (!s) return FALSE;
+        switch (LOWORD(wp)) {
+        case IDC_EDIT_TITLE: case IDC_EDIT_BODY:
+            if (HIWORD(wp) == EN_CHANGE && LOWORD(wp) == IDC_EDIT_TITLE) edit_item_update(dialog);
+            else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, LOWORD(wp));
+            return TRUE;
+        case IDOK: {
+            char *title = control_text(dialog, IDC_EDIT_TITLE), *body = control_text(dialog, IDC_EDIT_BODY);
+            char *trimmed = str_trim(title);
+            if (!*trimmed) { free(title); free(body); free(trimmed); return TRUE; }
+            free(*s->title); *s->title = trimmed;
+            free(*s->body); *s->body = body;
+            free(title);
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL: EndDialog(dialog, IDCANCEL); return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE: EndDialog(dialog, IDCANCEL); return TRUE;
+    }
+    return FALSE;
+}
+bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body) {
+    EditItemState s = { caption, title, body };
+    return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_EDIT_ITEM), owner, edit_item_proc, (LPARAM)&s) == IDOK;
+}

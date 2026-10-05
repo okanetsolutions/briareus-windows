@@ -59,27 +59,30 @@ const char *credentials_failure_text(void) {
 
 #define SETTINGS_KEY L"Software\\Okanet\\Briareus"
 
-char *settings_read_origin(void) {
+static char *settings_read(const wchar_t *name) {
     HKEY key;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS) return NULL;
     wchar_t buffer[1024]; DWORD size = sizeof buffer, type = 0;
-    LSTATUS status = RegQueryValueExW(key, L"serverOrigin", NULL, &type, (LPBYTE)buffer, &size);
+    LSTATUS status = RegQueryValueExW(key, name, NULL, &type, (LPBYTE)buffer, &size);
     RegCloseKey(key);
     if (status != ERROR_SUCCESS || type != REG_SZ) return NULL;
     buffer[size / sizeof(wchar_t) < 1023 ? size / sizeof(wchar_t) : 1023] = 0;
-    char *origin = wide_to_utf8(buffer);
-    if (!*origin) { free(origin); return NULL; }
-    return origin;
+    char *value = wide_to_utf8(buffer);
+    if (!*value) { free(value); return NULL; }
+    return value;
 }
-
-void settings_write_origin(const char *origin) {
+static void settings_write(const wchar_t *name, const char *value) {
     HKEY key;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, SETTINGS_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) != ERROR_SUCCESS) return;
-    wchar_t *w = utf8_to_wide(origin);
-    RegSetValueExW(key, L"serverOrigin", 0, REG_SZ, (const BYTE *)w, (DWORD)((wcslen(w) + 1) * sizeof(wchar_t)));
+    wchar_t *w = utf8_to_wide(value);
+    RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *)w, (DWORD)((wcslen(w) + 1) * sizeof(wchar_t)));
     free(w);
     RegCloseKey(key);
 }
+
+char *settings_read_origin(void) { return settings_read(L"serverOrigin"); }
+
+void settings_write_origin(const char *origin) { settings_write(L"serverOrigin", origin); }
 
 void settings_remove_origin(void) {
     HKEY key;
@@ -87,3 +90,6 @@ void settings_remove_origin(void) {
     RegDeleteValueW(key, L"serverOrigin");
     RegCloseKey(key);
 }
+
+char *settings_read_github_login(void) { return settings_read(L"githubLogin"); }
+void settings_write_github_login(const char *login) { settings_write(L"githubLogin", login); }

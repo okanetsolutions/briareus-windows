@@ -20,6 +20,9 @@ bool dialog_action_input(HWND owner, const BoardAction *action, int number, char
 /// `*prompt` and `*first_message`; Reset puts the defaults back. True with the texts on Join.
 bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_prompt, const char *default_first,
                            char **prompt, char **first_message);
+/// An issue's or pull request's title and description, edited from `*title` and `*body`; true with both on Save, which
+/// a blank title keeps disabled.
+bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body);
 /// Applies the theme to a dialog and its controls.
 void dialog_theme(HWND dialog);
 /// Paints dialog backgrounds and static text in the theme; call from WM_CTLCOLOR* handlers.

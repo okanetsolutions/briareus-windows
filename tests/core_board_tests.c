@@ -1177,6 +1177,49 @@ static void test_board_settings_are_read_from_their_github_address(void) {
     CHECK(project_board_setting_url(NULL) == NULL);
 }
 
+
+// MARK: - Edits
+
+static void check_names(const char *text, bool logins, const char *expected) {
+    Json *names = board_names_parse(text, logins);
+    char *got = json_serialize(names, false);
+    CHECK_STR(got, expected);
+    free(got); json_free(names);
+}
+static void test_edited_names_are_split_trimmed_and_listed_once(void) {
+    check_names("bug, good first issue ,,\r\nBug\nui", false, "[\"bug\",\"good first issue\",\"ui\"]");
+    check_names("", false, "[]");
+    check_names(NULL, false, "[]");
+    check_names(" , \n ", false, "[]");
+    // A login may be typed with its @; a label keeps one.
+    check_names("@nadin, Nadin, @, octocat", true, "[\"nadin\",\"octocat\"]");
+    check_names("@release", false, "[\"@release\"]");
+    // A quoted name keeps its commas, and "" in it is a quote.
+    check_names("bug, \"needs: review, qa\" ,\"say \"\"hi\"\"\"", false, "[\"bug\",\"needs: review, qa\",\"say \\\"hi\\\"\"]");
+    check_names("\"open, ", false, "[\"open,\"]");
+}
+static void test_names_join_as_the_edit_box_shows_them(void) {
+    char *names[] = { "a", "b c" };
+    char *j = board_names_join(names, 2); CHECK_STR(j, "a, b c"); free(j);
+    j = board_names_join(NULL, 0); CHECK_STR(j, ""); free(j);
+    PullLabel labels[] = { { "bug", "d73a4a" }, { NULL, NULL }, { "ui", NULL } };
+    j = board_label_names_join(labels, 3); CHECK_STR(j, "bug, , ui"); free(j);
+    // A label with a comma is quoted, so saving the box unchanged sends it back as it was.
+    PullLabel odd[] = { { "needs: review, qa", NULL }, { "\"x\"", NULL }, { "ui", NULL } };
+    j = board_label_names_join(odd, 3); CHECK_STR(j, "\"needs: review, qa\", \"\"\"x\"\"\", ui");
+    check_names(j, false, "[\"needs: review, qa\",\"\\\"x\\\"\",\"ui\"]"); free(j);
+}
+static void test_assign_me_adds_or_takes_off_the_login(void) {
+    char *assignees[] = { "octocat", "Nadin" };
+    bool added = true;
+    Json *out = board_assignees_toggle(assignees, 2, "nadin", &added);
+    char *t = json_serialize(out, false); CHECK_STR(t, "[\"octocat\"]"); CHECK(!added); free(t); json_free(out);
+    out = board_assignees_toggle(assignees, 1, "nadin", &added);
+    t = json_serialize(out, false); CHECK_STR(t, "[\"octocat\",\"nadin\"]"); CHECK(added); free(t); json_free(out);
+    out = board_assignees_toggle(NULL, 0, "nadin", NULL);
+    t = json_serialize(out, false); CHECK_STR(t, "[\"nadin\"]"); free(t); json_free(out);
+}
+
 void board_tests(void) {
     test_run("labels read from an object or a bare name", test_labels_read_from_an_object_or_a_bare_name);
     test_run("label colours read as six hex digits", test_label_colours_read_as_six_hex_digits);
@@ -1239,4 +1282,7 @@ void board_tests(void) {
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
+    test_run("edited names are split, trimmed and listed once", test_edited_names_are_split_trimmed_and_listed_once);
+    test_run("names join as the edit box shows them", test_names_join_as_the_edit_box_shows_them);
+    test_run("assign me adds or takes off the login", test_assign_me_adds_or_takes_off_the_login);
 }

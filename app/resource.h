@@ -53,6 +53,12 @@
 #define IDC_MEET_PROMPT_LABEL   604
 #define IDC_MEET_FIRST_LABEL    605
 
+#define IDD_EDIT_ITEM           700
+#define IDC_EDIT_TITLE          701
+#define IDC_EDIT_BODY           702
+#define IDC_EDIT_TITLE_LABEL    703
+#define IDC_EDIT_BODY_LABEL     704
+
 #define IDS_APP_TITLE           1000
 
 #endif

@@ -13,5 +13,8 @@ const char *credentials_failure_text(void);
 char *settings_read_origin(void);
 void settings_write_origin(const char *origin);
 void settings_remove_origin(void);
+/// The user's own GitHub login, which "Assign me" adds; the API does not say whose the token is. NULL until saved.
+char *settings_read_github_login(void);
+void settings_write_github_login(const char *login);
 
 #endif
