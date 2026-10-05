@@ -840,12 +840,6 @@ static Json *details_edit(const char *what, int number, const char *title, const
     free(t); free(b);
     return fields;
 }
-/// A small ▾ button row under the sidebar's assignees or labels.
-static void side_edit_button(Doc *doc, Col c, const char *text, int action, bool enabled) {
-    doc_space(doc, px(8));
-    ButtonSpec b = { 0, text, BUTTON_BORDERED, action, 0, enabled };
-    doc_button_row(doc, c.x, c.w, &b, 1);
-}
 
 // MARK: - Pull request
 
@@ -2038,6 +2032,12 @@ static void side_heading(Doc *doc, Col c, int *count, const char *title) {
     doc_space(doc, px(14));
     doc_text(doc, c.x, c.w, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(8));
+}
+/// The edit button under the sidebar's assignees or labels.
+static void side_edit_button(Doc *doc, Col c, const char *text, int action, bool enabled) {
+    doc_space(doc, px(8));
+    ButtonSpec b = { 0, text, BUTTON_BORDERED, action, 0, enabled };
+    doc_button_row(doc, c.x, c.w, &b, 1);
 }
 /// A name on the left and its value on the right, as a project's fields are listed.
 static void side_field(Doc *doc, Col c, const char *name, const char *value) {
