@@ -193,16 +193,22 @@ static void linked_row(Doc *doc, int x, int w, const BoardLink *link, const char
 void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) { linked_row(doc, x, w, link, repo, true, NULL, action, arg); }
 void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const char *repo, const char *status, int action, intptr_t arg) { linked_row(doc, x, w, link, repo, false, status, action, arg); }
 
-/// One 12px muted line of facts, `·` between them, the last one pushed to the right edge.
-typedef struct { char **parts; COLORREF *colors; bool *mono; size_t count; char *right; } MetaData;
+/// One 12px muted line of facts, the last one pushed to the right edge.
+typedef struct { char **parts; COLORREF *colors; bool *mono; size_t count; char *right; const char *separator; } MetaData;
 static void meta_free(void *p) { MetaData *d = p; str_array_free(d->parts, d->count); free(d->colors); free(d->mono); free(d->right); free(d); }
 static void paint_meta(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     MetaData *d = it->data;
     int x = rc->left, right = rc->right;
     if (d->right) { int rw = text_width(cv, d->right, FONT_CAPTION); RECT rr = { right - rw, rc->top, right, rc->bottom }; draw_text(cv, d->right, &rr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= rw + px(8); }
-    int dot_w = text_width(cv, "\xC2\xB7", FONT_CAPTION);
+    const char *separator = d->separator ? d->separator : "\xC2\xB7";
+    int separator_w = text_width(cv, separator, FONT_CAPTION);
     for (size_t i = 0; i < d->count && x < right; i++) {
-        if (i) { RECT dr = { x + px(6), rc->top, x + px(6) + dot_w, rc->bottom }; draw_text(cv, "\xC2\xB7", &dr, FONT_CAPTION, theme.line, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += px(6) * 2 + dot_w; }
+        if (i) {
+            if (x + px(6) * 2 + separator_w >= right) break;
+            RECT dr = { x + px(6), rc->top, x + px(6) + separator_w, rc->bottom };
+            draw_text(cv, separator, &dr, FONT_CAPTION, d->separator ? theme.muted : theme.line, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            x += px(6) * 2 + separator_w;
+        }
         FontId f = d->mono[i] ? FONT_MONO_CAPTION2 : FONT_CAPTION;
         int w = text_width(cv, d->parts[i], f);
         if (x + w > right) w = right - x;
@@ -224,6 +230,7 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
     doc_text(doc, ix, iw, pull->title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(4));
     MetaData *d = xcalloc(1, sizeof *d);
+    d->separator = "|";
     char *number = xstrfmt("#%d", pull->number); meta_add(d, number, theme.muted, false); free(number);
     if (pull->draft) meta_add(d, "draft", theme.muted, false);
     if (pull_has_conflicts(pull)) meta_add(d, "\xE2\x9A\xA0 conflicts", theme.danger, false);
@@ -238,6 +245,15 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
     if (pull->assignee_count) { char *a = people(pull->assignees, pull->assignee_count, 2); char *t = xstrfmt("assignee %s", a); meta_add(d, t, theme.muted, false); free(t); free(a); }
     else meta_add(d, "unassigned", theme.tertiary, false);
     if (pull->author) { char *a = xstrfmt("author @%s", pull->author); meta_add(d, a, theme.muted, false); free(a); }
+    if (pull->reviewer_count) {
+        Str reviewers; str_init(&reviewers);
+        for (size_t i = 0; i < pull->reviewer_count; i++) {
+            if (str_empty(pull->reviewers[i].user)) continue;
+            str_appendf(&reviewers, "%s@%s", reviewers.len ? ", " : "reviewers ", pull->reviewers[i].user);
+        }
+        if (reviewers.len) meta_add(d, reviewers.data, theme.muted, false);
+        str_free(&reviewers);
+    }
     if (pull->has_updated) d->right = format_relative(pull->updated_at);
     doc_meta(doc, ix, iw, d);
     if (pull->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, pull->labels, pull->label_count, theme.raise); }
