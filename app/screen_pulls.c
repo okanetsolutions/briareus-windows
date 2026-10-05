@@ -2053,7 +2053,7 @@ static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
         side_heading(doc, c, count, "Development");
         doc_text(doc, c.x, c.w, "Successfully merging this pull request may close these issues.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
         doc_space(doc, px(6));
-        for (size_t i = 0; i < issue_count; i++) { if (i) doc_space(doc, px(2)); doc_linked_row(doc, c.x, c.w, &issues[i], s->project.repo, safe_web_url(issues[i].url) ? ACT_ISSUE_URL : 0, (intptr_t)i); }
+        for (size_t i = 0; i < issue_count; i++) { if (i) doc_space(doc, px(2)); doc_linked_row(doc, c.x, c.w, &issues[i], s->project.repo, safe_web_url(issues[i].url) || (!board_link_is_foreign(&issues[i], s->project.repo) && store_supports("issue")) ? ACT_ISSUE_URL : 0, (intptr_t)i); }
     }
     for (size_t i = 0; i < parsed_count; i++) board_link_free(&parsed[i]);
     free(parsed);
@@ -2495,9 +2495,17 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_CHECK_URL: open_web_url(json_str(json_get(json_at(json_get(json_get(s->pr, "checks"), "runs"), (size_t)arg), "url"))); break;
     case ACT_COMMIT_URL: open_web_url(json_str(json_get(json_at(json_get(s->pr, "commitList"), (size_t)arg), "url"))); break;
     case ACT_ISSUE_URL: {
+        // An issue of this repository opens here, which reads the rest itself; any other on GitHub.
         const PullSummary *row = board_row(s);
-        if (row && (size_t)arg < row->issue_count) open_web_url(row->issues[arg].url);
-        else open_web_url(json_str(json_get(json_at(json_get(s->pr, "issues"), (size_t)arg), "url")));
+        BoardLink parsed; memset(&parsed, 0, sizeof parsed);
+        const BoardLink *link = row && (size_t)arg < row->issue_count ? &row->issues[arg]
+            : board_link_parse(json_at(json_get(s->pr, "issues"), (size_t)arg), &parsed) ? &parsed : NULL;
+        if (link && !board_link_is_foreign(link, s->project.repo) && store_supports("issue")) {
+            IssueSummary bare; memset(&bare, 0, sizeof bare);
+            bare.number = link->number; bare.title = link->title; bare.url = link->url;
+            app_push_detail(issue_detail_screen_new(&s->project, &bare));
+        } else if (link && safe_web_url(link->url)) open_web_url(link->url);
+        board_link_free(&parsed);
         break;
     }
     case ACT_PR_PROJECT: open_web_url(json_str(json_get(json_at(json_get(json_at(s->issue_projects, (size_t)(arg >> 16)), "projects"), (size_t)(arg & 0xFFFF)), "url"))); break;
