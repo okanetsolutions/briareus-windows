@@ -405,21 +405,25 @@ void project_db_layout(ProjectDb *p, Doc *doc, int w) {
         return;
     }
     project_db_load(p);
+    // The tabs stay at the top; beneath them the tree and the grid scroll apart: the grid with the page, the tree on
+    // its own inside a window the view's height, as the Files tab's tree does.
+    doc_pin(doc, (int)doc->count, doc->y);
     RECT view = pane_content_rect(p->host->pane);
-    int top = doc->y, bottom = top + (view.bottom - view.top) - top - px(14);
-    if (bottom < top + px(240)) bottom = top + px(240);
+    int top = doc->y, room = (view.bottom - view.top) - top - px(14);
+    if (room < px(240)) room = px(240);
     int lw = px(LIST_W);
     if (lw > w / 3) lw = w / 3;
+    int tree_first = (int)doc->count;
     layout_tree(p, doc, 0, lw);
-    int tree_bottom = doc->y;
+    // A rule between the tree and the grid, the window's height, so it stays beside the grid.
+    RECT rule = { lw + px(8), top, lw + px(9), top + room };
+    doc_add(doc, &rule, paint_rule);
+    int tree_last = (int)doc->count;
     doc->y = top;
     int rx = lw + px(18), rw = w - rx;
     layout_grid(p, doc, rx, rw);
-    if (doc->y < bottom) doc->y = bottom;
-    if (doc->y < tree_bottom) doc->y = tree_bottom;
-    // A rule between the tree and the grid, as tall as the longer of the two.
-    RECT rule = { lw + px(8), top, lw + px(9), doc->y };
-    doc_add(doc, &rule, paint_rule);
+    if (doc->y < top + room) doc->y = top + room;
+    doc_sticky(doc, tree_first, tree_last, doc->y);
 }
 
 // MARK: - Actions
