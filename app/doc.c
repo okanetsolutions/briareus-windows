@@ -742,7 +742,10 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     }
     free(want);
     int copy_w = text_width(doc->cv, "Copy table", FONT_CAPTION) + px(30), copy_h = font_height(doc->cv, FONT_CAPTION) + px(8);
-    RECT cr = { x + table_w - copy_w, doc->y, x + table_w, doc->y + copy_h };
+    // A table narrower than the button lets it run past its right edge, so the label is not clipped.
+    int copy_right = table_w < copy_w ? copy_w : table_w;
+    if (copy_right > w) copy_right = w;
+    RECT cr = { x + copy_right - copy_w, doc->y, x + copy_right, doc->y + copy_h };
     if (cr.left < x) cr.left = x;
     char *source = md_table_source(b);
     Item *ci = &doc->items[doc_add(doc, &cr, paint_table_copy)];
