@@ -91,14 +91,15 @@ const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number
 typedef struct {
     const char *author;
     const Reviewer *reviewers; size_t reviewer_count;
+    char *const *assignees; size_t assignee_count;
     const PullLabel *labels; size_t label_count;
 } BoardRow;
 BoardRow pull_board_row(const PullSummary *pull);
 BoardRow issue_board_row(const IssueSummary *issue);
 
-typedef enum { FILTER_AUTHOR, FILTER_REVIEWER, FILTER_LABEL, FILTER_KIND_COUNT } FilterKind;
-/// One author, reviewer and label the board is narrowed to; empty means all. Values are kept folded.
-typedef struct { char *author, *reviewer, *label; } BoardFilter;
+typedef enum { FILTER_AUTHOR, FILTER_REVIEWER, FILTER_ASSIGNEE, FILTER_LABEL, FILTER_KIND_COUNT } FilterKind;
+/// One author, reviewer, assignee and label the board is narrowed to; empty means all. Values are kept folded.
+typedef struct { char *author, *reviewer, *assignee, *label; } BoardFilter;
 typedef struct { char *value, *text; int count; } FilterOption;
 void board_filter_init(BoardFilter *filter);
 void board_filter_free(BoardFilter *filter);
@@ -111,7 +112,7 @@ const char *board_filter_get(const BoardFilter *filter, FilterKind kind);
 void board_filter_set(BoardFilter *filter, FilterKind kind, const char *value);
 /// `skipping` (or -1) leaves one picker out, which is how each counts what it would show without counting itself.
 bool board_filter_passes(const BoardFilter *filter, const BoardRow *row, int skipping);
-/// What one picker offers, each counted against the other two. A pick they have emptied still lists itself.
+/// What one picker offers, each counted against the others. A pick they have emptied still lists itself.
 FilterOption *board_filter_options(const BoardFilter *filter, FilterKind kind, const BoardRow *rows, size_t count, size_t *option_count);
 void filter_options_free(FilterOption *options, size_t count);
 const char *filter_kind_name(FilterKind kind);

@@ -42,7 +42,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
@@ -589,10 +589,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     // The pickers, as the dashboard's selects, and ⟳.
     {
         BoardFilter *f = current_filter(s);
-        const char *author = board_filter_get(f, FILTER_AUTHOR), *reviewer = board_filter_get(f, FILTER_REVIEWER), *label = board_filter_get(f, FILTER_LABEL);
+        const char *author = board_filter_get(f, FILTER_AUTHOR), *reviewer = board_filter_get(f, FILTER_REVIEWER), *assignee = board_filter_get(f, FILTER_ASSIGNEE), *label = board_filter_get(f, FILTER_LABEL);
         HeaderButton *b;
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(author) ? "All authors" : author); b->action = ACT_FILTER_AUTHOR; b->enabled = s->loaded;
         if (s->tab == 0) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(reviewer) ? "All reviewers" : reviewer); b->action = ACT_FILTER_REVIEWER; b->enabled = s->loaded; }
+        if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(label) ? "All labels" : label); b->action = ACT_FILTER_LABEL; b->enabled = s->loaded;
     }
     HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the pull requests from GitHub again";
@@ -634,6 +635,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     switch (action) {
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
+    case ACT_FILTER_ASSIGNEE: filter_pick(s, FILTER_ASSIGNEE, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;

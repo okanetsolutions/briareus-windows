@@ -218,28 +218,43 @@ const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number
 // MARK: - Filters
 
 BoardRow pull_board_row(const PullSummary *p) {
-    BoardRow row = { p->author, p->reviewers, p->reviewer_count, p->labels, p->label_count };
+    BoardRow row = { p->author, p->reviewers, p->reviewer_count, p->assignees, p->assignee_count, p->labels, p->label_count };
     return row;
 }
 BoardRow issue_board_row(const IssueSummary *i) {
-    BoardRow row = { i->author, NULL, 0, i->labels, i->label_count };
+    BoardRow row = { i->author, NULL, 0, i->assignees, i->assignee_count, i->labels, i->label_count };
     return row;
 }
 
-const char *filter_kind_name(FilterKind kind) { return kind == FILTER_AUTHOR ? "author" : kind == FILTER_REVIEWER ? "reviewer" : "label"; }
-void board_filter_init(BoardFilter *f) { f->author = xstrdup(""); f->reviewer = xstrdup(""); f->label = xstrdup(""); }
-void board_filter_free(BoardFilter *f) { if (!f) return; free(f->author); free(f->reviewer); free(f->label); memset(f, 0, sizeof *f); }
-void board_filter_copy(BoardFilter *into, const BoardFilter *from) { into->author = xstrdup(from->author); into->reviewer = xstrdup(from->reviewer); into->label = xstrdup(from->label); }
-bool board_filter_equal(const BoardFilter *a, const BoardFilter *b) { return str_eq(a->author, b->author) && str_eq(a->reviewer, b->reviewer) && str_eq(a->label, b->label); }
+const char *filter_kind_name(FilterKind kind) {
+    switch (kind) {
+    case FILTER_AUTHOR: return "author";
+    case FILTER_REVIEWER: return "reviewer";
+    case FILTER_ASSIGNEE: return "assignee";
+    default: return "label";
+    }
+}
+void board_filter_init(BoardFilter *f) { f->author = xstrdup(""); f->reviewer = xstrdup(""); f->assignee = xstrdup(""); f->label = xstrdup(""); }
+void board_filter_free(BoardFilter *f) { if (!f) return; free(f->author); free(f->reviewer); free(f->assignee); free(f->label); memset(f, 0, sizeof *f); }
+void board_filter_copy(BoardFilter *into, const BoardFilter *from) { into->author = xstrdup(from->author); into->reviewer = xstrdup(from->reviewer); into->assignee = xstrdup(from->assignee); into->label = xstrdup(from->label); }
+bool board_filter_equal(const BoardFilter *a, const BoardFilter *b) { return str_eq(a->author, b->author) && str_eq(a->reviewer, b->reviewer) && str_eq(a->assignee, b->assignee) && str_eq(a->label, b->label); }
 void board_filter_opening(BoardFilter *f, const char *author, const BoardRow *rows, size_t count) {
     board_filter_init(f);
     if (str_empty(author)) return;
     for (size_t i = 0; i < count; i++) if (fold_eq(rows[i].author, author)) { free(f->author); f->author = str_fold(author); return; }
 }
-bool board_filter_is_on(const BoardFilter *f) { return !(str_empty(f->author) && str_empty(f->reviewer) && str_empty(f->label)); }
-const char *board_filter_get(const BoardFilter *f, FilterKind kind) { return kind == FILTER_AUTHOR ? f->author : kind == FILTER_REVIEWER ? f->reviewer : f->label; }
+bool board_filter_is_on(const BoardFilter *f) { return !(str_empty(f->author) && str_empty(f->reviewer) && str_empty(f->assignee) && str_empty(f->label)); }
+static char **filter_slot(BoardFilter *f, FilterKind kind) {
+    switch (kind) {
+    case FILTER_AUTHOR: return &f->author;
+    case FILTER_REVIEWER: return &f->reviewer;
+    case FILTER_ASSIGNEE: return &f->assignee;
+    default: return &f->label;
+    }
+}
+const char *board_filter_get(const BoardFilter *f, FilterKind kind) { return *filter_slot((BoardFilter *)f, kind); }
 void board_filter_set(BoardFilter *f, FilterKind kind, const char *value) {
-    char **slot = kind == FILTER_AUTHOR ? &f->author : kind == FILTER_REVIEWER ? &f->reviewer : &f->label;
+    char **slot = filter_slot(f, kind);
     free(*slot); *slot = str_fold(value);
 }
 static size_t carried(FilterKind kind, const BoardRow *row, const char **out, size_t cap) {
@@ -247,6 +262,7 @@ static size_t carried(FilterKind kind, const BoardRow *row, const char **out, si
     switch (kind) {
     case FILTER_AUTHOR: if (row->author && n < cap) out[n++] = row->author; break;
     case FILTER_REVIEWER: for (size_t i = 0; i < row->reviewer_count && n < cap; i++) out[n++] = row->reviewers[i].user; break;
+    case FILTER_ASSIGNEE: for (size_t i = 0; i < row->assignee_count && n < cap; i++) out[n++] = row->assignees[i]; break;
     default: for (size_t i = 0; i < row->label_count && n < cap; i++) out[n++] = row->labels[i].name; break;
     }
     return n;
