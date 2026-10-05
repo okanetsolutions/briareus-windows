@@ -755,7 +755,7 @@ enum {
     F_REPO, F_LABEL, F_ENABLED, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT, F_DB_POOL, F_DB_RESTORE,
-    F_REVIEW_AUTHOR, F_PUBLISH, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
     F_BUDGET, F_IS_SELF,
     F_ENV,
     F_RUN, F_PROFILES,
@@ -783,6 +783,7 @@ static const FieldDef FIELDS[F_COUNT] = {
     [F_REVIEW_AUTHOR] = { "reviewAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
+    [F_AUTO_LOOP] = { "autonomousReviewLoop", K_BOOL, "Autonomous review loop: fix every finding and review again" },
     [F_TEST_SHEET] = { "reviewTestSheet", K_BOOL, "Write a test sheet when the \xF0\x9F\x8E\xAC QA errand is started" },
     [F_TEST_RUN] = { "reviewTestRun", K_BOOL, "Execute the test sheet and record a video of each scenario" },
     [F_QA_NOTES] = { "qaNotes", K_AREA, "QA notes", NULL,
@@ -1206,6 +1207,9 @@ static void form_layout(Screen *base, Doc *doc) {
         field(s, doc, x, (col - px(28)) / 3, F_REVIEW_AUTHOR);
         runtime_row(s, doc, x, col, R_REVIEW);
         field(s, doc, x, col, F_PUBLISH);
+        check(s, doc, x, col, F_AUTO_LOOP);
+        if (field_offered(s, F_AUTO_LOOP) && s->bools[F_AUTO_LOOP])
+            note(doc, x, col, "Every finding of a session's review-loop round, low severity and parked ones too, goes to \xE2\x9A\x99 Implement feedback on its own, and the fix is pushed and reviewed again until a round comes back clean and code-approved. The loop's round limit and repeated-findings check still stop one that cannot converge. Sessions still need their review loop switched on; a standalone \xE2\x8C\x95 Code review keeps its manual findings.");
         // Each step runs as a turn of its own, on the code review's runtime unless it names one; a step switched off has none.
         check(s, doc, x, col, F_TEST_SHEET);
         if (s->bools[F_TEST_SHEET]) runtime_row(s, doc, x + px(23), col - px(23), R_TEST_SHEET);
