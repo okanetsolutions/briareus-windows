@@ -415,19 +415,21 @@ void project_db_layout(ProjectDb *p, Doc *doc, int w) {
     doc_pin(doc, (int)doc->count, doc->y);
     RECT view = pane_content_rect(p->host->pane);
     int top = doc->y, room = (view.bottom - view.top) - top - px(14);
-    if (room < px(240)) room = px(240);
+    if (room < 0) room = 0;
     int lw = px(LIST_W);
     if (lw > w / 3) lw = w / 3;
     int tree_first = (int)doc->count;
     layout_tree(p, doc, 0, lw);
-    // An unpainted spacer keeps the tree's window the view's height when the tree is shorter.
+    // An unpainted spacer keeps the tree's window the view's height when the tree is shorter. It takes the unclamped
+    // room, so in a short pane the group never outgrows its window; the px(240) minimum applies to the page alone.
     RECT spacer = { lw + px(8), top, lw + px(9), top + room };
     doc_add(doc, &spacer, NULL);
     int tree_last = (int)doc->count;
     doc->y = top;
     int rx = lw + px(18), rw = w - rx;
     layout_grid(p, doc, rx, rw);
-    if (doc->y < top + room) doc->y = top + room;
+    int least = room < px(240) ? px(240) : room;
+    if (doc->y < top + least) doc->y = top + least;
     // A rule between the tree and the grid, outside the tree's group so it does not scroll with the tree: it spans
     // the whole page and paints only the tree's window.
     RECT rule = { lw + px(8), top, lw + px(9), doc->y };
