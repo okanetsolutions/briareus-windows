@@ -152,9 +152,13 @@ void app_set_overlay(Screen *screen) {
     Screen *root = pane_root(g_overlay);
     if (root && screen && screen->id && str_eq(root->id, screen->id) && pane_depth(g_overlay) == 1) { screen->vt->destroy(screen); return; }
     if (!screen && !root) return;
+    // Win32 leaves focus on a hidden window, so closing the panel hands it back to the board.
+    HWND focus = GetFocus(), overlay = pane_hwnd(g_overlay);
+    bool had_focus = focus && (focus == overlay || IsChild(overlay, focus));
     pane_set_root(g_overlay, screen);
     layout();
-    if (screen) SetFocus(pane_hwnd(g_overlay));
+    if (screen) SetFocus(overlay);
+    else if (had_focus && g_detail) SetFocus(pane_hwnd(g_detail));
     InvalidateRect(g_main, NULL, TRUE);
 }
 
