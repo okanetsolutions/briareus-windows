@@ -507,6 +507,8 @@ static void test_markdown_blocks(void) {
     if (n == 4) {
         CHECK(b[0].kind == MD_TABLE && b[0].rows == 3 && b[0].cols == 2); CHECK_STR(b[0].aligns, "lr");
         CHECK_STR(b[0].cells[0], "Name"); CHECK_STR(b[0].cells[2], "a | b"); CHECK_STR(b[0].cells[3], "1"); CHECK_STR(b[0].cells[4], "c"); CHECK_STR(b[0].cells[5], "");
+        char *source = md_table_source(&b[0]);
+        CHECK_STR(source, "| Name | Count |\n| --- | ---: |\n| a \\| b | 1 |\n| c |  |"); free(source);
         CHECK(b[1].kind == MD_BULLET && b[1].task == 1); CHECK_STR(b[1].text, "todo");
         CHECK(b[2].task == 2); CHECK_STR(b[2].text, "done"); CHECK(b[3].task == 2); CHECK_STR(b[3].text, "also");
     }

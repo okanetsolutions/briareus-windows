@@ -105,6 +105,26 @@ static bool table_delimiter(const char *line, char **aligns, size_t *cols) {
 }
 static bool is_table_row(const char *trimmed) { return strchr(trimmed, '|') != NULL; }
 
+static void table_row_source(Str *s, char *const *cells, size_t cols) {
+    str_appendc(s, '|');
+    for (size_t c = 0; c < cols; c++) {
+        char *escaped = str_replace(cells[c], "|", "\\|");
+        str_appendc(s, ' '); str_appendz(s, escaped); str_appendz(s, " |"); free(escaped);
+    }
+}
+char *md_table_source(const MdBlock *table) {
+    Str s; str_init(&s);
+    if (!table->rows) return str_detach(&s);
+    table_row_source(&s, table->cells, table->cols);
+    str_appendz(&s, "\n|");
+    for (size_t c = 0; c < table->cols; c++) {
+        char a = table->aligns[c];
+        str_appendz(&s, a == 'c' ? " :---: |" : a == 'r' ? " ---: |" : " --- |");
+    }
+    for (size_t r = 1; r < table->rows; r++) { str_appendc(&s, '\n'); table_row_source(&s, table->cells + r * table->cols, table->cols); }
+    return str_detach(&s);
+}
+
 static bool is_rule(const char *trimmed) {
     size_t n = strlen(trimmed);
     if (n < 3) return false;
