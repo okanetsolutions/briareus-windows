@@ -3032,12 +3032,6 @@ static bool issue_runs_cost(const IssueScreen *s, double *total) {
     }
     return any;
 }
-/// The board row of a closing pull request of this repository, which carries its checks and reviews.
-static const PullSummary *issue_pull_row(const IssueScreen *s, size_t i) {
-    const BoardLink *pull = &s->issue.pulls[i];
-    if (board_link_is_foreign(pull, s->project.repo)) return NULL;
-    return pulls_find(s->board_pulls, s->board_pull_count, pull->number);
-}
 /// The pull requests still open among those linked to it; the full read lists merged and closed ones too.
 static size_t issue_open_pulls(const IssueScreen *s) {
     size_t n = 0;
@@ -3181,36 +3175,6 @@ static void issue_layout_subs(IssueScreen *s, Doc *doc, Col c) {
         free(m);
     }
     free(rest); free(rich);
-}
-/// The pull requests linked to close it: those on the board drawn as the board draws them, the rest as links.
-static void issue_layout_pulls(IssueScreen *s, Doc *doc, Col c) {
-    const IssueSummary *issue = &s->issue;
-    doc_section(doc, c.x, c.w, "Pull requests");
-    bool thin = false;
-    for (size_t i = 0; i < issue->pull_count; i++) {
-        const PullSummary *row = issue_pull_row(s, i);
-        if (!row) { thin = true; continue; }
-        bool running = false;
-        for (size_t r = 0; r < s->run_count; r++) if (session_pull_number(&s->runs[r]) == row->number && session_is_active(&s->runs[r])) running = true;
-        // The issues it closes would only name this one again.
-        PullSummary shown = *row; shown.issue_count = 0;
-        doc_pull_row(doc, c.x, c.w, &shown, NULL, s->project.repo, NULL, store_supports("pull") || safe_web_url(row->url) ? ACT_ISSUE_PULL : 0, (intptr_t)i, NULL, 0, running);
-        doc_space(doc, px(8));
-    }
-    if (thin || !issue->pull_count) {
-        int box = col_box(doc, c);
-        bool first = true;
-        for (size_t i = 0; i < issue->pull_count; i++) {
-            if (issue_pull_row(s, i)) continue;
-            if (!first) doc_space(doc, px(4));
-            first = false;
-            const BoardLink *pull = &issue->pulls[i];
-            bool foreign = board_link_is_foreign(pull, s->project.repo) || !store_supports("pull");
-            doc_linked_row(doc, c.ix, c.iw, pull, s->project.repo, foreign ? (safe_web_url(pull->url) ? ACT_ISSUE_PULL : 0) : ACT_ISSUE_PULL, (intptr_t)i);
-        }
-        if (!issue->pull_count) doc_text(doc, c.ix, c.iw, s->detail ? "No pull request is linked to close this issue yet" : "No open pull request closes this issue yet", FONT_CALLOUT, theme.secondary, DT_WORDBREAK);
-        doc_box_end(doc, box, px(12));
-    }
 }
 static void issue_layout_runs(IssueScreen *s, Doc *doc, Col c) {
     if (!s->run_count) return;
@@ -3396,7 +3360,6 @@ static void issue_layout_activity(IssueScreen *s, Doc *doc, Col c) {
 static void issue_layout_main(IssueScreen *s, Doc *doc, Col c) {
     issue_layout_body(s, doc, c);
     issue_layout_subs(s, doc, c);
-    issue_layout_pulls(s, doc, c);
     issue_layout_runs(s, doc, c);
     issue_layout_activity(s, doc, c);
 }
