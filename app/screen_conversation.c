@@ -865,6 +865,9 @@ static int conversation_footer_height(Screen *base, int width) {
 static void conversation_footer_layout(Screen *base, const RECT *rc) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (!can_message(s)) { ShowWindow(s->composer, SW_HIDE); return; }
+    // Made in the detail pane, the composer follows a conversation pushed onto the side panel instead.
+    HWND parent = pane_hwnd(base->pane);
+    if (GetParent(s->composer) != parent) SetParent(s->composer, parent);
     Canvas *cv = NULL;   // measuring only
     RECT col = footer_column(rc);
     int chips = chips_layout(s, cv, col.right - col.left, NULL);
