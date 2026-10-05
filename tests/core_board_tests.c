@@ -1179,6 +1179,24 @@ static void test_project_boards_filter_by_assignee(void) {
     o = project_board_assignees(&b, PROJECT_NO_ASSIGNEE, &n); CHECK_INT((int)n, 2); CHECK_INT(o[1].count, 0); filter_options_free(o, n);
     project_board_free(&b); json_free(j);
 }
+static void test_project_boards_keep_only_the_projects_cards(void) {
+    Json *j = json_parsez("{\"columns\":["
+        "{\"name\":\"Todo\",\"count\":4,\"sums\":{\"Story Points\":10},\"items\":["
+        "{\"repo\":\"hq/core\",\"number\":1,\"fields\":[{\"name\":\"Story Points\",\"value\":2}]},"
+        "{\"repo\":\"hq/app\",\"number\":2,\"fields\":[{\"name\":\"Story Points\",\"value\":5}]},"
+        "{\"type\":\"draft\",\"title\":\"idea\"},"
+        "{\"repo\":\"HQ/Core\",\"number\":3,\"fields\":[{\"name\":\"Story Points\",\"value\":3}]}]},"
+        "{\"name\":\"Done\",\"count\":9,\"sums\":{\"Story Points\":40},\"items\":[{\"repo\":\"hq/core\",\"number\":4}]}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    project_board_keep_repo(&b, "hq/core");
+    CHECK_INT((int)b.column_count, 2);
+    CHECK_INT((int)b.columns[0].card_count, 2); CHECK_INT(b.columns[0].count, 2);
+    CHECK_INT(b.columns[0].cards[0].number, 1); CHECK_INT(b.columns[0].cards[1].number, 3);
+    CHECK(b.columns[0].sums[0].value == 5);
+    // A column that lost nothing keeps the server's count and totals, which reach past the cards it was sent.
+    CHECK_INT((int)b.columns[1].card_count, 1); CHECK_INT(b.columns[1].count, 9); CHECK(b.columns[1].sums[0].value == 40);
+    project_board_free(&b); json_free(j);
+}
 static void test_project_option_colours_are_githubs_names(void) {
     int rgb[3];
     CHECK(project_color_rgb("GREEN", rgb)); CHECK(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
@@ -1206,6 +1224,49 @@ static void test_board_settings_are_read_from_their_github_address(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { j = project_board_setting_from_url(bad[i]); if (j) printf("  read %s\n", bad[i]); CHECK(j == NULL); json_free(j); }
     j = json_parsez("{\"owner\":\"\",\"number\":1}"); CHECK(project_board_setting_url(j) == NULL); json_free(j);
     CHECK(project_board_setting_url(NULL) == NULL);
+}
+
+
+// MARK: - Edits
+
+static void check_names(const char *text, bool logins, const char *expected) {
+    Json *names = board_names_parse(text, logins);
+    char *got = json_serialize(names, false);
+    CHECK_STR(got, expected);
+    free(got); json_free(names);
+}
+static void test_edited_names_are_split_trimmed_and_listed_once(void) {
+    check_names("bug, good first issue ,,\r\nBug\nui", false, "[\"bug\",\"good first issue\",\"ui\"]");
+    check_names("", false, "[]");
+    check_names(NULL, false, "[]");
+    check_names(" , \n ", false, "[]");
+    // A login may be typed with its @; a label keeps one.
+    check_names("@nadin, Nadin, @, octocat", true, "[\"nadin\",\"octocat\"]");
+    check_names("@release", false, "[\"@release\"]");
+    // A quoted name keeps its commas, and "" in it is a quote.
+    check_names("bug, \"needs: review, qa\" ,\"say \"\"hi\"\"\"", false, "[\"bug\",\"needs: review, qa\",\"say \\\"hi\\\"\"]");
+    check_names("\"open, ", false, "[\"open,\"]");
+}
+static void test_names_join_as_the_edit_box_shows_them(void) {
+    char *names[] = { "a", "b c" };
+    char *j = board_names_join(names, 2); CHECK_STR(j, "a, b c"); free(j);
+    j = board_names_join(NULL, 0); CHECK_STR(j, ""); free(j);
+    PullLabel labels[] = { { "bug", "d73a4a" }, { NULL, NULL }, { "ui", NULL } };
+    j = board_label_names_join(labels, 3); CHECK_STR(j, "bug, , ui"); free(j);
+    // A label with a comma is quoted, so saving the box unchanged sends it back as it was.
+    PullLabel odd[] = { { "needs: review, qa", NULL }, { "\"x\"", NULL }, { "ui", NULL } };
+    j = board_label_names_join(odd, 3); CHECK_STR(j, "\"needs: review, qa\", \"\"\"x\"\"\", ui");
+    check_names(j, false, "[\"needs: review, qa\",\"\\\"x\\\"\",\"ui\"]"); free(j);
+}
+static void test_assign_me_adds_or_takes_off_the_login(void) {
+    char *assignees[] = { "octocat", "Nadin" };
+    bool added = true;
+    Json *out = board_assignees_toggle(assignees, 2, "nadin", &added);
+    char *t = json_serialize(out, false); CHECK_STR(t, "[\"octocat\"]"); CHECK(!added); free(t); json_free(out);
+    out = board_assignees_toggle(assignees, 1, "nadin", &added);
+    t = json_serialize(out, false); CHECK_STR(t, "[\"octocat\",\"nadin\"]"); CHECK(added); free(t); json_free(out);
+    out = board_assignees_toggle(NULL, 0, "nadin", NULL);
+    t = json_serialize(out, false); CHECK_STR(t, "[\"nadin\"]"); free(t); json_free(out);
 }
 
 void board_tests(void) {
@@ -1268,7 +1329,11 @@ void board_tests(void) {
     test_run("project boards carry why GitHub refused", test_project_boards_carry_why_github_refused);
     test_run("project boards filter by assignee", test_project_boards_filter_by_assignee);
     test_run("project board cards list their pull requests", test_project_board_cards_list_their_pull_requests);
+    test_run("project boards keep only the project's cards", test_project_boards_keep_only_the_projects_cards);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
+    test_run("edited names are split, trimmed and listed once", test_edited_names_are_split_trimmed_and_listed_once);
+    test_run("names join as the edit box shows them", test_names_join_as_the_edit_box_shows_them);
+    test_run("assign me adds or takes off the login", test_assign_me_adds_or_takes_off_the_login);
 }

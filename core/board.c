@@ -886,6 +886,23 @@ int project_column_matching(const ProjectColumn *column, const char *assignee, d
     }
     return matching;
 }
+void project_board_keep_repo(ProjectBoard *board, const char *repo) {
+    if (str_empty(repo)) return;
+    for (size_t c = 0; c < board->column_count; c++) {
+        ProjectColumn *column = &board->columns[c];
+        size_t kept = 0;
+        for (size_t k = 0; k < column->card_count; k++) {
+            if (column->cards[k].repo && str_ieq(column->cards[k].repo, repo)) column->cards[kept++] = column->cards[k];
+            else project_card_free(&column->cards[k]);
+        }
+        if (kept == column->card_count) continue;
+        column->card_count = kept;
+        double *sums = xcalloc(column->sum_count + 1, sizeof *sums);
+        column->count = project_column_matching(column, NULL, sums);
+        for (size_t s = 0; s < column->sum_count; s++) column->sums[s].value = sums[s];
+        free(sums);
+    }
+}
 bool project_color_rgb(const char *name, int rgb[3]) {
     // GitHub's Primer colours behind the option colours, as its board draws them.
     static const struct { const char *name; int rgb[3]; } colors[] = {
@@ -951,4 +968,59 @@ char *project_board_setting_url(const Json *setting) {
     const char *kind = str_eq(json_str(json_get(setting, "ownerType")), "user") ? "users" : "orgs";
     return view > 0 ? xstrfmt("https://github.com/%s/%s/projects/%d/views/%d", kind, owner, number, view)
                     : xstrfmt("https://github.com/%s/%s/projects/%d", kind, owner, number);
+}
+
+// MARK: - Edits
+
+static bool names_have(const Json *names, const char *name) {
+    for (size_t i = 0; i < json_count(names); i++) if (fold_eq(json_str(json_at(names, i)), name)) return true;
+    return false;
+}
+Json *board_names_parse(const char *text, bool logins) {
+    Json *out = json_array();
+    for (const char *p = text ? text : ""; *p;) {
+        while (*p == ' ' || *p == '\t') p++;
+        Str raw; str_init(&raw);
+        if (*p == '"') {   // a quoted name keeps its commas; "" inside it is one quote
+            for (p++; *p && !(*p == '"' && p[1] != '"'); p++) { str_appendc(&raw, *p); if (*p == '"') p++; }
+            if (*p) p++;
+        }
+        size_t n = strcspn(p, ",\r\n");
+        str_appendf(&raw, "%.*s", (int)n, p);
+        char *joined = str_detach(&raw), *name = str_trim(joined);
+        const char *kept = logins && *name == '@' ? name + 1 : name;
+        if (*kept && !names_have(out, kept)) json_array_push(out, json_string(kept));
+        free(joined); free(name);
+        p += n;
+        if (*p) p++;
+    }
+    return out;
+}
+/// A name as an edit box holds it: quoted when a comma, a line break or a leading quote would split or change it.
+static void names_append(Str *out, const char *name) {
+    if (!name[strcspn(name, ",\r\n")] && *name != '"') { str_appendz(out, name); return; }
+    str_appendc(out, '"');
+    for (const char *c = name; *c; c++) { if (*c == '"') str_appendc(out, '"'); str_appendc(out, *c); }
+    str_appendc(out, '"');
+}
+char *board_names_join(char *const *names, size_t count) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < count; i++) { if (i) str_appendz(&out, ", "); names_append(&out, names[i]); }
+    return str_detach(&out);
+}
+char *board_label_names_join(const PullLabel *labels, size_t count) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < count; i++) { if (i) str_appendz(&out, ", "); names_append(&out, labels[i].name ? labels[i].name : ""); }
+    return str_detach(&out);
+}
+Json *board_assignees_toggle(char *const *assignees, size_t count, const char *login, bool *added) {
+    Json *out = json_array();
+    bool had = false;
+    for (size_t i = 0; i < count; i++) {
+        if (fold_eq(assignees[i], login)) { had = true; continue; }
+        json_array_push(out, json_string(assignees[i]));
+    }
+    if (!had && login && *login) json_array_push(out, json_string(login));
+    if (added) *added = !had;
+    return out;
 }

@@ -292,12 +292,15 @@ static const ApiRoute ROUTES[] = {
     { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },
+    { "update_pull", "PATCH", "pulls/{pr}" },             // its `title`, `body`, `labels` and `assignees`; a list replaces the old one
+    { "update_pull_branch", "POST", "pulls/{pr}/update-branch" }, // merges its base into it on GitHub, at the `headSha` and `baseRef` read
     { "serve_pull", "POST", "pulls/{prNumber}/serve" },
     { "serve_branch", "POST", "branches/serve" },          // ▶ Run on a branch, the default one when `branch` is absent
     // Issues
     { "issue", "GET", "issues/{issue}" },                  // one issue in full: body, type, projects, sub-issues, linked pulls
     { "issue_timeline", "GET", "issues/{issue}/timeline" }, // its comments and events, a `page` of 100 at a time
     { "close_issue", "POST", "issues/{issue}/close" },      // `reason` completed or not_planned, and an optional `comment` posted first
+    { "update_issue", "PATCH", "issues/{issue}" },          // its `title`, `body`, `labels` and `assignees`, as update_pull
     { "project_board", "GET", "project-board" },           // the project's GitHub Projects board as its view groups it; `fresh` skips the cache
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },

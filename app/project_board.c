@@ -2,9 +2,10 @@
 // the way its view is on GitHub (`project_board`). Columns run side by side, each with its count and its number fields
 // totalled (Story Points). The columns reach the view's bottom and each scrolls on its own; a wide board scrolls sideways
 // with the bar at the bottom, or Shift and the wheel. An assignee picker narrows the cards, as GitHub's filter bar does.
-// A card opens its issue or pull request in a side panel over the board when it is this project's, as GitHub's board
-// does, and on GitHub otherwise. An issue card lists the pull requests that close it, from the host's `pulls` read,
-// and each opens the same way. Read-only: cards are moved on GitHub.
+// Only this project's cards are shown, so a board shared by several repositories reads as this one's. A card opens its
+// issue or pull request in a side panel over the board, as GitHub's board does. An issue card lists the pull requests
+// that close it, from the host's `pulls` read; this project's open the same way, others on GitHub. Read-only: cards are
+// moved on GitHub.
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
@@ -56,6 +57,7 @@ static void filter_restore(BoardTab *p) {
 static void show(BoardTab *p, const Json *answer) {
     ProjectBoard board;
     if (!project_board_parse(answer, &board)) return;
+    project_board_keep_repo(&board, p->project.repo);
     project_board_free(&p->board);
     p->board = board; p->has_board = true;
 }
