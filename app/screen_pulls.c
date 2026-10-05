@@ -3617,6 +3617,7 @@ static void issue_refresh(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
     request_cancel(&s->req_runs); request_cancel(&s->req_detail);
     set_string(&s->timeline_seen, NULL);   // the timeline is read again with it
+    set_string(&s->edit_error, NULL);
     issue_load(s, true);
     pane_relayout(base->pane); pane_header_changed(base->pane);
 }
