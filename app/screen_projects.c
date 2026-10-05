@@ -5,6 +5,7 @@
 #include "resource.h"
 #include "screens.h"
 #include "str.h"
+#include "updater.h"
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -108,7 +109,7 @@ static int player_height(void) {
     return px(6) + 1 + px(8) + px(PLAYER_ROW) + (st.has_volume ? px(VOLUME_ROW) : 0) + px(2);
 }
 typedef struct {
-    RECT select_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc;
+    RECT select_rc, version_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc;
     RECT player_rc, mute_rc, volume_rc;     // the whole player for the wheel; the slider's track takes clicks around it
     int track_left, track_right;
 } FooterRects;
@@ -205,8 +206,8 @@ static bool player_wheel(Pane *pane, const FooterRects *f, POINT pt, int delta) 
     return true;
 }
 
-/// The foot: `☑ Select` 13px muted and the version, then at the right the ⚙ Settings icon button and the `⎋ Sign out`
-/// button, above a border, under the player.
+/// The foot: `☑ Select` 13px muted and the version (the waiting release's in the accent, opening the updates menu), then
+/// at the right the ⚙ Settings icon button and the `⎋ Sign out` button, above a border, under the player.
 enum { FOOT_BUTTON = 26 };
 static int sidebar_footer_height(int width) { (void)width; return player_height() + px(6) + 1 + px(8) + px(FOOT_BUTTON) + px(8); }
 static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, bool select_on) {
@@ -215,7 +216,8 @@ static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, b
     draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(8), h = px(FOOT_BUTTON);
     int left = rc->left + px(16), right = rc->right - px(10);
-    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B Sign out", *version = "v" APP_VERSION_STRING;
+    bool update = false;
+    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B Sign out", *version = updater_label(&update);
     int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = text_width(cv, out_, FONT_CAPTION) + px(20), vw = text_width(cv, version, FONT_CAPTION2);
     RECT c = { right - ow, y, right, y + h }, g = { c.left - px(6) - h, y, c.left - px(6), y + h };
     RECT a = { left, y, left + sw, y + h };
@@ -223,7 +225,11 @@ static void sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, b
     int mid = (a.right + g.left) / 2;
     RECT v = { mid - vw / 2, y, mid + vw / 2 + 1, y + h };
     draw_text(cv, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    if (v.left > a.right + px(6)) draw_text(cv, version, &v, FONT_CAPTION2, theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    out->version_rc = (RECT){ 0, 0, 0, 0 };
+    if (v.left > a.right + px(6)) {
+        draw_text(cv, version, &v, FONT_CAPTION2, update ? theme.accent : theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        out->version_rc = v; InflateRect(&out->version_rc, px(4), 0);
+    }
     fill_round_rect(cv, &g, px(7), theme.raise, theme.line);
     draw_text(cv, "\xE2\x9A\x99", &g, FONT_EMOJI, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     fill_round_rect(cv, &c, px(7), theme.raise, theme.line);
@@ -517,6 +523,7 @@ static bool projects_footer_wheel(Screen *base, POINT pt, int delta) { return pl
 static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
+    if (PtInRect(&s->footer.version_rc, pt)) { updater_menu(base->pane, pt); return; }
     if (PtInRect(&s->footer.settings_rc, pt)) sidebar_common_action(base->pane, ACT_SETTINGS);
     if (PtInRect(&s->footer.signout_rc, pt)) sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
@@ -782,6 +789,7 @@ static void sessions_footer_click(Screen *base, POINT pt) {
     SessionsScreen *s = (SessionsScreen *)base;
     if (player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) clear_picks(s); pane_footer_changed(base->pane); return; }
+    if (PtInRect(&s->footer.version_rc, pt)) { updater_menu(base->pane, pt); return; }
     if (PtInRect(&s->footer.settings_rc, pt)) { sidebar_common_action(base->pane, ACT_SETTINGS); return; }
     if (PtInRect(&s->footer.signout_rc, pt)) { sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;

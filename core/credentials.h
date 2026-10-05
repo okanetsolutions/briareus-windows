@@ -16,5 +16,8 @@ void settings_remove_origin(void);
 /// The user's own GitHub login, which "Assign me" adds; the API does not say whose the token is. NULL until saved.
 char *settings_read_github_login(void);
 void settings_write_github_login(const char *login);
+/// Whether new releases are downloaded and installed on their own; on until turned off.
+bool settings_read_auto_update(void);
+void settings_write_auto_update(bool on);
 
 #endif

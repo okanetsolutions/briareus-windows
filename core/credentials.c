@@ -93,3 +93,10 @@ void settings_remove_origin(void) {
 
 char *settings_read_github_login(void) { return settings_read(L"githubLogin"); }
 void settings_write_github_login(const char *login) { settings_write(L"githubLogin", login); }
+bool settings_read_auto_update(void) {
+    char *value = settings_read(L"autoUpdate");
+    bool on = !str_eq(value, "off");
+    free(value);
+    return on;
+}
+void settings_write_auto_update(bool on) { settings_write(L"autoUpdate", on ? "on" : "off"); }
