@@ -3462,6 +3462,17 @@ static void issue_layout_sidebar(IssueScreen *s, Doc *doc, Col c) {
         bool linked = !board_link_is_foreign(&issue->parent, s->project.repo) || safe_web_url(issue->parent.url);
         doc_linked_row(doc, c.x, c.w, &issue->parent, s->project.repo, linked ? ACT_ISSUE_PARENT : 0, 0);
     } else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    side_heading(doc, c, &count, "Development");
+    if (issue->pull_count) {
+        doc_text(doc, c.x, c.w, issue->pull_count == 1 ? "Successfully merging this pull request may close this issue." : "Successfully merging one of these pull requests may close this issue.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_space(doc, px(6));
+    } else doc_text(doc, c.x, c.w, "No pull request yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+    for (size_t i = 0; i < issue->pull_count; i++) {
+        const BoardLink *pull = &issue->pulls[i];
+        bool foreign = board_link_is_foreign(pull, s->project.repo) || !store_supports("pull");
+        if (i) doc_space(doc, px(2));
+        doc_linked_row(doc, c.x, c.w, pull, s->project.repo, foreign ? (safe_web_url(pull->url) ? ACT_ISSUE_PULL : 0) : ACT_ISSUE_PULL, (intptr_t)i);
+    }
     if (issue->has_updated) {
         side_heading(doc, c, &count, "Updated");
         char *rel = format_relative(issue->updated_at); doc_text(doc, c.x, c.w, rel, FONT_FOOTNOTE, theme.ink, DT_SINGLELINE); free(rel);
