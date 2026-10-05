@@ -684,7 +684,15 @@ static void paint_table(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
         }
     }
 }
-/// A table sized to its content: columns take what their widest cell wants, then share the width that is left.
+static void paint_table_copy(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    if (doc_item_hovered(doc, it)) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
+    RECT g = { rc->left + px(4), rc->top, rc->left + px(22), rc->bottom };
+    draw_glyph(cv, 0xE8C8, &g, FONT_ICON_SMALL, theme.secondary);
+    RECT l = { g.right + px(2), rc->top, rc->right - px(6), rc->bottom };
+    draw_text(cv, "Copy table", &l, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+/// A table sized to its content: columns take what their widest cell wants, then share the width that is left. A copy
+/// button above its right edge copies it as Markdown.
 static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     TableData *t = xcalloc(1, sizeof *t);
     t->rows = b->rows; t->cols = b->cols; t->aligns = xstrdup(b->aligns);
@@ -733,6 +741,13 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
         y += t->row_h[r] + 1;
     }
     free(want);
+    int copy_w = text_width(doc->cv, "Copy table", FONT_CAPTION) + px(30), copy_h = font_height(doc->cv, FONT_CAPTION) + px(8);
+    RECT cr = { x + table_w - copy_w, doc->y, x + table_w, doc->y + copy_h };
+    if (cr.left < x) cr.left = x;
+    char *source = md_table_source(b);
+    Item *ci = &doc->items[doc_add(doc, &cr, paint_table_copy)];
+    ci->data = source; ci->free_data = free; ci->action = ACTION_COPY_CODE; ci->arg = (intptr_t)source; ci->hand = true;
+    doc->y += copy_h + px(2);
     RECT rc = { x, doc->y, x + table_w, doc->y + y };
     int i = doc_add(doc, &rc, paint_table);
     Item *it = &doc->items[i];

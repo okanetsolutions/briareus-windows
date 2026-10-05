@@ -20,6 +20,8 @@ typedef struct {
 
 MdBlock *md_parse(const char *source, size_t *count);
 void md_free(MdBlock *blocks, size_t count);
+/// A table block written back as Markdown, pipes in cells escaped, as a new string.
+char *md_table_source(const MdBlock *table);
 
 enum { SPAN_BOLD = 1, SPAN_ITALIC = 2, SPAN_CODE = 4, SPAN_LINK = 8, SPAN_STRIKE = 16 };
 typedef struct { unsigned flags; char *text; char *url; } MdSpan;
