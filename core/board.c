@@ -808,6 +808,65 @@ const ProjectField *project_card_field(const ProjectCard *card, const char *name
     for (size_t i = 0; i < card->field_count; i++) if (str_ieq(card->fields[i].name, name)) return &card->fields[i];
     return NULL;
 }
+bool project_card_assigned(const ProjectCard *card, const char *assignee) {
+    if (str_empty(assignee)) return true;
+    if (str_eq(assignee, PROJECT_NO_ASSIGNEE)) return card->assignee_count == 0;
+    for (size_t i = 0; i < card->assignee_count; i++) if (str_ieq(card->assignees[i], assignee)) return true;
+    return false;
+}
+FilterOption *project_board_assignees(const ProjectBoard *board, const char *pick, size_t *count) {
+    FilterOption *options = NULL; size_t n = 0, cap = 0;
+    int nobody = 0;
+    for (size_t c = 0; c < board->column_count; c++) {
+        const ProjectColumn *column = &board->columns[c];
+        for (size_t k = 0; k < column->card_count; k++) {
+            const ProjectCard *card = &column->cards[k];
+            if (!card->assignee_count) nobody++;
+            for (size_t a = 0; a < card->assignee_count; a++) {
+                const char *login = card->assignees[a];
+                bool dup = false;
+                for (size_t b = 0; b < a && !dup; b++) dup = fold_eq(card->assignees[b], login);
+                if (dup) continue;
+                size_t i = 0;
+                for (; i < n; i++) if (fold_eq(options[i].text, login)) break;
+                if (i == n) {
+                    if (n == cap) { cap = cap ? cap * 2 : 8; options = xrealloc(options, cap * sizeof *options); }
+                    options[n].value = xstrdup(login); options[n].text = xstrdup(login); options[n].count = 0; n++;
+                }
+                options[i].count++;
+            }
+        }
+    }
+    if (!str_empty(pick) && !str_eq(pick, PROJECT_NO_ASSIGNEE)) {
+        bool listed = false;
+        for (size_t i = 0; i < n && !listed; i++) listed = fold_eq(options[i].value, pick);
+        if (!listed) {
+            if (n == cap) { cap = cap ? cap * 2 : 8; options = xrealloc(options, cap * sizeof *options); }
+            options[n].value = xstrdup(pick); options[n].text = xstrdup(pick); options[n].count = 0; n++;
+        }
+    }
+    if (n > 1) qsort(options, n, sizeof *options, compare_options);
+    if (nobody || str_eq(pick, PROJECT_NO_ASSIGNEE)) {
+        options = xrealloc(options, (n + 1) * sizeof *options);
+        options[n].value = xstrdup(PROJECT_NO_ASSIGNEE); options[n].text = xstrdup("No assignee"); options[n].count = nobody; n++;
+    }
+    *count = n;
+    return options;
+}
+int project_column_matching(const ProjectColumn *column, const char *assignee, double *sums) {
+    int matching = 0;
+    if (sums) for (size_t s = 0; s < column->sum_count; s++) sums[s] = 0;
+    for (size_t k = 0; k < column->card_count; k++) {
+        const ProjectCard *card = &column->cards[k];
+        if (!project_card_assigned(card, assignee)) continue;
+        matching++;
+        for (size_t s = 0; sums && s < column->sum_count; s++) {
+            const ProjectField *f = project_card_field(card, column->sums[s].name);
+            if (f && f->value) sums[s] += strtod(f->value, NULL);
+        }
+    }
+    return matching;
+}
 bool project_color_rgb(const char *name, int rgb[3]) {
     // GitHub's Primer colours behind the option colours, as its board draws them.
     static const struct { const char *name; int rgb[3]; } colors[] = {

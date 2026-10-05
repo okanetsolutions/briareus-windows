@@ -20,12 +20,13 @@ static void clear_items(Doc *doc) {
     }
     doc->count = 0;
 }
-void doc_free(Doc *doc) { clear_items(doc); free(doc->items); doc_init(doc); }
+void doc_free(Doc *doc) { clear_items(doc); free(doc->items); free(doc->regions); doc_init(doc); }
 void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
     doc->cv = cv; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
     doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
     doc->pin_last = doc->pin_bottom = doc->pin_shift = 0;
+    doc->regions_kept = doc->region_count; doc->region_count = 0;
 }
 void doc_end(Doc *doc) { doc->cv = NULL; }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
@@ -874,15 +875,100 @@ static bool sticky_hidden(const Doc *doc, size_t i, int y) {
     return sticky_active(doc) && (int)i >= doc->sticky_first && (int)i < doc->sticky_last && (y < doc->sticky_view.top || y >= doc->sticky_view.bottom);
 }
 
+// MARK: - Scrolling regions
+
+static void region_scroll(Doc *doc, DocRegion *r, int scroll) {
+    if (scroll > r->max) scroll = r->max;
+    if (scroll < 0) scroll = 0;
+    int delta = r->scroll - scroll;
+    if (!delta) return;
+    for (int i = r->first; i < r->last; i++) OffsetRect(&doc->items[i].rc, 0, delta);
+    r->scroll = scroll;
+}
+void doc_region(Doc *doc, int first, int last, const RECT *view, int bottom) {
+    if (first < 0) first = 0;
+    if (last > (int)doc->count) last = (int)doc->count;
+    if (doc->region_count == doc->region_cap) { doc->region_cap = doc->region_cap ? doc->region_cap * 2 : 16; doc->regions = xrealloc(doc->regions, doc->region_cap * sizeof *doc->regions); }
+    size_t index = doc->region_count++;
+    DocRegion *r = &doc->regions[index];
+    int kept = index < doc->regions_kept ? r->scroll : 0;
+    r->first = first; r->last = last > first ? last : first; r->view = *view; r->bottom = bottom;
+    r->scroll = 0;
+    r->max = bottom - view->bottom; if (r->max < 0) r->max = 0;
+    region_scroll(doc, r, kept);
+}
+/// The region item `i` scrolls in, or NULL.
+static const DocRegion *region_of(const Doc *doc, size_t i) {
+    for (size_t k = 0; k < doc->region_count; k++) if ((int)i >= doc->regions[k].first && (int)i < doc->regions[k].last) return &doc->regions[k];
+    return NULL;
+}
+static bool in_view(const RECT *v, int x, int y) { return x >= v->left && x < v->right && y >= v->top && y < v->bottom; }
+/// A region's item out of reach at a content point: the region shows it only through its window.
+static bool region_hidden(const Doc *doc, size_t i, int x, int y) {
+    if (!doc->region_count) return false;
+    const DocRegion *r = region_of(doc, i);
+    return r && !in_view(&r->view, x, y);
+}
+static int region_at(const Doc *doc, int x, int y) {
+    for (size_t k = 0; k < doc->region_count; k++) if (in_view(&doc->regions[k].view, x, y)) return (int)k;
+    return -1;
+}
+bool doc_region_wheel(Doc *doc, int x, int y, int dy) {
+    int k = region_at(doc, x, y);
+    if (k < 0 || doc->regions[k].max <= 0) return false;
+    region_scroll(doc, &doc->regions[k], doc->regions[k].scroll + dy);
+    return true;
+}
+/// The bar's thumb, in content coordinates; false while the region does not overflow.
+static bool region_thumb(const DocRegion *r, RECT *thumb) {
+    if (r->max <= 0) return false;
+    int track = r->view.bottom - r->view.top, total = track + r->max;
+    int h = track * track / total; if (h < px(24)) h = px(24);
+    int y = r->view.top + (track - h) * r->scroll / r->max;
+    SetRect(thumb, r->view.right - px(7), y, r->view.right - px(1), y + h);
+    return true;
+}
+int doc_region_thumb_at(Doc *doc, int x, int y, int *thumb_top) {
+    for (size_t k = 0; k < doc->region_count; k++) {
+        RECT t;
+        if (!region_thumb(&doc->regions[k], &t)) continue;
+        // A little wider than it is drawn, as it is thin.
+        if (x >= t.left - px(4) && x < t.right + px(2) && y >= t.top && y < t.bottom) { *thumb_top = t.top; return (int)k; }
+    }
+    return -1;
+}
+void doc_region_drag(Doc *doc, int k, int thumb_top) {
+    if (k < 0 || (size_t)k >= doc->region_count) return;
+    DocRegion *r = &doc->regions[k];
+    RECT t;
+    if (!region_thumb(r, &t)) return;
+    int room = (r->view.bottom - r->view.top) - (t.bottom - t.top);
+    if (room > 0) region_scroll(doc, r, (thumb_top - r->view.top) * r->max / room);
+}
+
 // MARK: - Paint and hit
 
+static void paint_item(Doc *doc, Item *it, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
+    RECT rc = { it->rc.left - scroll_x, it->rc.top - scroll_y, it->rc.right - scroll_x, it->rc.bottom - scroll_y };
+    if (rc.bottom < clip->top - px(4) || rc.top > clip->bottom + px(4)) return;
+    if (rc.right < clip->left || rc.left > clip->right) return;
+    if (it->paint) it->paint(doc, it, cv, &rc);
+}
+/// The items in [first, last) that scroll with the page; the regions' own are painted through their windows.
 static void paint_items(Doc *doc, Canvas *cv, int first, int last, int scroll_x, int scroll_y, const RECT *clip) {
-    for (int i = first; i < last; i++) {
-        Item *it = &doc->items[i];
-        RECT rc = { it->rc.left - scroll_x, it->rc.top - scroll_y, it->rc.right - scroll_x, it->rc.bottom - scroll_y };
-        if (rc.bottom < clip->top - px(4) || rc.top > clip->bottom + px(4)) continue;
-        if (rc.right < clip->left || rc.left > clip->right) continue;
-        if (it->paint) it->paint(doc, it, cv, &rc);
+    for (int i = first; i < last; i++) if (!doc->region_count || !region_of(doc, (size_t)i)) paint_item(doc, &doc->items[i], cv, scroll_x, scroll_y, clip);
+}
+static void paint_regions(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
+    for (size_t k = 0; k < doc->region_count; k++) {
+        const DocRegion *r = &doc->regions[k];
+        RECT v = r->view; OffsetRect(&v, -scroll_x, -scroll_y);
+        RECT within;
+        if (!IntersectRect(&within, &v, clip)) continue;
+        canvas_clip(cv, &within);
+        for (int i = r->first; i < r->last; i++) paint_item(doc, &doc->items[i], cv, scroll_x, scroll_y, &within);
+        canvas_unclip(cv);
+        RECT t;
+        if (region_thumb(r, &t)) { OffsetRect(&t, -scroll_x, -scroll_y); fill_round_rect(cv, &t, px(3), theme.thumb, theme.thumb); }
     }
 }
 static void paint_scrolled(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip);
@@ -899,7 +985,7 @@ void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *cli
 /// The items that scroll: all of them but the pinned band, the sticky group through its window.
 static void paint_scrolled(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip) {
     int first = doc->pin_last;
-    if (!sticky_active(doc)) { paint_items(doc, cv, first, (int)doc->count, scroll_x, scroll_y, clip); return; }
+    if (!sticky_active(doc)) { paint_items(doc, cv, first, (int)doc->count, scroll_x, scroll_y, clip); paint_regions(doc, cv, scroll_x, scroll_y, clip); return; }
     paint_items(doc, cv, first, doc->sticky_first, scroll_x, scroll_y, clip);
     // The sticky group shows through its window, with a thin bar at its right edge while it overflows.
     RECT v = doc->sticky_view; OffsetRect(&v, -scroll_x, -scroll_y);
@@ -916,11 +1002,12 @@ static void paint_scrolled(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, con
         fill_round_rect(cv, &r, px(3), c, c);
     }
     paint_items(doc, cv, doc->sticky_last, (int)doc->count, scroll_x, scroll_y, clip);
+    paint_regions(doc, cv, scroll_x, scroll_y, clip);
 }
 int doc_hit(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (!it->action || sticky_hidden(doc, i, y) || pin_covered(doc, i, y)) continue;
+        if (!it->action || sticky_hidden(doc, i, y) || pin_covered(doc, i, y) || region_hidden(doc, i, x, y)) continue;
         if (x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) {
             if (it->paint == paint_segments) it->arg = ((SegmentData *)it->data)->arg_base + segment_at(it, x);
             // Linked text is clickable on its links alone; the rest of it selects.
@@ -978,7 +1065,7 @@ void doc_clear_selection(Doc *doc) {
 int doc_text_item_at(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (it->sel && !pin_covered(doc, i, y) && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
+        if (it->sel && !pin_covered(doc, i, y) && !region_hidden(doc, i, x, y) && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
     }
     return -1;
 }
@@ -1020,7 +1107,7 @@ bool doc_position_at(Doc *doc, Canvas *cv, int x, int y, DocPos *pos) {
     int best = -1, best_d = 0;
     for (size_t i = 0; i < doc->count; i++) {
         Item *it = &doc->items[i];
-        if (!it->sel || pin_covered(doc, i, y) || y < it->rc.top || y >= it->rc.bottom) continue;
+        if (!it->sel || pin_covered(doc, i, y) || region_hidden(doc, i, x, y) || y < it->rc.top || y >= it->rc.bottom) continue;
         int d = x < it->rc.left ? it->rc.left - x : x >= it->rc.right ? x - it->rc.right + 1 : 0;
         if (best < 0 || d < best_d) { best = (int)i; best_d = d; }
     }

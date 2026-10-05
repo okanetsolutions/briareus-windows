@@ -32,6 +32,8 @@ struct Item {
 
 /// A character position: an item and an offset into its plain text.
 typedef struct { int item, offset; } DocPos;
+/// Items that scroll on their own inside a window of the page, as a board's column does. See doc_region.
+typedef struct { int first, last; RECT view; int bottom, scroll, max; } DocRegion;
 
 struct Doc {
     Item *items; size_t count, cap;
@@ -48,6 +50,8 @@ struct Doc {
     int sticky_scroll, sticky_max;  // the group's own scroll inside its window, and how far it can go
     RECT sticky_view;               // the window the group shows through, in content coordinates
     int pin_last, pin_bottom, pin_shift;  // items [0, pin_last) pinned at the view's top over [0, pin_bottom); none when 0
+    DocRegion *regions; size_t region_count, region_cap;
+    size_t regions_kept;            // regions the last layout had, whose scroll the next one keeps
 };
 
 void doc_init(Doc *doc);
@@ -120,6 +124,16 @@ void doc_sticky(Doc *doc, int first, int last, int limit);
 /// Items [0, last), laid out above `bottom`, stay at the top of the view as a fixed header: the rest scrolls beneath
 /// them, clipped at `bottom`, and a sticky group's window starts below them. One band per document.
 void doc_pin(Doc *doc, int last, int bottom);
+/// Items [first, last) scroll on their own inside `view`, in content coordinates, as a board's column does: clipped to
+/// it, with a thin bar at its right edge while they overflow. `bottom` is the content y they end at, padding included.
+/// A region keeps its scroll through layouts that lay it out at the same index; their rectangles move with it.
+void doc_region(Doc *doc, int first, int last, const RECT *view, int bottom);
+/// Scrolls the region under a content point by `dy`; false when there is none or it does not overflow.
+bool doc_region_wheel(Doc *doc, int x, int y, int dy);
+/// The region whose bar is under a content point, or -1; `thumb_top` is the bar's thumb top, for dragging it.
+int doc_region_thumb_at(Doc *doc, int x, int y, int *thumb_top);
+/// Scrolls region `r` so its thumb's top is at content y `thumb_top`, as a drag of the bar moves it.
+void doc_region_drag(Doc *doc, int r, int thumb_top);
 /// Moves the pinned and sticky items for the scroll offset and the visible height; their rectangles stay in content coordinates.
 void doc_set_view(Doc *doc, int scroll_y, int view_height);
 /// Scrolls the sticky group by `dy` when the content point is over its window and it overflows; false otherwise.

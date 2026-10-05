@@ -156,9 +156,10 @@ bool board_tab_offered(const Project *project);
 /// Reads the board the first time the tab is shown, the saved copy first; the refresh reads it past the server's cache.
 void board_tab_open(BoardTab *p);
 void board_tab_refresh(BoardTab *p);
-/// Lays the board out from `doc->y` down; columns that do not fit `w` run on past it, scrolled sideways.
+/// Lays the board out from `doc->y` down to the view's bottom, each column scrolling on its own; columns that do not fit
+/// `w` run on past it, scrolled sideways.
 void board_tab_layout(BoardTab *p, Doc *doc, int w);
-/// The board and view in the line under the title, and a button that opens the view on GitHub.
+/// The board and view in the line under the title, the assignee picker, and a button that opens the view on GitHub.
 void board_tab_header(BoardTab *p, HeaderInfo *info);
 /// True when the action was the tab's.
 bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt);

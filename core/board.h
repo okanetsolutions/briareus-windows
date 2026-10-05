@@ -224,6 +224,17 @@ bool project_board_parse(const Json *value, ProjectBoard *out);
 void project_board_free(ProjectBoard *board);
 /// A card's field by name, or NULL.
 const ProjectField *project_card_field(const ProjectCard *card, const char *name);
+/// The assignee filter's pick for the cards nobody has; GitHub logins never start with a hyphen.
+#define PROJECT_NO_ASSIGNEE "-"
+/// Whether a card passes the assignee filter: an empty pick passes every card, PROJECT_NO_ASSIGNEE the unassigned ones,
+/// and a login (in any case) the cards assigned to it.
+bool project_card_assigned(const ProjectCard *card, const char *assignee);
+/// What the assignee filter offers: everyone the board's cards are assigned to, by name, each with how many cards they
+/// have, then "No assignee" when some card has nobody. A pick the board no longer holds still lists itself.
+FilterOption *project_board_assignees(const ProjectBoard *board, const char *pick, size_t *count);
+/// How many of a column's cards pass the assignee filter, and each of its number fields totalled over them into `sums`
+/// (`sum_count` long; may be NULL).
+int project_column_matching(const ProjectColumn *column, const char *assignee, double *sums);
 /// GitHub's named colours for single-select options as red, green and blue; false for a name it does not use.
 bool project_color_rgb(const char *name, int rgb[3]);
 /// A number as a column's total shows it: whole numbers without decimals, the rest with up to two. New string.
