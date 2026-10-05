@@ -900,5 +900,6 @@ int main(void) {
     sftp_tests();
     browser_tests();
     meet_tests();
+    update_tests();
     return test_summary();
 }

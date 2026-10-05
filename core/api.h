@@ -100,5 +100,9 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
                            const void *body, size_t body_len, int timeout_ms,
                            int *status, char **content_type, char **retry_after, char **response, size_t *response_len,
                            char **error_message);
+/// What a WinHTTP or system error code should say, as a new string.
+char *api_winhttp_error_text(DWORD code);
+/// A response header of a WinHTTP request (a `WINHTTP_QUERY_*`), or NULL without one.
+char *api_winhttp_header(void *request, DWORD info);
 
 #endif

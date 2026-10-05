@@ -9,6 +9,7 @@
 #include "str.h"
 #include "terminal.h"
 #include "theme.h"
+#include "updater.h"
 #include <stdio.h>
 #include <commctrl.h>
 #include <objbase.h>
@@ -320,6 +321,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         rebuild_for_connection();
         store_restore();
         media_start(hwnd);
+        updater_start();
         return 0;
     case WM_SIZE:
         if (wp == SIZE_MINIMIZED) set_active(false);
@@ -393,7 +395,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             char message[160];
             const char *kind = !sftp ? "SSH" : !ssh ? "SFTP" : "SSH and SFTP";
             snprintf(message, sizeof message, "%zu %s session%s still open; closing Briareus disconnects %s.", live, kind, live == 1 ? " is" : "s are", live == 1 ? "it" : "them");
-            if (!app_confirm("Close Briareus?", message, "Close", true)) return 0;
+            if (!app_confirm("Close Briareus?", message, "Close", true)) { updater_restart_cancelled(); return 0; }
         }
         DestroyWindow(hwnd);
         return 0;
@@ -463,6 +465,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
+    updater_relaunch_if_asked();
     CoUninitialize();
     return 0;
 }

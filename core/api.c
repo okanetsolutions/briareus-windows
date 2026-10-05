@@ -487,10 +487,6 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
 
 // MARK: - Event streams
 
-static char *winhttp_error_text(DWORD code);
-static char *query_header(HINTERNET request, DWORD info);
-
-
 void api_stream_cancel_init(ApiStreamCancel *c) { InitializeCriticalSection(&c->lock); c->request = NULL; c->cancelled = false; }
 void api_stream_cancel_free(ApiStreamCancel *c) { DeleteCriticalSection(&c->lock); }
 void api_stream_cancel(ApiStreamCancel *c) {
@@ -531,7 +527,7 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
     }
     connection = WinHttpConnect(c->session, host, parts.nPort, 0);
     if (connection) req = WinHttpOpenRequest(connection, L"GET", wpath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE | WINHTTP_FLAG_REFRESH);
-    if (!req) { char *why = winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); goto done; }
+    if (!req) { char *why = api_winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); goto done; }
     EnterCriticalSection(&cancel->lock);
     bool cancelled = cancel->cancelled;
     if (!cancelled) cancel->request = req;
@@ -553,7 +549,7 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
     if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &size, WINHTTP_NO_HEADER_INDEX)) goto failed;
     if (code < 200 || code >= 300) {
         // The refusal's own words, as a JSON body says them.
-        char *type = query_header(req, WINHTTP_QUERY_CONTENT_TYPE), *retry = query_header(req, WINHTTP_QUERY_RETRY_AFTER);
+        char *type = api_winhttp_header(req, WINHTTP_QUERY_CONTENT_TYPE), *retry = api_winhttp_header(req, WINHTTP_QUERY_RETRY_AFTER);
         char body[4096]; DWORD got = 0, total = 0;
         while (total < sizeof body - 1 && WinHttpReadData(req, body + total, (DWORD)(sizeof body - 1 - total), &got) && got) total += got;
         body[total] = 0;
@@ -578,7 +574,7 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
     goto done;
 failed:
     if (stream_cancelled(cancel)) api_error_set(error, API_CANCELLED, 0, NULL, -1);
-    else { char *why = winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); }
+    else { char *why = api_winhttp_error_text(GetLastError()); api_error_set(error, API_NETWORK, 0, why, -1); free(why); }
 done:
     if (req) {
         EnterCriticalSection(&cancel->lock);
@@ -650,7 +646,7 @@ double api_retry_after(const char *value, time_t now) {
 
 // MARK: - WinHTTP transport
 
-static char *winhttp_error_text(DWORD code) {
+char *api_winhttp_error_text(DWORD code) {
     switch (code) {
     case ERROR_WINHTTP_TIMEOUT: return xstrdup("The request timed out.");
     case ERROR_WINHTTP_CANNOT_CONNECT: return xstrdup("Could not connect to the server.");
@@ -672,7 +668,7 @@ static char *winhttp_error_text(DWORD code) {
     return xstrfmt("The network request failed (error %lu).", (unsigned long)code);
 }
 
-static char *query_header(HINTERNET request, DWORD info) {
+char *api_winhttp_header(HINTERNET request, DWORD info) {
     DWORD size = 0;
     WinHttpQueryHeaders(request, info, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &size, WINHTTP_NO_HEADER_INDEX);
     if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) return NULL;
@@ -694,7 +690,7 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
     if (!session) {
         own_session = WinHttpOpen(L"Briareus-Windows/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         session = own_session;
-        if (!session) { *error_message = winhttp_error_text(GetLastError()); return false; }
+        if (!session) { *error_message = api_winhttp_error_text(GetLastError()); return false; }
     }
     wchar_t *wurl = utf8_to_wide(url);
     URL_COMPONENTS parts; memset(&parts, 0, sizeof parts); parts.dwStructSize = sizeof parts;
@@ -705,12 +701,12 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
         *error_message = xstrdup("The server address is not an HTTPS URL."); goto done;
     }
     connection = WinHttpConnect(session, host, parts.nPort, 0);
-    if (!connection) { *error_message = winhttp_error_text(GetLastError()); goto done; }
+    if (!connection) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
     wchar_t *wmethod = utf8_to_wide(method);
     request = WinHttpOpenRequest(connection, wmethod, path, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                  WINHTTP_FLAG_SECURE | WINHTTP_FLAG_REFRESH);
     free(wmethod);
-    if (!request) { *error_message = winhttp_error_text(GetLastError()); goto done; }
+    if (!request) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
     DWORD disabled = WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS | WINHTTP_DISABLE_AUTHENTICATION | WINHTTP_DISABLE_KEEP_ALIVE;
     WinHttpSetOption(request, WINHTTP_OPTION_DISABLE_FEATURE, &disabled, sizeof disabled);
     DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
@@ -723,23 +719,23 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
     BOOL sent = WinHttpSendRequest(request, *wheaders ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS, *wheaders ? (DWORD)-1 : 0,
                                    body_len ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA, (DWORD)body_len, (DWORD)body_len, 0);
     free(wheaders);
-    if (!sent) { *error_message = winhttp_error_text(GetLastError()); goto done; }
-    if (!WinHttpReceiveResponse(request, NULL)) { *error_message = winhttp_error_text(GetLastError()); goto done; }
+    if (!sent) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
+    if (!WinHttpReceiveResponse(request, NULL)) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
     DWORD code = 0, size = sizeof code;
     if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &size, WINHTTP_NO_HEADER_INDEX)) {
-        *error_message = winhttp_error_text(GetLastError()); goto done;
+        *error_message = api_winhttp_error_text(GetLastError()); goto done;
     }
     *status = (int)code;
-    *content_type = query_header(request, WINHTTP_QUERY_CONTENT_TYPE);
-    *retry_after = query_header(request, WINHTTP_QUERY_RETRY_AFTER);
+    *content_type = api_winhttp_header(request, WINHTTP_QUERY_CONTENT_TYPE);
+    *retry_after = api_winhttp_header(request, WINHTTP_QUERY_RETRY_AFTER);
     Str data; str_init(&data);
     for (;;) {
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available)) { *error_message = winhttp_error_text(GetLastError()); str_free(&data); goto done; }
+        if (!WinHttpQueryDataAvailable(request, &available)) { *error_message = api_winhttp_error_text(GetLastError()); str_free(&data); goto done; }
         if (!available) break;
         str_reserve(&data, available);
         DWORD read = 0;
-        if (!WinHttpReadData(request, data.data + data.len, available, &read)) { *error_message = winhttp_error_text(GetLastError()); str_free(&data); goto done; }
+        if (!WinHttpReadData(request, data.data + data.len, available, &read)) { *error_message = api_winhttp_error_text(GetLastError()); str_free(&data); goto done; }
         if (!read) break;
         data.len += read; data.data[data.len] = 0;
         if (data.len > 64u * 1024 * 1024) { *error_message = xstrdup("The response is too large."); str_free(&data); goto done; }

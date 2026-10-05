@@ -46,6 +46,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Hides write controls on a Read-only token. The server's own route catalog (`GET /api/v1/openapi.json`) is read at pairing and on every launch, and a control whose route the server lacks, or that the token's permission may not call, is kept unavailable, so the app adapts to older and newer servers.
 - Saves projects, conversations, transcripts and pull requests on the computer. A screen opens on what it last showed and then asks the server only for what changed; a saved transcript resumes from its last event, and F5 reads it again in full.
 - Pauses polling while the window is minimized or in the background, with exponential backoff and `Retry-After` after failures.
+- Keeps itself up to date from this repository's [releases](https://github.com/okanetsolutions/briareus-windows/releases): it checks GitHub shortly after launch and every six hours, and when a newer release is out, downloads its `Briareus.exe`, checks it against the size and SHA-256 GitHub records for it, and moves it in place of the running one (kept beside it as `Briareus.exe.old` until the next start), to run from the next start. The version at the foot of the sidebar turns into the new one, in the accent colour, and opens a menu to restart into it, check now, read the release notes or turn off “Install updates automatically” (then a newer release is only offered). An executable in a folder this user may not write to is not replaced, and the menu says so.
 - Opens filling the screen in the dashboard's own look: its dark palette, Segoe UI at its pixel sizes, Cascadia Code for code, its 268px sidebar with the ＋ New session strip, and its Welcome back composer with the project, branch, provider, model, effort and loop chips. Scales with the monitor's DPI.
 - A conversation's actions (stop, close, reopen, delete, and ✎ to rename) sit in its header as the dashboard's buttons, the review loop as a chip above the composer, and its pull request, commits, reviews and findings in the 272px panel on the right, as on the dashboard. A wide window lays a pull request out in two columns.
 
@@ -64,7 +65,7 @@ There is nothing to install besides the compiler. The executable is statically l
 mingw32-make test
 ```
 
-The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`: origin validation, credential headers, the route and arguments of every call, the route catalog and its permissions, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, label and assignee edits, errands, issue nesting, merge warnings and the saved-response cache. HTTP is stubbed through the client's pluggable transport.
+The core (JSON, models, API client, cache, diff, Markdown and board logic) has no UI code and is exercised by `tests\core_tests.c`: origin validation, credential headers, the route and arguments of every call, the route catalog and its permissions, redirect rejection, non-JSON responses, expiry, rate limiting, write timeouts without retry, revocation, response compatibility, transcript cursor and deduplication, runtime selection, pull request file paging, diff line numbering, board rows, filters, label and assignee edits, errands, issue nesting, merge warnings and the saved-response cache, and the updater's release parsing, version comparison, allowed download hosts, checksum and executable swap. HTTP is stubbed through the client's pluggable transport.
 
 ## Project layout
 
@@ -91,6 +92,7 @@ A revoked or expired token returns the app to pairing. Forgetting the connection
 - No shared secret is built into the app. Each device holds its own token in Credential Manager, scoped by canonical server origin and persisted for this machine only. Only the server origin is saved in the registry (`HKCU\Software\Okanet\Briareus`).
 - Saved responses live under `%LOCALAPPDATA%\Okanet\Briareus\Responses`, encrypted with EFS where the volume allows it. They are erased when the connection is forgotten, revoked, expired or replaced by another device token, and entries untouched for 30 days are dropped.
 - Voice notes are sent to your server for transcription and nowhere else.
+- Update checks read the latest release from `api.github.com` with no identifying data, and downloads are followed only to GitHub's own hosts over HTTPS.
 - No analytics or telemetry.
 
 ## Contributing and license
