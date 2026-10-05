@@ -319,7 +319,7 @@ void doc_label_chips(Doc *doc, int x, int w, const PullLabel *labels, size_t cou
 char *people(char **logins, size_t count, size_t limit);
 /// The linked issue or pull request row under a board row.
 void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg);
-/// The same, with `status` (the issue's Status on its project board) as a chip after its state; NULL or empty for none.
+/// The same without its open/closed state, with `status` (the issue's Status on its project board) as a chip after its title; NULL or empty for none.
 void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const char *repo, const char *status, int action, intptr_t arg);
 /// The row of a pull request on the board; `issue_status`, when given, holds the project Status of each issue it closes.
 void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, const char *const *issue_status, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running);

@@ -175,20 +175,23 @@ static void paint_linked(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     }
     if (d->status) draw_chip(cv, sx, rc->top + (rc->bottom - rc->top - ch) / 2, d->status, theme.secondary, theme.raise, NULL);
 }
-void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) { doc_linked_row_status(doc, x, w, link, repo, NULL, action, arg); }
-void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const char *repo, const char *status, int action, intptr_t arg) {
+static void linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, bool show_state, const char *status, int action, intptr_t arg) {
     LinkedData *d = xcalloc(1, sizeof *d);
     d->reference = board_link_reference(link, repo); d->title = xstrdup(link->title);
-    if (link->draft) { d->state = xstrdup("draft"); d->state_color = theme.warning; }
-    else if (board_link_not_planned(link)) { d->state = xstrdup("not planned"); d->state_color = theme.warning; }
-    else if (str_eq(link->state, "open")) { d->state = xstrdup("open"); d->state_color = theme.success; }
-    else if (str_eq(link->state, "merged")) { d->state = xstrdup("merged"); d->state_color = theme.accent; }
-    else if (str_eq(link->state, "closed")) { d->state = xstrdup("closed"); d->state_color = theme.secondary; }
+    if (show_state) {
+        if (link->draft) { d->state = xstrdup("draft"); d->state_color = theme.warning; }
+        else if (board_link_not_planned(link)) { d->state = xstrdup("not planned"); d->state_color = theme.warning; }
+        else if (str_eq(link->state, "open")) { d->state = xstrdup("open"); d->state_color = theme.success; }
+        else if (str_eq(link->state, "merged")) { d->state = xstrdup("merged"); d->state_color = theme.accent; }
+        else if (str_eq(link->state, "closed")) { d->state = xstrdup("closed"); d->state_color = theme.secondary; }
+    }
     if (!str_empty(status)) d->status = xstrdup(status);
     int h = px(20);
     int i = doc_custom(doc, x, w, h, paint_linked, d, linked_free, action, arg);
     doc_item(doc, i)->color = theme.ink;
 }
+void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) { linked_row(doc, x, w, link, repo, true, NULL, action, arg); }
+void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const char *repo, const char *status, int action, intptr_t arg) { linked_row(doc, x, w, link, repo, false, status, action, arg); }
 
 /// One 12px muted line of facts, `·` between them, the last one pushed to the right edge.
 typedef struct { char **parts; COLORREF *colors; bool *mono; size_t count; char *right; } MetaData;
@@ -232,10 +235,9 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
     ReviewStatus review = review_status_of_reviewers(pull->review_decision, pull->reviewers, pull->reviewer_count);
     if (review != REVIEW_NONE) { COLORREF c; review_glyph(review, &c); meta_add(d, review_status_text(review), c, false); }
     if (stack) { char *label = stack_position_label(stack, 0); char *text = xstrfmt("stack %s", label); meta_add(d, text, theme.accent, false); free(text); free(label); }
-    if (pull->assignee_count) { char *a = people(pull->assignees, pull->assignee_count, 2); meta_add(d, a, theme.muted, false); free(a); }
+    if (pull->assignee_count) { char *a = people(pull->assignees, pull->assignee_count, 2); char *t = xstrfmt("assignee %s", a); meta_add(d, t, theme.muted, false); free(t); free(a); }
     else meta_add(d, "unassigned", theme.tertiary, false);
-    if (pull->author) { char *a = xstrfmt("@%s", pull->author); meta_add(d, a, theme.muted, false); free(a); }
-    if (!str_empty(pull->branch)) meta_add(d, pull->branch, theme.muted, true);
+    if (pull->author) { char *a = xstrfmt("author @%s", pull->author); meta_add(d, a, theme.muted, false); free(a); }
     if (pull->has_updated) d->right = format_relative(pull->updated_at);
     doc_meta(doc, ix, iw, d);
     if (pull->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, pull->labels, pull->label_count, theme.raise); }
