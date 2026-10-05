@@ -751,9 +751,11 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
                 shift = b->aligns[c] == 'r' ? cell_w - widest : (cell_w - widest) / 2;
                 if (shift < 0) shift = 0;
             }
-            RECT cr = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r] + px(5), rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
+            // The item covers the whole row, its runs moved below the top padding, so a press there lands in this cell.
+            rich_offset(cell, 0, px(5));
+            RECT cr = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r], rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
             Item *ci = &doc->items[doc_add(doc, &cr, paint_rich)];
-            ci->data = cell; ci->free_data = rich_free; ci->sel = cell; ci->cell = c > 0;
+            ci->data = cell; ci->free_data = rich_free; ci->sel = cell; ci->cell = true;
             for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].link) { ci->action = ACTION_OPEN_LINK; ci->hand = true; break; }
         }
     }
@@ -1176,7 +1178,8 @@ char *doc_selection_text(Doc *doc) {
         Item *it = &doc->items[i];
         if (!it->sel) continue;
         size_t from = i == a.item ? (size_t)a.offset : 0, to = i == b.item ? (size_t)b.offset : it->sel->plain_len;
-        if (from >= to) continue;
+        // An empty table cell still takes its place, so the cells after it stay in their columns.
+        if (from >= to && !(it->cell && !it->sel->plain_len)) continue;
         // Items side by side (a bullet and its text) join with a space, table cells with a tab; stacked ones take a line each.
         const wchar_t *sep = !any ? L"" : it->rc.top < prev_bottom - px(2) ? (it->cell ? L"\t" : L" ") : L"\n";
         size_t need = len + wcslen(sep) + (to - from) + 1;
