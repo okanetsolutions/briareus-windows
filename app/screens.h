@@ -145,7 +145,8 @@ void project_db_layout(ProjectDb *p, Doc *doc, int w);
 /// True when the action was the tab's.
 bool project_db_action(ProjectDb *p, int action, intptr_t arg, POINT pt);
 /// A project's Board tab, after Issues: the GitHub Projects board its settings name, read with `project_board` and laid
-/// out as GitHub's board view, columns side by side. Read-only. Its items and header buttons use `BOARD_TAB_ACTIONS`
+/// out as GitHub's board view, columns side by side. Cards are dragged between columns where the server offers
+/// `project_board_move`. Its items and header buttons use `BOARD_TAB_ACTIONS`
 /// actions from `action_base` up.
 typedef struct BoardTab BoardTab;
 enum { BOARD_TAB_ACTIONS = 8 };
@@ -166,6 +167,8 @@ void board_tab_layout(BoardTab *p, Doc *doc, int w);
 void board_tab_header(BoardTab *p, HeaderInfo *info);
 /// True when the action was the tab's.
 bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt);
+/// A card carried over the board: the column under `pt` (content coordinates) lights up, and a drop moves the card there.
+void board_tab_drag(BoardTab *p, int action, intptr_t arg, POINT pt, DragPhase phase);
 /// A project's Forge tab, laid out inside its board: the servers of the Laravel Forge accounts available to the project
 /// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
 /// actions from `action_base` up.

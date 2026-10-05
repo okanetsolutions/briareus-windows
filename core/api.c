@@ -302,6 +302,7 @@ static const ApiRoute ROUTES[] = {
     { "close_issue", "POST", "issues/{issue}/close" },      // `reason` completed or not_planned, and an optional `comment` posted first
     { "update_issue", "PATCH", "issues/{issue}" },          // its `title`, `body`, `labels` and `assignees`, as update_pull
     { "project_board", "GET", "project-board" },           // the project's GitHub Projects board as its view groups it; `fresh` skips the cache
+    { "project_board_move", "POST", "project-board/move" }, // a card to another column: `itemId`, and `columnId` (null for "No <field>")
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
     { "start_session", "POST", "sessions" },

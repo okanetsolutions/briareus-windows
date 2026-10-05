@@ -19,6 +19,9 @@ typedef struct {
     int title_action;   // when set, a ✎ after the title fires it (the dashboard's Edit session title)
 } HeaderInfo;
 
+/// Where a carried item is: moving (`DRAG_MOVE`), let go (`DRAG_DROP`), or put back by Escape or a new layout (`DRAG_CANCEL`).
+typedef enum { DRAG_MOVE, DRAG_DROP, DRAG_CANCEL } DragPhase;
+
 typedef struct ScreenVTable {
     void (*destroy)(Screen *s);
     void (*layout)(Screen *s, Doc *doc);
@@ -52,6 +55,9 @@ typedef struct ScreenVTable {
     void (*activated)(Screen *s, bool active);
     /// Another screen is about to replace this one as the detail pane's root: false keeps it (unsaved changes); optional.
     bool (*can_leave)(Screen *s);
+    /// An item laid out with `drag` set, carried by the mouse: its action and arg, and `pt`, the pointer in content
+    /// coordinates. A carried item is not clicked. Optional.
+    void (*drag)(Screen *s, int action, intptr_t arg, POINT pt, DragPhase phase);
     /// The detail pane keeps this screen over a fresh one with the same id: take what the fresh one asks for; optional.
     void (*adopt)(Screen *s, Screen *fresh);
 } ScreenVTable;

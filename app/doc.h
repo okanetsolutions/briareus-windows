@@ -28,6 +28,7 @@ struct Item {
     Rich *sel;            // the item's text in runs, relative to rc, when it can be selected
     bool sel_owned;       // `sel` is freed with the item (otherwise it is `data`)
     char *tip;            // shown in a tooltip while the item is hovered; freed with the item
+    bool drag;            // a press that moves carries it to the screen's `drag` instead of clicking it (a board's card)
 };
 
 /// A character position: an item and an offset into its plain text.
@@ -52,6 +53,7 @@ struct Doc {
     int pin_last, pin_bottom, pin_shift;  // items [0, pin_last) pinned at the view's top over [0, pin_bottom); none when 0
     DocRegion *regions; size_t region_count, region_cap;
     size_t regions_kept;            // regions the last layout had, whose scroll the next one keeps
+    int drag_first, drag_last;      // the carried box and the items inside it, painted as an empty slot; none when equal
 };
 
 void doc_init(Doc *doc);
@@ -139,6 +141,11 @@ void doc_set_view(Doc *doc, int scroll_y, int view_height);
 /// Scrolls the sticky group by `dy` when the content point is over its window and it overflows; false otherwise.
 bool doc_sticky_wheel(Doc *doc, int x, int y, int dy);
 
+/// Starts carrying `box` (a doc_box_begin item) with the items inside it: its place shows an empty slot until the
+/// next layout or doc_drag(doc, -1).
+void doc_drag(Doc *doc, int box);
+/// Paints the carried box and what is inside it with its top left at (x, y), in the canvas's coordinates.
+void doc_paint_dragged(Doc *doc, Canvas *cv, int x, int y);
 void doc_paint(Doc *doc, Canvas *cv, int scroll_x, int scroll_y, const RECT *clip);
 /// The topmost clickable item at a content point, or -1.
 int doc_hit(Doc *doc, int x, int y);

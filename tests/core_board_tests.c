@@ -1107,8 +1107,9 @@ static void test_project_boards_read_columns_cards_and_sums(void) {
     CHECK_STR(b.title, "HQ"); CHECK_STR(b.view_name, "This Iteration"); CHECK_STR(b.group_by, "Status"); CHECK_STR(b.filter, "is:issue");
     CHECK(b.truncated); CHECK(b.error == NULL);
     CHECK_INT((int)b.column_count, 2);
-    CHECK_STR(b.columns[0].name, "No Status"); CHECK(b.columns[0].color == NULL); CHECK_INT((int)b.columns[0].card_count, 0);
+    CHECK_STR(b.columns[0].name, "No Status"); CHECK(b.columns[0].id == NULL); CHECK(b.columns[0].color == NULL); CHECK_INT((int)b.columns[0].card_count, 0);
     const ProjectColumn *c = &b.columns[1];
+    CHECK_STR(c->id, "a"); CHECK_STR(c->cards[0].id, "i1"); CHECK_STR(c->cards[1].id, "i2");
     CHECK_STR(c->color, "YELLOW"); CHECK_INT(c->count, 2); CHECK_INT((int)c->card_count, 2);
     CHECK_INT((int)c->sum_count, 1); CHECK_STR(c->sums[0].name, "Story Points"); CHECK(c->sums[0].value == 5.5);
     const ProjectCard *k = &c->cards[0];
@@ -1213,6 +1214,24 @@ static void test_project_boards_keep_only_the_projects_cards(void) {
     CHECK(b.columns[0].sums[0].value == 5);
     // A column that lost nothing keeps the server's count and totals, which reach past the cards it was sent.
     CHECK_INT((int)b.columns[1].card_count, 1); CHECK_INT(b.columns[1].count, 9); CHECK(b.columns[1].sums[0].value == 40);
+    project_board_free(&b); json_free(j);
+}
+static void test_project_boards_move_a_card_and_its_totals(void) {
+    Json *j = json_parsez("{\"columns\":["
+        "{\"id\":null,\"name\":\"No Status\",\"count\":0,\"sums\":{\"Story Points\":0},\"items\":[]},"
+        "{\"id\":\"t\",\"name\":\"Todo\",\"count\":2,\"sums\":{\"Story Points\":7.5},\"items\":["
+        "{\"id\":\"a\",\"fields\":[{\"name\":\"Story Points\",\"value\":2}]},{\"id\":\"b\",\"fields\":[{\"name\":\"Story Points\",\"value\":5.5}]}]},"
+        "{\"id\":\"d\",\"name\":\"Done\",\"count\":1,\"sums\":{\"Story Points\":1},\"items\":[{\"id\":\"c\",\"fields\":[]}]}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    // The card leaves its column and lands at the end of the other, its points with it.
+    CHECK(project_board_move(&b, 1, 0, 2));
+    CHECK_INT((int)b.columns[1].card_count, 1); CHECK_INT(b.columns[1].count, 1); CHECK_STR(b.columns[1].cards[0].id, "b"); CHECK(b.columns[1].sums[0].value == 5.5);
+    CHECK_INT((int)b.columns[2].card_count, 2); CHECK_INT(b.columns[2].count, 2); CHECK_STR(b.columns[2].cards[1].id, "a"); CHECK(b.columns[2].sums[0].value == 3);
+    // Into the empty "No Status" column, and a card without points moves none.
+    CHECK(project_board_move(&b, 2, 0, 0));
+    CHECK_INT((int)b.columns[0].card_count, 1); CHECK_STR(b.columns[0].cards[0].id, "c"); CHECK(b.columns[0].sums[0].value == 0); CHECK(b.columns[2].sums[0].value == 3);
+    CHECK(!project_board_move(&b, 1, 0, 1)); CHECK(!project_board_move(&b, 1, 1, 2)); CHECK(!project_board_move(&b, 1, 0, 3)); CHECK(!project_board_move(&b, 3, 0, 1));
+    CHECK_INT((int)b.columns[1].card_count, 1);
     project_board_free(&b); json_free(j);
 }
 static void test_project_option_colours_are_githubs_names(void) {
@@ -1349,6 +1368,7 @@ void board_tests(void) {
     test_run("project boards filter by assignee", test_project_boards_filter_by_assignee);
     test_run("project board cards list their pull requests", test_project_board_cards_list_their_pull_requests);
     test_run("project boards keep only the project's cards", test_project_boards_keep_only_the_projects_cards);
+    test_run("project boards move a card and its totals", test_project_boards_move_a_card_and_its_totals);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);

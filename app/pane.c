@@ -32,6 +32,8 @@ struct Pane {
     bool dragging_hthumb;   // the sideways bar at the bottom, while the content is wider than the pane
     int dragging_region;    // a document region's own bar (a board's column), or -1
     bool dragging_footer;   // the top screen's footer_drag follows the mouse
+    bool carrying;          // the pressed item, laid out with `drag`, follows the mouse
+    POINT carry_from, carry_grab, carry_at;   // the press and the mouse now (client), and where on the item it took it
     RECT thumb_rect, hthumb_rect;
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
     HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
@@ -254,9 +256,12 @@ static void refresh_header(Pane *p) {
     p->header_h = has_header ? content + px(20) + 1 : 0;
 }
 
+static void end_carry(Pane *p, POINT at, DragPhase phase);
 static void layout_if_needed(Pane *p, Canvas *cv) {
     if (!p->dirty) return;
     p->dirty = false;
+    // The carried item is laid out again, perhaps elsewhere: it goes back.
+    if (p->carrying) end_carry(p, p->carry_at, DRAG_CANCEL);
     Screen *s = pane_top(p);
     refresh_header(p);
     RECT rc = client(p);
@@ -433,6 +438,7 @@ static void paint(Pane *p) {
     canvas_offset(cv, margin(p), content.top);
     RECT local_clip = { content.left - margin(p), 0, content.right - margin(p), content.bottom - content.top };
     doc_paint(&p->doc, cv, p->scroll_x, p->scroll_y, &local_clip);
+    if (p->carrying) doc_paint_dragged(&p->doc, cv, p->carry_at.x - p->carry_grab.x - margin(p), p->carry_at.y - p->carry_grab.y - content.top);
     canvas_offset(cv, 0, 0);
     canvas_unclip(cv);
     paint_scrollbar(p, cv, &content);
@@ -527,9 +533,52 @@ static bool context_menu(Pane *p, int x, int y) {
     return true;
 }
 
+// MARK: - Carrying an item
+
+/// The carried item follows the mouse; near the content's sides the view scrolls sideways, on a timer while it stays.
+static void carry_to(Pane *p, int x, int y) {
+    p->carry_at.x = x; p->carry_at.y = y;
+    RECT content = pane_content_rect(p);
+    int edge = px(48);
+    bool left = x < content.left + edge, right = x >= content.right - edge;
+    if (left) set_scroll_x(p, p->scroll_x - px(24)); else if (right) set_scroll_x(p, p->scroll_x + px(24));
+    if (left || right) SetTimer(p->hwnd, TIMER_AUTOSCROLL, 60, NULL); else KillTimer(p->hwnd, TIMER_AUTOSCROLL);
+    Screen *s = pane_top(p);
+    Item *it = doc_item(&p->doc, p->doc.pressed);
+    if (s && it && s->vt->drag) s->vt->drag(s, it->action, it->arg, to_content(p, x, y), DRAG_MOVE);
+    InvalidateRect(p->hwnd, NULL, FALSE);
+}
+/// Starts carrying the pressed item once the mouse has moved past the system's drag distance.
+static bool carry_begins(Pane *p, int x, int y) {
+    Item *it = doc_item(&p->doc, p->doc.pressed);
+    if (!it || !it->drag) return false;
+    if (abs(x - p->carry_from.x) <= GetSystemMetrics(SM_CXDRAG) && abs(y - p->carry_from.y) <= GetSystemMetrics(SM_CYDRAG)) return false;
+    POINT c = to_content(p, p->carry_from.x, p->carry_from.y);
+    p->carry_grab.x = c.x - it->rc.left; p->carry_grab.y = c.y - it->rc.top;
+    p->carrying = true;
+    hide_tip(p);
+    doc_drag(&p->doc, p->doc.pressed);
+    return true;
+}
+/// Lets the carried item go: dropped where the mouse is, or put back.
+static void end_carry(Pane *p, POINT at, DragPhase phase) {
+    Item *it = doc_item(&p->doc, p->doc.pressed);
+    int action = it ? it->action : 0; intptr_t arg = it ? it->arg : 0;
+    POINT c = to_content(p, at.x, at.y);
+    // Cleared before the capture is let go: its WM_CAPTURECHANGED must find nothing left to cancel.
+    p->carrying = false; p->doc.pressed = -1;
+    doc_drag(&p->doc, -1);
+    KillTimer(p->hwnd, TIMER_AUTOSCROLL);
+    if (GetCapture() == p->hwnd) ReleaseCapture();
+    Screen *s = pane_top(p);
+    if (s && action && s->vt->drag) s->vt->drag(s, action, arg, c, phase);
+    InvalidateRect(p->hwnd, NULL, FALSE);
+}
+
 static void mouse_move(Pane *p, int x, int y) {
     if (!p->tracking) { TRACKMOUSEEVENT tme = { sizeof tme, TME_LEAVE, p->hwnd, 0 }; TrackMouseEvent(&tme); p->tracking = true; }
     if (p->doc.selecting) { drag_selection(p, x, y); return; }
+    if (p->carrying || (p->doc.pressed >= 0 && carry_begins(p, x, y))) { carry_to(p, x, y); return; }
     if (p->dragging_footer) {
         Screen *s = pane_top(p);
         POINT pt = { x, y };
@@ -598,7 +647,7 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
             if (position_at(p, x, y, &pos)) { p->doc.sel_anchor = p->doc.sel_focus = pos; p->doc.selecting = true; SetCapture(p->hwnd); }
             return;
         }
-        p->doc.pressed = item; SetCapture(p->hwnd); InvalidateRect(p->hwnd, NULL, FALSE);
+        p->doc.pressed = item; p->carry_from.x = x; p->carry_from.y = y; SetCapture(p->hwnd); InvalidateRect(p->hwnd, NULL, FALSE);
         return;
     }
     if (!right && p->footer_h && y >= content.bottom) {
@@ -610,6 +659,7 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
 }
 static void mouse_up(Pane *p, int x, int y) {
     if (p->doc.selecting) { end_selection(p); return; }
+    if (p->carrying) { POINT at = { x, y }; end_carry(p, at, DRAG_DROP); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
     if (p->dragging_hthumb) { p->dragging_hthumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
     if (p->dragging_region >= 0) { p->dragging_region = -1; ReleaseCapture(); return; }
@@ -662,7 +712,10 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_RBUTTONDOWN: mouse_down(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), true); return 0;
     case WM_LBUTTONUP: mouse_up(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
     // A footer drag the mouse was taken from (another window, Alt+Tab) ends where it was.
-    case WM_CAPTURECHANGED: p->dragging_footer = false; p->dragging_hthumb = false; p->dragging_region = -1; return 0;
+    case WM_CAPTURECHANGED:
+        p->dragging_footer = false; p->dragging_hthumb = false; p->dragging_region = -1;
+        if (p->carrying) end_carry(p, p->carry_at, DRAG_CANCEL);
+        return 0;
     case WM_LBUTTONDBLCLK: {
         int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
         RECT content = pane_content_rect(p);
@@ -701,6 +754,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_SETCURSOR: {
         POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+        if (p->carrying) { SetCursor(LoadCursorW(NULL, IDC_SIZEALL)); return TRUE; }
         bool hand = p->hover_button != -1;
         Item *it = doc_item(&p->doc, p->doc.hover);
         if (it && it->hand) hand = true;
@@ -717,8 +771,9 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_TIMER:
         if (wp == TIMER_AUTOSCROLL) {
-            if (!p->doc.selecting) { KillTimer(hwnd, TIMER_AUTOSCROLL); return 0; }
             POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+            if (p->carrying) { carry_to(p, pt.x, pt.y); return 0; }
+            if (!p->doc.selecting) { KillTimer(hwnd, TIMER_AUTOSCROLL); return 0; }
             drag_selection(p, pt.x, pt.y);
             return 0;
         }
@@ -727,6 +782,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: if (s && s->vt->command) s->vt->command(s, LOWORD(wp), HIWORD(wp), (HWND)lp); return 0;
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        if (p->carrying && wp == VK_ESCAPE) { end_carry(p, p->carry_at, DRAG_CANCEL); return 0; }
         if (s && s->vt->key && s->vt->key(s, wp, ctrl, shift)) return 0;
         if (ctrl && wp == 'C' && doc_has_selection(&p->doc)) { copy_selection(p); return 0; }
         if (ctrl && wp == 'A') { select_all(p); return 0; }
