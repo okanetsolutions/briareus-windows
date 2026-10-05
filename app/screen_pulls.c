@@ -82,7 +82,19 @@ typedef struct {
     int starting_number; char *starting_id;
     char *write_error;
     int merging_number; Request *req_merge;   // the pull request being merged: read for its head first, then merged
+    // The Status each linked issue has on its project board, by issue number, from that issue's own read (saved, and
+    // shared with the issue and pull request screens). `status_read` holds the ones read this visit; one at a time.
+    Json *issue_status, *status_read; Request *req_status;
 } PullsScreen;
+
+/// Where the issue screen keeps its read of issue `number`, which the board and the pull request screen share.
+static char *saved_issue_key(const char *repo, int number) { return xstrfmt("issue:%s#%d", repo, number); }
+/// An issue's Status on the first of its project boards that gives it one; NULL on none.
+static const char *issue_project_status(const Json *issue) {
+    const Json *projects = json_get(issue, "projects");
+    for (size_t i = 0; i < json_count(projects); i++) { const char *st = json_str(json_get(json_at(projects, i), "status")); if (!str_empty(st)) return st; }
+    return NULL;
+}
 
 static BoardFilter *current_filter(PullsScreen *s) { return s->tab == 0 ? &s->pull_filter : &s->issue_filter; }
 static BoardRow *rows_of(PullsScreen *s, size_t *count) {
@@ -122,6 +134,63 @@ static bool filters_restore(PullsScreen *s) {
     return true;
 }
 
+static char *number_key(int number) { return xstrfmt("%d", number); }
+static void status_note(PullsScreen *s, int number, const Json *issue) {
+    const char *st = issue_project_status(issue);
+    char *k = number_key(number); json_set_str(s->issue_status, k, st ? st : ""); free(k);
+}
+/// What was saved of the linked issues not known yet, so the statuses show before they are read again.
+static void status_restore(PullsScreen *s) {
+    for (size_t i = 0; i < s->pull_count; i++) {
+        for (size_t k = 0; k < s->pulls[i].issue_count; k++) {
+            const BoardLink *l = &s->pulls[i].issues[k];
+            char *nk = number_key(l->number);
+            bool known = board_link_is_foreign(l, s->project.repo) || json_str(json_get(s->issue_status, nk));
+            free(nk);
+            if (known) continue;
+            char *key = saved_issue_key(s->project.repo, l->number); Json *saved = cache_value(g_store.cache, key); free(key);
+            if (saved) { status_note(s, l->number, json_get(saved, "issue")); json_free(saved); }
+        }
+    }
+}
+static void status_next(PullsScreen *s);
+static void status_done(void *owner, Request *req) {
+    PullsScreen *s = owner;
+    int number = json_int_or(json_get(req->args, "issue"), 0);
+    // Throttling stops the round and leaves this issue unread, so it and the remaining reads wait for the
+    // next poll rather than hitting the limit again.
+    if (req->error.kind == API_HTTP && req->error.status == 429) return;
+    char *k = number_key(number); json_set_bool(s->status_read, k, true); free(k);
+    if (req->ok) {
+        status_note(s, number, json_get(req->result, "issue"));
+        char *key = saved_issue_key(s->project.repo, number); cache_store(g_store.cache, req->result, key); free(key);
+        pane_relayout(s->base.pane);
+    }
+    status_next(s);
+}
+/// Reads the next linked issue not read this visit: those of the rows the filters show first, then the rest.
+static void status_next(PullsScreen *s) {
+    if (s->req_status || !s->shown || !store_supports("issue")) return;
+    BoardRow *rows = xcalloc(s->pull_count ? s->pull_count : 1, sizeof *rows);
+    for (size_t i = 0; i < s->pull_count; i++) rows[i] = pull_board_row(&s->pulls[i]);
+    int next = 0;
+    for (int pass = 0; pass < 2 && !next; pass++) {
+        for (size_t i = 0; i < s->pull_count && !next; i++) {
+            if (!pass && !board_filter_passes(&s->pull_filter, &rows[i], -1)) continue;
+            for (size_t k = 0; k < s->pulls[i].issue_count && !next; k++) {
+                const BoardLink *l = &s->pulls[i].issues[k];
+                char *nk = number_key(l->number);
+                if (!board_link_is_foreign(l, s->project.repo) && json_is_null(json_get(s->status_read, nk))) next = l->number;
+                free(nk);
+            }
+        }
+    }
+    free(rows);
+    if (!next) return;
+    Json *a = json_object(); json_set_num(a, "issue", next); json_set_str(a, "repo", s->project.repo);
+    store_call("issue", a, 0, s, status_done, 0, &s->req_status);
+}
+
 static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     json_free(s->board); s->board = json_clone(result);
     pull_summaries_free(s->pulls, s->pull_count); s->pulls = pull_summaries_parse(json_get(result, "pulls"), &s->pull_count);
@@ -139,6 +208,7 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
         board_filter_free(&filter);
     }
     if (s->tab == TAB_ISSUES && !s->issue_count && !json_is_set(json_get(result, "issuesError"))) s->tab = TAB_PULLS;
+    status_restore(s);
     s->loaded = true;
 }
 static void pulls_load(PullsScreen *s, bool fresh);
@@ -156,6 +226,7 @@ static void pulls_done(void *owner, Request *req) {
         char *key = xstrfmt("pulls:%s", s->project.repo);
         cache_store(g_store.cache, req->result, key);
         free(key);
+        status_next(s);
     }
     poller_finished(&s->poller, !req->ok, req->error.retry_after);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
@@ -277,6 +348,7 @@ static void pulls_destroy(Screen *base) {
     request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); request_cancel(&s->req_merge); poller_stop(&s->poller);
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
+    request_cancel(&s->req_status); json_free(s->issue_status); json_free(s->status_read);
     project_ssh_free(s->ssh);
     project_sftp_free(s->sftp);
     project_run_free(s->run);
@@ -429,8 +501,13 @@ static void pulls_layout(Screen *base, Doc *doc) {
             size_t runs = runs_on(s, pull->number);
             char *runs_text = runs ? xstrfmt("%zu run%s \xE2\x80\xBA", runs, runs == 1 ? "" : "s") : NULL;
             if (runs_text) { ButtonSpec b = { 0, runs_text, BUTTON_PLAIN, ACT_RUNS, (intptr_t)i, true }; buttons[bn++] = b; }
-            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, ACT_OPEN_PULL, (intptr_t)i, buttons, bn, run_active_on(s, pull->number));
-            free(runs_text); str_array_free(labels, an); free(buttons); board_actions_free(actions, an);
+            const char **statuses = xcalloc(pull->issue_count ? pull->issue_count : 1, sizeof *statuses);
+            for (size_t k = 0; k < pull->issue_count; k++) {
+                if (board_link_is_foreign(&pull->issues[k], s->project.repo)) continue;
+                char *nk = number_key(pull->issues[k].number); statuses[k] = json_str(json_get(s->issue_status, nk)); free(nk);
+            }
+            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, statuses, ACT_OPEN_PULL, (intptr_t)i, buttons, bn, run_active_on(s, pull->number));
+            free(statuses); free(runs_text); str_array_free(labels, an); free(buttons); board_actions_free(actions, an);
             if (has_stack) stack_position_free(&stack);
             doc_space(doc, px(8));
         }
@@ -631,7 +708,7 @@ static void pulls_visible(Screen *base, bool shown) {
     s->shown = shown;
     if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); project_run_place(s->run, NULL, 0, false); project_forge_place(s->forge, NULL, 0, false); }
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
-    else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); }
+    else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); request_cancel(&s->req_status); }
 }
 static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
@@ -643,6 +720,7 @@ static void pulls_refresh(Screen *base) {
     if (s->tab == TAB_BOARD) { board_tab_refresh(s->board_tab); return; }
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
+    request_cancel(&s->req_status); json_free(s->status_read); s->status_read = json_object();
     pulls_load(s, true);
 }
 static void pulls_activated(Screen *base, bool active) { if (active) pulls_visible(base, true); }
@@ -655,7 +733,7 @@ Screen *pulls_screen_new(const Project *project) {
     PullsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &pulls_vt; s->base.id = xstrfmt("pulls:%s", project->repo);
     project_copy(&s->project, project);
-    s->board = json_null(); s->catalog = json_array();
+    s->board = json_null(); s->catalog = json_array(); s->issue_status = json_object(); s->status_read = json_object();
     board_filter_init(&s->pull_filter); board_filter_init(&s->issue_filter); board_filter_init(&s->opening);
     s->has_opening = !filters_restore(s);
     s->ssh = project_ssh_new(project->repo, &s->base, ACT_SSH_BASE);
@@ -672,11 +750,11 @@ Screen *pulls_screen_new(const Project *project) {
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
-    ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY,
+    ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS };
+enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE };
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
@@ -684,6 +762,7 @@ enum { CONV_COMMENTS, CONV_REVIEWS, CONV_REVIEW_COMMENTS, CONV_FEEDS };
 static const struct { const char *op, *field; } conv_feeds[CONV_FEEDS] = {
     { "pull_comments", "comments" }, { "pull_reviews", "reviews" }, { "pull_review_comments", "reviewComments" },
 };
+enum { LINKED_ISSUES_MAX = 10 };
 typedef struct { Json *items, *incoming; bool read; char *error; Request *req; } ConvFeed;
 
 typedef struct {
@@ -720,6 +799,11 @@ typedef struct {
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
     bool body_read;
     char *deciding;
+    // The projects of the issues it closes, as GitHub's sidebar shows them: one `issue` read per linked issue in this
+    // repository, once per visit and on refresh, kept as [{number, projects, projectsError}] in the sidebar's order.
+    // The round keeps the issue numbers it reads, so a list that changes partway starts it again.
+    Json *issue_projects, *issue_incoming; bool issues_read; Request *req_issue;
+    int issue_round[LINKED_ISSUES_MAX]; size_t issue_round_count;
     int *open_findings; size_t open_finding_count;
     BoardAction *actions; size_t action_count;
     Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_body, *req_delete_run;
@@ -819,6 +903,94 @@ static void conv_load(PullScreen *s) {
 }
 static void conv_cancel(PullScreen *s) { for (int k = 0; k < CONV_FEEDS; k++) request_cancel(&s->conv[k].req); }
 
+/// The issues the Development item lists that are in this repository: the board's row first, else the pull request's own.
+static size_t linked_issues(PullScreen *s, int *out, size_t cap) {
+    const PullSummary *row = board_row(s);
+    size_t n = 0;
+    if (row && row->issue_count) {
+        for (size_t i = 0; i < row->issue_count && n < cap; i++) if (!board_link_is_foreign(&row->issues[i], s->project.repo)) out[n++] = row->issues[i].number;
+        return n;
+    }
+    const Json *arr = json_get(s->pr, "issues");
+    for (size_t i = 0; i < json_count(arr) && n < cap; i++) {
+        BoardLink l;
+        if (!board_link_parse(json_at(arr, i), &l)) continue;
+        if (!board_link_is_foreign(&l, s->project.repo)) out[n++] = l.number;
+        board_link_free(&l);
+    }
+    return n;
+}
+static bool issue_round_same(const PullScreen *s, const int *numbers, size_t n) {
+    return n == s->issue_round_count && !memcmp(numbers, s->issue_round, n * sizeof *numbers);
+}
+static Json *linked_issue_entry(int number, const Json *issue) {
+    Json *e = json_object();
+    json_set_num(e, "number", number);
+    json_object_set(e, "projects", json_clone(json_get(issue, "projects")));
+    if (json_str(json_get(issue, "projectsError"))) json_set_str(e, "projectsError", json_str(json_get(issue, "projectsError")));
+    return e;
+}
+static void issue_projects_next(PullScreen *s);
+static void issue_projects_done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    // Throttling stops the round with this issue unread, so it and the rest are read on the next poll rather
+    // than hitting the limit again.
+    if (req->error.kind == API_HTTP && req->error.status == 429) return;
+    double number = 0; json_num(json_get(req->args, "issue"), &number);
+    if (req->ok) {
+        json_array_push(s->issue_incoming, linked_issue_entry((int)number, json_get(req->result, "issue")));
+        char *key = saved_issue_key(s->project.repo, (int)number); cache_store(g_store.cache, req->result, key); free(key);
+    } else {
+        // One that cannot be read keeps what was shown of it, if anything; the others still show.
+        const Json *kept = NULL;
+        for (size_t i = 0; i < json_count(s->issue_projects) && !kept; i++) if (json_int_or(json_get(json_at(s->issue_projects, i), "number"), 0) == (int)number) kept = json_at(s->issue_projects, i);
+        json_array_push(s->issue_incoming, kept ? json_clone(kept) : json_null());
+    }
+    issue_projects_next(s);
+}
+/// Reads the next linked issue, or, once they are all in, shows what they said.
+static void issue_projects_next(PullScreen *s) {
+    int numbers[LINKED_ISSUES_MAX]; size_t n = linked_issues(s, numbers, LINKED_ISSUES_MAX);
+    // A list that changed partway, as when the board's row replaces the saved one, starts the round again on it.
+    if (!issue_round_same(s, numbers, n)) {
+        memcpy(s->issue_round, numbers, n * sizeof *numbers); s->issue_round_count = n;
+        json_free(s->issue_incoming); s->issue_incoming = json_array();
+    }
+    size_t at = json_count(s->issue_incoming);
+    if (at < n) {
+        Json *a = json_object(); json_set_num(a, "issue", numbers[at]); json_set_str(a, "repo", s->project.repo);
+        store_call("issue", a, 0, s, issue_projects_done, TAG_ISSUE, &s->req_issue);
+        return;
+    }
+    Json *done = json_array();
+    for (size_t i = 0; i < json_count(s->issue_incoming); i++) if (!json_is_null(json_at(s->issue_incoming, i))) json_array_push(done, json_clone(json_at(s->issue_incoming, i)));
+    json_free(s->issue_incoming); s->issue_incoming = NULL;
+    json_free(s->issue_projects); s->issue_projects = done;
+    s->issues_read = true;
+    pane_relayout(s->base.pane);
+}
+/// The linked issues' projects: what was saved of them at once, then each issue read again.
+static void issue_projects_load(PullScreen *s) {
+    if (s->req_issue || !store_supports("issue")) return;
+    int numbers[LINKED_ISSUES_MAX]; size_t n = linked_issues(s, numbers, LINKED_ISSUES_MAX);
+    // Read once per visit, unless the issues it links have changed since.
+    if (s->issues_read && issue_round_same(s, numbers, n)) return;
+    s->issues_read = false;
+    // A pull request that no longer links any issue drops the projects it showed.
+    if (!n) { if (s->issue_projects) { json_free(s->issue_projects); s->issue_projects = NULL; pane_relayout(s->base.pane); } return; }
+    if (!s->issue_projects) {
+        Json *saved_all = json_array();
+        for (size_t i = 0; i < n; i++) {
+            char *key = saved_issue_key(s->project.repo, numbers[i]); Json *saved = cache_value(g_store.cache, key); free(key);
+            if (saved) { json_array_push(saved_all, linked_issue_entry(numbers[i], json_get(saved, "issue"))); json_free(saved); }
+        }
+        if (json_count(saved_all)) s->issue_projects = saved_all; else json_free(saved_all);
+    }
+    // A round throttled partway carries on where it stopped.
+    if (!s->issue_incoming) s->issue_incoming = json_array();
+    issue_projects_next(s);
+}
+
 static void pull_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (!req->ok) { request_error_into(&s->error, req); pull_finish_poll(s); return; }
@@ -833,6 +1005,7 @@ static void pull_done(void *owner, Request *req) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
         store_call("findings", args, 0, s, findings_done, TAG_FINDINGS, &s->req_findings);
     }
+    issue_projects_load(s);
     pull_finish_poll(s);
 }
 static void rows_done(void *owner, Request *req) {
@@ -858,6 +1031,7 @@ static void rows_done(void *owner, Request *req) {
     pull_summaries_free(rows, count);
     s->row_read = true;
     rebuild_actions(s);
+    issue_projects_load(s);
     pane_relayout(s->base.pane);
 }
 static void actions_done(void *owner, Request *req) {
@@ -914,6 +1088,7 @@ static void pull_destroy(Screen *base) {
     request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
     request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_body);
     request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
+    request_cancel(&s->req_issue); json_free(s->issue_projects); json_free(s->issue_incoming);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -1744,6 +1919,40 @@ static void side_heading(Doc *doc, Col c, int *count, const char *title) {
     doc_text(doc, c.x, c.w, title, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_space(doc, px(8));
 }
+/// A name on the left and its value on the right, as a project's fields are listed.
+static void side_field(Doc *doc, Col c, const char *name, const char *value) {
+    int y = doc->y, half = c.w * 2 / 5;
+    RECT nr = { c.x, y, c.x + half - px(6), y + px(20) }; doc_text_at(doc, &nr, name, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc->y = y;
+    doc_text(doc, c.x + half, c.w - half, value, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK);
+    if (doc->y < y + px(20)) doc->y = y + px(20);
+    doc_space(doc, px(2));
+}
+/// One Projects v2 board an issue is on: its title (with `from`, the issue it came through, when given), which `action`
+/// opens on GitHub, then its Status and the rest of its fields.
+static void side_project(Doc *doc, Col c, const Json *p, const char *from, int action, intptr_t arg) {
+    const char *title = json_str(json_get(p, "title")), *status = json_str(json_get(p, "status"));
+    char *label = from ? xstrfmt("%s \xC2\xB7 %s", title ? title : "Project", from) : NULL;
+    int li = doc_label(doc, c.x, c.w, 0xE8FD, label ? label : title ? title : "Project", FONT_FOOTNOTE_SEMIBOLD, theme.ink);
+    free(label);
+    if (safe_web_url(json_str(json_get(p, "url")))) { doc_item(doc, li)->action = action; doc_item(doc, li)->arg = arg; doc_item(doc, li)->hand = true; }
+    doc_space(doc, px(4));
+    side_field(doc, c, "Status", status ? status : "No status");
+    const Json *fields = json_get(p, "fields");
+    for (size_t k = 0; k < json_count(fields); k++) {
+        const Json *field = json_at(fields, k), *v = json_get(field, "value");
+        const char *name = json_str(json_get(field, "name"));
+        double n;
+        char *value = json_str(v) ? xstrdup(json_str(v)) : json_num(v, &n) ? xstrfmt("%g", n) : NULL;
+        if (name && value) side_field(doc, c, name, value);
+        free(value);
+    }
+}
+/// What the Projects item says when there are none: why, when GitHub would not read them.
+static void side_projects_none(Doc *doc, Col c, const char *refused) {
+    if (refused) { char *t = xstrfmt("GitHub would not read its projects with the server\xE2\x80\x99s token, which needs Projects: read. %s", refused); doc_text(doc, c.x, c.w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK); free(t); }
+    else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
+}
 /// The errands as the sidebar's first item: one full-width button per action, the one the pull request's state asks for filled.
 static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
     if (!s->action_count) return;
@@ -1847,7 +2056,27 @@ static void side_development(PullScreen *s, Doc *doc, Col c, int *count) {
     for (size_t i = 0; i < parsed_count; i++) board_link_free(&parsed[i]);
     free(parsed);
 }
-/// The sidebar: only what the server reports; GitHub's projects and notifications are not part of it.
+/// The projects of the issues it closes, which is where a team keeps its board fields; named after their issue when it
+/// closes more than one.
+static void side_projects(PullScreen *s, Doc *doc, Col c, int *count) {
+    size_t issues = json_count(s->issue_projects), shown = 0;
+    if (!issues) return;
+    side_heading(doc, c, count, "Projects");
+    const char *refused = NULL;
+    for (size_t i = 0; i < issues; i++) {
+        const Json *e = json_at(s->issue_projects, i), *projects = json_get(e, "projects");
+        if (!refused) refused = json_str(json_get(e, "projectsError"));
+        char *from = issues > 1 ? xstrfmt("#%d", json_int_or(json_get(e, "number"), 0)) : NULL;
+        for (size_t k = 0; k < json_count(projects); k++) {
+            if (shown++) doc_space(doc, px(10));
+            side_project(doc, c, json_at(projects, k), from, ACT_PR_PROJECT, (intptr_t)(i << 16 | k));
+        }
+        free(from);
+    }
+    if (!shown) side_projects_none(doc, c, refused);
+}
+/// The sidebar: only what the server reports; the projects are those of the issues it closes, and notifications are not
+/// part of it.
 static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     int count = 0;
     side_actions(s, doc, c, &count);
@@ -1855,6 +2084,7 @@ static void layout_sidebar(PullScreen *s, Doc *doc, Col c) {
     side_reviewers(s, doc, c, &count);
     side_assignees(s, doc, c, &count);
     side_labels(s, doc, c, &count);
+    side_projects(s, doc, c, &count);
     side_milestone(s, doc, c, &count);
     side_development(s, doc, c, &count);
 }
@@ -2268,6 +2498,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         else open_web_url(json_str(json_get(json_at(json_get(s->pr, "issues"), (size_t)arg), "url")));
         break;
     }
+    case ACT_PR_PROJECT: open_web_url(json_str(json_get(json_at(json_get(json_at(s->issue_projects, (size_t)(arg >> 16)), "projects"), (size_t)(arg & 0xFFFF)), "url"))); break;
     case ACT_MERGE: merge(s, "squash"); break;
     case ACT_RELOAD: pull_refresh(base); break;
     case ACT_START_ACTION: {
@@ -2358,7 +2589,7 @@ static void pull_visible(Screen *base, bool shown) {
     if (shown && s->run_busy) SetTimer(pane_hwnd(base->pane), TIMER_RUN_LOG, 1500, NULL);
     if (!shown) KillTimer(pane_hwnd(base->pane), TIMER_RUN_LOG);
     if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) conv_load(s); }
-    else { poller_stop(&s->poller); pull_files_cancel(s->files); conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); }
+    else { poller_stop(&s->poller); pull_files_cancel(s->files); conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); request_cancel(&s->req_issue); }
 }
 static void pull_refresh(Screen *base) {
     PullScreen *s = (PullScreen *)base;
@@ -2367,6 +2598,7 @@ static void pull_refresh(Screen *base) {
     // Refreshing is how an uncertain start is checked: its conversation is listed in the Sessions tab if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     request_cancel(&s->req_body); s->body_read = false;
+    request_cancel(&s->req_issue); s->issues_read = false; json_free(s->issue_incoming); s->issue_incoming = NULL;
     request_cancel(&s->req_pull); pull_load(s);
     if (pull_files_started(s->files)) pull_files_refresh(s->files);
     pane_relayout(base->pane);
@@ -2734,7 +2966,7 @@ static void issue_layout_pulls(IssueScreen *s, Doc *doc, Col c) {
         for (size_t r = 0; r < s->run_count; r++) if (session_pull_number(&s->runs[r]) == row->number && session_is_active(&s->runs[r])) running = true;
         // The issues it closes would only name this one again.
         PullSummary shown = *row; shown.issue_count = 0;
-        doc_pull_row(doc, c.x, c.w, &shown, NULL, s->project.repo, store_supports("pull") || safe_web_url(row->url) ? ACT_ISSUE_PULL : 0, (intptr_t)i, NULL, 0, running);
+        doc_pull_row(doc, c.x, c.w, &shown, NULL, s->project.repo, NULL, store_supports("pull") || safe_web_url(row->url) ? ACT_ISSUE_PULL : 0, (intptr_t)i, NULL, 0, running);
         doc_space(doc, px(8));
     }
     if (thin || !issue->pull_count) {
@@ -2968,42 +3200,12 @@ static void issue_side_actions(IssueScreen *s, Doc *doc, Col c, int *count) {
                  FONT_CAPTION, theme.secondary, DT_WORDBREAK);
     }
 }
-/// A name on the left and its value on the right, as a project's fields are listed.
-static void side_field(Doc *doc, Col c, const char *name, const char *value) {
-    int y = doc->y, half = c.w * 2 / 5;
-    RECT nr = { c.x, y, c.x + half - px(6), y + px(20) }; doc_text_at(doc, &nr, name, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    doc->y = y;
-    doc_text(doc, c.x + half, c.w - half, value, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK);
-    if (doc->y < y + px(20)) doc->y = y + px(20);
-    doc_space(doc, px(2));
-}
 static void issue_side_projects(IssueScreen *s, Doc *doc, Col c, int *count) {
     if (!s->detail) return;
     const Json *projects = json_get(s->detail, "projects");
-    const char *refused = json_str(json_get(s->detail, "projectsError"));
     side_heading(doc, c, count, "Projects");
-    for (size_t i = 0; i < json_count(projects); i++) {
-        const Json *p = json_at(projects, i);
-        const char *title = json_str(json_get(p, "title")), *status = json_str(json_get(p, "status"));
-        if (i) doc_space(doc, px(10));
-        int li = doc_label(doc, c.x, c.w, 0xE8FD, title ? title : "Project", FONT_FOOTNOTE_SEMIBOLD, theme.ink);
-        if (safe_web_url(json_str(json_get(p, "url")))) { doc_item(doc, li)->action = ACT_ISSUE_PROJECT; doc_item(doc, li)->arg = (intptr_t)i; doc_item(doc, li)->hand = true; }
-        doc_space(doc, px(4));
-        side_field(doc, c, "Status", status ? status : "No status");
-        const Json *fields = json_get(p, "fields");
-        for (size_t k = 0; k < json_count(fields); k++) {
-            const Json *field = json_at(fields, k), *v = json_get(field, "value");
-            const char *name = json_str(json_get(field, "name"));
-            double n;
-            char *value = json_str(v) ? xstrdup(json_str(v)) : json_num(v, &n) ? xstrfmt("%g", n) : NULL;
-            if (name && value) side_field(doc, c, name, value);
-            free(value);
-        }
-    }
-    if (!json_count(projects)) {
-        if (refused) { char *t = xstrfmt("GitHub would not read its projects with the server\xE2\x80\x99s token, which needs Projects: read. %s", refused); doc_text(doc, c.x, c.w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK); free(t); }
-        else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
-    }
+    for (size_t i = 0; i < json_count(projects); i++) { if (i) doc_space(doc, px(10)); side_project(doc, c, json_at(projects, i), NULL, ACT_ISSUE_PROJECT, (intptr_t)i); }
+    if (!json_count(projects)) side_projects_none(doc, c, json_str(json_get(s->detail, "projectsError")));
 }
 static void issue_layout_sidebar(IssueScreen *s, Doc *doc, Col c) {
     const IssueSummary *issue = &s->issue;

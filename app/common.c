@@ -154,8 +154,8 @@ char *people(char **logins, size_t count, size_t limit) {
     return str_detach(&s);
 }
 
-typedef struct { char *reference, *title, *state; COLORREF state_color; } LinkedData;
-static void linked_free(void *p) { LinkedData *d = p; free(d->reference); free(d->title); free(d->state); free(d); }
+typedef struct { char *reference, *title, *state, *status; COLORREF state_color; } LinkedData;
+static void linked_free(void *p) { LinkedData *d = p; free(d->reference); free(d->title); free(d->state); free(d->status); free(d); }
 static void paint_linked(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     LinkedData *d = it->data;
     int x = rc->left;
@@ -163,16 +163,20 @@ static void paint_linked(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     int rw = text_width(cv, d->reference, FONT_MONO_CAPTION2);
     RECT r = { x, rc->top, x + rw, rc->bottom }; draw_text(cv, d->reference, &r, FONT_MONO_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); x += rw + px(5);
     int sw = d->state ? text_width(cv, d->state, FONT_CAPTION2) + px(6) : 0;
-    RECT t = { x, rc->top, rc->right - sw, rc->bottom };
+    int ch = 0, cw = d->status ? draw_chip(NULL, 0, 0, d->status, theme.secondary, theme.raise, &ch) + px(6) : 0;
+    RECT t = { x, rc->top, rc->right - sw - cw, rc->bottom };
     draw_text(cv, d->title, &t, FONT_CAPTION, it->action ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    int tw = text_width(cv, d->title, FONT_CAPTION);
+    int sx = x + (tw < rc->right - sw - cw - x ? tw : rc->right - sw - cw - x) + px(6);
     if (d->state) {
-        int tw = text_width(cv, d->title, FONT_CAPTION);
-        int sx = x + (tw < rc->right - sw - x ? tw : rc->right - sw - x) + px(6);
         RECT s = { sx, rc->top, sx + sw, rc->bottom };
         draw_text(cv, d->state, &s, FONT_CAPTION2, d->state_color, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        sx += sw;
     }
+    if (d->status) draw_chip(cv, sx, rc->top + (rc->bottom - rc->top - ch) / 2, d->status, theme.secondary, theme.raise, NULL);
 }
-void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) {
+void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *repo, int action, intptr_t arg) { doc_linked_row_status(doc, x, w, link, repo, NULL, action, arg); }
+void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const char *repo, const char *status, int action, intptr_t arg) {
     LinkedData *d = xcalloc(1, sizeof *d);
     d->reference = board_link_reference(link, repo); d->title = xstrdup(link->title);
     if (link->draft) { d->state = xstrdup("draft"); d->state_color = theme.warning; }
@@ -180,6 +184,7 @@ void doc_linked_row(Doc *doc, int x, int w, const BoardLink *link, const char *r
     else if (str_eq(link->state, "open")) { d->state = xstrdup("open"); d->state_color = theme.success; }
     else if (str_eq(link->state, "merged")) { d->state = xstrdup("merged"); d->state_color = theme.accent; }
     else if (str_eq(link->state, "closed")) { d->state = xstrdup("closed"); d->state_color = theme.secondary; }
+    if (!str_empty(status)) d->status = xstrdup(status);
     int h = px(20);
     int i = doc_custom(doc, x, w, h, paint_linked, d, linked_free, action, arg);
     doc_item(doc, i)->color = theme.ink;
@@ -210,7 +215,7 @@ static void meta_add(MetaData *d, const char *text, COLORREF color, bool mono) {
 }
 static void doc_meta(Doc *doc, int x, int w, MetaData *d) { doc_custom(doc, x, w, px(20), paint_meta, d, meta_free, 0, 0); }
 
-void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running) {
+void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, const char *const *issue_status, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running) {
     int box = doc_box_begin(doc, x, w, px(10), theme.raise, running ? theme.accent_dim : theme.line, px(12));
     int ix = x + px(12), iw = w - px(24);
     doc_text(doc, ix, iw, pull->title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -234,7 +239,7 @@ void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPo
     if (pull->has_updated) d->right = format_relative(pull->updated_at);
     doc_meta(doc, ix, iw, d);
     if (pull->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, pull->labels, pull->label_count, theme.raise); }
-    for (size_t i = 0; i < pull->issue_count; i++) { doc_space(doc, px(4)); doc_linked_row(doc, ix, iw, &pull->issues[i], repo, 0, 0); }
+    for (size_t i = 0; i < pull->issue_count; i++) { doc_space(doc, px(4)); doc_linked_row_status(doc, ix, iw, &pull->issues[i], repo, issue_status ? issue_status[i] : NULL, 0, 0); }
     if (button_count) { doc_space(doc, px(8)); doc_button_row(doc, ix, iw, buttons, button_count); }
     doc_box_end(doc, box, px(10));
     doc_box_action(doc, box, action, arg);

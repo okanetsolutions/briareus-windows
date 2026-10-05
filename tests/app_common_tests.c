@@ -338,7 +338,7 @@ static void test_pull_row_with_a_run_keeps_the_accent_border(void) {
     p.number = 12; p.title = "Make it faster";
     Doc doc; doc_init(&doc);
     doc_begin(&doc, NULL, 600);
-    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", 9, 12, NULL, 0, true);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", NULL, 9, 12, NULL, 0, true);
     CHECK_INT(doc.items[0].border, theme.accent_dim);
     CHECK_INT(doc.items[0].fill, theme.raise);
     CHECK_INT(doc.items[0].action, 9);
@@ -346,7 +346,7 @@ static void test_pull_row_with_a_run_keeps_the_accent_border(void) {
     CHECK_INT(doc.items[0].rc.bottom, doc_height(&doc));
     CHECK(item_with_text(&doc, "Make it faster") > 0);
     doc_begin(&doc, NULL, 600);
-    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", 9, 12, NULL, 0, false);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", NULL, 9, 12, NULL, 0, false);
     CHECK_INT(doc.items[0].border, theme.line);
     doc_free(&doc);
 }
@@ -356,14 +356,33 @@ static void test_pull_row_grows_with_labels_and_buttons(void) {
     PullSummary p; memset(&p, 0, sizeof p);
     p.number = 3; p.title = "T";
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600);
-    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", 1, 0, NULL, 0, false);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", NULL, 1, 0, NULL, 0, false);
     int bare = doc_height(&doc);
     PullLabel labels[2] = { { "bug", "d73a4a" }, { "ui", "00ff00" } };
     p.labels = labels; p.label_count = 2;
     ButtonSpec button = { 0xE768, "Run", BUTTON_BORDERED, 5, 0, true };
     doc_begin(&doc, NULL, 600);
-    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", 1, 0, &button, 1, false);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", NULL, 1, 0, &button, 1, false);
     CHECK(doc_height(&doc) > bare);
+    doc_free(&doc);
+}
+
+static void test_pull_row_keeps_an_issue_status_on_its_line(void) {
+    // The issue's project Status is a chip after its state, not a line of its own.
+    ensure_theme();
+    PullSummary p; memset(&p, 0, sizeof p);
+    p.number = 4; p.title = "T";
+    BoardLink issue; memset(&issue, 0, sizeof issue);
+    issue.number = 11; issue.title = "Rates resubmit"; issue.state = "open";
+    p.issues = &issue; p.issue_count = 1;
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", NULL, 1, 0, NULL, 0, false);
+    int plain = doc_height(&doc); size_t items = doc.count;
+    const char *status[1] = { "In Review" };
+    doc_begin(&doc, NULL, 600);
+    doc_pull_row(&doc, 0, 600, &p, NULL, "o/r", status, 1, 0, NULL, 0, false);
+    CHECK_INT(doc_height(&doc), plain);
+    CHECK_INT((int)doc.count, (int)items);
     doc_free(&doc);
 }
 
@@ -491,6 +510,7 @@ void app_common_tests(void) {
     test_run("selected session row is raised", test_selected_session_row_is_raised);
     test_run("pull row with a run keeps the accent border", test_pull_row_with_a_run_keeps_the_accent_border);
     test_run("pull row grows with labels and buttons", test_pull_row_grows_with_labels_and_buttons);
+    test_run("pull row keeps an issue status on its line", test_pull_row_keeps_an_issue_status_on_its_line);
     test_run("issue row names its parent unless nested", test_issue_row_names_its_parent_unless_nested);
     test_run("epic issue title has the target mark", test_epic_issue_title_has_the_target_mark);
     test_run("label chips wrap within the width", test_label_chips_wrap_within_the_width);
