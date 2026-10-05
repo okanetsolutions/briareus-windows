@@ -229,6 +229,11 @@ const ProjectField *project_card_field(const ProjectCard *card, const char *name
 /// Whether a card passes the assignee filter: an empty pick passes every card, PROJECT_NO_ASSIGNEE the unassigned ones,
 /// and a login (in any case) the cards assigned to it.
 bool project_card_assigned(const ProjectCard *card, const char *assignee);
+/// The pull requests linked to close an issue card of `repo`, from the `pulls` board read: those its issue row names,
+/// then the rows of `pulls` that name it. None for a card of another repository or one that is not an issue. Each
+/// is freed with board_link_free, then the array.
+BoardLink *project_card_pulls(const ProjectCard *card, const char *repo, const IssueSummary *issues, size_t issue_count,
+                              const PullSummary *pulls, size_t pull_count, size_t *count);
 /// What the assignee filter offers: everyone the board's cards are assigned to, by name, each with how many cards they
 /// have, then "No assignee" when some card has nobody. A pick the board no longer holds still lists itself.
 FilterOption *project_board_assignees(const ProjectBoard *board, const char *pick, size_t *count);

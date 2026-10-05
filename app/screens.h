@@ -155,6 +155,9 @@ void board_tab_free(BoardTab *p);
 bool board_tab_offered(const Project *project);
 /// Reads the board the first time the tab is shown, the saved copy first; the refresh reads it past the server's cache.
 void board_tab_open(BoardTab *p);
+/// The host's `pulls` read, which names the pull requests closing each issue card. Borrowed: set again whenever the
+/// host replaces or frees it.
+void board_tab_set_pulls(BoardTab *p, const IssueSummary *issues, size_t issue_count, const PullSummary *pulls, size_t pull_count);
 void board_tab_refresh(BoardTab *p);
 /// Lays the board out from `doc->y` down to the view's bottom, each column scrolling on its own; columns that do not fit
 /// `w` run on past it, scrolled sideways.

@@ -3,7 +3,8 @@
 // totalled (Story Points). The columns reach the view's bottom and each scrolls on its own; a wide board scrolls sideways
 // with the bar at the bottom, or Shift and the wheel. An assignee picker narrows the cards, as GitHub's filter bar does.
 // A card opens its issue or pull request in a side panel over the board when it is this project's, as GitHub's board
-// does, and on GitHub otherwise. Read-only: cards are moved on GitHub.
+// does, and on GitHub otherwise. An issue card lists the pull requests that close it, from the host's `pulls` read,
+// and each opens the same way. Read-only: cards are moved on GitHub.
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
@@ -11,7 +12,7 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_CARD, A_OPEN_GITHUB, A_FILTER_ASSIGNEE, A_CLEAR_FILTER };
+enum { A_CARD, A_OPEN_GITHUB, A_FILTER_ASSIGNEE, A_CLEAR_FILTER, A_CARD_PULL };
 enum { COL_W = 300, COL_MAX_W = 380, COL_GAP = 12, COL_MIN_H = 240 };
 
 struct BoardTab {
@@ -23,6 +24,9 @@ struct BoardTab {
     bool loaded;           // the server answered since the tab was first opened
     char *error;           // the request's own failure; GitHub's refusal is `board.error`
     char *assignee;        // the picked assignee (a login or PROJECT_NO_ASSIGNEE); NULL or empty for everyone
+    // The host's `pulls` read, borrowed: which pull requests close each issue card.
+    const IssueSummary *issues; size_t issue_count;
+    const PullSummary *pulls; size_t pull_count;
     Request *req;
 };
 
@@ -80,6 +84,9 @@ static void load(BoardTab *p, bool fresh) {
     Json *args = json_object(); json_set_str(args, "repo", p->project.repo);
     if (fresh) json_set_str(args, "fresh", "1");
     store_call("project_board", args, 0, p, board_done, 0, &p->req);
+}
+void board_tab_set_pulls(BoardTab *p, const IssueSummary *issues, size_t issue_count, const PullSummary *pulls, size_t pull_count) {
+    p->issues = issues; p->issue_count = issue_count; p->pulls = pulls; p->pull_count = pull_count;
 }
 void board_tab_open(BoardTab *p) { if (!p->loaded && !p->req) load(p, false); }
 void board_tab_refresh(BoardTab *p) { load(p, true); relayout(p); }
@@ -145,6 +152,12 @@ static const ProjectCard *card_at(const BoardTab *p, intptr_t arg) {
     if (column >= p->board.column_count || card >= p->board.columns[column].card_count) return NULL;
     return &p->board.columns[column].cards[card];
 }
+/// A card's pull request link: the card's argument, then which of its pull requests.
+static intptr_t card_pull_arg(intptr_t card, size_t pull) { return (card << 8) | (intptr_t)(pull & 0xFF); }
+static BoardLink *card_pulls(const BoardTab *p, const ProjectCard *card, size_t *count) {
+    return project_card_pulls(card, p->project.repo, p->issues, p->issue_count, p->pulls, p->pull_count, count);
+}
+static void card_pulls_free(BoardLink *links, size_t count) { for (size_t i = 0; i < count; i++) board_link_free(&links[i]); free(links); }
 /// Whether a click on the card leads anywhere: to the app's own screen or to GitHub.
 static bool card_opens(const ProjectCard *card) { return card->number > 0 && (card->repo || safe_web_url(card->url)); }
 
@@ -173,6 +186,14 @@ static void layout_card(BoardTab *p, Doc *doc, int x, int w, const ProjectCard *
     }
     if (card->label_count) { doc_space(doc, px(6)); doc_label_chips(doc, ix, iw, card->labels, card->label_count, theme.elevated); }
     if (card->has_parent) { doc_space(doc, px(4)); doc_linked_row(doc, ix, iw, &card->parent, p->project.repo, 0, 0); }
+    // The pull requests that close it, each opening on its own.
+    size_t pn; BoardLink *pulls = card_pulls(p, card, &pn);
+    for (size_t i = 0; i < pn && i < 0x100; i++) {
+        bool here = !board_link_is_foreign(&pulls[i], p->project.repo) && store_supports("pull");
+        doc_space(doc, px(4));
+        doc_linked_row(doc, ix, iw, &pulls[i], p->project.repo, here || safe_web_url(pulls[i].url) ? p->base + A_CARD_PULL : 0, card_pull_arg(arg, i));
+    }
+    card_pulls_free(pulls, pn);
     // Who has it and when it was opened.
     Str meta; str_init(&meta);
     if (card->assignee_count) { char *who = people(card->assignees, card->assignee_count, 3); str_appendz(&meta, who); free(who); }
@@ -332,6 +353,18 @@ static void open_card(BoardTab *p, const ProjectCard *card) {
     if (safe_web_url(card->url)) open_web_url(card->url);
 }
 
+/// A pull request of this project opens in the side panel, as its card would; any other on GitHub.
+static void open_card_pull(BoardTab *p, const ProjectCard *card, size_t index) {
+    size_t n; BoardLink *pulls = card_pulls(p, card, &n);
+    if (index < n) {
+        const BoardLink *l = &pulls[index];
+        if (!board_link_is_foreign(l, p->project.repo) && store_supports("pull"))
+            app_set_overlay(pull_detail_screen_new(&p->project, l->number, NULL, pulls_find(p->pulls, p->pull_count, l->number)));
+        else if (safe_web_url(l->url)) open_web_url(l->url);
+    }
+    card_pulls_free(pulls, n);
+}
+
 static void set_assignee(BoardTab *p, const char *assignee) {
     set_string(&p->assignee, str_empty(assignee) ? NULL : assignee);
     filter_save(p);
@@ -359,6 +392,7 @@ bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt) {
     if (action < p->base || action >= p->base + BOARD_TAB_ACTIONS) return false;
     switch (action - p->base) {
     case A_CARD: { const ProjectCard *card = card_at(p, arg); if (card) open_card(p, card); break; }
+    case A_CARD_PULL: { const ProjectCard *card = card_at(p, arg >> 8); if (card) open_card_pull(p, card, (size_t)(arg & 0xFF)); break; }
     case A_FILTER_ASSIGNEE: if (p->host->pane) pick_assignee(p, pt); break;
     case A_CLEAR_FILTER: set_assignee(p, NULL); break;
     case A_OPEN_GITHUB: { const char *url = safe_web_url(p->board.view_url) ? p->board.view_url : p->board.url; if (safe_web_url(url)) open_web_url(url); break; }

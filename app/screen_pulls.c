@@ -195,6 +195,7 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     json_free(s->board); s->board = json_clone(result);
     pull_summaries_free(s->pulls, s->pull_count); s->pulls = pull_summaries_parse(json_get(result, "pulls"), &s->pull_count);
     issue_summaries_free(s->issues, s->issue_count); s->issues = issue_summaries_parse(json_get(result, "issues"), &s->issue_count);
+    board_tab_set_pulls(s->board_tab, s->issues, s->issue_count, s->pulls, s->pull_count);
     // A saved board may be out of date about who has something open, so the server's first answer
     // opens the board again, unless the pickers were touched meanwhile.
     if (s->has_opening) {
