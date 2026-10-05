@@ -753,10 +753,10 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
             }
             // The item covers the whole row, its runs moved below the top padding, so a press there lands in this cell.
             rich_offset(cell, 0, px(5));
-            RECT cr = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r], rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
-            Item *ci = &doc->items[doc_add(doc, &cr, paint_rich)];
-            ci->data = cell; ci->free_data = rich_free; ci->sel = cell; ci->cell = true;
-            for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].link) { ci->action = ACTION_OPEN_LINK; ci->hand = true; break; }
+            RECT cell_rc = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r], rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
+            Item *cell_it = &doc->items[doc_add(doc, &cell_rc, paint_rich)];
+            cell_it->data = cell; cell_it->free_data = rich_free; cell_it->sel = cell; cell_it->cell = true;
+            for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].link) { cell_it->action = ACTION_OPEN_LINK; cell_it->hand = true; break; }
         }
     }
     free(cells); free(col_w);
