@@ -23,6 +23,11 @@ void webview_free(WebView *wv);
 void webview_set_bounds(WebView *wv, const RECT *rc);
 void webview_show(WebView *wv, bool shown);
 void webview_reload(WebView *wv);
+/// Goes back or forward in the browser's history, as its buttons do; nothing when there is nowhere to go.
+void webview_back(WebView *wv);
+void webview_forward(WebView *wv);
+bool webview_can_back(WebView *wv);
+bool webview_can_forward(WebView *wv);
 /// True once the page is up; false while the browser starts or after it failed.
 bool webview_ready(WebView *wv);
 /// Why the browser could not start, or NULL.

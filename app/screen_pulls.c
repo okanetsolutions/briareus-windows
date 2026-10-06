@@ -854,7 +854,7 @@ static Json *details_edit(const char *what, int number, const char *title, const
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
-    ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
+    ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
@@ -2225,13 +2225,17 @@ static const char *run_shown_profile(PullScreen *s) {
     if (s->run_profile) return s->run_profile;
     return s->profile_count ? s->profiles[0] : NULL;
 }
-/// The Run tab: the browser's area, down to the bottom of the pane, under a line saying what a restart is doing, with
-/// what is happening written in it until the page is up. The tab itself is the run profile dropdown.
+/// The Run tab: the browser's area under its address bar, down to the bottom of the pane, with what is happening
+/// written in it until the page is up. The tab itself is the run profile dropdown.
 static void layout_run(PullScreen *s, Doc *doc, int w) {
     RECT view = pane_content_rect(s->base.pane);
     if (s->run_error) { doc_notice(doc, px(4), w - px(8), s->run_error); doc_space(doc, px(10)); }
     bool page = s->run_url && !s->run_busy && s->web && webview_ready(s->web);
     if (page && s->serve_error) { doc_text(doc, px(4), w - px(8), s->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
+    if (s->run_url && !s->run_busy) {
+        static const int actions[4] = { ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_WEB_RELOAD, ACT_WEB_BROWSER };
+        run_browser_bar(doc, w, s->web, s->run_url, actions);
+    }
     int area = doc->y, h = (view.bottom - view.top) - area - px(12);
     if (h < px(320)) h = px(320);
     SetRect(&s->web_rc, 0, area, w, area + h);
@@ -2506,13 +2510,6 @@ static void pull_header(Screen *base, HeaderInfo *info) {
     PullScreen *s = (PullScreen *)base;
     snprintf(info->title, sizeof info->title, "Pull request");
     snprintf(info->subtitle, sizeof info->subtitle, "%s #%d", s->project.repo, s->number);
-    if (s->tab != PR_TAB_RUN || !s->run_url) return;
-    const char *url = s->web && webview_url(s->web) ? webview_url(s->web) : s->run_url;
-    snprintf(info->subtitle, sizeof info->subtitle, "%s #%d \xC2\xB7 %s", s->project.repo, s->number, url);
-    HeaderButton *r = &info->buttons[info->button_count++];
-    r->glyph = 0xE72C; r->action = ACT_WEB_RELOAD; r->enabled = s->web && webview_ready(s->web); r->tip = "Reload the page";
-    HeaderButton *o = &info->buttons[info->button_count++];
-    o->glyph = 0xE8A7; o->action = ACT_WEB_BROWSER; o->enabled = true; o->tip = "Open in your browser";
 }
 
 static void start_done(void *owner, Request *req) {
@@ -2660,6 +2657,8 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
     case ACT_WEB_RELOAD: if (s->web) webview_reload(s->web); break;
+    case ACT_WEB_BACK: if (s->web) webview_back(s->web); break;
+    case ACT_WEB_FORWARD: if (s->web) webview_forward(s->web); break;
     case ACT_RUN_PROFILE: run_pick_profile(s, pt); break;
     case ACT_RUN_RETRY: run_start(s); break;
     case ACT_WEB_BROWSER: open_web_url(s->web && webview_url(s->web) ? webview_url(s->web) : s->run_url); break;

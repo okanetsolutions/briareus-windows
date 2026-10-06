@@ -21,8 +21,9 @@ enum { ENV_CREATE_CONTROLLER = 3 };
 // ICoreWebView2Controller
 enum { CTRL_PUT_IS_VISIBLE = 4, CTRL_PUT_BOUNDS = 6, CTRL_CLOSE = 24, CTRL_GET_CORE = 25 };
 // ICoreWebView2
-enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_RELOAD = 31, CORE_ADD_TITLE_CHANGED = 46, CORE_GET_TITLE = 48,
-       CORE_ADD_WEB_RESOURCE_REQUESTED = 55, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER = 57 };
+enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_ADD_HISTORY_CHANGED = 13, CORE_RELOAD = 31,
+       CORE_GET_CAN_GO_BACK = 38, CORE_GET_CAN_GO_FORWARD = 39, CORE_GO_BACK = 40, CORE_GO_FORWARD = 41, CORE_ADD_TITLE_CHANGED = 46,
+       CORE_GET_TITLE = 48, CORE_ADD_WEB_RESOURCE_REQUESTED = 55, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER = 57 };
 // ICoreWebView2WebResourceRequestedEventArgs, ICoreWebView2WebResourceRequest, ICoreWebView2HttpRequestHeaders
 enum { ARGS_GET_REQUEST = 3 };
 enum { REQUEST_GET_URI = 3, REQUEST_GET_HEADERS = 9 };
@@ -35,6 +36,7 @@ struct WebView {
     HWND parent; wchar_t *url; RECT bounds; bool shown;
     void *controller, *core;    // ICoreWebView2Controller, ICoreWebView2
     char *error, *title, *source;
+    bool can_back, can_forward;
     char *access_suffix; wchar_t *access_id, *access_secret;   // the preview's service token, or NULL
     void (*changed)(void *ctx); void *ctx;
 };
@@ -83,13 +85,20 @@ static void read_string(WebView *wv, int slot_index, char **slot) {
         CoTaskMemFree(w);
     }
 }
-/// DocumentTitleChanged and SourceChanged: (sender, args).
+/// Reads a BOOL property of the ICoreWebView2, false when it cannot.
+static bool read_bool(WebView *wv, int slot_index) {
+    BOOL b = FALSE;
+    return SUCCEEDED(COM(wv->core, slot_index, HRESULT (WINAPI *)(void *, BOOL *))(wv->core, &b)) && b;
+}
+/// DocumentTitleChanged, SourceChanged and HistoryChanged: (sender, args).
 static HRESULT WINAPI page_changed(Handler *h, void *sender, void *args) {
     (void)sender; (void)args;
     WebView *wv = h->wv;
     if (wv->closed || !wv->core) return S_OK;
     read_string(wv, CORE_GET_TITLE, &wv->title);
     read_string(wv, CORE_GET_SOURCE, &wv->source);
+    wv->can_back = read_bool(wv, CORE_GET_CAN_GO_BACK);
+    wv->can_forward = read_bool(wv, CORE_GET_CAN_GO_FORWARD);
     notify(wv);
     return S_OK;
 }
@@ -136,6 +145,7 @@ static HRESULT WINAPI controller_created(Handler *h, HRESULT hr, void *controlle
     Handler *ev = handler_new(page_changed_vtbl, wv);
     COM(core, CORE_ADD_TITLE_CHANGED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, ev, &token);
     COM(core, CORE_ADD_SOURCE_CHANGED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, ev, &token);
+    COM(core, CORE_ADD_HISTORY_CHANGED, HRESULT (WINAPI *)(void *, void *, INT64 *))(core, ev, &token);
     handler_release(ev);
     if (wv->access_suffix) {
         Handler *rr = handler_new(resource_requested_vtbl, wv);
@@ -236,6 +246,10 @@ void webview_show(WebView *wv, bool shown) {
     if (wv->controller) COM(wv->controller, CTRL_PUT_IS_VISIBLE, HRESULT (WINAPI *)(void *, BOOL))(wv->controller, shown);
 }
 void webview_reload(WebView *wv) { if (wv->core) COM(wv->core, CORE_RELOAD, HRESULT (WINAPI *)(void *))(wv->core); }
+void webview_back(WebView *wv) { if (wv->core && wv->can_back) COM(wv->core, CORE_GO_BACK, HRESULT (WINAPI *)(void *))(wv->core); }
+void webview_forward(WebView *wv) { if (wv->core && wv->can_forward) COM(wv->core, CORE_GO_FORWARD, HRESULT (WINAPI *)(void *))(wv->core); }
+bool webview_can_back(WebView *wv) { return wv->core && wv->can_back; }
+bool webview_can_forward(WebView *wv) { return wv->core && wv->can_forward; }
 bool webview_ready(WebView *wv) { return wv->core && !wv->error; }
 const char *webview_error(WebView *wv) { return wv->error; }
 const char *webview_title(WebView *wv) { return wv->title; }

@@ -213,6 +213,10 @@ bool forge_site_key(ForgeSite *v, WPARAM vk, bool ctrl);
 bool forge_site_can_leave(ForgeSite *v);
 /// True when the action was the tab's.
 bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
+/// The address bar over a Run tab's browser: back, forward and reload, the page's address (`url` until the browser
+/// reports one), and open in the browser; `actions` holds the four actions in that order. Advances.
+struct WebView;
+void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4]);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
 /// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
 /// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
@@ -226,7 +230,7 @@ bool project_run_offered(void);
 void project_run_open(ProjectRun *p);
 /// Lays the tab out from `doc->y` down to the bottom of the pane.
 void project_run_layout(ProjectRun *p, Doc *doc, int w);
-/// The branch and the served address under the title, and the profile picker, Reload, Open in browser and Delete.
+/// The branch under the title, and the profile picker and Delete.
 void project_run_header(ProjectRun *p, HeaderInfo *info);
 /// Shows the browser over the tab's area, or hides it when `shown` is false.
 void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool shown);
