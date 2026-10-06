@@ -511,7 +511,7 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         pane_footer_changed(s->base.pane);
         break;
     }
-    case CHIP_LOOP: s->review_loop = !s->review_loop; pane_footer_changed(s->base.pane); break;
+    case CHIP_LOOP: s->review_loop = !s->review_loop; settings_write_review_loop(s->review_loop); pane_footer_changed(s->base.pane); break;
     }
     if (has) runtime_choice_free(&eff);
 }
@@ -626,7 +626,7 @@ Screen *new_session_screen_new(const Project *project_, const Project *projects,
         if (saved && projects_parse(saved, &items, &n)) { free(s->projects); s->projects = items; s->count = n; }
         json_free(saved);
     }
-    s->review_loop = true;
+    s->review_loop = settings_read_review_loop();
     s->composer_lines = 1;
     HWND parent = pane_hwnd(app_detail_pane());
     s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
