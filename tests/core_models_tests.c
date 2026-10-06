@@ -719,6 +719,34 @@ static void test_runtime_efforts_and_labels_for_known_and_unknown_choices(void) 
     CHECK_OWNED_STR(runtime_catalog_label(&c, &unnamed), "m");
     runtime_catalog_free(&c); json_free(j);
 }
+static void test_runtime_offered_keeps_only_what_the_catalog_still_has(void) {
+    Json *j = json_parsez(CATALOG);
+    RuntimeCatalog c; CHECK(runtime_catalog_parse(j, &c));
+    RuntimeChoice out;
+    RuntimeChoice sonnet_medium = { 2, (char *)"sonnet", (char *)"medium" }, opus_max = { 2, (char *)"opus", (char *)"max" },
+                  sonnet = { 2, (char *)"sonnet", NULL }, old = { 3, NULL, (char *)"x" }, gone = { 2, (char *)"gone", NULL },
+                  stranger = { 9, (char *)"opus", NULL }, off = { 1, (char *)"gpt", NULL }, nomodel = { 2, NULL, NULL }, haiku = { 2, (char *)"haiku", (char *)"high" };
+    CHECK(runtime_catalog_offered(&c, &sonnet_medium, &out)); CHECK(runtime_choice_equal(&out, &sonnet_medium)); runtime_choice_free(&out);
+    // An effort the model no longer offers falls to its default, else its first, else none.
+    CHECK(runtime_catalog_offered(&c, &opus_max, &out)); CHECK_STR(out.model, "opus"); CHECK_STR(out.effort, "high"); runtime_choice_free(&out);
+    CHECK(runtime_catalog_offered(&c, &sonnet, &out)); CHECK_STR(out.effort, "low"); runtime_choice_free(&out);
+    CHECK(runtime_catalog_offered(&c, &haiku, &out)); CHECK_STR(out.model, "haiku"); CHECK(out.effort == NULL); runtime_choice_free(&out);
+    // A provider without models keeps the pick as it was.
+    CHECK(runtime_catalog_offered(&c, &old, &out)); CHECK_INT(out.provider_id, 3); CHECK(out.model == NULL); CHECK_STR(out.effort, "x"); runtime_choice_free(&out);
+    // A gone model or provider, an unavailable provider, or no model where the provider lists some, offers nothing.
+    CHECK(!runtime_catalog_offered(&c, &gone, &out)); CHECK(!runtime_catalog_offered(&c, &stranger, &out));
+    CHECK(!runtime_catalog_offered(&c, &off, &out)); CHECK(!runtime_catalog_offered(&c, &nomodel, &out));
+    runtime_catalog_free(&c); json_free(j);
+}
+static void test_runtime_choice_saves_and_reads_back(void) {
+    RuntimeChoice a = { 2, (char *)"sonnet", (char *)"medium" }, bare = { 3, NULL, NULL }, back;
+    char *text = runtime_choice_saved(&a);
+    CHECK(runtime_choice_from_saved(text, &back)); CHECK(runtime_choice_equal(&a, &back)); runtime_choice_free(&back); free(text);
+    text = runtime_choice_saved(&bare);
+    CHECK(runtime_choice_from_saved(text, &back)); CHECK(runtime_choice_equal(&bare, &back)); runtime_choice_free(&back); free(text);
+    CHECK(!runtime_choice_from_saved(NULL, &back)); CHECK(!runtime_choice_from_saved("", &back));
+    CHECK(!runtime_choice_from_saved("not json", &back)); CHECK(!runtime_choice_from_saved("{\"model\":\"opus\"}", &back));
+}
 static void test_runtime_choice_copy_equality_and_arguments(void) {
     RuntimeChoice a = { 2, (char *)"opus", (char *)"high" }, c;
     runtime_choice_copy(&c, &a);
@@ -950,6 +978,8 @@ void models_tests(void) {
     test_run("runtime first available skips only providers turned off", test_runtime_first_available_skips_only_providers_turned_off);
     test_run("runtime efforts and labels for known and unknown choices", test_runtime_efforts_and_labels_for_known_and_unknown_choices);
     test_run("runtime choice copy, equality and arguments", test_runtime_choice_copy_equality_and_arguments);
+    test_run("runtime offered keeps only what the catalog still has", test_runtime_offered_keeps_only_what_the_catalog_still_has);
+    test_run("runtime choice saves and reads back", test_runtime_choice_saves_and_reads_back);
     test_run("pull file reads and round trips", test_pull_file_reads_and_round_trips);
     test_run("pull file name and directory", test_pull_file_name_and_directory);
     test_run("pull files page reads paging and rejects without files", test_pull_files_page_reads_paging_and_rejects_without_files);
