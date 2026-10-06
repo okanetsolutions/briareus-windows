@@ -76,7 +76,7 @@ static void adopt(NewSessionScreen *s, RuntimeCatalog c) {
     if (s->has_catalog) runtime_catalog_free(&s->catalog);
     s->catalog = c; s->has_catalog = true;
     if (s->has_runtime) {
-        RuntimeChoice kept;
+        RuntimeChoice kept = { 0 };
         bool keep = s->hand_picked && runtime_catalog_offered(&s->catalog, &s->runtime, &kept);
         runtime_choice_free(&s->runtime); s->has_runtime = false;
         if (keep) { s->runtime = kept; s->has_runtime = true; return; }
