@@ -530,6 +530,35 @@ bool runtime_catalog_first_available(const RuntimeCatalog *c, RuntimeChoice *out
         if (runtime_provider_available(&c->providers[i])) return runtime_catalog_choice(c, c->providers[i].id, NULL, out);
     return false;
 }
+bool runtime_catalog_offered(const RuntimeCatalog *c, const RuntimeChoice *saved, RuntimeChoice *out) {
+    const RuntimeProvider *p = runtime_catalog_provider(c, saved->provider_id);
+    if (!p || !runtime_provider_available(p)) return false;
+    if (!saved->model) {
+        if (p->model_count) return false;
+        memset(out, 0, sizeof *out); out->provider_id = p->id; out->effort = xstrdup(saved->effort);
+        return true;
+    }
+    const RuntimeModel *m = runtime_catalog_model(c, saved);
+    if (!m) return false;
+    const char *effort = NULL;
+    for (size_t i = 0; saved->effort && i < m->effort_count && !effort; i++) if (str_eq(m->efforts[i], saved->effort)) effort = m->efforts[i];
+    if (!effort) effort = m->default_effort ? m->default_effort : (m->effort_count ? m->efforts[0] : NULL);
+    memset(out, 0, sizeof *out);
+    out->provider_id = p->id; out->model = xstrdup(m->id); out->effort = xstrdup(effort);
+    return true;
+}
+char *runtime_choice_saved(const RuntimeChoice *c) {
+    Json *j = runtime_choice_json(c); char *text = json_serialize(j, true); json_free(j);
+    return text;
+}
+bool runtime_choice_from_saved(const char *text, RuntimeChoice *out) {
+    memset(out, 0, sizeof *out);
+    if (str_empty(text)) return false;
+    Json *j = json_parsez(text);
+    bool ok = j && runtime_choice_parse(j, out);
+    json_free(j);
+    return ok;
+}
 char *runtime_catalog_label(const RuntimeCatalog *c, const RuntimeChoice *choice) {
     const RuntimeProvider *p = runtime_catalog_provider(c, choice->provider_id);
     const RuntimeModel *m = runtime_catalog_model(c, choice);

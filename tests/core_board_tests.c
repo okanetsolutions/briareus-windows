@@ -1303,6 +1303,26 @@ static void test_names_join_as_the_edit_box_shows_them(void) {
     j = board_label_names_join(odd, 3); CHECK_STR(j, "\"needs: review, qa\", \"\"\"x\"\"\", ui");
     check_names(j, false, "[\"needs: review, qa\",\"\\\"x\\\"\",\"ui\"]"); free(j);
 }
+static void test_review_list_keeps_what_waits_on_my_review(void) {
+    Json *j = json_parsez("[{\"number\":1,\"labels\":[{\"name\":\"required-dev-review\"}],\"assignees\":[]},"
+        "{\"number\":2,\"labels\":[{\"name\":\"Required-Dev-Review\"}],\"assignees\":[\"Me\"]},"
+        "{\"number\":3,\"labels\":[{\"name\":\"required-dev-review\"}],\"stack\":{\"id\":7,\"position\":1,\"total\":2}},"
+        "{\"number\":4,\"labels\":[{\"name\":\"required-dev-review\"}],\"stack\":{\"id\":7,\"position\":2,\"total\":2}},"
+        "{\"number\":5,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"changes_requested\"}],"
+        "\"stack\":{\"id\":7,\"position\":2,\"total\":2},\"assignees\":[\"me\"]},"
+        "{\"number\":6,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"someone\",\"state\":\"requested\"}]},"
+        "{\"number\":7,\"labels\":[{\"name\":\"bug\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"requested\"}]}]");
+    size_t n; PullSummary *pulls = pull_summaries_parse(j, &n); CHECK_INT(n, 7);
+    size_t found = 99; size_t *rows = pulls_review_list(pulls, n, NULL, "me", &found);
+    CHECK_INT(found, 3); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 3); CHECK_INT(pulls[rows[2]].number, 5); free(rows);
+    rows = pulls_review_list(pulls, n, NULL, "someone", &found);
+    CHECK_INT(found, 4); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 2); CHECK_INT(pulls[rows[2]].number, 3); CHECK_INT(pulls[rows[3]].number, 6); free(rows);
+    // No login, no list.
+    rows = pulls_review_list(pulls, n, NULL, NULL, &found); CHECK_INT(found, 0); free(rows);
+    rows = pulls_review_list(pulls, n, NULL, "", &found); CHECK_INT(found, 0); free(rows);
+    rows = pulls_review_list(NULL, 0, NULL, "me", &found); CHECK_INT(found, 0); free(rows);
+    pull_summaries_free(pulls, n); json_free(j);
+}
 static void test_assign_me_adds_or_takes_off_the_login(void) {
     char *assignees[] = { "octocat", "Nadin" };
     bool added = true;
@@ -1383,4 +1403,5 @@ void board_tests(void) {
     test_run("edited names are split, trimmed and listed once", test_edited_names_are_split_trimmed_and_listed_once);
     test_run("names join as the edit box shows them", test_names_join_as_the_edit_box_shows_them);
     test_run("assign me adds or takes off the login", test_assign_me_adds_or_takes_off_the_login);
+    test_run("review list keeps what waits on my review", test_review_list_keeps_what_waits_on_my_review);
 }

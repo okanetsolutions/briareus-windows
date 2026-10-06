@@ -43,14 +43,14 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
 enum { ACT_DB_BASE = 1160 };    // the Database tab's, PROJECT_DB_ACTIONS of them
 enum { ACT_FORGE_BASE = 1180 }; // the Forge tab's, PROJECT_FORGE_ACTIONS of them
 enum { ACT_BOARD_BASE = 1200 }; // the Board tab's, BOARD_TAB_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD };
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD, TAB_REVIEW };
 enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
@@ -60,7 +60,7 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
-    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
+    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
     ProjectRun *run;   // the Run tab, on the default branch
@@ -424,6 +424,51 @@ static void layout_meeting(Doc *doc, int w, const char *transcript) {
     }
 }
 
+static const char *github_login(void);
+static bool github_login_ask(void);
+/// Pull request `i`'s row: the dashboard's buttons, the errands its state offers with the suggested one filled, then
+/// Merge and its runs. Clicking the row opens the PR.
+static void layout_pull(PullsScreen *s, Doc *doc, int w, size_t i) {
+    const PullSummary *pull = &s->pulls[i];
+    StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
+    size_t an = 0; BoardAction *actions = str_empty(pull->branch) ? NULL : row_actions(s->catalog, pull, 0, &an);
+    ButtonSpec *buttons = xcalloc(an + 2, sizeof *buttons); size_t bn = 0;
+    char **labels = xcalloc(an + 1, sizeof *labels);
+    for (size_t k = 0; k < an && k < ACTION_STRIDE; k++) {
+        bool starting = s->busy && s->starting_number == pull->number && str_eq(s->starting_id, actions[k].id);
+        bool suggested = str_eq(pull->recommended, actions[k].id);
+        labels[k] = starting ? xstrdup("Starting\xE2\x80\xA6") : xstrfmt("%s %s", action_icon(actions[k].id), actions[k].label);
+        ButtonSpec b = { 0, labels[k], suggested ? BUTTON_PROMINENT : BUTTON_BORDERED, ACT_PULL_ACTION, (intptr_t)(i * ACTION_STRIDE + k), !s->busy && !s->uncertain };
+        buttons[bn++] = b;
+    }
+    if (!pull->draft && store_can_manage() && store_supports("pull") && store_supports("merge_pull")) {
+        bool merging = s->merging_number == pull->number;
+        ButtonSpec b = { 0, merging ? "Merging\xE2\x80\xA6" : "\xE2\x86\xB3 Merge", BUTTON_BORDERED, ACT_MERGE_PULL, (intptr_t)i, !s->merging_number && !s->busy };
+        buttons[bn++] = b;
+    }
+    size_t runs = runs_on(s, pull->number);
+    char *runs_text = runs ? xstrfmt("%zu run%s \xE2\x80\xBA", runs, runs == 1 ? "" : "s") : NULL;
+    if (runs_text) { ButtonSpec b = { 0, runs_text, BUTTON_PLAIN, ACT_RUNS, (intptr_t)i, true }; buttons[bn++] = b; }
+    const char **statuses = xcalloc(pull->issue_count ? pull->issue_count : 1, sizeof *statuses);
+    for (size_t k = 0; k < pull->issue_count; k++) {
+        if (board_link_is_foreign(&pull->issues[k], s->project.repo)) continue;
+        char *nk = number_key(pull->issues[k].number); statuses[k] = json_str(json_get(s->issue_status, nk)); free(nk);
+    }
+    doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, statuses, ACT_OPEN_PULL, (intptr_t)i, buttons, bn, run_active_on(s, pull->number));
+    free(statuses); free(runs_text); str_array_free(labels, an); free(buttons); board_actions_free(actions, an);
+    if (has_stack) stack_position_free(&stack);
+    doc_space(doc, px(8));
+}
+/// Whose review the Review List waits on: the saved GitHub login, else the project's author.
+static const char *reviewer(PullsScreen *s) {
+    const char *me = github_login();
+    return me ? me : json_str_nonempty(json_get(s->board, "author"));
+}
+/// The Review List tab's rows, as indices into the pull requests (pulls_review_list).
+static size_t *review_rows(PullsScreen *s, size_t *count) {
+    return pulls_review_list(s->pulls, s->pull_count, json_get(s->board, "stacks"), reviewer(s), count);
+}
+
 static void pulls_layout(Screen *base, Doc *doc) {
     PullsScreen *s = (PullsScreen *)base;
     int w = doc->width;
@@ -432,12 +477,16 @@ static void pulls_layout(Screen *base, Doc *doc) {
     char *ssh_label = open ? xstrfmt("\xE2\x9D\xAF SSH sessions %zu", open) : xstrdup("\xE2\x9D\xAF SSH sessions");
     char *sftp_label = files ? xstrfmt("\xE2\x87\xB5 SFTP sessions %zu", files) : xstrdup("\xE2\x87\xB5 SFTP sessions");
     // Run, on the default branch, for a token that may serve one.
-    const char *tabs[9] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
-    int ids[9] = { TAB_PULLS, TAB_ISSUES };
+    const char *tabs[10] = { "\xE2\x87\x85 Pull requests", "\xE2\x8A\x99 Issues" };
+    int ids[10] = { TAB_PULLS, TAB_ISSUES };
     size_t n = 2;
     // Board, after Issues, for a project that names a GitHub Projects board.
     if (board_tab_offered(&s->project)) { tabs[n] = "\xE2\x96\xA6 Board"; ids[n++] = TAB_BOARD; }
     else if (s->tab == TAB_BOARD) s->tab = TAB_PULLS;
+    // Review List, the pull requests waiting on the user's review, after the board.
+    size_t review_count; free(review_rows(s, &review_count));
+    char *review_label = s->loaded ? xstrfmt("\xE2\x9C\x93 Review List %zu", review_count) : xstrdup("\xE2\x9C\x93 Review List");
+    tabs[n] = review_label; ids[n++] = TAB_REVIEW;
     if (project_run_offered()) { tabs[n] = "\xE2\x96\xB6 Run"; ids[n++] = TAB_RUN; }
     if (project_ssh_offered()) { tabs[n] = ssh_label; ids[n++] = TAB_SSH; tabs[n] = sftp_label; ids[n++] = TAB_SFTP; }
     if (project_db_offered()) { tabs[n] = "\xE2\x9B\x81 Database"; ids[n++] = TAB_DB; }
@@ -447,7 +496,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
     if (transcript) { tabs[n] = meeting_for(s->project.repo) ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meeting"; ids[n++] = TAB_MEETING; }
     else if (s->tab == TAB_MEETING) s->tab = TAB_PULLS;
     doc_tabs(doc, w, tabs, ids, n, s->tab);
-    free(ssh_label); free(sftp_label);
+    free(ssh_label); free(sftp_label); free(review_label);
     doc_space(doc, px(14));
     if (s->tab == TAB_BOARD) { board_tab_layout(s->board_tab, doc, w); free(transcript); return; }
     if (s->tab == TAB_RUN) { project_run_layout(s->run, doc, w); return; }
@@ -462,6 +511,15 @@ static void pulls_layout(Screen *base, Doc *doc) {
         doc_notice(doc, 0, w, s->write_error);
         if (s->uncertain) { doc_space(doc, px(4)); doc_text(doc, 0, w, "The request may have completed. Refresh (F5) and look for its conversation in the project before starting another agent.", FONT_CAPTION, theme.muted, DT_WORDBREAK); }
         doc_space(doc, px(10));
+    }
+    if (s->tab == TAB_REVIEW) {
+        size_t rn; size_t *rows = review_rows(s, &rn);
+        for (size_t k = 0; k < rn; k++) layout_pull(s, doc, w, rows[k]);
+        free(rows);
+        if (s->loaded && !rn && !s->error) doc_text(doc, 0, w, reviewer(s) ? "Nothing is waiting on your review." : "Set your GitHub login to see the pull requests waiting on your review.", FONT_FOOTNOTE, theme.muted, DT_LEFT);
+        if (!s->loaded) doc_loading(doc, 0, w, "Loading pull requests\xE2\x80\xA6");
+        doc_space(doc, px(16));
+        return;
     }
     BoardFilter *filter = current_filter(s);
     size_t total = s->tab == 0 ? s->pull_count : s->issue_count, shown = 0;
@@ -482,36 +540,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
     if (s->tab == 0) {
         for (size_t i = 0; i < s->pull_count; i++) {
             if (!board_filter_passes(filter, &rows[i], -1)) continue;
-            const PullSummary *pull = &s->pulls[i];
-            StackPosition stack; bool has_stack = stack_position_parse(json_get(pull->raw, "stack"), json_get(s->board, "stacks"), &stack);
-            // The dashboard's buttons: the errands its state offers, the suggested one filled. Clicking the row opens the PR.
-            size_t an = 0; BoardAction *actions = str_empty(pull->branch) ? NULL : row_actions(s->catalog, pull, 0, &an);
-            ButtonSpec *buttons = xcalloc(an + 2, sizeof *buttons); size_t bn = 0;
-            char **labels = xcalloc(an + 1, sizeof *labels);
-            for (size_t k = 0; k < an && k < ACTION_STRIDE; k++) {
-                bool starting = s->busy && s->starting_number == pull->number && str_eq(s->starting_id, actions[k].id);
-                bool suggested = str_eq(pull->recommended, actions[k].id);
-                labels[k] = starting ? xstrdup("Starting\xE2\x80\xA6") : xstrfmt("%s %s", action_icon(actions[k].id), actions[k].label);
-                ButtonSpec b = { 0, labels[k], suggested ? BUTTON_PROMINENT : BUTTON_BORDERED, ACT_PULL_ACTION, (intptr_t)(i * ACTION_STRIDE + k), !s->busy && !s->uncertain };
-                buttons[bn++] = b;
-            }
-            if (!pull->draft && store_can_manage() && store_supports("pull") && store_supports("merge_pull")) {
-                bool merging = s->merging_number == pull->number;
-                ButtonSpec b = { 0, merging ? "Merging\xE2\x80\xA6" : "\xE2\x86\xB3 Merge", BUTTON_BORDERED, ACT_MERGE_PULL, (intptr_t)i, !s->merging_number && !s->busy };
-                buttons[bn++] = b;
-            }
-            size_t runs = runs_on(s, pull->number);
-            char *runs_text = runs ? xstrfmt("%zu run%s \xE2\x80\xBA", runs, runs == 1 ? "" : "s") : NULL;
-            if (runs_text) { ButtonSpec b = { 0, runs_text, BUTTON_PLAIN, ACT_RUNS, (intptr_t)i, true }; buttons[bn++] = b; }
-            const char **statuses = xcalloc(pull->issue_count ? pull->issue_count : 1, sizeof *statuses);
-            for (size_t k = 0; k < pull->issue_count; k++) {
-                if (board_link_is_foreign(&pull->issues[k], s->project.repo)) continue;
-                char *nk = number_key(pull->issues[k].number); statuses[k] = json_str(json_get(s->issue_status, nk)); free(nk);
-            }
-            doc_pull_row(doc, 0, w, pull, has_stack ? &stack : NULL, s->project.repo, statuses, ACT_OPEN_PULL, (intptr_t)i, buttons, bn, run_active_on(s, pull->number));
-            free(statuses); free(runs_text); str_array_free(labels, an); free(buttons); board_actions_free(actions, an);
-            if (has_stack) stack_position_free(&stack);
-            doc_space(doc, px(8));
+            layout_pull(s, doc, w, i);
         }
         if (s->loaded && !shown && !s->error) doc_text(doc, 0, w, s->pull_count ? "No pull requests match the filters." : "No open pull requests.", FONT_FOOTNOTE, theme.muted, DT_LEFT);
     } else {
@@ -549,7 +578,8 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     snprintf(info->title, sizeof info->title, "%s", project_title(&s->project));
     Str sub; str_init(&sub);
     str_appendz(&sub, s->project.repo);
-    if (s->loaded) str_appendf(&sub, " \xC2\xB7 %zu open pull request%s", s->pull_count, s->pull_count == 1 ? "" : "s");
+    if (s->loaded && s->tab == TAB_REVIEW) { size_t n; free(review_rows(s, &n)); str_appendf(&sub, " \xC2\xB7 %zu waiting on %s", n, reviewer(s) ? reviewer(s) : "you"); }
+    else if (s->loaded) str_appendf(&sub, " \xC2\xB7 %zu open pull request%s", s->pull_count, s->pull_count == 1 ? "" : "s");
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
     // A meeting about this project leads the line: its time, cost and what it is doing.
     if (meeting_for(s->project.repo)) { char *m = meeting_status(); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", m, sub.data); free(m); }
@@ -581,6 +611,14 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     if (s->tab == TAB_FORGE) {
         project_forge_header(s->forge, info);
         HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = true; r->tip = "Read it from Forge again";
+        return;
+    }
+    if (s->tab == TAB_REVIEW) {
+        // Whose review the list waits on, set or changed here as from "Assign me".
+        HeaderButton *l = &info->buttons[info->button_count++];
+        if (github_login()) snprintf(l->label, sizeof l->label, "Reviewing as %s", github_login()); else snprintf(l->label, sizeof l->label, "Set my GitHub login\xE2\x80\xA6");
+        l->glyph = 0xE77B; l->action = ACT_REVIEW_LOGIN; l->enabled = true; l->tip = "The GitHub login whose reviews the Review List shows";
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the pull requests from GitHub again";
         return;
     }
     if (s->tab == TAB_SFTP) {
@@ -640,12 +678,13 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_FILTER_ASSIGNEE: filter_pick(s, FILTER_ASSIGNEE, pt); break;
     case ACT_FILTER_LABEL: filter_pick(s, FILTER_LABEL, pt); break;
     case ACT_REFRESH: pulls_refresh(base); break;
+    case ACT_REVIEW_LOGIN: if (github_login_ask()) { pane_relayout(base->pane); pane_header_changed(base->pane); } break;
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
     case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
         // The side panel belongs to the Board tab's cards.
         if (s->tab == TAB_BOARD && arg != TAB_BOARD) app_set_overlay(NULL);
-        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || arg == TAB_MEETING ? (int)arg : TAB_PULLS;
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || arg == TAB_MEETING || arg == TAB_REVIEW ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
         if (s->tab == TAB_BOARD) board_tab_open(s->board_tab);
         // The transcript, like a conversation's, keeps to its latest line.

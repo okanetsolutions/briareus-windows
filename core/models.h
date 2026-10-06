@@ -168,6 +168,12 @@ const char *const *runtime_catalog_efforts(const RuntimeCatalog *catalog, const 
 bool runtime_catalog_choice(const RuntimeCatalog *catalog, int provider_id, const char *model, RuntimeChoice *out);
 /// Used when the project has no default runtime and a start therefore needs a provider.
 bool runtime_catalog_first_available(const RuntimeCatalog *catalog, RuntimeChoice *out);
+/// A pick saved earlier, as this catalog still offers it: false once its provider is gone or unavailable or its model
+/// gone; an effort the model no longer offers falls back to the model's default, else its first.
+bool runtime_catalog_offered(const RuntimeCatalog *catalog, const RuntimeChoice *saved, RuntimeChoice *out);
+/// A choice as text to keep between launches, and read back; false for text that names no provider.
+char *runtime_choice_saved(const RuntimeChoice *choice);
+bool runtime_choice_from_saved(const char *text, RuntimeChoice *out);
 /// "Provider · Model", as a new string.
 char *runtime_catalog_label(const RuntimeCatalog *catalog, const RuntimeChoice *choice);
 

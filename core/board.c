@@ -210,6 +210,28 @@ size_t *issue_open_sub_issues(const IssueSummary *issues, size_t count, int epic
     }
     return out;
 }
+static bool pull_carries(const PullSummary *pull, const char *label) {
+    for (size_t i = 0; i < pull->label_count; i++) if (str_ieq(pull->labels[i].name, label)) return true;
+    return false;
+}
+static bool pull_waits_on(const PullSummary *pull, const Json *stacks, const char *me) {
+    if (pull_carries(pull, REVIEW_LIST_ANSWERED_LABEL))
+        for (size_t i = 0; i < pull->reviewer_count; i++) if (str_ieq(pull->reviewers[i].user, me)) return true;
+    if (!pull_carries(pull, REVIEW_LIST_REQUEST_LABEL)) return false;
+    for (size_t i = 0; i < pull->assignee_count; i++) if (str_ieq(pull->assignees[i], me)) return false;
+    StackPosition stack;
+    if (!stack_position_parse(json_get(pull->raw, "stack"), stacks, &stack)) return true;
+    bool first = stack.position <= 1;
+    stack_position_free(&stack);
+    return first;
+}
+size_t *pulls_review_list(const PullSummary *pulls, size_t count, const Json *stacks, const char *me, size_t *found) {
+    size_t *out = xcalloc(count ? count : 1, sizeof *out);
+    *found = 0;
+    if (str_empty(me)) return out;
+    for (size_t i = 0; i < count; i++) if (pull_waits_on(&pulls[i], stacks, me)) out[(*found)++] = i;
+    return out;
+}
 const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number) {
     for (size_t i = 0; i < count; i++) if (pulls[i].number == number) return &pulls[i];
     return NULL;

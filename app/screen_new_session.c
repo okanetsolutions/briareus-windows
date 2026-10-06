@@ -1,6 +1,7 @@
 // The dashboard's opening view: "Welcome back", and the composer that starts a session, with its row of chips for the
 // project, branch, provider, model, effort and the loops.
 #include "attach_list.h"
+#include "credentials.h"
 #include "screens.h"
 #include "str.h"
 #include "voice.h"
@@ -19,6 +20,7 @@ typedef struct {
     char *asked;   // the repo of the project the screen was opened for; NULL: none in particular
     bool has_catalog; RuntimeCatalog catalog;
     bool has_runtime; RuntimeChoice runtime;   // the pick; none starts on the project default
+    bool hand_picked;   // the pick came from the chips rather than from the last pick or the first available provider
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
     bool local;   // work in the project's own checkout rather than a fresh worktree
     bool review_loop;
@@ -68,14 +70,34 @@ static bool effective_choice(NewSessionScreen *s, RuntimeChoice *out) {
     if (s->has_catalog && s->catalog.has_default) { runtime_choice_copy(out, &s->catalog.def); return true; }
     return false;
 }
+/// Takes a project's catalog: a hand pick or else the last pick where this project still offers it; without a project
+/// default a start needs a provider. The cached catalog comes first, so each catalog decides the screen's own picks afresh.
+static void adopt(NewSessionScreen *s, RuntimeCatalog c) {
+    if (s->has_catalog) runtime_catalog_free(&s->catalog);
+    s->catalog = c; s->has_catalog = true;
+    if (s->has_runtime) {
+        RuntimeChoice kept = { 0 };
+        bool keep = s->hand_picked && runtime_catalog_offered(&s->catalog, &s->runtime, &kept);
+        runtime_choice_free(&s->runtime); s->has_runtime = false;
+        if (keep) { s->runtime = kept; s->has_runtime = true; return; }
+        s->hand_picked = false;
+    }
+    char *text = settings_read_last_runtime(); RuntimeChoice last;
+    if (runtime_choice_from_saved(text, &last)) { s->has_runtime = runtime_catalog_offered(&s->catalog, &last, &s->runtime); runtime_choice_free(&last); }
+    free(text);
+    if (!s->has_runtime && !s->catalog.has_default) s->has_runtime = runtime_catalog_first_available(&s->catalog, &s->runtime);
+}
+/// A pick made by hand, kept for the next new session; the screen's own picks (the first available provider) are not.
+static void remember(NewSessionScreen *s) {
+    s->hand_picked = true;
+    char *text = runtime_choice_saved(&s->runtime); settings_write_last_runtime(text); free(text);
+}
 static void runtimes_done(void *owner, Request *req) {
     NewSessionScreen *s = owner;
     if (!req->ok || !project(s)) return;
     RuntimeCatalog c;
     if (!runtime_catalog_parse(req->result, &c)) return;
-    if (s->has_catalog) runtime_catalog_free(&s->catalog);
-    s->catalog = c; s->has_catalog = true;
-    if (!c.has_default && !s->has_runtime) { RuntimeChoice first; if (runtime_catalog_first_available(&c, &first)) { s->runtime = first; s->has_runtime = true; } }
+    adopt(s, c);
     char *key = xstrfmt("runtimes:%s", project(s)->repo); cache_store(g_store.cache, req->result, key); free(key);
     pane_footer_changed(s->base.pane);
 }
@@ -96,6 +118,7 @@ static void load_choices(NewSessionScreen *s) {
     request_cancel(&s->req_runtimes); request_cancel(&s->req_branches);
     if (s->has_catalog) { runtime_catalog_free(&s->catalog); s->has_catalog = false; }
     if (s->has_runtime) { runtime_choice_free(&s->runtime); s->has_runtime = false; }
+    s->hand_picked = false;
     str_array_free(s->branches, s->branch_count); s->branches = NULL; s->branch_count = 0;
     set_string(&s->default_branch, NULL); set_string(&s->branch, NULL);
     if (!p || !p->has_local) s->local = false;
@@ -103,7 +126,7 @@ static void load_choices(NewSessionScreen *s) {
     if (store_supports("runtimes")) {
         char *key = xstrfmt("runtimes:%s", p->repo);
         Json *saved = cache_value(g_store.cache, key);
-        if (saved) { RuntimeCatalog c; if (runtime_catalog_parse(saved, &c)) { s->catalog = c; s->has_catalog = true; } json_free(saved); }
+        if (saved) { RuntimeCatalog c; if (runtime_catalog_parse(saved, &c)) adopt(s, c); json_free(saved); }
         free(key);
         Json *args = json_object(); json_set_str(args, "repo", p->repo);
         store_call("runtimes", args, 0, s, runtimes_done, 0, &s->req_runtimes);
@@ -469,7 +492,7 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         int chosen = popup(s, m, r);
         if (chosen >= 1 && (size_t)chosen - 1 < n) {
             RuntimeChoice c;
-            if (runtime_catalog_choice(&s->catalog, rows[chosen - 1].provider, rows[chosen - 1].model, &c)) { if (s->has_runtime) runtime_choice_free(&s->runtime); s->runtime = c; s->has_runtime = true; }
+            if (runtime_catalog_choice(&s->catalog, rows[chosen - 1].provider, rows[chosen - 1].model, &c)) { if (s->has_runtime) runtime_choice_free(&s->runtime); s->runtime = c; s->has_runtime = true; remember(s); }
         }
         pane_footer_changed(s->base.pane);
         break;
@@ -483,7 +506,7 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         if (chosen >= 1 && (size_t)chosen - 1 < n) {
             RuntimeChoice c = { eff.provider_id, xstrdup(eff.model), xstrdup(efforts[chosen - 1]) };
             if (s->has_runtime) runtime_choice_free(&s->runtime);
-            s->runtime = c; s->has_runtime = true;
+            s->runtime = c; s->has_runtime = true; remember(s);
         }
         pane_footer_changed(s->base.pane);
         break;
