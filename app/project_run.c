@@ -1,7 +1,7 @@
 // A project's Run tab on its board, after Issues: the pull request's Run tab, on the project's default branch. Opening it
 // serves the branch in a clean workspace with the project's run commands (`serve_branch`, no agent turn) and shows it in
-// an embedded browser, with the setup's console until the page is up. The header picks the run profile, reloads the page,
-// opens it in the browser, and deletes the run with its workspace.
+// an embedded browser under an address bar, with the setup's console until the page is up. The header picks the run
+// profile and deletes the run with its workspace.
 #include "dialogs.h"
 #include "screens.h"
 #include "str.h"
@@ -11,7 +11,7 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_PROFILE, A_RELOAD, A_BROWSER, A_RETRY, A_DELETE };
+enum { A_PROFILE, A_RELOAD, A_BROWSER, A_RETRY, A_DELETE, A_BACK, A_FORWARD };
 
 struct ProjectRun {
     char *repo;
@@ -247,6 +247,46 @@ static void delete_run(ProjectRun *p) {
     free(id);
 }
 
+// MARK: - The address bar
+
+static void paint_field(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_round_rect(cv, rc, px(8), theme.field, theme.line); }
+static void paint_lock(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; draw_glyph(cv, (wchar_t)it->arg, rc, FONT_ICON_SMALL, theme.muted); }
+/// A toolbar glyph, as the shared browser's: no frame, tinted under the mouse, greyed while it cannot act.
+typedef struct { wchar_t glyph; bool enabled; } IconData;
+static void paint_icon(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    IconData *d = it->data;
+    bool hovered = d->enabled && doc_item_hovered(doc, it);
+    if (hovered) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
+    draw_glyph(cv, d->glyph, rc, FONT_ICON_SMALL, !d->enabled ? theme.line_strong : hovered ? theme.ink : theme.muted);
+}
+static void icon(Doc *doc, int x, int y, int size, wchar_t glyph, const char *tip, int action, bool enabled) {
+    IconData *d = xmalloc(sizeof *d); d->glyph = glyph; d->enabled = enabled;
+    int keep = doc->y;
+    doc->y = y;
+    Item *it = doc_item(doc, doc_custom(doc, x, size, size, paint_icon, d, free, enabled ? action : 0, 0));
+    it->hover_fill = false;
+    it->tip = xstrdup(tip);
+    doc->y = keep;
+}
+void run_browser_bar(Doc *doc, int w, WebView *web, const char *url, const int actions[4]) {
+    bool ready = web && webview_ready(web);
+    if (web && webview_url(web)) url = webview_url(web);
+    int nh = px(32), ib = px(28), gap = px(2), ny = doc->y, by = ny + (nh - ib) / 2;
+    icon(doc, 0, by, ib, 0xE72B, "Back", actions[0], ready && webview_can_back(web));
+    icon(doc, ib + gap, by, ib, 0xE72A, "Forward", actions[1], ready && webview_can_forward(web));
+    icon(doc, 2 * (ib + gap), by, ib, 0xE72C, "Reload the page", actions[2], ready);
+    int fx = 3 * (ib + gap) + px(6), fr = w - ib - px(6);
+    RECT field = { fx, ny, fr, ny + nh };
+    doc_add(doc, &field, paint_field);
+    RECT lock = { fx + px(10), ny, fx + px(26), ny + nh };
+    doc_item(doc, doc_add(doc, &lock, paint_lock))->arg = url && str_has_prefix(url, "https://") ? 0xE72E : 0xE774;
+    // The address can be selected and copied.
+    RECT text = { fx + px(34), ny, fr - px(10), ny + nh };
+    doc_text_at(doc, &text, url ? url : "", FONT_BODY, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    icon(doc, w - ib, by, ib, 0xE8A7, "Open in your browser", actions[3], url != NULL);
+    doc->y = ny + nh + px(8);
+}
+
 // MARK: - The tab
 
 void project_run_layout(ProjectRun *p, Doc *doc, int w) {
@@ -254,6 +294,10 @@ void project_run_layout(ProjectRun *p, Doc *doc, int w) {
     if (p->delete_error) { doc_notice(doc, 0, w, p->delete_error); doc_space(doc, px(10)); }
     bool page = p->url && !p->busy && p->web && webview_ready(p->web);
     if (page && p->serve_error) { doc_text(doc, 0, w, p->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
+    if (p->url && !p->busy) {
+        int actions[4] = { p->base + A_BACK, p->base + A_FORWARD, p->base + A_RELOAD, p->base + A_BROWSER };
+        run_browser_bar(doc, w, p->web, p->url, actions);
+    }
     int area = doc->y, h = (view.bottom - view.top) - area - px(12);
     if (h < px(320)) h = px(320);
     SetRect(&p->web_rc, 0, area, w, area + h);
@@ -291,17 +335,12 @@ void project_run_layout(ProjectRun *p, Doc *doc, int w) {
     if (doc->y < area + h) doc->y = area + h;
 }
 void project_run_header(ProjectRun *p, HeaderInfo *info) {
-    const char *url = p->web && webview_url(p->web) ? webview_url(p->web) : p->url;
-    snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s%s%s", p->repo, p->branch ? p->branch : "default branch", url ? " \xC2\xB7 " : "", url ? url : "");
+    snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", p->repo, p->branch ? p->branch : "default branch");
     HeaderButton *b;
     if (p->profile_count) {
         b = &info->buttons[info->button_count++];
         snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", shown_profile(p)); b->action = p->base + A_PROFILE; b->enabled = true; b->tip = "The run profile it is served with";
     }
-    b = &info->buttons[info->button_count++];
-    b->glyph = 0xE72C; b->action = p->base + A_RELOAD; b->enabled = p->web && webview_ready(p->web); b->tip = "Reload the page";
-    b = &info->buttons[info->button_count++];
-    b->glyph = 0xE8A7; b->action = p->base + A_BROWSER; b->enabled = p->url != NULL; b->tip = "Open in your browser";
     if (store_supports("delete")) {
         b = &info->buttons[info->button_count++];
         b->glyph = 0xE74D; b->action = p->base + A_DELETE; b->enabled = target(p) && !p->deleting; b->destructive = true; b->tip = "Delete this run and its workspace";
@@ -360,6 +399,8 @@ bool project_run_action(ProjectRun *p, int action, intptr_t arg, POINT pt) {
     switch (action - p->base) {
     case A_PROFILE: pick_profile(p, pt); break;
     case A_RELOAD: if (p->web) webview_reload(p->web); break;
+    case A_BACK: if (p->web) webview_back(p->web); break;
+    case A_FORWARD: if (p->web) webview_forward(p->web); break;
     case A_BROWSER: { const char *url = p->web && webview_url(p->web) ? webview_url(p->web) : p->url; if (url) open_web_url(url); break; }
     case A_RETRY: start(p); break;
     case A_DELETE: delete_run(p); break;
