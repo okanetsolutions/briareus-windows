@@ -31,17 +31,34 @@ static char *pulls_retry_key(const char *repo) {
     return xstrfmt("pulls-retry:%s:%s:%s", g_store.server ? g_store.server : "",
                    g_store.device.id ? g_store.device.id : "", repo);
 }
+// Only failed writes need a live fallback; expired entries are released on the next lookup.
+typedef struct PullsRetry {
+    struct PullsRetry *next;
+    time_t until;
+    char *key;
+} PullsRetry;
+static PullsRetry *pulls_retries;
+static PullsRetry *pulls_retry_live(const char *key) {
+    PullsRetry *found = NULL;
+    time_t now = time(NULL);
+    for (PullsRetry **slot = &pulls_retries; *slot;) {
+        PullsRetry *entry = *slot;
+        if (entry->until <= now) { *slot = entry->next; xfree_kept(entry); }
+        else { if (str_eq(entry->key, key)) found = entry; slot = &entry->next; }
+    }
+    return found;
+}
 time_t pulls_retry_deadline(const char *repo) {
-    if (!g_store.cache) return 0;
     char *key = pulls_retry_key(repo);
-    Json *saved = cache_value(g_store.cache, key);
+    PullsRetry *live = pulls_retry_live(key);
+    Json *saved = g_store.cache ? cache_value(g_store.cache, key) : NULL;
     double until = 0;
     json_num(json_get(saved, "until"), &until);
     json_free(saved); free(key);
-    return (time_t)until;
+    return live && live->until > (time_t)until ? live->until : (time_t)until;
 }
 void pulls_note_failure(const char *repo, const ApiError *error, time_t now) {
-    if (!g_store.cache || error->kind == API_CANCELLED) return;
+    if (error->kind == API_CANCELLED) return;
     double seconds = error->retry_after;
     if (seconds < 0) seconds = error->kind == API_HTTP && error->status == 429 ? 60 : 2;
     // Round upwards so fractional Retry-After values cannot allow an early read.
@@ -52,7 +69,15 @@ void pulls_note_failure(const char *repo, const ApiError *error, time_t now) {
     if (until <= pulls_retry_deadline(repo)) return;
     char *key = pulls_retry_key(repo);
     Json *saved = json_object(); json_set_num(saved, "until", (double)until);
-    cache_store(g_store.cache, saved, key);
+    if (!g_store.cache || !cache_store(g_store.cache, saved, key)) {
+        PullsRetry *live = pulls_retry_live(key);
+        if (!live) {
+            live = xmalloc_kept(sizeof *live + strlen(key) + 1);
+            live->key = (char *)(live + 1); strcpy(live->key, key);
+            live->next = pulls_retries; pulls_retries = live;
+        }
+        live->until = until;
+    }
     json_free(saved); free(key);
 }
 time_t pulls_sync_time(const Json *result, bool saved, time_t now) {

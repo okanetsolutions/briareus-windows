@@ -229,13 +229,16 @@ static bool pulls_read(const char *repo, bool fresh, void *owner, RequestDone do
 static void pulls_load(PullsScreen *s, bool fresh);
 static void pulls_done(void *owner, Request *req) {
     PullsScreen *s = owner;
-    if (req->client != g_store.client || !store_supports(req->operation)) return;
+    if (req->client != g_store.client || !store_supports(req->operation)) { poller_finished(&s->poller, false, -1); return; }
     if (!req->ok) {
         // A server from before `fresh` refuses the argument it does not know.
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, pulls_done, &s->req)) poller_finished(&s->poller, false, -1); return; }
         pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->error, req);
         s->loaded = true;
+    } else if (s->fresh_pending) {
+        // A write or refresh requested a newer snapshot while this read was in flight.
+        if (pulls_read(s->project.repo, true, s, pulls_done, &s->req)) { s->fresh_pending = false; return; }
     } else {
         pulls_show(s, req->result, false);
         set_string(&s->error, NULL);
@@ -274,7 +277,9 @@ static void pulls_load(PullsScreen *s, bool fresh) {
         free(key);
         if (!json_count(s->catalog)) { Json *acts = cache_value(g_store.cache, "actions"); if (acts) { json_free(s->catalog); s->catalog = json_clone(json_get(acts, "actions")); json_free(acts); } }
     }
-    if (!pulls_read(s->project.repo, fresh, s, pulls_done, &s->req)) poller_finished(&s->poller, false, -1);
+    s->fresh_pending = s->fresh_pending || fresh;
+    if (pulls_read(s->project.repo, s->fresh_pending, s, pulls_done, &s->req)) s->fresh_pending = false;
+    else poller_finished(&s->poller, false, -1);
     if (store_can_manage() && store_supports("actions") && !s->req_actions) store_call("actions", json_object(), 0, s, board_actions_done, 0, &s->req_actions);
     if (store_supports("sessions") && !s->req_runs) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
 }
@@ -1191,7 +1196,8 @@ static void pull_done(void *owner, Request *req) {
 }
 static void rows_done(void *owner, Request *req) {
     PullScreen *s = owner;
-    if (!req->ok) return;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
+    if (!req->ok) { pulls_note_failure(s->project.repo, &req->error, time(NULL)); return; }
     // A pull request the board no longer lists has been merged or closed, and its row went with it.
     if (s->has_row) pull_summary_free(&s->row);
     s->has_row = false;
@@ -1258,7 +1264,7 @@ static void pull_load(PullScreen *s) {
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
     store_call("pull", args, 0, s, pull_done, TAG_PULL, &s->req_pull);
     // What the board knows about this pull request beyond its own details.
-    if (store_supports("pulls")) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("pulls", a, 0, s, rows_done, TAG_ROWS, &s->req_rows); }
+    pulls_read(s->project.repo, false, s, rows_done, &s->req_rows);
     if (store_can_manage() && store_supports("actions")) store_call("actions", json_object(), 0, s, actions_done, TAG_ACTIONS, &s->req_actions);
     if (store_supports("sessions")) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, sessions_done_pull, TAG_SESSIONS, &s->req_sessions); }
     if (s->tab == PR_TAB_CONVERSATION) conv_load(s);
@@ -2949,6 +2955,7 @@ typedef struct {
     IssueSummary *board_issues; size_t board_issue_count;
     PullSummary *board_pulls; size_t board_pull_count;
     bool board_read, gone;      // gone: the board was read and this issue is not on it
+    bool fresh_pending;
     char *load_error, *detail_error;
     Json *detail;                        // the issue in full; NULL until read
     BoardLink *subs; size_t sub_count;   // every sub-issue it lists, closed ones and other repositories' included
@@ -3082,11 +3089,13 @@ static void issue_runs_done(void *owner, Request *req) {
 static void issue_load(IssueScreen *s, bool fresh);
 static void issue_board_done(void *owner, Request *req) {
     IssueScreen *s = owner;
-    if (req->client != g_store.client || !store_supports(req->operation)) return;
+    if (req->client != g_store.client || !store_supports(req->operation)) { poller_finished(&s->poller, false, -1); return; }
     if (!req->ok) {
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, issue_board_done, &s->req_board)) poller_finished(&s->poller, false, -1); return; }
         pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->load_error, req);
+    } else if (s->fresh_pending) {
+        if (pulls_read(s->project.repo, true, s, issue_board_done, &s->req_board)) { s->fresh_pending = false; return; }
     } else {
         issue_board_show(s, req->result, false);
         set_string(&s->load_error, NULL);
@@ -3099,7 +3108,9 @@ static void issue_board_done(void *owner, Request *req) {
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void issue_load(IssueScreen *s, bool fresh) {
-    if (!pulls_read(s->project.repo, fresh, s, issue_board_done, &s->req_board)) poller_finished(&s->poller, false, -1);
+    s->fresh_pending = s->fresh_pending || fresh;
+    if (pulls_read(s->project.repo, s->fresh_pending, s, issue_board_done, &s->req_board)) s->fresh_pending = false;
+    else poller_finished(&s->poller, false, -1);
     if (store_supports("issue") && !s->req_detail) {
         Json *a = json_object(); json_set_num(a, "issue", s->issue.number); json_set_str(a, "repo", s->project.repo);
         store_call("issue", a, 0, s, issue_detail_done, 0, &s->req_detail);

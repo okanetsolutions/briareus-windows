@@ -7,13 +7,14 @@
 #include <string.h>
 
 static Pane *pane;
-static volatile LONG list_calls, session_calls, detail_calls, replies;
+static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies;
 static int list_status;
 static const char *list_body, *retry_header;
 static bool network_fail, reject_fresh;
 static HANDLE hold, entered;
 static Route routes[] = {
-    { "GET", "/pulls", "read" }, { "GET", "/sessions", "read" }, { "GET", "/issues/{number}", "read" }
+    { "GET", "/pulls", "read" }, { "GET", "/sessions", "read" }, { "GET", "/issues/{number}", "read" },
+    { "GET", "/pulls/{pr}", "read" }
 };
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
                       const void *body, size_t body_len, int timeout_ms, int *status, char **content_type,
@@ -21,10 +22,14 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     const char *payload;
     if (strstr(url, "/pulls?")) {
         InterlockedIncrement(&list_calls); *status = list_status; payload = list_body;
+        if (strstr(url, "fresh=1")) InterlockedIncrement(&fresh_calls);
         if (reject_fresh && strstr(url, "fresh=1")) { *status = 400; payload = "{\"error\":\"Unknown fresh argument\"}"; }
         if (retry_header) *retry_after = xstrdup(retry_header);
         if (hold) { SetEvent(entered); WaitForSingleObject(hold, 5000); }
         if (network_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
+    } else if (strstr(url, "/pulls/")) {
+        InterlockedIncrement(&pull_calls); *status = 200;
+        payload = "{\"pr\":{\"number\":1,\"title\":\"Pull detail\",\"state\":\"open\",\"body\":\"Description\"}}";
     } else if (strstr(url, "/issues/")) {
         InterlockedIncrement(&detail_calls); *status = 200;
         payload = "{\"issue\":{\"number\":101,\"title\":\"Outside page\",\"state\":\"open\",\"body\":\"Still accessible\"}}";
@@ -51,10 +56,10 @@ static Project project(void) { Project p; memset(&p, 0, sizeof p); p.repo = "o/r
 static Screen *board(void) { Project p = project(); Screen *s = pulls_screen_new(&p); pane_set_root(pane, s); return s; }
 static void reset(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache);
-    list_calls = session_calls = detail_calls = replies = 0;
+    list_calls = session_calls = detail_calls = pull_calls = fresh_calls = replies = 0;
     list_status = 200; retry_header = NULL; network_fail = reject_fresh = false;
     list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Keep this row\"}],\"issues\":[],\"syncedAt\":\"2026-10-07T12:00:00.000Z\"}";
-    g_store.route_count = 2; g_store.device.id = "d1";
+    g_store.routes = routes; g_store.route_count = 2; g_store.device.id = "d1";
 }
 static void expire(void) {
     Json *j = json_object(); json_set_num(j, "until", 0);
@@ -169,6 +174,85 @@ static void test_hidden_and_replaced_client_discard_stale_completions(void) {
     CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
     pane_set_root(pane, NULL);
 }
+static void test_pull_detail_shares_list_cooldown(void) {
+    reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
+    list_status = 429; retry_header = "3600"; list_body = "{\"error\":\"Allowance spent\"}";
+    s->vt->refresh(s); drain(2); LONG sent = list_calls;
+    g_store.route_count = 4;
+    Project p = project(); s = pull_detail_screen_new(&p, 1, NULL, NULL); pane_set_root(pane, s);
+    s->vt->refresh(s); drain(2);
+    s->vt->timer(s, 1); drain(2);
+    s->vt->refresh(s); drain(2);
+    CHECK_INT(list_calls, sent); CHECK_INT(pull_calls, 3);
+    // A detail-list failure records the same deadline for subsequent board visits.
+    expire(); s->vt->refresh(s); drain(3); CHECK_INT(list_calls, sent + 1);
+    CHECK(pulls_retry_deadline("o/r") > time(NULL));
+    s = board(); s->vt->refresh(s); drain(1); CHECK_INT(list_calls, sent + 1);
+    pane_set_root(pane, NULL);
+}
+static void test_fresh_read_waits_for_inflight_snapshot(void) {
+    reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
+    hold = CreateEventW(NULL, TRUE, FALSE, NULL); entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+    list_body = "{\"pulls\":[{\"number\":3,\"title\":\"Before mutation\"}]}";
+    s->vt->timer(s, 1); CHECK_INT(WaitForSingleObject(entered, 5000), WAIT_OBJECT_0); drain(1);
+    // The merge completion and F5 both request pulls_load(true) while the poll is in flight.
+    s->vt->refresh(s); drain(1); CHECK_INT(list_calls, 2);
+    list_body = "{\"pulls\":[{\"number\":4,\"title\":\"After mutation\"}]}";
+    SetEvent(hold); drain(2);
+    CHECK_INT(list_calls, 3); CHECK_INT(fresh_calls, 2);
+    CHECK(layout_contains(s, "After mutation")); CHECK(!layout_contains(s, "Before mutation"));
+    Json *saved = cache_value(g_store.cache, "pulls:o/r");
+    CHECK_STR(json_str(json_get(json_at(json_get(saved, "pulls"), 0), "title")), "After mutation"); json_free(saved);
+    CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
+    pane_set_root(pane, NULL);
+}
+static void test_route_loss_rearms_board_and_issue_polling(void) {
+    for (int issue_screen = 0; issue_screen < 2; issue_screen++) {
+        reset(); g_store.route_count = 3;
+        Project p = project(); IssueSummary issue; memset(&issue, 0, sizeof issue);
+        issue.number = 101; issue.title = "Outside page";
+        Screen *s = issue_screen ? issue_detail_screen_new(&p, &issue) : pulls_screen_new(&p);
+        pane_set_root(pane, s); s->vt->refresh(s); drain(issue_screen ? 3 : 2);
+        hold = CreateEventW(NULL, TRUE, FALSE, NULL); entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+        list_body = "{\"pulls\":[{\"number\":3,\"title\":\"Removed route payload\"}]}";
+        s->vt->timer(s, 1); CHECK_INT(WaitForSingleObject(entered, 5000), WAIT_OBJECT_0);
+        drain(issue_screen ? 2 : 1);
+        CHECK(!KillTimer(pane_hwnd(pane), 1));
+        // Catalog verification keeps sessions and issue details on the same client.
+        g_store.routes = routes + 1; g_store.route_count = 2;
+        SetEvent(hold); drain(1);
+        CHECK(KillTimer(pane_hwnd(pane), 1));
+        CHECK(!layout_contains(s, "Removed route payload"));
+        LONG sent = list_calls, sessions = session_calls;
+        s->vt->timer(s, 1); drain(issue_screen ? 2 : 1);
+        CHECK_INT(list_calls, sent); CHECK_INT(session_calls, sessions + 1);
+        CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
+        pane_set_root(pane, NULL);
+    }
+}
+static void test_failed_deadline_write_keeps_account_repository_cooldown(void) {
+    reset();
+    char *server = g_store.server;
+    char long_server[400]; memset(long_server, 'a', sizeof long_server - 1); long_server[sizeof long_server - 1] = 0;
+    g_store.server = long_server;
+    ApiError e; api_error_init(&e); api_error_set(&e, API_HTTP, 429, "Slow down", 3600);
+    time_t now = time(NULL); pulls_note_failure("o/r", &e, now);
+    char *key = xstrfmt("pulls-retry:%s:d1:o/r", long_server);
+    Json *saved = cache_value(g_store.cache, key); CHECK(saved == NULL); json_free(saved); free(key);
+    CHECK(pulls_retry_deadline("o/r") == now + 3600);
+    e.retry_after = 60; pulls_note_failure("o/r", &e, now);
+    CHECK(pulls_retry_deadline("o/r") == now + 3600);
+    Screen *s = board(); s->vt->refresh(s); drain(1); CHECK_INT(list_calls, 0);
+    g_store.device.id = "d2"; CHECK(pulls_retry_deadline("o/r") == 0);
+    g_store.device.id = "d1"; CHECK(pulls_retry_deadline("other/repo") == 0);
+    g_store.server = server; CHECK(pulls_retry_deadline("o/r") == 0);
+    g_store.server = long_server;
+    pulls_note_failure("expired/repo", &e, now - 61); CHECK(pulls_retry_deadline("expired/repo") == 0);
+    DiskCache *cache = g_store.cache; g_store.cache = NULL;
+    pulls_note_failure("no-cache/repo", &e, now); CHECK(pulls_retry_deadline("no-cache/repo") == now + 60);
+    g_store.cache = cache; g_store.server = server;
+    api_error_clear(&e); pane_set_root(pane, NULL);
+}
 void app_pulls_tests(void) {
     theme_init();
     HWND parent = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -189,6 +273,10 @@ void app_pulls_tests(void) {
     test_run("pulls older fresh argument and network recovery", test_old_fresh_rejection_and_network_error_preserve_board);
     test_run("pulls HTTP failures and permission gates", test_http_failures_keep_rows_and_permission_gates_stop_reads);
     test_run("pulls hidden and replaced-client stale completions", test_hidden_and_replaced_client_discard_stale_completions);
+    test_run("pull detail shares board list cooldown", test_pull_detail_shares_list_cooldown);
+    test_run("pulls fresh reconciliation waits for in-flight snapshot", test_fresh_read_waits_for_inflight_snapshot);
+    test_run("pulls route loss rearms board and issue polling", test_route_loss_rearms_board_and_issue_polling);
+    test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
     pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&e);
