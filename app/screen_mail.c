@@ -73,7 +73,6 @@ static void read_done(void *owner, Request *r) {
         if (!s->blocked && r->error.status != 429) {
             s->failures++;
             int delay = mail_settings_retry_ms(s->failures, r->error.retry_after);
-            s->retry_until = GetTickCount64() + (ULONGLONG)delay;
             arm(s, delay);
         }
     } else if (!mail_accounts_parse(r->result, &fresh)) {
@@ -132,7 +131,7 @@ static void write_done(void *owner, Request *r) {
     MailScreen *s = owner;
     if (!current(s, r)) return;
     bool finish = str_eq(r->operation, "finish_mail_account");
-    if (finish) stop_waiting(s); // Exchanges are single-use, including a refusal or ambiguous network failure.
+    if (finish) { stop_waiting(s); set_text(&s->notice, NULL); } // Exchanges are single-use, including a refusal or ambiguous network failure.
     if (!r->ok) { failed(s, r, finish); }
     else {
         bool deletion = str_eq(r->operation, "delete_mail_account");
@@ -291,7 +290,8 @@ static void timer(Screen *base, UINT id) {
     if (id != TIMER_MAIL) return;
     MailScreen *s = (MailScreen *)base; KillTimer(pane_hwnd(base->pane), id);
     if (s->sign_in.state && now_ms() >= s->sign_in.expires_at) {
-        stop_waiting(s); set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
+        stop_waiting(s); set_text(&s->notice, NULL);
+        set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
     }
     // Paste-back sign-ins need expiry checks, not account reads that can impose a callback-blocking backoff.
     if (s->sign_in.state && !s->sign_in.server_finish && !syncing(s) && !s->retry_until) arm(s, 10000);
