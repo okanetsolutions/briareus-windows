@@ -149,6 +149,7 @@ static void write_done(void *owner, Request *r) {
             set_text(&s->notice, str_eq(r->operation, "sync_mail_account")
                 ? "Sync started (202); polling account status until it finishes."
                 : deletion ? "Disconnected. The provider may still list this app as having access; remove it there to revoke access."
+                : finish ? "Mailbox connected; refreshing status."
                 : "Account settings saved; refreshing status.");
         }
     }
@@ -263,7 +264,7 @@ static void layout(Screen *base, Doc *doc) {
     doc_space(doc, px(16));
     for (size_t i = 0; i < s->accounts.count; i++) {
         const MailAccount *a = &s->accounts.accounts[i];
-        char *title = xstrfmt("%s (%s)", str_empty(a->label) ? a->email : a->label, a->email);
+        char *title = str_empty(a->label) ? xstrdup(a->email) : xstrfmt("%s (%s)", a->label, a->email);
         doc_text(doc, x, w, title, FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK); free(title);
         char *last = a->last_sync_at ? format_relative((time_t)(a->last_sync_at / 1000)) : xstrdup("never");
         char *status = xstrfmt("%s | %s | %s | %d days | %d messages, %d unread | Last sync: %s%s", a->provider, a->status ? a->status : "unknown", a->enabled ? "Enabled" : "Disabled", a->sync_days, a->messages, a->unread, last, a->syncing ? " | Syncing..." : "");
@@ -292,7 +293,10 @@ static void timer(Screen *base, UINT id) {
     if (s->sign_in.state && now_ms() >= s->sign_in.expires_at) {
         stop_waiting(s); set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
     }
-    load(s); repaint(s);
+    // Paste-back sign-ins need expiry checks, not account reads that can impose a callback-blocking backoff.
+    if (s->sign_in.state && !s->sign_in.server_finish && !syncing(s) && !s->retry_until) arm(s, 10000);
+    else load(s);
+    repaint(s);
 }
 static void refresh(Screen *base) {
     MailScreen *s = (MailScreen *)base;
