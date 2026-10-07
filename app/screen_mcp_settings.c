@@ -29,7 +29,7 @@ typedef struct {
     Json *row, *repos;
     double id;
     HWND edits[F_COUNT]; RECT rects[F_COUNT]; bool laid[F_COUNT], clipped[F_COUNT];
-    bool shown, filling, dirty, stdio, enabled, all, loopback, uncertain, conflict;
+    bool shown, filling, dirty, stdio, enabled, all, loopback, uncertain, conflict, create_retry;
     int tab;
     McpSecretMode secrets[3];
     McpSignIn sign_in;
@@ -46,6 +46,7 @@ static void open_sign_in(const char *url) {
     ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL); free(w);
 }
 static bool busy(McpForm *s) { return s->write != NULL; }
+static bool can_save(McpForm *s) { return !busy(s) && (!s->uncertain || (!s->id && s->create_retry)); }
 static char *edit_text(HWND edit) {
     int n = GetWindowTextLengthW(edit);
     wchar_t *w = xmalloc(((size_t)n + 1) * sizeof *w); GetWindowTextW(edit, w, n + 1);
@@ -99,10 +100,24 @@ static bool repos_changed(McpForm *s) {
     }
     return false;
 }
+static bool nul_escape(const char *text) {
+    // Skip escaped backslashes so literal \\u0000 remains ordinary text.
+    for (const char *p = text; *p; p++) if (*p == '\\') {
+        p++;
+        if (!*p) break;
+        if (str_has_prefix(p, "u0000")) return true;
+    }
+    return false;
+}
 static Json *body_now(McpForm *s, char **error) {
     Json *fields = json_object();
     for (int f = 0; f < F_CALLBACK; f++) {
         char *text = edit_text(s->edits[f]);
+        bool authored_json = (f == F_ARGS && s->stdio) || (f == F_HEADERS && !s->stdio && s->secrets[0] == MCP_REPLACE) || (f == F_ENV && s->stdio && s->secrets[1] == MCP_REPLACE);
+        if (authored_json && nul_escape(text)) {
+            *error = xstrfmt("%s must not contain NUL escapes.", FIELDS[f].label);
+            free(text); json_free(fields); return NULL;
+        }
         if (f == F_ARGS || f == F_HEADERS || f == F_ENV) json_object_set(fields, FIELDS[f].key, json_parsez(text));
         else json_set_str(fields, FIELDS[f].key, text);
         free(text);
@@ -205,7 +220,7 @@ static void form_header(Screen *base, HeaderInfo *info) {
     snprintf(info->subtitle, sizeof info->subtitle, "MCP settings%s", s->dirty ? " · unsaved changes" : "");
     if (!account_current(s)) return;
     HeaderButton *b = &info->buttons[info->button_count++]; b->glyph = 0xE74E; b->action = ACT_SAVE; b->prominent = true;
-    snprintf(b->label, sizeof b->label, "Save"); b->enabled = !busy(s) && !s->uncertain && (s->dirty || !s->id) && mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server");
+    snprintf(b->label, sizeof b->label, "Save"); b->enabled = can_save(s) && (s->dirty || !s->id) && mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server");
     if (s->id) { b = &info->buttons[info->button_count++]; b->glyph = 0xE74D; b->action = ACT_DELETE; b->destructive = true; b->tip = "Delete MCP server"; b->enabled = !busy(s) && mcp_settings_supported("delete_mcp_server"); }
 }
 static void form_place(Screen *base, const RECT *content, int scroll_y) {
@@ -275,13 +290,17 @@ static void read_done(void *owner, Request *req) {
         if (mcp_server_id(candidate) && (creating ? str_eq(json_str(json_get(candidate, "name")), s->create_name) : mcp_server_id(candidate) == s->id)) row = candidate;
     }
     if (row) {
-        if (creating) { adopt_id(s, mcp_server_id(row)); settings_mcp_changed(); }
+        bool visible_changed = creating;
+        static const char *const visible[] = { "label", "transport", "status", "enabled" };
+        for (size_t i = 0; i < sizeof visible / sizeof *visible; i++) if (!json_equal(json_get(s->row, visible[i]), json_get(row, visible[i]))) visible_changed = true;
+        if (creating) adopt_id(s, mcp_server_id(row));
         status_update(s, row);
+        if (visible_changed) settings_mcp_changed();
         if (s->uncertain) set_string(&s->error, creating ? "The created server was found. Your draft is preserved; review it before saving any further changes." : NULL);
-        s->uncertain = false;
+        s->uncertain = false; s->create_retry = false;
     } else if (creating && listed) {
-        s->uncertain = false;
-        set_string(&s->error, "No server with the submitted name was found. Your draft is preserved; choose Save to retry the create.");
+        s->create_retry = true;
+        set_string(&s->error, "The submitted name is not listed yet; the create may still complete. Save retries with the original name. Your draft name is preserved for an update after the server is found.");
     }
     else {
         mcp_sign_in_failed(&s->sign_in);
@@ -303,26 +322,35 @@ static void write_done(void *owner, Request *req) {
     if (!req->ok || (req->tag != ACT_DELETE && (!mcp_server_id(row) || (s->id && mcp_server_id(row) != s->id)))) {
         char *e = req->ok ? xstrdup("Unexpected MCP response; refresh before trying again.") : xstrfmt("MCP action failed (HTTP %d). Refresh status; sign-in callbacks are single-use and must not be resubmitted automatically.", req->error.status);
         error_text(s, e); free(e);
-        s->uncertain = req->ok || request_outcome_unknown(req);
+        s->uncertain = s->uncertain || req->ok || request_outcome_unknown(req);
         // Reads recover an unknown outcome; honor rate limits/unavailability before that read.
         if (req->error.status != 429 && req->error.status != 503) load(s);
         poller_finished(&s->poll, true, req->error.retry_after); return;
     }
     if (req->tag == ACT_DELETE) { s->dirty = false; settings_mcp_changed(); app_clear_detail(); return; }
-    adopt_id(s, mcp_server_id(row)); status_update(s, row); s->uncertain = false; set_string(&s->error, NULL);
-    if (req->tag == ACT_SAVE) fill(s);
+    char *draft_name = req->tag == ACT_SAVE && !s->id ? edit_text(s->edits[F_NAME]) : NULL;
+    adopt_id(s, mcp_server_id(row)); status_update(s, row); s->uncertain = false; s->create_retry = false; set_string(&s->error, NULL);
+    if (req->tag == ACT_SAVE) {
+        fill(s);
+        if (draft_name && !str_eq(draft_name, json_str(json_get(row, "name")))) { set_text(s->edits[F_NAME], draft_name); changed(s); }
+    }
+    free(draft_name);
     settings_mcp_changed(); repaint(s);
     poller_finished(&s->poll, false, -1);
     if ((req->tag == ACT_SAVE || req->tag == ACT_CONNECT || req->tag == ACT_SIGN_IN) && s->sign_in.url && !s->sign_in.blocked) open_sign_in(s->sign_in.url);
 }
 static void write_call(McpForm *s, const char *operation, Json *args, int tag) {
     if (!s->shown || !account_current(s) || !mcp_settings_supported(operation)) { json_free(args); return; }
-    if (tag == ACT_SAVE && !s->id) set_string(&s->create_name, json_str(json_get(args, "name")));
+    if (tag == ACT_SAVE && !s->id) {
+        if (s->uncertain && s->create_name) json_set_str(args, "name", s->create_name);
+        else set_string(&s->create_name, json_str(json_get(args, "name")));
+        s->create_retry = false;
+    }
     request_cancel(&s->read); if (s->id) json_set_num(args, "id", s->id);
     store_call(operation, args, 60000, s, write_done, tag, &s->write); repaint(s);
 }
 static void form_save(McpForm *s) {
-    if (!account_current(s) || !s->shown || busy(s) || s->uncertain || !mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server")) return;
+    if (!account_current(s) || !s->shown || !can_save(s) || !mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server")) return;
     char *why = NULL; Json *body = body_now(s, &why);
     if (!body) { error_text(s, why); free(why); return; }
     if (s->conflict && !app_confirm("Replace newer MCP configuration?", "This server changed on core while you were editing. Saving replaces its current configuration with your draft. Cancel to keep editing or reload the current fields.", "Replace", true)) { json_free(body); return; }
@@ -377,13 +405,23 @@ static void form_command(Screen *base, int id, int code, HWND control) {
     (void)control; McpForm *s = (McpForm *)base; int f = id - ID_FIELD;
     if (f >= 0 && f < F_CALLBACK && code == EN_CHANGE && !busy(s)) changed(s);
 }
+static void departed_write_done(void *owner, Request *req) {
+    (void)owner;
+    if (req->client && req->client == g_store.client && mcp_settings_supported("settings_mcp_servers")) settings_mcp_changed();
+}
+static void detach_write(McpForm *s) {
+    if (!s->write) return;
+    // The worker continues on core. Observe completion without retaining the form or its controls.
+    s->write->owner = NULL; s->write->slot = NULL; s->write->done = departed_write_done;
+    s->write = NULL; s->uncertain = true; s->create_retry = false;
+    set_string(&s->error, "An action is still completing on core. Refresh status before repeating it.");
+}
 static void form_visible(Screen *base, bool shown) {
     McpForm *s = (McpForm *)base; s->shown = shown;
     if (shown && account_current(s)) { ensure_controls(s); poller_start(&s->poll, base->pane, TIMER_STATUS, 5000); load(s); }
     else {
         poller_stop(&s->poll); request_cancel(&s->read);
-        if (s->write) { s->uncertain = true; set_string(&s->error, "An action was cancelled locally and may have completed on core. Refresh Settings before repeating it."); }
-        request_cancel(&s->write); mcp_sign_in_clear(&s->sign_in);
+        detach_write(s); mcp_sign_in_clear(&s->sign_in);
         for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) { if (f == F_CALLBACK) set_text(s->edits[f], ""); ShowWindow(s->edits[f], SW_HIDE); }
     }
 }
@@ -395,7 +433,7 @@ static void form_timer(Screen *base, UINT id) {
 static void form_refresh(Screen *base) { McpForm *s = (McpForm *)base; request_cancel(&s->read); load(s); }
 static bool form_leave(Screen *base) { McpForm *s = (McpForm *)base; return !s->dirty || app_confirm("Discard unsaved MCP changes?", "The edited server fields have not been saved.", "Discard", true); }
 static void form_destroy(Screen *base) {
-    McpForm *s = (McpForm *)base; poller_stop(&s->poll); request_cancel(&s->read); request_cancel(&s->write);
+    McpForm *s = (McpForm *)base; poller_stop(&s->poll); request_cancel(&s->read); detach_write(s);
     for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
     json_free(s->row); json_free(s->repos); free(s->error); free(s->create_name); mcp_sign_in_clear(&s->sign_in); api_client_release(s->account); screen_release(base);
 }
