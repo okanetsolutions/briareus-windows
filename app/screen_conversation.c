@@ -189,7 +189,7 @@ static void mutate_done(void *owner, Request *req) {
         sessions_forget(session_repo(&s->initial), session_id(&s->initial));
         // Beside the list there is nothing to go back to: the right-hand side empties instead.
         Pane *pane = s->base.pane;
-        if (pane_depth(pane) > 1) pane_pop(pane); else app_clear_detail();
+        if (pane_depth(pane) > 1) pane_pop(pane); else if (detached_pane(pane)) detached_close(pane); else app_clear_detail();
         return;   // this screen is gone
     }
     if (str_eq(name, "complete_findings")) { str_array_free(s->decisions, s->decision_count); s->decisions = NULL; s->decision_count = 0; set_string(&s->triage_note, NULL); }
@@ -718,16 +718,16 @@ static void menu_choice(ConversationScreen *s, int chosen) {
     const char *repo = session_repo(ss);
     if ((chosen == MENU_CHANGES || chosen == MENU_PULL) && !(number && repo)) return;
     switch (chosen) {
-    case MENU_CHANGES: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_files_screen_new(&p, number)); project_free(&p); break; }
-    case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_detail(pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
+    case MENU_CHANGES: { Project p = { xstrdup(repo), NULL }; app_push_from(&s->base, pull_files_screen_new(&p, number)); project_free(&p); break; }
+    case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_from(&s->base, pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
-    case MENU_WEBHOOK: app_push_detail(webhook_screen_new(ss)); break;
+    case MENU_WEBHOOK: app_push_from(&s->base, webhook_screen_new(ss)); break;
     case MENU_LOOP_OFF:
     case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); mutate(s, "review_loop", extra); break; }
     case MENU_RENAME: {
         s->renaming = true; s->dialog_open = true;
-        char *title = dialog_rename(app_window(), session_display_title(ss));
+        char *title = dialog_rename(app_dialog_owner(), session_display_title(ss));
         s->renaming = false; s->dialog_open = false;
         if (title) { char *trimmed = str_trim(title); if (*trimmed) { Json *extra = json_object(); json_set_str(extra, "title", title); mutate(s, "rename", extra); } free(trimmed); free(title); }
         break;
@@ -765,7 +765,7 @@ static void conversation_action(Screen *base, int action, intptr_t arg, POINT pt
     }
     case ACT_TRIAGE_NOTE: {
         s->dialog_open = true;
-        char *note = dialog_rename(app_window(), s->triage_note ? s->triage_note : "");
+        char *note = dialog_rename(app_dialog_owner(), s->triage_note ? s->triage_note : "");
         s->dialog_open = false;
         if (note) { set_string(&s->triage_note, note); free(note); pane_relayout(base->pane); }
         break;
@@ -1019,9 +1019,11 @@ static void conversation_timer(Screen *base, UINT id) {
         if (enabled && !s->loading) refresh(s, false); else poller_finished(&s->poller, false, -1);
     }
 }
-/// The column at the right: the session's pull request and context usage, while this conversation is the page itself
-/// (not one pushed over a pull request) and the session has any of them. An open panel takes the latest record.
+/// The column at the right: the session's pull request and context usage, while this conversation is the main window's
+/// page itself (not one pushed over a pull request, nor one in a window of its own) and the session has any of them. An
+/// open panel takes the latest record.
 static void show_panel(ConversationScreen *s) {
+    if (s->base.pane != app_detail_pane()) return;
     if (pane_root(s->base.pane) == &s->base && session_panel_wanted(session(s))) {
         app_set_panel(session_panel_screen_new(session(s)));
         session_panel_update(session(s));
@@ -1037,6 +1039,8 @@ void conversation_session_op(const char *session_id_, const char *operation, Jso
 static void conversation_visible(Screen *base, bool shown) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (shown) {
+        // The composer goes with the conversation into a window of its own, and back.
+        if (GetParent(s->composer) != pane_hwnd(base->pane)) SetParent(s->composer, pane_hwnd(base->pane));
         show_panel(s);
         pane_stick_to_bottom(base->pane, true); pane_show_bottom_button(base->pane, true);
         poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(session(s)) ? 2000 : 7000);
@@ -1048,7 +1052,7 @@ static void conversation_visible(Screen *base, bool shown) {
         if (s->voice) voice_drop(s->voice);
         ShowWindow(s->composer, SW_HIDE);
         // A pull request pushed over the conversation fills the window; the column returns with the conversation.
-        app_set_panel(NULL);
+        if (base->pane == app_detail_pane()) app_set_panel(NULL);
     }
 }
 static void conversation_refresh(Screen *base) { ConversationScreen *s = (ConversationScreen *)base; refresh(s, true); }
@@ -1086,7 +1090,7 @@ static const ScreenVTable conversation_vt = {
     .timer = conversation_timer, .footer_height = conversation_footer_height,
     .footer_layout = conversation_footer_layout, .footer_paint = conversation_footer_paint, .footer_click = conversation_footer_click,
     .visible = conversation_visible, .command = conversation_command, .key = conversation_key, .refresh = conversation_refresh,
-    .scrolled = conversation_scrolled, .activated = conversation_activated,
+    .scrolled = conversation_scrolled, .activated = conversation_activated, .detachable = true,
 };
 
 Screen *conversation_screen_new(const Session *initial) {

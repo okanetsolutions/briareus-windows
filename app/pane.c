@@ -7,6 +7,8 @@
 #include <commctrl.h>
 
 #define PANE_CLASS L"BriareusPane"
+// The window button's action, below any a screen uses.
+#define ACTION_MOVE_WINDOW (-0x4D57)
 
 struct Pane {
     HWND hwnd;
@@ -24,6 +26,8 @@ struct Pane {
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
     bool overlay;           // a side panel over the main column: ✕ at its root, a line down its left edge
+    bool titles_window; char *window_title;   // the title last given the window the pane fills
+    wchar_t move_glyph; const char *move_tip; void (*move_cb)(void *); void *move_ctx;   // a detachable root's window button
     char *selected_id;
     bool tracking;
     HBRUSH edit_brush;
@@ -75,7 +79,7 @@ void pane_destroy(Pane *p) {
     pane_set_root(p, NULL);
     for (size_t i = 0; i < pane_count; i++) if (all_panes[i] == p) { all_panes[i] = all_panes[--pane_count]; break; }
     if (p->hwnd) DestroyWindow(p->hwnd);
-    doc_free(&p->doc); free(p->stack); free(p->selected_id);
+    doc_free(&p->doc); free(p->stack); free(p->selected_id); free(p->window_title);
     if (p->edit_brush) DeleteObject(p->edit_brush);
     canvas_free(p->canvas);
     free(p);
@@ -114,6 +118,17 @@ void pane_pop(Pane *p) {
     pane_relayout(p);
 }
 void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { set_visible(p->stack[0], true); pane_relayout(p); } }
+Screen *pane_take_root(Pane *p) {
+    if (p->depth != 1) return NULL;
+    Screen *s = p->stack[0];
+    set_visible(s, false);
+    p->depth = 0;
+    s->pane = NULL;
+    p->scroll_y = 0; p->scroll_x = 0; p->stick_bottom = false; p->show_bottom_button = false;
+    doc_free(&p->doc); doc_init(&p->doc);
+    pane_relayout(p);
+    return s;
+}
 void pane_set_root(Pane *p, Screen *s) {
     while (p->depth) destroy_top(p);
     p->scroll_y = 0; p->scroll_x = 0; p->stick_bottom = false; p->show_bottom_button = false;
@@ -232,6 +247,11 @@ void pane_scroll_to(Pane *p, int content_y) { set_scroll(p, content_y - px(8)); 
 void pane_stick_to_bottom(Pane *p, bool stick) { p->stick_bottom = stick; }
 void pane_show_bottom_button(Pane *p, bool show) { if (p->show_bottom_button != show) { p->show_bottom_button = show; InvalidateRect(p->hwnd, NULL, FALSE); } }
 void pane_set_root_back(Pane *p, bool show, void (*callback)(void *), void *ctx) { p->root_back = show; p->root_back_cb = callback; p->root_back_ctx = ctx; pane_relayout(p); }
+void pane_set_move_button(Pane *p, wchar_t glyph, const char *tip, void (*move)(void *), void *ctx) {
+    p->move_glyph = glyph; p->move_tip = tip; p->move_cb = move; p->move_ctx = ctx;
+    pane_header_changed(p);
+}
+void pane_set_titles_window(Pane *p) { p->titles_window = true; pane_header_changed(p); }
 void pane_set_overlay(Pane *p, void (*close)(void *), void *ctx) { p->overlay = true; pane_set_root_back(p, true, close, ctx); }
 void pane_set_selected_id(Pane *p, const char *id) {
     if (str_eq(p->selected_id, id)) return;
@@ -254,6 +274,17 @@ static void refresh_header(Pane *p) {
     Screen *s = pane_top(p);
     memset(&p->header, 0, sizeof p->header);
     if (s && s->vt->header) s->vt->header(s, &p->header);
+    if (p->move_cb && s && p->depth == 1 && s->vt->detachable && p->header.button_count < HEADER_BUTTONS) {
+        HeaderButton *b = &p->header.buttons[p->header.button_count++];
+        b->glyph = p->move_glyph; b->action = ACTION_MOVE_WINDOW; b->enabled = true; b->tip = p->move_tip;
+    }
+    if (p->titles_window && p->header.title[0] && !str_eq(p->header.title, p->window_title)) {
+        free(p->window_title); p->window_title = xstrdup(p->header.title);
+        char *title = xstrfmt("%s \xC2\xB7 Briareus", p->header.title);
+        wchar_t *w = utf8_to_wide(title);
+        SetWindowTextW(GetAncestor(p->hwnd, GA_ROOT), w);
+        free(w); free(title);
+    }
     bool has_header = s && (p->header.title[0] || p->header.button_count || (shows_back(p) && !p->sidebar));
     // `px-[18px] py-2.5` around a 15px title (22px line) and a 13px subtitle (18px line), or 30px buttons, plus the border.
     int content = p->header.subtitle[0] ? px(40) : (p->header.button_count || shows_back(p)) ? px(32) : px(22);
@@ -683,6 +714,7 @@ static void mouse_up(Pane *p, int x, int y) {
             if (b == -2) { if (p->depth > 1) pane_pop(p); else if (p->root_back_cb) p->root_back_cb(p->root_back_ctx); }
             else if (b == -3) { set_scroll(p, max_scroll(p)); }
             else if (b == -4) { if (s && s->vt->action) s->vt->action(s, p->header.title_action, 0, sp); }
+            else if (p->header.buttons[b].action == ACTION_MOVE_WINDOW) { if (p->move_cb) p->move_cb(p->move_ctx); }
             else if (s && p->header.buttons[b].enabled && s->vt->action) s->vt->action(s, p->header.buttons[b].action, 0, sp);
         }
         InvalidateRect(p->hwnd, NULL, FALSE);

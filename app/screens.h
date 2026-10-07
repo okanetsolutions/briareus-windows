@@ -60,9 +60,6 @@ bool browser_offered(void);
 void browser_open(const Session *session);
 /// Whether a session's browser is docked or in a window of its own.
 bool browser_is_open(const char *session_id);
-/// The popped-out browser windows close (signing out, quitting) or take a new theme.
-void browser_windows_close_all(void);
-void browser_windows_themed(void);
 /// Runs a session operation (`compact`, `clear`, `rename` with compaction settings) through its open conversation,
 /// which shows its progress and errors and reads the session again afterwards.
 void conversation_session_op(const char *session_id, const char *operation, Json *extra);
@@ -320,6 +317,39 @@ bool app_browser_dockable(void);
 bool app_browser_expanded(void);
 void app_set_browser_expanded(bool expanded);
 HWND app_window(void);
+/// The window a dialog opens over: the one of ours in front (a conversation in a window of its own), else the main one.
+HWND app_dialog_owner(void);
+/// Around a dialog over `owner`: every other window of ours waits for it too, so none docks, pops out or closes the
+/// screen that asked while its dialog is open. Nested dialogs count.
+void app_modal_begin(HWND owner);
+void app_modal_end(void);
+/// False when the detail's page keeps its unsaved changes rather than make way for another.
+bool app_detail_can_leave(void);
+/// Opens what a screen links to over it: in its window when it is in one of its own, else as app_push_detail does.
+void app_push_from(Screen *from, Screen *screen);
+
+// MARK: - Windows of their own (detached.c)
+
+/// Opens `screen` as the root of a new top-level window, over `at` (screen coordinates) when given, kept on that monitor;
+/// `sidebar` gives its pane the sidebar's colour and padding. Its pane, or NULL (the screen destroyed) when it could not.
+/// A detachable screen gets a button there that moves it back into the main window's detail.
+Pane *detached_open(Screen *screen, const RECT *at, bool sidebar);
+/// The pane of the window whose root screen has this id, or NULL.
+Pane *detached_find(const char *id);
+/// Whether the pane fills a window of its own, and the pane of the window holding `hwnd`.
+bool detached_pane(const Pane *pane);
+Pane *detached_pane_of(HWND hwnd);
+/// Brings the pane's window to the front, restored.
+void detached_raise(Pane *pane);
+/// Closes the pane's window once the message in hand is done, so a screen may close its own.
+void detached_close(Pane *pane);
+/// Whether any of them is on screen, not minimized.
+bool detached_any_shown(void);
+/// They all close (signing out, quitting) or take a new theme.
+void detached_close_all(void);
+void detached_themed(void);
+/// Disables every one of them but `except`, or enables again the ones it disabled.
+void detached_enable(HWND except, bool enabled);
 
 /// A confirmation with one continue button; true when confirmed.
 bool app_confirm(const char *title, const char *message, const char *continue_label, bool destructive);

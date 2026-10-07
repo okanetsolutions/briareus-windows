@@ -29,6 +29,8 @@
 #define BROWSER_MIN_WIDTH 360
 #define DETAIL_MIN_WIDTH 380
 #define SPLITTER_WIDTH 6
+// The detail's ⧉ moves its page into a window of its own once the click is over.
+#define WM_APP_POP_OUT (WM_APP + 5)
 
 static HWND g_main;
 typedef HRESULT (WINAPI *TaskDialogIndirectFn)(const TASKDIALOGCONFIG *, int *, int *, BOOL *);
@@ -38,8 +40,26 @@ static int g_browser_width;    // the docked browser's width once the divider wa
 static bool g_browser_expanded, g_dragging_splitter;
 static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
+static int g_modal;            // dialogs open
+static bool g_modal_disabled;  // whether the first of them disabled the main window
 
 HWND app_window(void) { return g_main; }
+HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
+// The dialog disables its owner itself, and enables it again before it hands the foreground back.
+void app_modal_begin(HWND owner) {
+    if (g_modal++) return;
+    if (owner) owner = GetAncestor(owner, GA_ROOT);   // a pane passed as the owner stands for its window
+    // A window already disabled (by a file picker) is left for whoever disabled it to enable again.
+    g_modal_disabled = g_main && g_main != owner && IsWindowEnabled(g_main);
+    if (g_modal_disabled) EnableWindow(g_main, FALSE);
+    detached_enable(owner, false);
+}
+void app_modal_end(void) {
+    if (--g_modal) return;
+    if (g_modal_disabled && g_main) EnableWindow(g_main, TRUE);
+    g_modal_disabled = false;
+    detached_enable(NULL, true);
+}
 Pane *app_sidebar_pane(void) { return g_sidebar; }
 Pane *app_detail_pane(void) { return g_detail; }
 Pane *app_panel_pane(void) { return g_panel; }
@@ -206,14 +226,27 @@ static void rebuild_for_connection(void) {
         pane_set_selected_id(g_sidebar, NULL);
         g_narrow_detail = false;
     } else {
-        browser_windows_close_all();
+        detached_close_all();
         pane_set_root(g_sidebar, NULL); pane_set_root(g_detail, NULL); pane_set_root(g_panel, NULL); pane_set_root(g_browser, NULL); pane_set_root(g_overlay, NULL);
         pane_set_root(g_pairing, pairing_screen_new());
     }
     layout();
 }
 
+/// A page already in a window of its own is brought forward there instead of opening a second time.
+static bool raise_detached(Screen *screen) {
+    Pane *held = screen->id ? detached_find(screen->id) : NULL;
+    if (!held) return false;
+    screen->vt->destroy(screen);
+    detached_raise(held);
+    return true;
+}
+bool app_detail_can_leave(void) {
+    Screen *root = g_detail ? pane_root(g_detail) : NULL;
+    return !root || !root->vt->can_leave || root->vt->can_leave(root);
+}
 void app_show_detail(Screen *screen) {
+    if (raise_detached(screen)) return;
     Screen *root = pane_root(g_detail);
     // A form with unsaved changes may keep its place.
     bool same = root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1;
@@ -233,7 +266,37 @@ void app_show_detail(Screen *screen) {
     InvalidateRect(g_main, NULL, TRUE);
 }
 // From the side panel, what an item links to opens in the panel, as GitHub's does.
-void app_push_detail(Screen *screen) { pane_push(overlay_shown() ? g_overlay : g_detail, screen); g_narrow_detail = true; layout(); }
+void app_push_detail(Screen *screen) {
+    if (raise_detached(screen)) return;
+    pane_push(overlay_shown() ? g_overlay : g_detail, screen); g_narrow_detail = true; layout();
+}
+void app_push_from(Screen *from, Screen *screen) {
+    if (from && from->pane && detached_pane(from->pane)) {
+        // The window's own page, asked for from deeper in that window, comes back to the top there.
+        Pane *held = screen->id ? detached_find(screen->id) : NULL;
+        if (held == from->pane) { screen->vt->destroy(screen); pane_pop_to_root(held); return; }
+        if (!raise_detached(screen)) pane_push(from->pane, screen);
+        return;
+    }
+    app_push_detail(screen);
+}
+/// The detail's page moves, as it is, into a window of its own over where it was, and the detail empties.
+static void pop_out_detail(void) {
+    Screen *root = pane_root(g_detail);
+    if (!root || pane_depth(g_detail) != 1 || !root->vt->detachable) return;
+    RECT at; GetWindowRect(pane_hwnd(g_detail), &at);
+    pane_set_root(g_panel, NULL);
+    pane_set_root(g_overlay, NULL);
+    app_set_browser(NULL);
+    Screen *screen = pane_take_root(g_detail);
+    pane_set_root(g_detail, placeholder_screen_new());
+    pane_set_selected_id(g_sidebar, NULL);
+    g_narrow_detail = false;
+    layout();
+    InvalidateRect(g_main, NULL, TRUE);
+    detached_open(screen, &at, false);
+}
+static void post_pop_out(void *ctx) { (void)ctx; PostMessageW(g_main, WM_APP_POP_OUT, 0, 0); }
 void app_clear_detail(void) {
     Screen *root = pane_root(g_detail);
     if (root && root->vt->can_leave && !root->vt->can_leave(root)) return;
@@ -252,13 +315,15 @@ void app_clear_detail(void) {
 static HRESULT task_dialog(const char *title, const char *message, const TASKDIALOG_BUTTON *buttons, UINT count, int *chosen) {
     wchar_t *wt = utf8_to_wide(title), *wm = message ? utf8_to_wide(message) : NULL;
     TASKDIALOGCONFIG cfg; memset(&cfg, 0, sizeof cfg);
-    cfg.cbSize = sizeof cfg; cfg.hwndParent = g_main; cfg.hInstance = GetModuleHandleW(NULL);
+    cfg.cbSize = sizeof cfg; cfg.hwndParent = app_dialog_owner(); cfg.hInstance = GetModuleHandleW(NULL);
     cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW | TDF_SIZE_TO_CONTENT;
     cfg.pszWindowTitle = L"Briareus"; cfg.pszMainInstruction = wt; cfg.pszContent = wm;
     cfg.pButtons = buttons; cfg.cButtons = count; cfg.nDefaultButton = buttons[0].nButtonID;
     cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
     int button = 0;
+    app_modal_begin(cfg.hwndParent);
     HRESULT hr = g_task_dialog ? g_task_dialog(&cfg, &button, NULL, NULL) : E_NOTIMPL;
+    app_modal_end();
     *chosen = button;
     free(wt); free(wm);
     return hr;
@@ -272,7 +337,10 @@ bool app_confirm(const char *title, const char *message, const char *continue_la
     free(label);
     if (FAILED(hr)) {
         wchar_t *wt = utf8_to_wide(title), *wm = utf8_to_wide(message ? message : "");
-        int r = MessageBoxW(g_main, *wm ? wm : wt, wt, MB_OKCANCEL | (destructive ? MB_ICONWARNING : MB_ICONQUESTION));
+        HWND owner = app_dialog_owner();
+        app_modal_begin(owner);
+        int r = MessageBoxW(owner, *wm ? wm : wt, wt, MB_OKCANCEL | (destructive ? MB_ICONWARNING : MB_ICONQUESTION));
+        app_modal_end();
         free(wt); free(wm);
         return r == IDOK;
     }
@@ -291,7 +359,10 @@ int app_choose(const char *title, const char *message, const char *const *choice
 }
 void app_alert(const char *title, const char *message) {
     wchar_t *wt = utf8_to_wide(title), *wm = utf8_to_wide(message ? message : "");
-    MessageBoxW(g_main, wm, wt, MB_OK | MB_ICONINFORMATION);
+    HWND owner = app_dialog_owner();
+    app_modal_begin(owner);
+    MessageBoxW(owner, wm, wt, MB_OK | MB_ICONINFORMATION);
+    app_modal_end();
     free(wt); free(wm);
 }
 
@@ -316,6 +387,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_browser = pane_create(hwnd, true);
         g_overlay = pane_create(hwnd, false);   // last, so it lies over the detail
         pane_set_overlay(g_overlay, close_overlay, NULL);
+        pane_set_move_button(g_detail, 0xE8A7, "Open in a new window", post_pop_out, NULL);
         store_init(hwnd);
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
@@ -324,10 +396,11 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         updater_start();
         return 0;
     case WM_SIZE:
-        if (wp == SIZE_MINIMIZED) set_active(false);
+        // A conversation in a window of its own keeps going while the main window is minimized.
+        if (wp == SIZE_MINIMIZED) set_active(detached_any_shown());
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }
         return 0;
-    case WM_ACTIVATEAPP: set_active(wp != 0 && !IsIconic(hwnd)); return 0;
+    case WM_ACTIVATEAPP: set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc; GetClientRect(hwnd, &rc);
@@ -339,6 +412,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND: return 1;
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(360); return 0; }
     case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;
+    case WM_APP_POP_OUT: pop_out_detail(); return 0;
     case WM_APP_MEDIA_CHANGED: if (g_sidebar) pane_footer_changed(g_sidebar); return 0;
     case WM_APP_REQUEST_DONE: case WM_APP_ASYNC_DONE: store_handle_message(msg, wp, lp); return 0;
     case WM_SETTINGCHANGE: case WM_THEMECHANGED:
@@ -351,7 +425,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_panel) { SendMessageW(pane_hwnd(g_panel), WM_THEMECHANGED, 0, 0); pane_relayout(g_panel); }
         if (g_browser) { SendMessageW(pane_hwnd(g_browser), WM_THEMECHANGED, 0, 0); pane_relayout(g_browser); }
         if (g_overlay) { SendMessageW(pane_hwnd(g_overlay), WM_THEMECHANGED, 0, 0); pane_relayout(g_overlay); }
-        browser_windows_themed();
+        detached_themed();
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
     case WM_DPICHANGED: {
@@ -407,7 +481,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         meeting_shutdown();
-        browser_windows_close_all();
+        detached_close_all();
         term_shutdown();
         sftp_shutdown();
         media_stop();
@@ -463,9 +537,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
         if (m.message == WM_KEYDOWN && (GetKeyState(VK_MENU) & 0x8000) && m.wParam == VK_LEFT) {
-            // Alt+Left goes back in whichever pane has the focus.
+            // Alt+Left goes back in whichever pane has the focus: the detail's, or a window of its own's.
             HWND focus = GetFocus();
-            if (focus && !term_is_window(focus) && (g_detail && (focus == pane_hwnd(g_detail) || IsChild(pane_hwnd(g_detail), focus)))) { SendMessageW(pane_hwnd(g_detail), WM_KEYDOWN, VK_LEFT, 0); continue; }
+            Pane *pane = focus ? detached_pane_of(focus) : NULL;
+            if (!pane && g_detail && focus && (focus == pane_hwnd(g_detail) || IsChild(pane_hwnd(g_detail), focus))) pane = g_detail;
+            if (pane && !term_is_window(focus)) { SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_LEFT, 0); continue; }
         }
         TranslateMessage(&m);
         DispatchMessageW(&m);

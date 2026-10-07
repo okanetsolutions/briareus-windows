@@ -487,7 +487,7 @@ static void panel_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_INSTRUCTIONS: {
         const char *current = json_str(json_get(s->session.raw, "compactInstructions"));
-        char *text = dialog_text(app_window(), "Compaction instructions", "What every compaction of this session must keep (empty clears them):", "Save", current ? current : "");
+        char *text = dialog_text(app_dialog_owner(), "Compaction instructions", "What every compaction of this session must keep (empty clears them):", "Save", current ? current : "");
         if (!text) break;
         char *trimmed = str_trim(text);
         if (!str_eq(trimmed, current ? current : "")) {

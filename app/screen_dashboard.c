@@ -879,7 +879,7 @@ static void open_top_session(DashboardScreen *s, size_t index) {
     const char *label = json_str_nonempty(json_get(r, "label"));
     if (label && !str_eq(label, id)) json_set_str(raw, "title", label);
     Session ses;
-    if (session_parse(raw, &ses)) { app_push_detail(conversation_screen_new(&ses)); session_free(&ses); }
+    if (session_parse(raw, &ses)) { app_push_from(&s->base, conversation_screen_new(&ses)); session_free(&ses); }
     json_free(raw);
 }
 static void dashboard_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -930,6 +930,7 @@ static void dashboard_destroy(Screen *base) {
 static const ScreenVTable dashboard_vt = {
     .destroy = dashboard_destroy, .layout = dashboard_layout, .header = dashboard_header, .action = dashboard_action,
     .timer = dashboard_timer, .visible = dashboard_visible, .refresh = dashboard_refresh, .activated = dashboard_activated,
+    .detachable = true,
 };
 Screen *dashboard_screen_new(void) {
     DashboardScreen *s = xcalloc(1, sizeof *s);
