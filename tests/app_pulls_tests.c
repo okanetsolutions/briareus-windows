@@ -174,7 +174,7 @@ void app_pulls_tests(void) {
     HWND parent = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
     pane = pane_create(parent, false);
     wchar_t dir[MAX_PATH]; GetTempPathW(MAX_PATH, dir); wcscat(dir, L"briareus-pulls-tests");
-    memset(&g_store, 0, sizeof g_store); g_store.cache = cache_new(dir);
+    memset(&g_store, 0, sizeof g_store); g_store.hwnd = parent; g_store.cache = cache_new(dir);
     g_store.has_device = true; g_store.device.permission = "read"; g_store.routes = routes;
     g_store.server = "https://test.example"; g_store.active = true;
     ServerAddress address; CHECK(server_address_parse(g_store.server, &address));
