@@ -114,6 +114,13 @@ static void test_allocation_helpers_accept_zero_and_null(void) {
     CHECK_OWNED_STR(xstrdup("caf\xc3\xa9"), "caf\xc3\xa9");
 }
 
+static void test_a_kept_block_is_freed_with_xfree_kept(void) {
+    // Under the debug CRT a kept block is a client block, and plain free() would assert on its type.
+    char *p = xmalloc_kept(0); CHECK(p != NULL); xfree_kept(p);
+    p = xmalloc_kept(4); memcpy(p, "abc", 4); CHECK_STR(p, "abc"); xfree_kept(p);
+    xfree_kept(NULL);
+}
+
 static void test_xstrndup_copies_a_prefix(void) {
     CHECK_OWNED_STR(xstrndup("abcdef", 3), "abc");
     CHECK_OWNED_STR(xstrndup("abcdef", 0), "");
@@ -338,6 +345,7 @@ void str_tests(void) {
     test_run("appendf handles output larger than the buffer", test_appendf_handles_output_larger_than_the_buffer);
     test_run("xstrfmt returns a new formatted string", test_xstrfmt_returns_a_new_formatted_string);
     test_run("allocation helpers accept zero and NULL", test_allocation_helpers_accept_zero_and_null);
+    test_run("a kept block is freed with xfree_kept", test_a_kept_block_is_freed_with_xfree_kept);
     test_run("xstrndup copies a prefix", test_xstrndup_copies_a_prefix);
     test_run("empty is true for NULL and the empty string", test_empty_is_true_for_null_and_the_empty_string);
     test_run("trim strips ASCII whitespace at both ends", test_trim_strips_ascii_whitespace_at_both_ends);

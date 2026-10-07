@@ -14,10 +14,17 @@ void *xcalloc(size_t count, size_t size) { void *p = calloc(count ? count : 1, s
 void *xrealloc(void *p, size_t n) { p = realloc(p, n ? n : 1); if (!p) oom(); return p; }
 void *xmalloc_kept(size_t n) {
 #if defined(_MSC_VER) && defined(_DEBUG)
-    // A client block, which the debug heap lets free() release and the harness does not count as leaked.
+    // A client block, which the harness does not count as leaked. The debug heap asserts if free() releases it.
     void *p = _malloc_dbg(n ? n : 1, _CLIENT_BLOCK, __FILE__, __LINE__); if (!p) oom(); return p;
 #else
     return xmalloc(n);
+#endif
+}
+void xfree_kept(void *p) {
+#if defined(_MSC_VER) && defined(_DEBUG)
+    _free_dbg(p, _CLIENT_BLOCK);
+#else
+    free(p);
 #endif
 }
 char *xstrdup(const char *z) { if (!z) return NULL; size_t n = strlen(z); char *c = xmalloc(n + 1); memcpy(c, z, n + 1); return c; }

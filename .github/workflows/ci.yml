@@ -110,7 +110,7 @@ jobs:
       - name: Build against the debug CRT and run the tests
         shell: cmd
         env:
-          OPT: /Od /MTd /RTC1 /Zi
+          CLOPT: /Od /MTd /RTC1 /Zi
           CL: /WX
         run: build.bat
 

@@ -4,9 +4,9 @@ setlocal
 set OUT=build
 if not exist %OUT% mkdir %OUT%
 rem /W4 with the SDK headers quiet and unused parameters allowed, as with GCC. CI adds /WX through the CL variable.
-rem OPT replaces /O2: the CI leak job builds against the debug CRT with run-time checks (/Od /MTd /RTC1).
-if not defined OPT set OPT=/O2
-set CFLAGS=/nologo /std:c11 %OPT% /W4 /wd4100 /external:anglebrackets /external:W0 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /D_CRT_SECURE_NO_WARNINGS /Icore /Iapp /Fo%OUT%\ /utf-8
+rem CLOPT replaces /O2 (not OPT, which the Makefile reads for gcc): the CI leak job builds against the debug CRT with run-time checks (/Od /MTd /RTC1).
+if not defined CLOPT set CLOPT=/O2
+set CFLAGS=/nologo /std:c11 %CLOPT% /W4 /wd4100 /external:anglebrackets /external:W0 /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /D_CRT_SECURE_NO_WARNINGS /Icore /Iapp /Fo%OUT%\ /utf-8
 rem app\canvas.cpp is C++ in C style (the SDK declares DirectWrite for C++ only): no exceptions, no RTTI.
 set CXXFLAGS=%CFLAGS:/std:c11=/std:c++17% /EHs-c- /GR-
 set LIBS=winhttp.lib advapi32.lib ole32.lib comctl32.lib gdi32.lib user32.lib shell32.lib uuid.lib dwmapi.lib winmm.lib mfplat.lib mfreadwrite.lib mfuuid.lib shlwapi.lib uxtheme.lib comdlg32.lib msimg32.lib d2d1.lib dwrite.lib

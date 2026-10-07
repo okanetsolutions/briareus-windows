@@ -22,8 +22,9 @@ char *str_detach(Str *s);
 void *xmalloc(size_t n);
 void *xcalloc(size_t count, size_t size);
 void *xrealloc(void *p, size_t n);
-/// Like xmalloc, for a cache that keeps the memory past the call that filled it: the tests' leak check leaves it out. Freed with free().
+/// Like xmalloc, for a cache that keeps the memory past the call that filled it: the tests' leak check leaves it out. Freed with xfree_kept.
 void *xmalloc_kept(size_t n);
+void xfree_kept(void *p);
 char *xstrdup(const char *z);
 char *xstrndup(const char *z, size_t n);
 char *xstrfmt(const char *fmt, ...);

@@ -51,7 +51,7 @@ enum { WIDTH_CACHE = 1 << 14, WIDTH_CACHE_MAX_LEN = 128 };
 static WidthEntry width_cache[WIDTH_CACHE];
 
 static void clear_width_cache(void) {
-    for (int i = 0; i < WIDTH_CACHE; i++) { free(width_cache[i].text); width_cache[i].text = NULL; }
+    for (int i = 0; i < WIDTH_CACHE; i++) { xfree_kept(width_cache[i].text); width_cache[i].text = NULL; }
 }
 
 static IDWriteTextLayout *layout(FontId f, const wchar_t *text, size_t len, float max_w, float max_h, bool wrap) {
@@ -82,7 +82,7 @@ extern "C" int textw_extent(FontId f, const wchar_t *text, size_t len) {
     WidthEntry *e = &width_cache[h & (WIDTH_CACHE - 1)];
     if (e->text && e->hash == h && e->font == (int)f && e->len == len && memcmp(e->text, text, len * sizeof *text) == 0) return e->width;
     int w = measure_width(f, text, len);
-    free(e->text);
+    xfree_kept(e->text);
     e->text = (wchar_t *)xmalloc_kept(len * sizeof *text); memcpy(e->text, text, len * sizeof *text);
     e->hash = h; e->font = (int)f; e->len = (unsigned)len; e->width = w;
     return w;
