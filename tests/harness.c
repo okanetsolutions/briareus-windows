@@ -30,6 +30,17 @@ static void on_abort(int sig) {
     _exit(3);
 }
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+// In file mode the debug CRT prints an error or assert and carries on, so the hook fails the test; returning FALSE
+// still lets the report print. /RTC and heap reports come through either the narrow or the wide entry point.
+static int count_report(int type) {
+    if (type == _CRT_ERROR || type == _CRT_ASSERT) test_failures++;
+    return FALSE;
+}
+static int __cdecl on_report(int type, char *message, int *ret) { (void)message; (void)ret; return count_report(type); }
+static int __cdecl on_report_w(int type, wchar_t *message, int *ret) { (void)message; (void)ret; return count_report(type); }
+#endif
+
 static void harness_init(void) {
     SetUnhandledExceptionFilter(on_exception);
     signal(SIGABRT, on_abort);
@@ -39,6 +50,8 @@ static void harness_init(void) {
     _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE); _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE); _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, on_report);
+    _CrtSetReportHookW2(_CRT_RPTHOOK_INSTALL, on_report_w);
 #endif
 }
 
