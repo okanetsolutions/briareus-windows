@@ -22,7 +22,9 @@ data, scoped by server, device and repository, and retained in memory even if st
 verification invalidates the response cache. Manual refresh, activation,
 visibility changes and reopening the board or issue screen all consult it.
 Absent Retry-After, 429 uses a conservative one-minute retry delay and other
-failures use two seconds; optional ISO `retryAt` is not consumed. Last successful
+failures back off at 2, 4, 8, 16, 32 and 60 seconds. The shared per-repository
+failure count survives deadline expiry and navigation and resets on a successful
+list read; optional ISO `retryAt` is not consumed. Last successful
 rows and freshness survive errors. The header shows the local retry clock time.
 Session/action reads retain their 45-second cadence; their timers never inherit
 the pull-list delay. An expired deadline permits the next refresh or timer read.
