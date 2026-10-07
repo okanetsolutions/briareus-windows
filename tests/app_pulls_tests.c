@@ -3,6 +3,7 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -54,17 +55,21 @@ static void drain(int expected) {
 }
 static Project project(void) { Project p; memset(&p, 0, sizeof p); p.repo = "o/r"; p.label = "Test"; return p; }
 static Screen *board(void) { Project p = project(); Screen *s = pulls_screen_new(&p); pane_set_root(pane, s); return s; }
+static void next_account(void) {
+    static char ids[100][32];
+    static size_t count;
+    snprintf(ids[count], sizeof ids[count], "test-device-%zu", count);
+    g_store.device.id = ids[count++];
+}
 static void reset(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache);
     list_calls = session_calls = detail_calls = pull_calls = fresh_calls = replies = 0;
     list_status = 200; retry_header = NULL; network_fail = reject_fresh = false;
     list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Keep this row\"}],\"issues\":[],\"syncedAt\":\"2026-10-07T12:00:00.000Z\"}";
-    g_store.routes = routes; g_store.route_count = 2; g_store.device.id = "d1";
+    g_store.routes = routes; g_store.route_count = 2; next_account();
 }
-static void expire(void) {
-    Json *j = json_object(); json_set_num(j, "until", 0);
-    cache_store(g_store.cache, j, "pulls-retry:https://test.example:d1:o/r"); json_free(j);
-}
+// Active deadlines deliberately survive response-cache deletion; use another account for recovery.
+static void expire(void) { next_account(); }
 static HeaderInfo header(Screen *s) { HeaderInfo h; memset(&h, 0, sizeof h); s->vt->header(s, &h); return h; }
 static bool layout_contains(Screen *s, const char *text) {
     Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
@@ -231,7 +236,7 @@ static void test_route_loss_rearms_board_and_issue_polling(void) {
     }
 }
 static void test_failed_deadline_write_keeps_account_repository_cooldown(void) {
-    reset();
+    reset(); g_store.device.id = "d1";
     char *server = g_store.server;
     char long_server[400]; memset(long_server, 'a', sizeof long_server - 1); long_server[sizeof long_server - 1] = 0;
     g_store.server = long_server;
@@ -252,6 +257,38 @@ static void test_failed_deadline_write_keeps_account_repository_cooldown(void) {
     pulls_note_failure("no-cache/repo", &e, now); CHECK(pulls_retry_deadline("no-cache/repo") == now + 60);
     g_store.cache = cache; g_store.server = server;
     api_error_clear(&e); pane_set_root(pane, NULL);
+}
+static void test_saved_deadline_survives_cache_invalidation(void) {
+    reset();
+    ApiError e; api_error_init(&e); api_error_set(&e, API_HTTP, 429, "Slow down", 3600);
+    time_t now = time(NULL); pulls_note_failure("o/r", &e, now);
+    char *key = xstrfmt("pulls-retry:%s:%s:o/r", g_store.server, g_store.device.id);
+    Json *saved = cache_value(g_store.cache, key); CHECK(saved != NULL); json_free(saved); free(key);
+    // Same-device startup verification clears responses when the repository catalog changes.
+    cache_remove_all(g_store.cache);
+    CHECK(pulls_retry_deadline("o/r") == now + 3600);
+    Screen *s = board(); s->vt->refresh(s); drain(1); CHECK_INT(list_calls, 0);
+    CHECK(pulls_retry_deadline("other/repo") == 0);
+    api_error_clear(&e); pane_set_root(pane, NULL);
+}
+static void test_pull_refresh_invalidates_inflight_rows(void) {
+    reset(); g_store.route_count = 4;
+    Project p = project(); Screen *s = pull_detail_screen_new(&p, 1, NULL, NULL);
+    pane_set_root(pane, s); s->vt->refresh(s); drain(3);
+    hold = CreateEventW(NULL, TRUE, FALSE, NULL); entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+    list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Before edit\"}]}";
+    s->vt->timer(s, 1); CHECK_INT(WaitForSingleObject(entered, 5000), WAIT_OBJECT_0); drain(2);
+    // Refresh and write completion both cancel req_pull and call pull_load.
+    list_body = "{\"pulls\":[{\"number\":1,\"title\":\"After edit\"}]}";
+    s->vt->refresh(s); drain(2);
+    SetEvent(hold); drain(2);
+    CHECK_INT(list_calls, 3);
+    // A subsequent refresh saves the reconciled row, never the cancelled old snapshot.
+    s->vt->refresh(s); drain(3);
+    Json *saved = cache_value(g_store.cache, "pull:o/r#1");
+    CHECK_STR(json_str(json_get(json_get(saved, "row"), "title")), "After edit"); json_free(saved);
+    CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
+    pane_set_root(pane, NULL);
 }
 void app_pulls_tests(void) {
     theme_init();
@@ -277,6 +314,8 @@ void app_pulls_tests(void) {
     test_run("pulls fresh reconciliation waits for in-flight snapshot", test_fresh_read_waits_for_inflight_snapshot);
     test_run("pulls route loss rearms board and issue polling", test_route_loss_rearms_board_and_issue_polling);
     test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
+    test_run("pulls saved cooldown survives cache invalidation", test_saved_deadline_survives_cache_invalidation);
+    test_run("pull refresh invalidates in-flight rows", test_pull_refresh_invalidates_inflight_rows);
     pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&e);

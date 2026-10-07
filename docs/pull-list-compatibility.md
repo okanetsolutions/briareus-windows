@@ -18,14 +18,17 @@ the payload as `_receivedAt`; old disk entries without either timestamp show no
 invented sync time. A 400 rejection of `fresh` retries without that argument.
 
 Retry-After becomes an absolute deadline saved separately from successful board
-data, scoped by server, device and repository. Manual refresh, activation,
+data, scoped by server, device and repository, and retained in memory even if startup
+verification invalidates the response cache. Manual refresh, activation,
 visibility changes and reopening the board or issue screen all consult it.
 Absent Retry-After, 429 uses a conservative one-minute retry delay and other
 failures use two seconds; optional ISO `retryAt` is not consumed. Last successful
 rows and freshness survive errors. The header shows the local retry clock time.
 Session/action reads retain their 45-second cadence; their timers never inherit
 the pull-list delay. An expired deadline permits the next refresh or timer read.
-Requests already in flight are retained rather than repeatedly replaced by F5;
+Board and issue list requests already in flight are retained rather than repeatedly replaced by F5;
+pull-detail refresh and write reconciliation invalidate older row requests before
+starting a replacement through the same cooldown gate;
 screen hiding cancels delivery, and completions from a replaced client or a route
 no longer allowed are ignored.
 

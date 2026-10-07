@@ -1263,6 +1263,9 @@ static void pull_load(PullScreen *s) {
     if (s->req_pull) return;
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
     store_call("pull", args, 0, s, pull_done, TAG_PULL, &s->req_pull);
+    // Invalidate pre-refresh rows even when a cooldown delays the replacement read.
+    // Write completions call this same path to reconcile labels and assignees.
+    request_cancel(&s->req_rows);
     // What the board knows about this pull request beyond its own details.
     pulls_read(s->project.repo, false, s, rows_done, &s->req_rows);
     if (store_can_manage() && store_supports("actions")) store_call("actions", json_object(), 0, s, actions_done, TAG_ACTIONS, &s->req_actions);

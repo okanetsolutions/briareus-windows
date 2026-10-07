@@ -31,7 +31,7 @@ static char *pulls_retry_key(const char *repo) {
     return xstrfmt("pulls-retry:%s:%s:%s", g_store.server ? g_store.server : "",
                    g_store.device.id ? g_store.device.id : "", repo);
 }
-// Only failed writes need a live fallback; expired entries are released on the next lookup.
+// Keep active deadlines live even when successful cache writes are later invalidated.
 typedef struct PullsRetry {
     struct PullsRetry *next;
     time_t until;
@@ -69,15 +69,14 @@ void pulls_note_failure(const char *repo, const ApiError *error, time_t now) {
     if (until <= pulls_retry_deadline(repo)) return;
     char *key = pulls_retry_key(repo);
     Json *saved = json_object(); json_set_num(saved, "until", (double)until);
-    if (!g_store.cache || !cache_store(g_store.cache, saved, key)) {
-        PullsRetry *live = pulls_retry_live(key);
-        if (!live) {
-            live = xmalloc_kept(sizeof *live + strlen(key) + 1);
-            live->key = (char *)(live + 1); strcpy(live->key, key);
-            live->next = pulls_retries; pulls_retries = live;
-        }
-        live->until = until;
+    if (g_store.cache) cache_store(g_store.cache, saved, key);
+    PullsRetry *live = pulls_retry_live(key);
+    if (!live) {
+        live = xmalloc_kept(sizeof *live + strlen(key) + 1);
+        live->key = (char *)(live + 1); strcpy(live->key, key);
+        live->next = pulls_retries; pulls_retries = live;
     }
+    live->until = until;
     json_free(saved); free(key);
 }
 time_t pulls_sync_time(const Json *result, bool saved, time_t now) {
