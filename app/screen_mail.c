@@ -113,6 +113,7 @@ static void start_done(void *owner, Request *r) {
         open_web_url(json_str(json_get(r->result, "url")));
         arm(s, 10000);
     }
+    if (!s->sign_in.state && syncing(s)) load(s);
     repaint(s);
 }
 static void start(MailScreen *s, const char *provider, int id) {
