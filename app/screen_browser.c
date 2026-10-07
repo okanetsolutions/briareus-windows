@@ -873,105 +873,30 @@ Screen *browser_screen_new(const Session *session) {
 
 // MARK: - Docked, or in a window of its own
 
-/// A popped-out browser: a top-level window holding a pane whose only screen is the session's browser.
-typedef struct { HWND hwnd; Pane *pane; HWND focus; } BrowserWindow;
-static BrowserWindow **g_windows; static size_t g_window_count;
-static const wchar_t WINDOW_CLASS[] = L"BriareusBrowserWindow";
 static const wchar_t HOST_CLASS[] = L"BriareusBrowserHost";
 #define WM_BROWSER_MOVE (WM_APP + 62)
 
-static BrowserScreen *window_screen(BrowserWindow *w) { return w->pane ? (BrowserScreen *)pane_root(w->pane) : NULL; }
-static BrowserWindow *find_window(const char *session_id_) {
-    for (size_t i = 0; i < g_window_count; i++) {
-        BrowserScreen *s = window_screen(g_windows[i]);
-        if (s && str_eq(s->session_id, session_id_)) return g_windows[i];
-    }
-    return NULL;
+/// A popped-out browser's window: one of detached.c's, its root screen the session's browser.
+static Pane *find_window(const char *session_id_) {
+    char *id = xstrfmt("browser:%s", session_id_);
+    Pane *p = detached_find(id);
+    free(id);
+    return p;
 }
+static HWND window_of(Pane *p) { return GetAncestor(pane_hwnd(p), GA_ROOT); }
 static BrowserScreen *docked(void) { return app_browser_pane() ? (BrowserScreen *)pane_root(app_browser_pane()) : NULL; }
-
-static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    BrowserWindow *w = (BrowserWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    switch (msg) {
-    case WM_NCCREATE:
-        w = ((CREATESTRUCTW *)lp)->lpCreateParams;
-        w->hwnd = hwnd;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)w);
-        break;
-    case WM_CREATE: theme_apply_window(hwnd); w->pane = pane_create(hwnd, true); return 0;
-    case WM_SIZE: if (w && w->pane && wp != SIZE_MINIMIZED) { RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc); } return 0;
-    case WM_ERASEBKGND: return 1;
-    case WM_ACTIVATE:
-        // Keys go back to where they went before the window lost the foreground: the page, or the address field.
-        if (!w || !w->pane) break;
-        if (LOWORD(wp) == WA_INACTIVE) w->focus = GetFocus();
-        else SetFocus(w->focus && IsChild(hwnd, w->focus) ? w->focus : pane_hwnd(w->pane));
-        return 0;
-    case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(320); return 0; }
-    case WM_DPICHANGED: { RECT *rc = (RECT *)lp; SetWindowPos(hwnd, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, SWP_NOZORDER | SWP_NOACTIVATE); return 0; }
-    case WM_DESTROY:
-        if (!w) return 0;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-        pane_destroy(w->pane);
-        for (size_t i = 0; i < g_window_count; i++) if (g_windows[i] == w) { g_windows[i] = g_windows[--g_window_count]; break; }
-        free(w);
-        return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
 /// Opens the screen in a window of its own, over `at` (screen coordinates) when given: where it was docked.
-static void open_window(Screen *screen, const RECT *at) {
-    static bool registered;
-    HINSTANCE instance = GetModuleHandleW(NULL);
-    if (!registered) {
-        WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);
-        wc.cbSize = sizeof wc; wc.lpfnWndProc = window_proc; wc.hInstance = instance; wc.lpszClassName = WINDOW_CLASS;
-        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-        wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP)); wc.hIconSm = wc.hIcon;
-        registered = RegisterClassExW(&wc) != 0;
-    }
-    int x = CW_USEDEFAULT, y = CW_USEDEFAULT, cx = px(1100), cy = px(800);
-    if (at && !IsRectEmpty(at)) {
-        x = at->left + px(24); y = at->top + px(24); cx = at->right - at->left; cy = at->bottom - at->top;
-        // Kept on the monitor it popped out on.
-        MONITORINFO mi = { sizeof mi };
-        if (GetMonitorInfoW(MonitorFromRect(at, MONITOR_DEFAULTTONEAREST), &mi)) {
-            RECT wa = mi.rcWork;
-            if (cx > wa.right - wa.left) cx = wa.right - wa.left;
-            if (cy > wa.bottom - wa.top) cy = wa.bottom - wa.top;
-            if (x + cx > wa.right) x = wa.right - cx;
-            if (y + cy > wa.bottom) y = wa.bottom - cy;
-            if (x < wa.left) x = wa.left;
-            if (y < wa.top) y = wa.top;
-        }
-    }
-    BrowserWindow *w = xcalloc(1, sizeof *w);
-    g_windows = xrealloc(g_windows, (g_window_count + 1) * sizeof *g_windows);
-    g_windows[g_window_count++] = w;
-    // Not owned by the main window: it stays put when that one is minimized, and has its own taskbar button.
-    HWND hwnd = CreateWindowExW(WS_EX_APPWINDOW, WINDOW_CLASS, L"Browser", WS_OVERLAPPEDWINDOW, x, y, cx, cy, NULL, NULL, instance, w);
-    if (!hwnd) {
-        for (size_t i = 0; i < g_window_count; i++) if (g_windows[i] == w) { g_windows[i] = g_windows[--g_window_count]; break; }
-        free(w);
-        screen->vt->destroy(screen);
-        return;
-    }
-    RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc);
-    pane_set_root(w->pane, screen);
-    ShowWindow(hwnd, SW_SHOWNORMAL);
-    SetForegroundWindow(hwnd);
-}
+static void open_window(Screen *screen, const RECT *at) { detached_open(screen, at, true); }
 
 typedef struct { int op; char *session_id, *title; bool on, running; } Move;
 /// Where the browser is shown changes once the click that asked for it is over: the screen that asked goes with it.
 static void do_move(const Move *m) {
-    BrowserWindow *w = find_window(m->session_id);
+    Pane *w = find_window(m->session_id);
     BrowserScreen *d = docked();
     bool is_docked = d && str_eq(d->session_id, m->session_id);
     switch (m->op) {
     case ACT_CLOSE_PANE:
-        if (w) DestroyWindow(w->hwnd); else if (is_docked) app_set_browser(NULL);
+        if (w) DestroyWindow(window_of(w)); else if (is_docked) app_set_browser(NULL);
         break;
     case ACT_DETACH: {
         if (!is_docked) break;
@@ -982,7 +907,7 @@ static void do_move(const Move *m) {
     }
     case ACT_DOCK:
         if (!w || !app_browser_dockable() || !conversation_shown(m->session_id)) break;
-        DestroyWindow(w->hwnd);
+        DestroyWindow(window_of(w));
         app_set_browser(browser_new(m->session_id, m->title, m->on, m->running, false));
         SetForegroundWindow(app_window());
         break;
@@ -1014,32 +939,13 @@ static void post_move(BrowserScreen *s, int op) {
 
 void browser_open(const Session *session) {
     const char *id = session_id(session);
-    BrowserWindow *w = find_window(id);
-    if (w) {
-        if (IsIconic(w->hwnd)) ShowWindow(w->hwnd, SW_RESTORE);
-        SetForegroundWindow(w->hwnd);
-        return;
-    }
+    Pane *w = find_window(id);
+    if (w) { detached_raise(w); return; }
     BrowserScreen *d = docked();
     if (d && str_eq(d->session_id, id)) { app_set_browser(NULL); return; }
     Screen *s = browser_screen_new(session);
-    if (app_browser_dockable()) { app_set_browser(s); return; }
-    // Too narrow for a column beside the conversation: a window of its own.
+    if (app_browser_dockable() && conversation_shown(id)) { app_set_browser(s); return; }
+    // Too narrow for a column beside the conversation, or the conversation is in a window of its own: a window of its own.
     ((BrowserScreen *)s)->detached = true;
     open_window(s, NULL);
-}
-void browser_windows_close_all(void) {
-    while (g_window_count) {
-        size_t before = g_window_count;
-        DestroyWindow(g_windows[g_window_count - 1]->hwnd);
-        if (g_window_count == before) break;
-    }
-}
-void browser_windows_themed(void) {
-    for (size_t i = 0; i < g_window_count; i++) {
-        theme_apply_window(g_windows[i]->hwnd);
-        if (!g_windows[i]->pane) continue;
-        SendMessageW(pane_hwnd(g_windows[i]->pane), WM_THEMECHANGED, 0, 0);
-        pane_relayout(g_windows[i]->pane);
-    }
 }

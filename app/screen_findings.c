@@ -533,7 +533,7 @@ static void reply_on(FindingsScreen *s, size_t r, size_t finding) {
     int round = round_number(held);
     char *sid = xstrdup(session_id(ses)), *fkey = xstrdup(key);
     const char *ft = json_str(json_get(f, "title"));
-    char *typed = dialog_text(app_window(), "Reply on this finding\xE2\x80\x99s thread", ft ? ft : "Reply", "Reply", reason_of(s, sid, round, f));
+    char *typed = dialog_text(app_dialog_owner(), "Reply on this finding\xE2\x80\x99s thread", ft ? ft : "Reply", "Reply", reason_of(s, sid, round, f));
     int again = typed ? find_round(s, sid, round) : -1;
     if (again >= 0) {
         char *text = str_trim(typed);
@@ -826,7 +826,7 @@ static void findings_header(Screen *base, HeaderInfo *info) {
 // MARK: - Actions
 
 static void open_session_by_id(FindingsScreen *s, const char *sid) {
-    for (size_t i = 0; i < s->all_count; i++) if (str_eq(session_id(&s->all[i]), sid)) { app_push_detail(conversation_screen_new(&s->all[i])); return; }
+    for (size_t i = 0; i < s->all_count; i++) if (str_eq(session_id(&s->all[i]), sid)) { app_push_from(&s->base, conversation_screen_new(&s->all[i])); return; }
 }
 static void set_all(FindingsScreen *s, size_t r, const char *decision) {
     const Session *ses = round_session(s, r);
@@ -864,7 +864,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     const char *key = json_str(json_get(f, "key"));
     int round = round_number(held);
     switch (action) {
-    case ACT_OPEN_SESSION: app_push_detail(conversation_screen_new(ses)); break;
+    case ACT_OPEN_SESSION: app_push_from(&s->base, conversation_screen_new(ses)); break;
     case ACT_OPEN_PR: { char *url = held_round_pr_url(ses, held); open_web_url(url); free(url); break; }
     case ACT_OPEN_FINDING: {
         const char *url = json_str(json_get(f, "url"));
@@ -886,7 +886,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (!key) break;
         char *sid = xstrdup(session_id(ses)), *fkey = xstrdup(key);
         const char *ft = json_str(json_get(f, "title"));
-        char *typed = dialog_text(app_window(), "Comment on this finding", ft ? ft : "Comment", "Save", reason_of(s, sid, round, f));
+        char *typed = dialog_text(app_dialog_owner(), "Comment on this finding", ft ? ft : "Comment", "Save", reason_of(s, sid, round, f));
         if (typed && find_round(s, sid, round) >= 0) { set_string(&draft_get(s, sid, round, fkey)->reason, typed); card_forget_saved(s, sid); pane_relayout(base->pane); }
         free(typed); free(sid); free(fkey);
         break;
@@ -897,7 +897,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_CLEAR_ALL: set_all(s, r, NULL); pane_relayout(base->pane); break;
     case ACT_NOTE: {
         char *sid = xstrdup(session_id(ses));
-        char *typed = dialog_text(app_window(), "Note for the fix session", "A note for the pull request and the fix session", "Save", note_of(s, sid, round));
+        char *typed = dialog_text(app_dialog_owner(), "Note for the fix session", "A note for the pull request and the fix session", "Save", note_of(s, sid, round));
         if (typed && find_round(s, sid, round) >= 0) { note_set(s, sid, round, typed); card_forget_saved(s, sid); pane_relayout(base->pane); }
         free(typed); free(sid);
         break;
@@ -947,6 +947,7 @@ static void findings_destroy(Screen *base) {
 static const ScreenVTable findings_vt = {
     .destroy = findings_destroy, .layout = findings_layout, .header = findings_header, .action = findings_action,
     .timer = findings_timer, .visible = findings_visible, .refresh = findings_refresh, .activated = findings_activated,
+    .detachable = true,
 };
 Screen *findings_screen_new(void) {
     FindingsScreen *s = xcalloc(1, sizeof *s);

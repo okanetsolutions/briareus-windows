@@ -23,7 +23,7 @@ static const char *action_icon(const char *id) {
 /// Asks for an errand's input when it takes one; the others start straight away. True to go ahead.
 static bool action_prompt(const BoardAction *a, int number, char **input) {
     *input = NULL;
-    if (a->has_input) return dialog_action_input(app_window(), a, number, input);
+    if (a->has_input) return dialog_action_input(app_dialog_owner(), a, number, input);
     return true;
 }
 /// The errands this app can start on a row: what the server offers for it, less what the token or server lacks.
@@ -680,7 +680,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_REFRESH: pulls_refresh(base); break;
     case ACT_REVIEW_LOGIN: if (github_login_ask()) { pane_relayout(base->pane); pane_header_changed(base->pane); } break;
     case ACT_MERGE_PULL: board_merge(s, (size_t)arg); break;
-    case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
+    case ACT_RUNS: if ((size_t)arg < s->pull_count) app_push_from(&s->base, pull_detail_screen_new(&s->project, s->pulls[arg].number, NULL, &s->pulls[arg])); break;
     case ACT_TAB:
         // The side panel belongs to the Board tab's cards.
         if (s->tab == TAB_BOARD && arg != TAB_BOARD) app_set_overlay(NULL);
@@ -696,11 +696,11 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
         StackPosition stack; bool has_stack = stack_position_parse(json_get(s->pulls[arg].raw, "stack"), json_get(s->board, "stacks"), &stack);
-        app_push_detail(pull_detail_screen_new(&s->project, s->pulls[arg].number, has_stack ? &stack : NULL, &s->pulls[arg]));
+        app_push_from(&s->base, pull_detail_screen_new(&s->project, s->pulls[arg].number, has_stack ? &stack : NULL, &s->pulls[arg]));
         if (has_stack) stack_position_free(&stack);
         break;
     }
-    case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_detail(issue_detail_screen_new(&s->project, &s->issues[arg])); break;
+    case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &s->issues[arg])); break;
     case ACT_PULL_ACTION: {
         size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;
         if (index >= s->pull_count || s->busy || s->uncertain) break;
@@ -807,7 +807,7 @@ static const char *github_login(void) {
 }
 /// Asks for the login, the saved one filled in; false when cancelled or left blank.
 static bool github_login_ask(void) {
-    char *typed = dialog_text(app_window(), "Your GitHub login", "The GitHub user \xE2\x80\x9C" "Assign me\xE2\x80\x9D adds", "Save", github_login() ? github_login() : "");
+    char *typed = dialog_text(app_dialog_owner(), "Your GitHub login", "The GitHub user \xE2\x80\x9C" "Assign me\xE2\x80\x9D adds", "Save", github_login() ? github_login() : "");
     if (!typed) return false;
     Json *names = board_names_parse(typed, true);
     const char *login = json_str(json_at(names, 0));
@@ -844,7 +844,7 @@ static Json *assignees_chosen(int chosen, char *const *assignees, size_t count, 
     }
     if (chosen != EDIT_ASSIGNEES) return NULL;
     char *current = board_names_join(assignees, count), *caption = xstrfmt("Assignees of #%d", number);
-    char *typed = dialog_text(app_window(), caption, "GitHub logins, comma separated (ten at most)", "Save", current);
+    char *typed = dialog_text(app_dialog_owner(), caption, "GitHub logins, comma separated (ten at most)", "Save", current);
     free(current); free(caption);
     if (!typed) return NULL;
     Json *names = board_names_parse(typed, true);
@@ -862,7 +862,7 @@ static Json *assignees_edit(HWND hwnd, POINT pt, char *const *assignees, size_t 
 /// The labels typed over the current ones (read before the dialog opens), or NULL when cancelled.
 static Json *labels_edit(const PullLabel *labels, size_t count, int number) {
     char *current = board_label_names_join(labels, count), *caption = xstrfmt("Labels of #%d", number);
-    char *typed = dialog_text(app_window(), caption, "Label names, comma separated", "Save", current);
+    char *typed = dialog_text(app_dialog_owner(), caption, "Label names, comma separated", "Save", current);
     free(current); free(caption);
     if (!typed) return NULL;
     Json *names = board_names_parse(typed, false);
@@ -873,7 +873,7 @@ static Json *labels_edit(const PullLabel *labels, size_t count, int number) {
 static Json *details_edit(const char *what, int number, const char *title, const char *body) {
     char *caption = xstrfmt("Edit %s #%d", what, number);
     char *t = xstrdup(title ? title : ""), *b = xstrdup(body ? body : "");
-    bool ok = dialog_edit_item(app_window(), caption, &t, &b);
+    bool ok = dialog_edit_item(app_dialog_owner(), caption, &t, &b);
     free(caption);
     Json *fields = NULL;
     if (ok) {
@@ -2686,7 +2686,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (arg == 1) { char *files = xstrfmt("%s/files", url); open_web_url(files); free(files); } else open_web_url(url);
         break;
     }
-    case ACT_STACK_ITEM: app_push_detail(pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
+    case ACT_STACK_ITEM: app_push_from(&s->base, pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB:
         if (arg == PR_TAB_RUN) { run_open(s); break; }
@@ -2731,7 +2731,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (link && !board_link_is_foreign(link, s->project.repo) && store_supports("issue")) {
             IssueSummary bare; memset(&bare, 0, sizeof bare);
             bare.number = link->number; bare.title = link->title; bare.url = link->url;
-            app_push_detail(issue_detail_screen_new(&s->project, &bare));
+            app_push_from(&s->base, issue_detail_screen_new(&s->project, &bare));
         } else if (link && safe_web_url(link->url)) open_web_url(link->url);
         board_link_free(&parsed);
         break;
@@ -2811,7 +2811,7 @@ static void pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
         free(id);
         break;
     }
-    case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
+    case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_from(&s->base, conversation_screen_new(&s->runs[arg])); break;
     case ACT_DELETE_RUN: {
         if ((size_t)arg >= s->run_count || s->deleting_run || !store_supports("delete")) break;
         char *id = xstrdup(session_id(&s->runs[arg]));
@@ -2887,7 +2887,7 @@ static void board_open_run(PullsScreen *s, size_t index) {
     Screen *screen = pull_detail_screen_new(&s->project, pull->number, has_stack ? &stack : NULL, pull);
     if (has_stack) stack_position_free(&stack);
     run_open((PullScreen *)screen);
-    app_push_detail(screen);
+    app_push_from(&s->base, screen);
 }
 
 // MARK: - Issue
@@ -3080,11 +3080,11 @@ static size_t issue_open_pulls(const IssueScreen *s) {
 static void issue_open_link(IssueScreen *s, const BoardLink *link) {
     if (!board_link_is_foreign(link, s->project.repo)) {
         const IssueSummary *row = issues_find(s->board_issues, s->board_issue_count, link->number);
-        if (row) { app_push_detail(issue_detail_screen_new(&s->project, row)); return; }
+        if (row) { app_push_from(&s->base, issue_detail_screen_new(&s->project, row)); return; }
         if (store_supports("issue")) {
             IssueSummary bare; memset(&bare, 0, sizeof bare);
             bare.number = link->number; bare.title = link->title; bare.url = link->url;
-            app_push_detail(issue_detail_screen_new(&s->project, &bare));
+            app_push_from(&s->base, issue_detail_screen_new(&s->project, &bare));
             return;
         }
     }
@@ -3092,7 +3092,7 @@ static void issue_open_link(IssueScreen *s, const BoardLink *link) {
 }
 static void issue_open_pull(IssueScreen *s, const BoardLink *link) {
     if (board_link_is_foreign(link, s->project.repo) || !store_supports("pull")) open_web_url(link->url);
-    else app_push_detail(pull_detail_screen_new(&s->project, link->number, NULL, pulls_find(s->board_pulls, s->board_pull_count, link->number)));
+    else app_push_from(&s->base, pull_detail_screen_new(&s->project, link->number, NULL, pulls_find(s->board_pulls, s->board_pull_count, link->number)));
 }
 /// The state pill: GitHub's green Open, purple Closed, and grey for one closed as not planned or a duplicate.
 static const char *issue_state(const IssueScreen *s, COLORREF *color) {
@@ -3551,7 +3551,7 @@ static void issue_start_done(void *owner, Request *req) {
         // The new conversation joins the Sessions list on the way back.
         if (store_supports("sessions")) { request_cancel(&s->req_runs); Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, issue_runs_done, 0, &s->req_runs); }
         Session started;
-        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_detail(conversation_screen_new(&started)); session_free(&started); return; }
+        if (session_parse(json_get(req->result, "session"), &started)) { pane_relayout(s->base.pane); app_push_from(&s->base, conversation_screen_new(&started)); session_free(&started); return; }
     } else {
         request_error_into(&s->write_error, req);
         if (request_outcome_unknown(req)) s->uncertain = true;
@@ -3611,7 +3611,7 @@ static void issue_close(IssueScreen *s, POINT pt) {
     char *comment = NULL;
     if (chosen >= 3) {
         char *caption = xstrfmt("Comment on #%d before closing it", s->issue.number);
-        comment = dialog_text(app_window(), caption, "Comment", "Next", "");
+        comment = dialog_text(app_dialog_owner(), caption, "Comment", "Next", "");
         free(caption);
         if (!comment) return;
         if (str_empty(comment)) { free(comment); comment = NULL; }
@@ -3671,8 +3671,8 @@ static void issue_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_ISSUE_EVENT: if ((size_t)arg < json_count(s->events)) event_open(s, json_at(s->events, (size_t)arg)); break;
     case ACT_ISSUE_PROJECT: open_web_url(json_str(json_get(json_at(json_get(s->detail, "projects"), (size_t)arg), "url"))); break;
     case ACT_ISSUE_MORE: if (s->next_page && !s->req_timeline) { issue_timeline_load(s, s->next_page); pane_relayout(base->pane); } break;
-    case ACT_ISSUE_SUB: if ((size_t)arg < s->board_issue_count) app_push_detail(issue_detail_screen_new(&s->project, &s->board_issues[arg])); break;
-    case ACT_ISSUE_RUN: if ((size_t)arg < s->run_count) app_push_detail(conversation_screen_new(&s->runs[arg])); break;
+    case ACT_ISSUE_SUB: if ((size_t)arg < s->board_issue_count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &s->board_issues[arg])); break;
+    case ACT_ISSUE_RUN: if ((size_t)arg < s->run_count) app_push_from(&s->base, conversation_screen_new(&s->runs[arg])); break;
     case ACT_ISSUE_PULL: {
         if ((size_t)arg >= s->issue.pull_count) break;
         issue_open_pull(s, &s->issue.pulls[arg]);

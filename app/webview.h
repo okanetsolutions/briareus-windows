@@ -22,6 +22,8 @@ void webview_free(WebView *wv);
 /// Where the browser sits, in `parent`'s client coordinates.
 void webview_set_bounds(WebView *wv, const RECT *rc);
 void webview_show(WebView *wv, bool shown);
+/// Moves the browser into another window, as a page moves into a window of its own; its bounds are set again after.
+void webview_set_parent(WebView *wv, HWND parent);
 void webview_reload(WebView *wv);
 /// Goes back or forward in the browser's history, as its buttons do; nothing when there is nowhere to go.
 void webview_back(WebView *wv);

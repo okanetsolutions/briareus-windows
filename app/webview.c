@@ -19,7 +19,7 @@ typedef void (*AnyFn)(void);
 // ICoreWebView2Environment
 enum { ENV_CREATE_CONTROLLER = 3 };
 // ICoreWebView2Controller
-enum { CTRL_PUT_IS_VISIBLE = 4, CTRL_PUT_BOUNDS = 6, CTRL_CLOSE = 24, CTRL_GET_CORE = 25 };
+enum { CTRL_PUT_IS_VISIBLE = 4, CTRL_PUT_BOUNDS = 6, CTRL_PUT_PARENT_WINDOW = 22, CTRL_CLOSE = 24, CTRL_GET_CORE = 25 };
 // ICoreWebView2
 enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_ADD_HISTORY_CHANGED = 13, CORE_RELOAD = 31,
        CORE_GET_CAN_GO_BACK = 38, CORE_GET_CAN_GO_FORWARD = 39, CORE_GO_BACK = 40, CORE_GO_FORWARD = 41, CORE_ADD_TITLE_CHANGED = 46,
@@ -240,6 +240,12 @@ void webview_set_bounds(WebView *wv, const RECT *rc) {
     if (EqualRect(&wv->bounds, rc)) return;
     wv->bounds = *rc;
     if (wv->controller) COM(wv->controller, CTRL_PUT_BOUNDS, HRESULT (WINAPI *)(void *, RECT))(wv->controller, wv->bounds);
+}
+void webview_set_parent(WebView *wv, HWND parent) {
+    if (wv->parent == parent) return;
+    wv->parent = parent;
+    SetRectEmpty(&wv->bounds);
+    if (wv->controller) COM(wv->controller, CTRL_PUT_PARENT_WINDOW, HRESULT (WINAPI *)(void *, HWND))(wv->controller, parent);
 }
 void webview_show(WebView *wv, bool shown) {
     wv->shown = shown;

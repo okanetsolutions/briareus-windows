@@ -1,6 +1,7 @@
 // WhatsApp Web and Slack in the detail pane, from the sidebar strip's buttons. One browser per app serves every visit:
 // leaving the screen hides it instead of closing it, so the chats stay loaded and coming back is instant. The WebView2
-// profile is kept on disk, so the QR code is scanned, or the workspace signed in to, once.
+// profile is kept on disk, so the QR code is scanned, or the workspace signed in to, once. Either moves into a window of
+// its own, and its browser goes with it.
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
@@ -17,7 +18,7 @@ static const WebAppInfo APPS[WEB_APP_COUNT] = {
 
 typedef struct { Screen base; WebApp app; bool shown; } WebAppScreen;
 
-static WebView *g_web[WEB_APP_COUNT];            // live as long as the detail pane, their parent
+static WebView *g_web[WEB_APP_COUNT];            // live as long as the detail pane, their parent while no window holds them
 static WebAppScreen *g_current[WEB_APP_COUNT];   // the screen showing each, which hears its changes
 
 static void web_changed(void *ctx) {
@@ -29,7 +30,11 @@ static void web_changed(void *ctx) {
 
 static void web_app_destroy(Screen *base) {
     WebAppScreen *s = (WebAppScreen *)base;
-    if (g_current[s->app] == s) { g_current[s->app] = NULL; if (g_web[s->app]) webview_show(g_web[s->app], false); }
+    if (g_current[s->app] == s) {
+        g_current[s->app] = NULL;
+        // A window of its own closing hands the browser back to the detail pane, which outlives it.
+        if (g_web[s->app]) { webview_show(g_web[s->app], false); if (app_detail_pane()) webview_set_parent(g_web[s->app], pane_hwnd(app_detail_pane())); }
+    }
     screen_release(base);
 }
 
@@ -75,6 +80,7 @@ static void web_app_place(Screen *base, const RECT *content, int scroll_y) {
     if (!s->shown || g_current[s->app] != s) return;
     WebView **web = &g_web[s->app];
     if (!*web) *web = webview_new(pane_hwnd(base->pane), APPS[s->app].url, NULL, web_changed, (void *)(intptr_t)s->app);
+    else webview_set_parent(*web, pane_hwnd(base->pane));
     bool on = webview_ready(*web) && content->bottom > content->top;
     if (on) webview_set_bounds(*web, content);
     webview_show(*web, on);
@@ -99,7 +105,7 @@ static void web_app_refresh(Screen *base) {
 
 static const ScreenVTable web_app_vt = {
     .destroy = web_app_destroy, .layout = web_app_layout, .header = web_app_header, .action = web_app_action,
-    .place = web_app_place, .visible = web_app_visible, .refresh = web_app_refresh,
+    .place = web_app_place, .visible = web_app_visible, .refresh = web_app_refresh, .detachable = true,
 };
 Screen *web_app_screen_new(WebApp app) {
     WebAppScreen *s = xcalloc(1, sizeof *s);
