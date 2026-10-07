@@ -526,20 +526,22 @@ static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
     }
 }
 
-/// The screens' Edit controls follow the palette's mode (their scrollbars, their context menus).
+/// The screens' Edit controls and the find bar's controls follow the palette's mode.
 static BOOL CALLBACK retheme_child(HWND child, LPARAM lp) {
     (void)lp;
     wchar_t cls[16]; GetClassNameW(child, cls, 16);
-    if (_wcsicmp(cls, L"Edit") == 0) { theme_apply_control(child); InvalidateRect(child, NULL, TRUE); }
+    if (_wcsicmp(cls, L"Edit") == 0 || _wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"Static") == 0) {
+        theme_apply_control(child); InvalidateRect(child, NULL, TRUE);
+    }
     return TRUE;
 }
 
-/// The HWND render target presents a new frame even when an Edit has not moved. WS_CLIPCHILDREN keeps the Edit out
-/// of the pane's GDI update region, so it needs its own paint after the Direct2D frame has been presented.
-static BOOL CALLBACK repaint_edit(HWND child, LPARAM lp) {
+/// The HWND render target presents a new frame even when a control has not moved. WS_CLIPCHILDREN keeps controls out
+/// of the pane's GDI update region, so they need their own paint after the Direct2D frame has been presented.
+static BOOL CALLBACK repaint_child(HWND child, LPARAM lp) {
     (void)lp;
     wchar_t cls[16]; GetClassNameW(child, cls, 16);
-    if (IsWindowVisible(child) && _wcsicmp(cls, L"Edit") == 0)
+    if (IsWindowVisible(child) && (_wcsicmp(cls, L"Edit") == 0 || _wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"Static") == 0))
         RedrawWindow(child, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     return TRUE;
 }
@@ -862,7 +864,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps);
-        EnumChildWindows(hwnd, repaint_edit, 0);
+        EnumChildWindows(hwnd, repaint_child, 0);
         return 0;
     }
     case WM_ERASEBKGND: return 1;
