@@ -56,7 +56,7 @@ static bool syncing(MailScreen *s) { for (size_t i = 0; i < s->accounts.count; i
 static void stop_waiting(MailScreen *s) { mail_sign_in_free(&s->sign_in); }
 static void failed(MailScreen *s, Request *r, bool finish) {
     set_error(s, mail_error_message(r->error.status, finish, r->error.message), str_eq(r->operation, "settings_mail_accounts"));
-    if (r->error.status == 401 || r->error.status == 403 || r->error.status == 404) s->blocked = true;
+    if (r->error.status == 401 || r->error.status == 403 || (r->error.status == 404 && s->read_error)) s->blocked = true;
     if (r->error.status == 429) {
         s->failures++;
         int delay = mail_settings_retry_ms(s->failures, r->error.retry_after);
@@ -113,7 +113,10 @@ static void start_done(void *owner, Request *r) {
         open_web_url(json_str(json_get(r->result, "url")));
         arm(s, 10000);
     }
-    if (!s->sign_in.state && syncing(s)) load(s);
+    if (!s->sign_in.state && (syncing(s) || (!r->ok && r->error.status == 404))) {
+        if (!r->ok && r->error.status == 404) s->next_read = 0;
+        load(s);
+    }
     repaint(s);
 }
 static void start(MailScreen *s, const char *provider, int id) {
