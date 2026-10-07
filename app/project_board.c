@@ -21,7 +21,9 @@ enum { COL_W = 300, COL_MAX_W = 380, COL_GAP = 12, COL_MIN_H = 240 };
 enum { SETTLE_SECONDS = 120 };
 
 /// A card GitHub moved, the column it came from and the one it went to (NULL for the "No <field>" column).
-typedef struct { char *id, *from, *column; time_t until; } Settling;
+// `from` holds every column the card was carried from while it settles (NULL for the "No <field>" column): a read
+// lagging behind more than one quick move shows it in any of them.
+typedef struct { char *id, **from, *column; size_t from_count; time_t until; } Settling;
 
 struct BoardTab {
     Project project;
@@ -74,7 +76,9 @@ static void filter_restore(BoardTab *p) {
     json_free(saved);
 }
 static void settled(BoardTab *p, size_t i) {
-    free(p->settling[i].id); free(p->settling[i].from); free(p->settling[i].column);
+    Settling *m = &p->settling[i];
+    for (size_t k = 0; k < m->from_count; k++) free(m->from[k]);
+    free(m->id); free(m->from); free(m->column);
     p->settling[i] = p->settling[--p->settling_count];
 }
 /// Puts the cards GitHub moved lately in their new columns, on a read that has them in their old ones.
@@ -85,9 +89,11 @@ static void settle(BoardTab *p, ProjectBoard *board) {
         size_t column, card;
         bool found = project_board_find(board, m->id, &column, &card);
         int to = project_board_column(board, m->column);
+        bool stale = false;
+        for (size_t k = 0; found && !stale && k < m->from_count; k++) stale = str_eq(board->columns[column].id, m->from[k]);
         // Once a read shows it there or anywhere but where it came from (moved again since), or long enough after, the
         // read is GitHub's own.
-        if (now > m->until || (found && ((int)column == to || !str_eq(board->columns[column].id, m->from)))) { settled(p, i); continue; }
+        if (now > m->until || (found && ((int)column == to || !stale))) { settled(p, i); continue; }
         if (found && to >= 0) project_board_move(board, column, card, (size_t)to);
         i++;
     }
@@ -487,11 +493,21 @@ static void move_done(void *owner, Request *req) {
     // Moved or not, the board is read again as GitHub has it now: the server has dropped its saved copy.
     if (!req->ok) request_error_into(&p->move_error, req);
     else if (p->moved_id) {
-        for (size_t i = 0; i < p->settling_count; i++) if (str_eq(p->settling[i].id, p->moved_id)) { settled(p, i); break; }
+        // A card moved again before it settled keeps the columns it came from before, so a read behind both moves
+        // is still corrected.
+        char **from = NULL; size_t from_count = 0;
+        for (size_t i = 0; i < p->settling_count; i++) {
+            if (!str_eq(p->settling[i].id, p->moved_id)) continue;
+            from = p->settling[i].from; from_count = p->settling[i].from_count;
+            p->settling[i].from = NULL; p->settling[i].from_count = 0;
+            settled(p, i); break;
+        }
+        from = xrealloc(from, (from_count + 1) * sizeof *from);
+        from[from_count++] = p->moved_off; p->moved_off = NULL;
         p->settling = xrealloc(p->settling, (p->settling_count + 1) * sizeof *p->settling);
         Settling *m = &p->settling[p->settling_count++];
         m->id = p->moved_id; p->moved_id = NULL;
-        m->from = p->moved_off; p->moved_off = NULL;
+        m->from = from; m->from_count = from_count;
         m->column = p->moved_to; p->moved_to = NULL;
         m->until = time(NULL) + SETTLE_SECONDS;
     }
