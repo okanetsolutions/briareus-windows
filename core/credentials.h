@@ -22,5 +22,8 @@ void settings_write_last_runtime(const char *saved);
 /// Whether new releases are downloaded and installed on their own; on until turned off.
 bool settings_read_auto_update(void);
 void settings_write_auto_update(bool on);
+/// Whether a new session starts with its review loop on: the chip's last value, on until turned off.
+bool settings_read_review_loop(void);
+void settings_write_review_loop(bool on);
 
 #endif
