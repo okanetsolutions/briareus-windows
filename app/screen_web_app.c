@@ -93,6 +93,8 @@ static void web_app_visible(Screen *base, bool shown) {
     if (shown) {
         // A browser that failed to start is tried again on the next visit.
         if (*web && webview_error(*web)) { webview_free(*web); *web = NULL; }
+        // Moved to its new pane now, not at the next paint: a window docking back is destroyed before that paint.
+        if (*web) webview_set_parent(*web, pane_hwnd(base->pane));
         g_current[s->app] = s; pane_relayout(base->pane);
     }
     else if (*web && g_current[s->app] == s) webview_show(*web, false);

@@ -47,6 +47,7 @@ HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? a
 // The dialog disables its owner itself, and enables it again before it hands the foreground back.
 void app_modal_begin(HWND owner) {
     if (g_modal++) return;
+    if (owner) owner = GetAncestor(owner, GA_ROOT);   // a pane passed as the owner stands for its window
     if (g_main && g_main != owner) EnableWindow(g_main, FALSE);
     detached_enable(owner, false);
 }
