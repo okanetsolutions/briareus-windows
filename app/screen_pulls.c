@@ -218,13 +218,21 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     status_restore(s);
     s->loaded = true;
 }
+/// The shared list read gate also covers the older-server retry without refreshing ancillary reads twice.
+static bool pulls_read(const char *repo, bool fresh, void *owner, RequestDone done, Request **slot) {
+    if (*slot || !store_supports("pulls") || time(NULL) < pulls_retry_deadline(repo)) return false;
+    Json *args = json_object(); json_set_str(args, "repo", repo);
+    if (fresh) json_set_str(args, "fresh", "1");
+    store_call("pulls", args, 0, owner, done, 0, slot);
+    return true;
+}
 static void pulls_load(PullsScreen *s, bool fresh);
 static void pulls_done(void *owner, Request *req) {
     PullsScreen *s = owner;
     if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) {
         // A server from before `fresh` refuses the argument it does not know.
-        if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { pulls_load(s, false); return; }
+        if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, pulls_done, &s->req)) poller_finished(&s->poller, false, -1); return; }
         pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->error, req);
         s->loaded = true;
@@ -266,11 +274,7 @@ static void pulls_load(PullsScreen *s, bool fresh) {
         free(key);
         if (!json_count(s->catalog)) { Json *acts = cache_value(g_store.cache, "actions"); if (acts) { json_free(s->catalog); s->catalog = json_clone(json_get(acts, "actions")); json_free(acts); } }
     }
-    if (store_supports("pulls") && !s->req && time(NULL) >= pulls_retry_deadline(s->project.repo)) {
-        Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
-        if (fresh) json_set_str(args, "fresh", "1");
-        store_call("pulls", args, 0, s, pulls_done, 0, &s->req);
-    } else poller_finished(&s->poller, false, -1);
+    if (!pulls_read(s->project.repo, fresh, s, pulls_done, &s->req)) poller_finished(&s->poller, false, -1);
     if (store_can_manage() && store_supports("actions") && !s->req_actions) store_call("actions", json_object(), 0, s, board_actions_done, 0, &s->req_actions);
     if (store_supports("sessions") && !s->req_runs) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
 }
@@ -3080,7 +3084,7 @@ static void issue_board_done(void *owner, Request *req) {
     IssueScreen *s = owner;
     if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) {
-        if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { issue_load(s, false); return; }
+        if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, issue_board_done, &s->req_board)) poller_finished(&s->poller, false, -1); return; }
         pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->load_error, req);
     } else {
@@ -3095,11 +3099,7 @@ static void issue_board_done(void *owner, Request *req) {
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void issue_load(IssueScreen *s, bool fresh) {
-    if (store_supports("pulls") && !s->req_board && time(NULL) >= pulls_retry_deadline(s->project.repo)) {
-        Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
-        if (fresh) json_set_str(args, "fresh", "1");
-        store_call("pulls", args, 0, s, issue_board_done, 0, &s->req_board);
-    } else poller_finished(&s->poller, false, -1);
+    if (!pulls_read(s->project.repo, fresh, s, issue_board_done, &s->req_board)) poller_finished(&s->poller, false, -1);
     if (store_supports("issue") && !s->req_detail) {
         Json *a = json_object(); json_set_num(a, "issue", s->issue.number); json_set_str(a, "repo", s->project.repo);
         store_call("issue", a, 0, s, issue_detail_done, 0, &s->req_detail);
