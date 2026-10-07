@@ -256,6 +256,7 @@ static void pulls_load(PullsScreen *s, bool fresh);
 static void pulls_done(void *owner, Request *req) {
     PullsScreen *s = owner;
     if (req->client != g_store.client || !store_supports(req->operation)) { poller_finished(&s->poller, false, -1); return; }
+    if (req->ok) pulls_note_success(s->project.repo);
     if (!req->ok) {
         // A server from before `fresh` refuses the argument it does not know.
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, pulls_done, &s->req)) poller_finished(&s->poller, false, -1); return; }
@@ -1231,6 +1232,7 @@ static void pull_done(void *owner, Request *req) {
 static void rows_done(void *owner, Request *req) {
     PullScreen *s = owner;
     if (req->client != g_store.client || !store_supports(req->operation)) return;
+    if (req->ok) pulls_note_success(s->project.repo);
     if (!req->ok) { pulls_note_failure(s->project.repo, &req->error, time(NULL)); return; }
     // A pull request the board no longer lists has been merged or closed, and its row went with it.
     if (s->has_row) pull_summary_free(&s->row);
@@ -3127,6 +3129,7 @@ static void issue_load(IssueScreen *s, bool fresh);
 static void issue_board_done(void *owner, Request *req) {
     IssueScreen *s = owner;
     if (req->client != g_store.client || !store_supports(req->operation)) { poller_finished(&s->poller, false, -1); return; }
+    if (req->ok) pulls_note_success(s->project.repo);
     if (!req->ok) {
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { if (!pulls_read(s->project.repo, false, s, issue_board_done, &s->req_board)) poller_finished(&s->poller, false, -1); return; }
         pulls_note_failure(s->project.repo, &req->error, time(NULL));

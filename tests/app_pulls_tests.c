@@ -275,6 +275,79 @@ static void test_list_deadline_retries_board_and_issue(void) {
         pane_set_root(pane, NULL); CHECK(!KillTimer(pane_hwnd(pane), 5));
     }
 }
+static time_t saved_retry_deadline(const char *repo) {
+    char *key = xstrfmt("pulls-retry:%s:%s:%s", g_store.server, g_store.device.id, repo);
+    Json *saved = cache_value(g_store.cache, key);
+    double until = 0; CHECK(json_num(json_get(saved, "until"), &until));
+    json_free(saved); free(key); return (time_t)until;
+}
+static void test_list_failure_backoff_survives_expiry_and_resets(void) {
+    reset();
+    ApiError e; api_error_init(&e);
+    const int statuses[] = { 403, 404, 503, 0 };
+    const int delays[] = { 2, 4, 8, 16, 32, 60, 60, 60 };
+    for (size_t kind = 0; kind < sizeof statuses / sizeof *statuses; kind++) {
+        next_account();
+        api_error_set(&e, statuses[kind] ? API_HTTP : API_NETWORK, statuses[kind], "Unavailable", -1);
+        // Expired deadlines exercise successive retries without a minute-long sleep.
+        time_t now = time(NULL) - 120;
+        for (size_t i = 0; i < sizeof delays / sizeof *delays; i++) {
+            pulls_note_failure("o/r", &e, now);
+            CHECK(saved_retry_deadline("o/r") == now + delays[i]);
+            CHECK(pulls_retry_deadline("o/r") <= time(NULL));
+            cache_remove_all(g_store.cache);
+        }
+        pulls_note_failure("other/repo", &e, now);
+        CHECK(saved_retry_deadline("other/repo") == now + 2);
+        pulls_note_success("o/r");
+        pulls_note_failure("o/r", &e, now);
+        CHECK(saved_retry_deadline("o/r") == now + 2);
+        api_error_set(&e, API_CANCELLED, 0, "Cancelled", -1);
+        pulls_note_failure("o/r", &e, now);
+        api_error_set(&e, API_HTTP, 503, "Unavailable", -1);
+        pulls_note_failure("o/r", &e, now);
+        CHECK(saved_retry_deadline("o/r") == now + 4);
+        // Explicit server cooldowns and the default 429 delay retain their existing semantics.
+        e.retry_after = 120; pulls_note_failure("o/r", &e, now);
+        CHECK(saved_retry_deadline("o/r") == now + 120);
+        pulls_note_success("o/r");
+        cache_remove_all(g_store.cache);
+        e.status = 429; e.retry_after = -1; pulls_note_failure("o/r", &e, now);
+        CHECK(saved_retry_deadline("o/r") == now + 60);
+    }
+    next_account();
+    api_error_set(&e, API_HTTP, 503, "Unavailable", -1);
+    DiskCache *cache = g_store.cache; g_store.cache = NULL;
+    time_t now = time(NULL);
+    pulls_note_failure("o/r", &e, now - 120);
+    pulls_note_failure("o/r", &e, now);
+    CHECK(pulls_retry_deadline("o/r") == now + 4);
+    pulls_note_success("o/r");
+    CHECK(pulls_retry_deadline("o/r") == now + 4);
+    g_store.cache = cache;
+    api_error_clear(&e);
+}
+static void test_successful_list_completions_reset_shared_backoff(void) {
+    for (int screen_kind = 0; screen_kind < 3; screen_kind++) {
+        reset(); g_store.route_count = 4;
+        ApiError e; api_error_init(&e); api_error_set(&e, API_HTTP, 503, "Unavailable", -1);
+        time_t old = time(NULL) - 120;
+        pulls_note_failure("o/r", &e, old); pulls_note_failure("o/r", &e, old);
+        Project p = project(); IssueSummary issue; memset(&issue, 0, sizeof issue);
+        issue.number = 101; issue.title = "Outside page";
+        Screen *s = screen_kind == 0 ? pulls_screen_new(&p) : screen_kind == 1 ?
+            issue_detail_screen_new(&p, &issue) : pull_detail_screen_new(&p, 1, NULL, NULL);
+        pane_set_root(pane, s); s->vt->refresh(s); drain(screen_kind ? 3 : 2);
+        list_status = 503; list_body = "{\"error\":\"Unavailable\"}";
+        time_t before = time(NULL);
+        s->vt->refresh(s); drain(screen_kind ? 3 : 2);
+        time_t deadline = pulls_retry_deadline("o/r");
+        CHECK(deadline >= before + 2 && deadline <= time(NULL) + 2);
+        LONG sent = list_calls;
+        s->vt->refresh(s); drain(screen_kind ? 2 : 1); CHECK_INT(list_calls, sent);
+        api_error_clear(&e); pane_set_root(pane, NULL);
+    }
+}
 static void test_failed_deadline_write_keeps_account_repository_cooldown(void) {
     reset(); g_store.device.id = "d1";
     char *server = g_store.server;
@@ -354,6 +427,8 @@ void app_pulls_tests(void) {
     test_run("pulls fresh reconciliation waits for in-flight snapshot", test_fresh_read_waits_for_inflight_snapshot);
     test_run("pulls route loss rearms board and issue polling", test_route_loss_rearms_board_and_issue_polling);
     test_run("pulls board and issue retry at list deadlines", test_list_deadline_retries_board_and_issue);
+    test_run("pulls persistent failure backoff survives expiry and resets", test_list_failure_backoff_survives_expiry_and_resets);
+    test_run("pulls successful screen completions reset shared backoff", test_successful_list_completions_reset_shared_backoff);
     test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
     test_run("pulls saved cooldown survives cache invalidation", test_saved_deadline_survives_cache_invalidation);
     test_run("pull refresh invalidates in-flight rows", test_pull_refresh_invalidates_inflight_rows);
