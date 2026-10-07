@@ -48,17 +48,18 @@ void test_run(const char *name, void (*fn)(void)) {
     tests++;
     current = name;
 #if defined(_MSC_VER) && defined(_DEBUG)
-    // Debug builds (the CI leak job) fail a test that leaves memory it allocated behind.
+    // Debug builds (the CI leak job) fail a test that leaves memory it allocated behind. Caches allocate with
+    // xmalloc_kept, as client blocks, so only normal blocks count.
     _CrtMemState start, end, diff;
     _CrtMemCheckpoint(&start);
     fn();
     _CrtMemCheckpoint(&end);
     // The counts are unsigned: a test that frees memory from before it started wraps them, so they are read as signed.
     _CrtMemDifference(&diff, &start, &end);
-    ptrdiff_t blocks = (ptrdiff_t)(diff.lCounts[_NORMAL_BLOCK] + diff.lCounts[_CLIENT_BLOCK]);
+    ptrdiff_t blocks = (ptrdiff_t)diff.lCounts[_NORMAL_BLOCK];
     if (blocks > 0) {
         test_failures++;
-        printf("  FAIL leaked %td blocks, %td bytes:\n", blocks, (ptrdiff_t)(diff.lSizes[_NORMAL_BLOCK] + diff.lSizes[_CLIENT_BLOCK]));
+        printf("  FAIL leaked %td blocks, %td bytes:\n", blocks, (ptrdiff_t)diff.lSizes[_NORMAL_BLOCK]);
         fflush(stdout);
         _CrtMemDumpAllObjectsSince(&start);
     }

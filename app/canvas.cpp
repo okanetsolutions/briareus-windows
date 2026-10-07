@@ -83,7 +83,7 @@ extern "C" int textw_extent(FontId f, const wchar_t *text, size_t len) {
     if (e->text && e->hash == h && e->font == (int)f && e->len == len && memcmp(e->text, text, len * sizeof *text) == 0) return e->width;
     int w = measure_width(f, text, len);
     free(e->text);
-    e->text = (wchar_t *)xmalloc(len * sizeof *text); memcpy(e->text, text, len * sizeof *text);
+    e->text = (wchar_t *)xmalloc_kept(len * sizeof *text); memcpy(e->text, text, len * sizeof *text);
     e->hash = h; e->font = (int)f; e->len = (unsigned)len; e->width = w;
     return w;
 }
