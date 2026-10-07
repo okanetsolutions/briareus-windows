@@ -105,7 +105,8 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         // `Foo::class`, `$this->type`, `options.type` name a word; they declare nothing.
         if (!d || prev == '.' || prev == '>' || prev == ':' || prev == '$') { i = j; continue; }
         size_t k = skip_spaces(code, n, j);
-        if (str_eq(d->word, "function") && k < n && code[k] == '&') k = skip_spaces(code, n, k + 1);
+        // PHP's `function &name` returns a reference; JavaScript's `function* name` is a generator.
+        if (str_eq(d->word, "function") && k < n && (code[k] == '&' || code[k] == '*')) k = skip_spaces(code, n, k + 1);
         // Go's receiver: func (r *Repo) Name(.
         if (str_eq(d->word, "func") && k < n && code[k] == '(') {
             int depth = 0;
@@ -117,6 +118,8 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         while (e < n && ident_char(code[e])) e++;
         // A function named through what holds it, Ruby's `def self.name` or Lua's `function M.name`: its last part.
         while (d->kind == SYMBOL_FUNCTION && e + 1 < n && (code[e] == '.' || code[e] == ':') && code[e + 1] != ':' && ident_start(code[e + 1])) { k = e + 1; e = k; while (e < n && ident_char(code[e])) e++; }
+        // A class named through its namespace, Ruby's `class Admin::UsersController`: its last part too.
+        while (d->kind == SYMBOL_CLASS && e + 2 < n && code[e] == ':' && code[e + 1] == ':' && ident_start(code[e + 2])) { k = e + 2; e = k; while (e < n && ident_char(code[e])) e++; }
         size_t after = skip_spaces(code, n, e);
         // A keyword in the name's place: Kotlin's `enum class Color` and `fun interface Runner` declare with the next
         // word, and Python's `from enum import`, or JavaScript's `class extends Base`, declare nothing here.
@@ -187,6 +190,7 @@ static bool method_declaration(const char *code, size_t n, const char *language,
         i++;
     }
     // The parameters close on the line, and a body, a return type or `throws` follows; or they run on to the next line.
+    // A body opens at the line's end, or closes there too: `int getX() { return x; }`.
     // A call passing a callback, `describe('x', () => {`, leaves its parenthesis open with a body after it.
     size_t close = p;
     for (int depth = 0; close < b; close++) { if (code[close] == '(') depth++; else if (code[close] == ')' && --depth == 0) break; }
@@ -196,11 +200,23 @@ static bool method_declaration(const char *code, size_t n, const char *language,
         size_t after = skip_spaces(code, b, close + 1);
         // C++'s `const`, `override` and `noexcept`, and Java's `throws A, B`, sit between the parameters and the body.
         if (prefix_end != a) while (after < b && (ident_char(code[after]) || code[after] == ',' || code[after] == '.' || code[after] == ' ')) after++;
-        declared = after >= b ? prefix_end != a : (code[after] == '{' && after == b - 1) || code[after] == ':' || (b - after >= 6 && memcmp(code + after, "throws", 6) == 0);
+        declared = after >= b ? prefix_end != a : (code[after] == '{' && (after == b - 1 || last == '}')) || code[after] == ':' || (b - after >= 6 && memcmp(code + after, "throws", 6) == 0);
     } else declared = prefix_end != a && (last == ',' || last == '(' || ident_char(last));
     if (!declared) { free(scope); return false; }
     *name_at = prefix_end; *name_len = e - prefix_end; *container = scope;
     return true;
+}
+
+/// C's anonymous `typedef struct {`, named by the `} Name;` that closes it: true when the line opens one.
+static bool anonymous_typedef(const char *code, size_t n) {
+    size_t i = skip_spaces(code, n, 0), e = i;
+    while (e < n && ident_char(code[e])) e++;
+    if (!word_is(code + i, e - i, "typedef")) return false;
+    i = skip_spaces(code, n, e); e = i;
+    while (e < n && ident_char(code[e])) e++;
+    if (!word_is(code + i, e - i, "struct") && !word_is(code + i, e - i, "union") && !word_is(code + i, e - i, "enum")) return false;
+    e = skip_spaces(code, n, e);
+    return e >= n || code[e] == '{';
 }
 
 RepoSymbol *repo_symbols_of(const char *path, const char *content, size_t len, size_t *count) {
@@ -213,7 +229,9 @@ RepoSymbol *repo_symbols_of(const char *path, const char *content, size_t len, s
     CodeLexer lexer; code_lexer_init(&lexer, lang);
     Symbols out = { 0 };
     Scope scope = { NULL, -1 };
-    bool methods = language_in(language, METHOD_LANGUAGES);
+    bool methods = language_in(language, METHOD_LANGUAGES), c_like = language_in(language, "C|C++|Objective-C");
+    // An anonymous typedef being read: the line it opens on, and how deep its braces are (-1: none).
+    int typedef_line = 0, typedef_depth = -1;
     for (size_t i = 0; i < line_count; i++) {
         const char *line = text + lines[i].start;
         size_t n = lines[i].len, tn;
@@ -227,10 +245,24 @@ RepoSymbol *repo_symbols_of(const char *path, const char *content, size_t len, s
         size_t at, nlen; SymbolKind kind; char *owner = NULL;
         bool found = keyword_declaration(code, n, indent, language, &at, &nlen, &kind);
         if (!found && methods && method_declaration(code, n, language, &at, &nlen, &owner)) { found = true; kind = SYMBOL_FUNCTION; }
+        int line_no = (int)i + 1;
+        if (c_like && typedef_depth < 0 && anonymous_typedef(code, n)) { typedef_line = line_no; typedef_depth = 0; }
+        for (size_t k = 0; typedef_depth >= 0 && k < n; k++) {
+            if (code[k] == '{') typedef_depth++;
+            else if (code[k] == '}' && --typedef_depth <= 0) {
+                // The body closes: the first name after it, `} Name;` or `} Name, *NamePtr;`.
+                typedef_depth = -1;
+                size_t s = k + 1;
+                while (s < n && (code[s] == ' ' || code[s] == '\t' || code[s] == '*')) s++;
+                size_t e = s;
+                while (e < n && ident_char(code[e])) e++;
+                if (!found && e > s && ident_start(code[s])) { found = true; at = s; nlen = e - s; kind = SYMBOL_CLASS; line_no = typedef_line; }
+            }
+        }
         if (found) {
             // Leaving the class: a declaration as far left as it.
             if (scope.name && indent <= scope.indent) { free(scope.name); scope.name = NULL; scope.indent = -1; }
-            symbol_add(&out, code + at, nlen, owner ? owner : scope.name, kind, (int)i + 1);
+            symbol_add(&out, code + at, nlen, owner ? owner : scope.name, kind, line_no);
             if (kind == SYMBOL_CLASS) { free(scope.name); scope.name = xstrndup(code + at, nlen); scope.indent = indent; }
         }
         free(owner); free(code);

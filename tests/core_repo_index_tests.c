@@ -77,8 +77,10 @@ static void test_finds_declarations_in_javascript_and_typescript(void) {
         "interface Props {}\n"
         "describe('x', () => {\n"
         "function plain(a) {\n"
-        "const options = { type: 'a' };\n"),
-        "c:Store@1 f:load@2<Store f:create@7<Store k:API_URL@9 f:handler@10 c:Id@11 c:Props@12 f:plain@14 k:options@15");
+        "const options = { type: 'a' };\n"
+        "function* saga() {\n"
+        "export function *rootSaga() {}\n"),
+        "c:Store@1 f:load@2<Store f:create@7<Store k:API_URL@9 f:handler@10 c:Id@11 c:Props@12 f:plain@14 k:options@15 f:saga@16 f:rootSaga@17");
 }
 
 static void test_finds_declarations_in_other_languages(void) {
@@ -94,6 +96,17 @@ static void test_finds_declarations_in_other_languages(void) {
     CHECK_OWNED_STR(symbols_of("a.scala", "val p = \"\"\"C:\\\"\"\"\ndef later() = 1\nclass Foo {}\n"), "f:later@2 c:Foo@3");
     CHECK_OWNED_STR(symbols_of("a.rb", "module Billing\n  class Invoice\n    def self.build\n    def total\n"),
                     "c:Billing@1 c:Invoice@2<Billing f:build@3<Invoice f:total@4<Invoice");
+    // A class named through its namespace is named by its last part.
+    CHECK_OWNED_STR(symbols_of("a.rb", "class Admin::UsersController < ApplicationController\n  def index\nmodule Api::V1\n"),
+                    "c:UsersController@1 f:index@2<UsersController c:V1@3");
+    // An anonymous typedef is named where its body closes; a named one where it opens.
+    CHECK_OWNED_STR(symbols_of("a.h", "typedef struct {\n    union { int a; } u;\n    char *name;\n} RepoEntry;\ntypedef enum { A, B } Kind;\ntypedef struct Foo {\n} Foo;\nstruct Bar {\n};\ntypedef struct\n{\n} Pair, *PairPtr;\n"),
+                    "c:RepoEntry@1 c:Kind@5 c:Foo@6 c:Bar@8 c:Pair@10");
+    // A body that opens and closes on the declaration's line.
+    CHECK_OWNED_STR(symbols_of("A.java", "class A {\n    public int getX() { return x; }\n    if (x) { y(); }\n"), "c:A@1 f:getX@2<A");
+    CHECK_OWNED_STR(symbols_of("a.ts", "class S {\n  constructor(private readonly http: HttpClient) {}\n  get name() { return this._n; }\n"),
+                    "c:S@1 f:constructor@2<S f:name@3<S");
+    CHECK_OWNED_STR(symbols_of("a.c", "static int add(int a, int b) { return a + b; }\n"), "f:add@1");
     CHECK_OWNED_STR(symbols_of("a.c", "struct point {\n};\nstruct point *p = NULL;\nstatic int add(int a, int b)\n{\n    return add(a, b);\n}\nint main(void) {\n    if (x) {\n    foo(x)\n"),
                     "c:point@1 f:add@4 f:main@8");
     CHECK_OWNED_STR(symbols_of("a.cpp", "void Widget::draw(Canvas *cv) const {\n~Widget() {\n"), "f:draw@1<Widget f:~Widget@2");
