@@ -1,0 +1,42 @@
+name: Archive 127 feasibility only
+
+# Investigation branch only; no PR or production build/release integration.
+on:
+  push:
+    branches: [dev-2d6c491a]
+    paths:
+      - 'investigations/archive-127/*.cs'
+      - 'investigations/archive-127/*.ps1'
+      - 'investigations/archive-127/*.py'
+      - '.github/workflows/archive-127-prototype.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-provided-tools:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Generate adversarial and real-limit fixtures (test-only Python stdlib)
+        shell: powershell
+        run: python investigations/archive-127/make_fixtures.py "$env:RUNNER_TEMP/archive-127-fixtures" --large
+      - name: Run built-in Windows PowerShell and managed prototype
+        shell: powershell
+        run: ./investigations/archive-127/run.ps1 -Fixtures "$env:RUNNER_TEMP/archive-127-fixtures" -Report managed-windows.json
+      - name: Probe OS tar.exe without extracting archive paths
+        if: always()
+        shell: powershell
+        run: ./investigations/archive-127/tar-probe.ps1 -Fixtures "$env:RUNNER_TEMP/archive-127-fixtures" -Report tar-windows.json
+      - name: Collect export and strict-gzip oracle evidence
+        if: always()
+        shell: powershell
+        run: |
+          Copy-Item "$env:RUNNER_TEMP/archive-127-fixtures/export-results.json" export-windows.json
+          Copy-Item "$env:RUNNER_TEMP/archive-127-fixtures/oracle.json" oracle-windows.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: archive-127-windows-evidence
+          path: '*-windows.json'
