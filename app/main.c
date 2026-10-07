@@ -41,6 +41,7 @@ static bool g_browser_expanded, g_dragging_splitter;
 static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
 static int g_modal;            // dialogs open
+static bool g_modal_disabled;  // whether the first of them disabled the main window
 
 HWND app_window(void) { return g_main; }
 HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
@@ -48,12 +49,15 @@ HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? a
 void app_modal_begin(HWND owner) {
     if (g_modal++) return;
     if (owner) owner = GetAncestor(owner, GA_ROOT);   // a pane passed as the owner stands for its window
-    if (g_main && g_main != owner) EnableWindow(g_main, FALSE);
+    // A window already disabled (by a file picker) is left for whoever disabled it to enable again.
+    g_modal_disabled = g_main && g_main != owner && IsWindowEnabled(g_main);
+    if (g_modal_disabled) EnableWindow(g_main, FALSE);
     detached_enable(owner, false);
 }
 void app_modal_end(void) {
     if (--g_modal) return;
-    if (g_main) EnableWindow(g_main, TRUE);
+    if (g_modal_disabled && g_main) EnableWindow(g_main, TRUE);
+    g_modal_disabled = false;
     detached_enable(NULL, true);
 }
 Pane *app_sidebar_pane(void) { return g_sidebar; }

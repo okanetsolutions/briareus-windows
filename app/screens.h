@@ -316,7 +316,7 @@ bool detached_any_shown(void);
 /// They all close (signing out, quitting) or take a new theme.
 void detached_close_all(void);
 void detached_themed(void);
-/// Enables or disables every one of them but `except`.
+/// Disables every one of them but `except`, or enables again the ones it disabled.
 void detached_enable(HWND except, bool enabled);
 
 /// A confirmation with one continue button; true when confirmed.

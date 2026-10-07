@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { HWND hwnd; Pane *pane; HWND focus; bool sidebar; } Detached;
+typedef struct { HWND hwnd; Pane *pane; HWND focus; bool sidebar, modal_disabled; } Detached;
 static Detached **g_windows; static size_t g_window_count;
 static const wchar_t WINDOW_CLASS[] = L"BriareusWindow";
 #define WM_DETACHED_DOCK (WM_APP + 63)
@@ -148,8 +148,13 @@ void detached_close_all(void) {
         if (g_window_count == before) break;
     }
 }
+// Only the windows this disabled come back, so one a file picker disabled stays disabled under it.
 void detached_enable(HWND except, bool enabled) {
-    for (size_t i = 0; i < g_window_count; i++) if (g_windows[i]->hwnd != except) EnableWindow(g_windows[i]->hwnd, enabled);
+    for (size_t i = 0; i < g_window_count; i++) {
+        Detached *w = g_windows[i];
+        if (enabled) { if (w->modal_disabled) EnableWindow(w->hwnd, TRUE); w->modal_disabled = false; }
+        else if (w->hwnd != except && IsWindowEnabled(w->hwnd)) { EnableWindow(w->hwnd, FALSE); w->modal_disabled = true; }
+    }
 }
 void detached_themed(void) {
     for (size_t i = 0; i < g_window_count; i++) {
