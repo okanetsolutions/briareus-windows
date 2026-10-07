@@ -19,8 +19,19 @@ static bool repo_ok(const char *s) {
     for (const char *p = s; *p; p++) if (p != slash && !ascii_word((unsigned char)*p) && *p != '.' && *p != '-') return false;
     return true;
 }
+static bool utf16_fits(const char *s, size_t limit) {
+    if (!s) return false;
+    size_t units = 0;
+    // UTF-8 continuation bytes add no units; supplementary characters use a surrogate pair in core's JS strings.
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if ((*p & 0xc0) == 0x80) continue;
+        units += *p >= 0xf0 ? 2u : 1u;
+        if (units > limit) return false;
+    }
+    return true;
+}
 static bool text_ok(const char *s, size_t limit) {
-    if (!s || strlen(s) > limit) return false;
+    if (!utf16_fits(s, limit)) return false;
     for (; *s; s++) if ((unsigned char)*s < 32) return false;
     return true;
 }
@@ -47,16 +58,19 @@ bool mcp_secure_url(const char *url) {
 }
 static bool query_has(const char *q, const char *key) {
     size_t n = strlen(key);
-    for (const char *p = q; p && *p; ) {
+    const char *end = q + strcspn(q, "#");
+    for (const char *p = q; p && p < end; ) {
+        if ((size_t)(end - p) <= n + 1) return false;
         if (!strncmp(p, key, n) && p[n] == '=' && p[n + 1] && p[n + 1] != '&' && p[n + 1] != '#') return true;
         p = strchr(p, '&'); if (p) p++;
     }
     return false;
 }
 bool mcp_callback_url(const char *url) {
-    if (!url || !str_has_prefix(url, "http://") || !mcp_secure_url(url) || strchr(url, '#')) return false;
+    if (!mcp_secure_url(url)) return false;
     const char *q = strchr(url, '?');
-    return q && query_has(q + 1, "state") && (query_has(q + 1, "code") || query_has(q + 1, "error"));
+    const char *fragment = strchr(url, '#');
+    return q && (!fragment || q < fragment) && query_has(q + 1, "state") && (query_has(q + 1, "code") || query_has(q + 1, "error"));
 }
 double mcp_server_id(const Json *row) {
     double id = json_num_or(json_get(row, "id"), 0);
@@ -75,19 +89,24 @@ static bool secret_map_ok(const Json *map, bool env) {
             if (!*key || strlen(key) > 128) return false;
             for (const char *p = key; *p; p++) if (!ascii_word((unsigned char)*p) && !strchr("!#$%&'*+.^`|~-", *p)) return false;
         }
-        if (!val || strlen(val) > 8192 || strchr(val, '\r') || strchr(val, '\n')) return false;
+        if (!utf16_fits(val, 8192) || strchr(val, '\r') || strchr(val, '\n')) return false;
     }
     return true;
 }
 Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env, McpSecretMode client_secret, char **error) {
     if (error) *error = NULL;
     Json *body = json_object();
+    char *transport = str_trim(json_str_or(json_get(fields, "transport"), ""));
+    bool stdio = str_eq(transport, "stdio"), http = str_eq(transport, "http");
+    free(transport);
+    if (!stdio && !http) return fail(body, error, "Choose HTTP or stdio.");
     static const struct { const char *key; size_t max; } texts[] = {
         { "name", 64 }, { "label", 200 }, { "transport", 5 }, { "url", 2048 }, { "command", 1024 },
         { "oauthClientId", 256 }, { "oauthScope", 1024 }, { "oauthClientName", 100 }, { "oauthRedirect", 8 },
     };
     for (size_t i = 0; i < sizeof texts / sizeof *texts; i++) {
-        char *s = str_trim(json_str_or(json_get(fields, texts[i].key), ""));
+        bool inactive = (stdio && str_eq(texts[i].key, "url")) || (http && str_eq(texts[i].key, "command"));
+        char *s = str_trim(inactive ? "" : json_str_or(json_get(fields, texts[i].key), ""));
         if (!text_ok(s, texts[i].max)) { free(s); return fail(body, error, "A text field is too long or contains control characters."); }
         json_set_str(body, texts[i].key, s); free(s);
     }
@@ -95,11 +114,11 @@ Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env
     static const char *const reserved[] = { "reviewer_memory", "reviewer_ssh", "reviewer_slack", "reviewer_workers", "browser" };
     if (!name_ok(name, false)) return fail(body, error, "Use 1 to 64 letters, digits, underscores or hyphens for the tool name.");
     for (size_t i = 0; i < sizeof reserved / sizeof *reserved; i++) if (str_eq(name, reserved[i])) return fail(body, error, "That tool name is reserved by Briareus.");
-    const char *transport = json_str(json_get(body, "transport"));
-    if (!str_eq(transport, "http") && !str_eq(transport, "stdio")) return fail(body, error, "Choose HTTP or stdio.");
     const Json *args = json_get(fields, "args"), *repos = json_get(fields, "repos");
-    if (!json_is_array(args) || json_count(args) > 64) return fail(body, error, "Arguments must be a JSON array of up to 64 strings.");
-    for (size_t i = 0; i < json_count(args); i++) { const char *a = json_str(json_at(args, i)); if (!a || strlen(a) > 4096) return fail(body, error, "Each argument must be a string of up to 4096 bytes."); }
+    if (stdio) {
+        if (!json_is_array(args) || json_count(args) > 64) return fail(body, error, "Arguments must be a JSON array of up to 64 strings.");
+        for (size_t i = 0; i < json_count(args); i++) if (!utf16_fits(json_str(json_at(args, i)), 4096)) return fail(body, error, "Each argument must be a string of up to 4096 UTF-16 units.");
+    }
     if (!json_is_array(repos)) return fail(body, error, "Choose all repositories or selected repositories.");
     Json *unique = json_array();
     for (size_t i = 0; i < json_count(repos); i++) {
@@ -112,7 +131,7 @@ Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env
     json_object_set(body, "repos", unique);
     if (json_bool_tristate(json_get(fields, "enabled")) < 0) return fail(body, error, "Enabled must be a boolean.");
     json_object_set(body, "enabled", json_clone(json_get(fields, "enabled")));
-    if (str_eq(transport, "http")) {
+    if (http) {
         if (!mcp_secure_url(json_str(json_get(body, "url")))) return fail(body, error, "Enter an HTTPS endpoint, or HTTP on core's loopback host.");
         json_set_str(body, "command", ""); json_object_set(body, "args", json_array());
     } else {
