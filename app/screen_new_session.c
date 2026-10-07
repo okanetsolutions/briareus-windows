@@ -13,6 +13,7 @@
 enum { ID_COMPOSER = 401 };
 enum { TIMER_VOICE = 3 };
 enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
+typedef enum { WORKSPACE_WORKTREE = 1, WORKSPACE_LOCAL, WORKSPACE_ORCHESTRATOR } WorkspaceMode;
 
 typedef struct {
     Screen base;
@@ -22,7 +23,7 @@ typedef struct {
     bool has_runtime; RuntimeChoice runtime;   // the pick; none starts on the project default
     bool hand_picked;   // the pick came from the chips rather than from the last pick or the first available provider
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
-    bool local;   // work in the project's own checkout rather than a fresh worktree
+    WorkspaceMode workspace;
     bool review_loop;
     Request *req_runtimes, *req_branches, *req_start, *req_projects;
     bool busy, uncertain;
@@ -38,7 +39,7 @@ typedef struct {
 
 static const Project *project(NewSessionScreen *s) { return s->count ? &s->projects[s->chosen < s->count ? s->chosen : 0] : NULL; }
 /// The branch chip's "no pick" row: a worktree branches off the default, the local checkout stays on what it has out.
-static char *no_branch_label(NewSessionScreen *s) { return s->local ? xstrdup("Current branch") : xstrfmt("New branch off %s", s->default_branch ? s->default_branch : "main"); }
+static char *no_branch_label(NewSessionScreen *s) { return s->workspace == WORKSPACE_LOCAL ? xstrdup("Current branch") : xstrfmt("New branch off %s", s->default_branch ? s->default_branch : "main"); }
 
 // MARK: - The composer's text
 
@@ -121,7 +122,7 @@ static void load_choices(NewSessionScreen *s) {
     s->hand_picked = false;
     str_array_free(s->branches, s->branch_count); s->branches = NULL; s->branch_count = 0;
     set_string(&s->default_branch, NULL); set_string(&s->branch, NULL);
-    if (!p || !p->has_local) s->local = false;
+    if (s->workspace == WORKSPACE_LOCAL && (!p || !p->has_local)) s->workspace = WORKSPACE_WORKTREE;
     if (!p) return;
     if (store_supports("runtimes")) {
         char *key = xstrfmt("runtimes:%s", p->repo);
@@ -157,8 +158,8 @@ static void start_done(void *owner, Request *req) {
     if (req->ok && session_parse(json_get(req->result, "session"), &started)) {
         set_composer_text(s, "");
         attach_list_sent(s->files, json_get(req->args, "attachments"));
-        // The loop the chip asked for that the server does not arm by default. A local session never has one.
-        if (!s->local && !s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
+        // Only worktree sessions have a review-loop chip; local sessions and orchestrators never have their own loop.
+        if (s->workspace == WORKSPACE_WORKTREE && !s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
             Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
             store_call("review_loop", a, 0, NULL, loop_done, 0, NULL);
         }
@@ -180,8 +181,11 @@ static void start(NewSessionScreen *s) {
     if (!composer_empty(s)) json_set_str(args, "prompt", prompt);
     Json *ids = attach_list_ids(s->files);
     if (ids) json_object_set(args, "attachments", ids);
-    if (s->branch) json_set_str(args, "branch", s->branch);
-    if (s->local) json_set_bool(args, "local", true);
+    if (s->workspace == WORKSPACE_ORCHESTRATOR) json_set_bool(args, "orchestrator", true);
+    else {
+        if (s->branch) json_set_str(args, "branch", s->branch);
+        if (s->workspace == WORKSPACE_LOCAL) json_set_bool(args, "local", true);
+    }
     free(prompt);
     if (s->has_runtime) { Json *rt = runtime_choice_arguments(&s->runtime); json_object_merge(args, rt); json_free(rt); }
     s->busy = true; set_string(&s->error, NULL);
@@ -255,7 +259,8 @@ static void new_session_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(6));
     const Project *p = project(s);
     WelcomeData *d = xcalloc(1, sizeof *d);
-    if (s->local) { d->before = xstrdup("Start a session in "); d->name = xstrdup(p ? project_title(p) : "the project"); d->after = xstrdup("'s own local checkout and database."); }
+    if (s->workspace == WORKSPACE_ORCHESTRATOR) { d->before = xstrdup("Start an orchestrator for "); d->name = xstrdup(p ? project_title(p) : "the project"); d->after = xstrdup(" to plan and coordinate worker sessions."); }
+    else if (s->workspace == WORKSPACE_LOCAL) { d->before = xstrdup("Start a session in "); d->name = xstrdup(p ? project_title(p) : "the project"); d->after = xstrdup("'s own local checkout and database."); }
     else { d->before = xstrdup("Start a session in a fresh "); d->name = xstrdup(p ? project_title(p) : "project"); d->after = xstrdup(" checkout with its own database."); }
     int bw = text_width(doc->cv, d->before, FONT_BODY) + text_width(doc->cv, d->name, FONT_BODY) + text_width(doc->cv, d->after, FONT_BODY);
     doc_custom(doc, x, col, bw <= col ? px(24) : px(48), paint_welcome_line, d, welcome_free, 0, 0);
@@ -271,7 +276,7 @@ static char *chip_label(NewSessionScreen *s, int chip) {
     RuntimeChoice eff; bool has = effective_choice(s, &eff);
     char *out = NULL;
     switch (chip) {
-    case CHIP_WORKSPACE: out = xstrdup(s->local ? "\xE2\x8C\x82 Local" : "\xE2\x8C\x97 Worktree"); break;
+    case CHIP_WORKSPACE: out = xstrdup(s->workspace == WORKSPACE_ORCHESTRATOR ? "\xF0\x9F\xA7\xAD Orchestrator" : s->workspace == WORKSPACE_LOCAL ? "\xE2\x8C\x82 Local" : "\xE2\x8C\x97 Worktree"); break;
     case CHIP_PROJECT: out = xstrdup(p ? project_title(p) : "Project"); break;
     case CHIP_BRANCH: out = s->branch ? xstrdup(s->branch) : no_branch_label(s); break;
     case CHIP_PROVIDER: {
@@ -294,8 +299,8 @@ static bool chip_shown(NewSessionScreen *s, int chip) {
     switch (chip) {
     case CHIP_PROVIDER: case CHIP_MODEL: return s->has_catalog && s->catalog.provider_count > 0;
     case CHIP_EFFORT: { RuntimeChoice eff; if (!effective_choice(s, &eff)) return false; size_t n = 0; runtime_catalog_efforts(&s->catalog, &eff, &n); runtime_choice_free(&eff); return n > 0; }
-    case CHIP_BRANCH: return store_supports("branches");
-    case CHIP_LOOP: return !s->local && store_supports("review_loop");   // the server arms no loop on the shared checkout
+    case CHIP_BRANCH: return s->workspace != WORKSPACE_ORCHESTRATOR && store_supports("branches");
+    case CHIP_LOOP: return s->workspace == WORKSPACE_WORKTREE && store_supports("review_loop");
     default: return true;
     }
 }
@@ -441,12 +446,13 @@ static void pick_chip(NewSessionScreen *s, int chip) {
         const Project *p = project(s);
         bool can = p && p->has_local;
         HMENU m = CreatePopupMenu();
-        append(m, 1, "\xE2\x8C\x97 Worktree: a fresh clone and database", !s->local, true);
-        append(m, 2, can ? "\xE2\x8C\x82 Local: the project's own checkout" : "\xE2\x8C\x82 Local: no local checkout set in Settings", s->local, can);
+        append(m, WORKSPACE_WORKTREE, "\xE2\x8C\x97 Worktree: a fresh clone and database", s->workspace == WORKSPACE_WORKTREE, true);
+        append(m, WORKSPACE_LOCAL, can ? "\xE2\x8C\x82 Local: the project's own checkout" : "\xE2\x8C\x82 Local: no local checkout set in Settings", s->workspace == WORKSPACE_LOCAL, can);
+        append(m, WORKSPACE_ORCHESTRATOR, "\xF0\x9F\xA7\xAD Orchestrator: plan and coordinate workers", s->workspace == WORKSPACE_ORCHESTRATOR, true);
         int chosen = popup(s, m, r);
-        if (chosen >= 1 && (chosen == 2) != s->local) {
-            // "No branch picked" means something else in each mode, so the pick starts over.
-            s->local = chosen == 2; set_string(&s->branch, NULL);
+        if (chosen >= WORKSPACE_WORKTREE && chosen <= WORKSPACE_ORCHESTRATOR && (WorkspaceMode)chosen != s->workspace) {
+            // Each mode starts with its own branch default; an orchestrator cannot take a branch at all.
+            s->workspace = (WorkspaceMode)chosen; set_string(&s->branch, NULL);
             pane_relayout(s->base.pane); pane_footer_changed(s->base.pane);
         }
         break;
@@ -614,6 +620,7 @@ static const ScreenVTable new_session_vt = {
 Screen *new_session_screen_new(const Project *project_, const Project *projects, size_t count) {
     NewSessionScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &new_session_vt; s->base.id = xstrdup("new-session");
+    s->workspace = WORKSPACE_WORKTREE;
     if (project_) s->asked = xstrdup(project_->repo);
     s->projects = xcalloc(count, sizeof *s->projects);
     for (size_t i = 0; i < count; i++) { project_copy(&s->projects[i], &projects[i]); if (project_ && str_eq(projects[i].repo, project_->repo)) s->chosen = i; }
