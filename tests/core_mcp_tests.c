@@ -1,5 +1,6 @@
 // Fixtures pinned to nadinyamaui/briareus PR #124, 8585d12e20e57097bae291659765f9cfe9e14691.
 #include "mcp.h"
+#include "str.h"
 #include "suites.h"
 #include "test.h"
 #include <math.h>
@@ -78,7 +79,7 @@ static void test_invalid_fields_and_limits(void) {
 }
 static char *repeat_utf8(const char *character, size_t count) {
     size_t bytes = strlen(character);
-    char *text = malloc(bytes * count + 1);
+    char *text = xmalloc(bytes * count + 1);
     for (size_t i = 0; i < count; i++) memcpy(text + i * bytes, character, bytes);
     text[bytes * count] = 0; return text;
 }
