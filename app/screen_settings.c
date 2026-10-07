@@ -31,7 +31,7 @@ static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:")
-                  || str_eq(id, "settings-meeting"));
+                  || str_eq(id, "settings-meeting") || str_eq(id, "mail"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -50,7 +50,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_MOVE_UP, ACT_MOVE_DOWN };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_OPEN_MAIL };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -518,6 +518,10 @@ static void settings_layout(Screen *base, Doc *doc) {
     meeting->selected = str_eq(selected, "settings-meeting");
     doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
     doc_space(doc, px(16));
+    if (mail_settings_offered()) {
+        doc_button(doc, px(8), w - px(16), "Mail account settings", BUTTON_PLAIN, ACT_OPEN_MAIL, 0, true);
+        doc_space(doc, px(16));
+    }
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); doc_space(doc, px(8)); return; }
@@ -690,6 +694,7 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_FORGE: forge_open_row(s, (size_t)arg); break;
     case ACT_NEW_SLACK: app_show_detail(slack_settings_screen_new(NULL, json_get(s->slack, "defaults"))); break;
     case ACT_OPEN_SLACK: slack_open_row(s, (size_t)arg); break;
+    case ACT_OPEN_MAIL: if (mail_settings_offered()) app_show_detail(mail_screen_new()); break;
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: settings_move(s, (size_t)arg, 1); break;
