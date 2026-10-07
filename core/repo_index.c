@@ -73,7 +73,7 @@ static const char *const NOT_NAMES[] = {
     "match", "elif", "until", "unless", "defined", "decltype", "alignof", "static_assert", "operator", "echo", "print", NULL,
 };
 /// The words JavaScript and TypeScript allow before a method's name.
-static const char *const JS_MODIFIERS[] = { "async", "static", "get", "set", "public", "private", "protected", "readonly", "abstract", "override", "export", "default", NULL };
+static const char *const JS_MODIFIERS[] = { "async", "static", "get", "set", "public", "private", "protected", "readonly", "abstract", "override", NULL };
 
 typedef struct { RepoSymbol *items; size_t count, cap; } Symbols;
 static void symbol_add(Symbols *s, const char *name, size_t len, const char *container, SymbolKind kind, int line) {

@@ -150,9 +150,12 @@ static size_t find(const char *token, const char *s, size_t n, size_t from, bool
     }
     return n + 1;
 }
-/// Whether a backslash escapes the character after it in a string `delim` opens: not in Go's raw `...` strings.
+/// Whether a backslash escapes the character after it in a string `delim` opens: not in Go's raw `...` strings,
+/// nor in Kotlin's and Scala's raw """...""" ones.
 static bool escapes_in(const CodeLanguage *l, const char *delim) {
-    return !(str_eq(delim, "`") && str_eq(l->name, "Go"));
+    if (str_eq(delim, "`")) return !str_eq(l->name, "Go");
+    if (str_eq(delim, "\"\"\"")) return !str_eq(l->name, "Kotlin") && !str_eq(l->name, "Scala");
+    return true;
 }
 static bool is_keyword(const CodeLanguage *l, const char *word, size_t len) {
     for (int k = 0; k < 2; k++) {

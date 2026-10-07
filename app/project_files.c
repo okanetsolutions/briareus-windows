@@ -540,7 +540,7 @@ static LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
         }
         if (wp == VK_RETURN) { open_result(p, (size_t)p->pick); return 0; }
         if (wp == VK_ESCAPE) { find_clear(p); SetFocus(GetParent(hwnd)); relayout(p); return 0; }
-        if (wp == 'A' && ctrl) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+        if (wp == 'A' && ctrl && !(GetKeyState(VK_MENU) & 0x8000)) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
         break;
     }
     case WM_CHAR:

@@ -89,6 +89,9 @@ static void test_finds_declarations_in_other_languages(void) {
     // A raw string ending in a backslash closes at its backtick, so the declarations after it are found.
     CHECK_OWNED_STR(symbols_of("a.go", "func Fix(p string) string {\n\treturn strings.ReplaceAll(p, `\\`, \"/\")\n}\nfunc Foo() {}\ntype Bar struct {}\n"),
                     "f:Fix@1 f:Foo@4 c:Bar@5");
+    // Kotlin's and Scala's """ strings are raw too.
+    CHECK_OWNED_STR(symbols_of("a.kt", "val p = \"\"\"C:\\\"\"\"\nfun later() {}\nclass Foo {}\n"), "f:later@2 c:Foo@3");
+    CHECK_OWNED_STR(symbols_of("a.scala", "val p = \"\"\"C:\\\"\"\"\ndef later() = 1\nclass Foo {}\n"), "f:later@2 c:Foo@3");
     CHECK_OWNED_STR(symbols_of("a.rb", "module Billing\n  class Invoice\n    def self.build\n    def total\n"),
                     "c:Billing@1 c:Invoice@2<Billing f:build@3<Invoice f:total@4<Invoice");
     CHECK_OWNED_STR(symbols_of("a.c", "struct point {\n};\nstruct point *p = NULL;\nstatic int add(int a, int b)\n{\n    return add(a, b);\n}\nint main(void) {\n    if (x) {\n    foo(x)\n"),
@@ -109,6 +112,8 @@ static void test_finds_declarations_in_other_languages(void) {
     CHECK_OWNED_STR(symbols_of("a.py", "from enum import Enum\n"), "");
     CHECK_OWNED_STR(symbols_of("a.js", "export default class extends React.Component {\n  render() {\n"), "f:render@2");
     CHECK_OWNED_STR(symbols_of("a.ts", "const type = 'a';\n"), "k:type@1");
+    // A default export without a semicolon calls a function; it declares none.
+    CHECK_OWNED_STR(symbols_of("a.js", "export default withRouter(App)\n"), "");
     // Languages without declarations of their own, and nothing to read.
     CHECK_OWNED_STR(symbols_of("a.json", "{\"class\": 1}"), "");
     CHECK_OWNED_STR(symbols_of("README.md", "class Foo"), "");
