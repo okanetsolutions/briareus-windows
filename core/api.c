@@ -273,6 +273,16 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
 // with each parameter named after the argument that fills it. A route without a `{}` sends every argument in the query
 // (GET, DELETE) or the body (the rest).
 static const ApiRoute ROUTES[] = {
+    // Operator Slack inbox (JSON only; SSE belongs to issue #126).
+    { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
+    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
+    { "slack_people", "GET", "slack/workspaces/{id}/people" },
+    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
+    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
+    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     // Projects
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },

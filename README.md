@@ -30,6 +30,15 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Shows what Spotify is playing at the foot of the sidebar, with ⏮ ⏯ ⏭, through Windows' own media sessions: no Spotify account or login, only the desktop app running. Without Spotify it shows whichever app Windows lists as playing, and nothing when none is.
 - Keeps the projects and conversations in a column on the left and the chosen conversation on the right, as the dashboard does: each project with its session count and a dot while one works, and inside it the conversations with their provider, branch, state and age; ☑ Select ticks several to close or delete at once. A window narrower than the dashboard's `lg` breakpoint falls back to a single column with a back button.
 
+**Slack inbox**
+
+- With an Admin token and a server that offers the Slack inbox API, the sidebar's Slack button opens workspaces, public/private channels, DMs and group DMs without a project session; People lists and searches loaded directory pages and opens a DM.
+- Reads conversation history and threads with paging, author names, string timestamps, readable Slack mrkdwn and file metadata/browser links; Refresh reads updates (live SSE is separate work).
+- Sends human messages and thread replies to the destination named above the composer (Ctrl+Enter sends), with scoped in-memory drafts and an 8000-character limit; an uncertain send keeps its draft and asks you to inspect history before explicitly allowing another send.
+- Marks only messages viewed in the active window as read after a debounce and explains rate limits, missing scopes and refused workspace tokens; attachment bytes are accessed in Slack, with no native download.
+- Settings → Slack workspaces supports inbox-only connections with every project unticked (`projects: []`), including the inbox scopes and `message.mpim` event guidance; older servers retain Slack web.
+- See [the pinned core contract and outstanding release checks](docs/slack-inbox-contract.md).
+
 **Project board**
 
 - Shows open pull requests as the dashboard does: labels, whether they conflict with their base, the state of their checks, author, assignees, reviewers, linked issues (each with its Status on its GitHub project board, read in the background one issue at a time, the rows the filters show first) and stack position, narrowed by author, reviewer or label.

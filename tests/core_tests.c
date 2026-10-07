@@ -903,5 +903,6 @@ int main(void) {
     update_tests();
     repo_tests();
     repo_index_tests();
+    slack_tests();
     return test_summary();
 }

@@ -91,7 +91,7 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     int x = w - icons_w;
     RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->mark = MARK_WHATSAPP;
     x += iw + gap;
-    RECT kr = { x, y, x + iw, y + h }; strip_button(doc, &kr, "", false, 0, str_eq(selected, "slack"), ACT_SLACK)->mark = MARK_SLACK;
+    RECT kr = { x, y, x + iw, y + h }; strip_button(doc, &kr, "", false, 0, (str_eq(selected, "slack") || str_eq(selected, "slack-inbox")), ACT_SLACK)->mark = MARK_SLACK;
     x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
@@ -246,7 +246,7 @@ static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
-    case ACT_SLACK: app_show_detail(web_app_screen_new(WEB_APP_SLACK)); return true;
+    case ACT_SLACK: app_show_detail(slack_inbox_offered() ? slack_screen_new() : web_app_screen_new(WEB_APP_SLACK)); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;

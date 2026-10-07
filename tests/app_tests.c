@@ -7,5 +7,6 @@ int main(void) {
     app_common_tests();
     app_store_tests();
     app_sql_tests();
+    app_slack_tests();
     return test_summary();
 }

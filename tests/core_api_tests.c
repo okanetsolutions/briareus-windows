@@ -323,6 +323,15 @@ static const Expected ROUTE_TABLE[] = {
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
+    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
+    { "slack_people", "GET", "slack/workspaces/{id}/people" },
+    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
+    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
+    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
     { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
 };
@@ -968,7 +977,33 @@ static void test_retry_after_http_dates(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { if (api_retry_after(bad[i], 0) >= 0) printf("  read %s\n", bad[i]); CHECK(api_retry_after(bad[i], 0) < 0); }
 }
 
+static void test_slack_json_contract_and_no_retry(void) {
+    Stub stub = {0}; stub_json(&stub, 201, "{\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"workspaceChanged\":true}");
+    ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    Json *args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"threadTs\":\"1712345678.000001\",\"text\":\"human reply\"}");
+    Json *result = api_call(c, "slack_send", args, 0, &error);
+    CHECK(result && json_bool_is(json_get(result, "workspaceChanged"), true)); CHECK_INT(stub.calls, 1);
+    CHECK_STR(stub.last_url, BASE "slack/workspaces/1727000000002/conversations/C1/messages");
+    Json *sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "threadTs")), "1712345678.000001");
+    CHECK(json_is_null(json_get(sent, "id"))); CHECK(json_is_null(json_get(sent, "channel"))); json_free(sent); json_free(result);
+    const int failures[] = {401, 403, 404, 409, 429, 503};
+    for (size_t i = 0; i < sizeof failures / sizeof *failures; i++) {
+        stub_json(&stub, failures[i], "{\"error\":\"Slack refused the workspace token\"}"); stub.retry_after = "60";
+        int calls = stub.calls; result = api_call(c, "slack_send", args, 0, &error);
+        CHECK(!result); CHECK_INT(stub.calls, calls + 1); CHECK_INT(error.status, failures[i]); CHECK(error.retry_after == 60);
+    }
+    stub.fail = true; stub.fail_message = "Timed out"; int calls = stub.calls;
+    CHECK(api_call(c, "slack_send", args, 0, &error) == NULL); CHECK_INT(stub.calls, calls + 1); CHECK(error.kind == API_NETWORK);
+    stub_json(&stub, 200, "{\"messages\":[],\"nextCursor\":\"more\",\"hasMore\":true}"); json_free(args);
+    args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"cursor\":\"empty page\",\"oldest\":\"1.000000001\",\"latest\":\"2.000000001\"}");
+    result = api_call(c, "slack_thread", args, 0, &error); CHECK(result != NULL);
+    CHECK(strstr(stub.last_url, "/threads/1712345678.000001?") != NULL);
+    CHECK(strstr(stub.last_url, "cursor=empty%20page") != NULL); CHECK(strstr(stub.last_url, "oldest=1.000000001") != NULL); CHECK(strstr(stub.last_url, "latest=2.000000001") != NULL);
+    json_free(result); json_free(args); api_client_release(c); api_error_clear(&error); stub_reset(&stub);
+}
+
 void api_tests(void) {
+    test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);

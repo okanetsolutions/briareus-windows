@@ -68,6 +68,12 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
+/// Global admin Slack JSON inbox; availability always requires both catalog and Admin access.
+Screen *slack_screen_new(void);
+bool slack_inbox_offered(void);
+bool slack_inbox_supports(const char *operation);
+/// Clear private state in every open/detached inbox on account or access changes.
+void slack_inbox_store_changed(void);
 /// The web apps the sidebar strip opens in the detail pane; the screen's id is "whatsapp" or "slack".
 typedef enum { WEB_APP_WHATSAPP, WEB_APP_SLACK, WEB_APP_COUNT } WebApp;
 /// WhatsApp Web or Slack, from the sidebar strip's buttons.
