@@ -29,7 +29,7 @@ typedef struct {
     Json *row, *repos;
     double id;
     HWND edits[F_COUNT]; RECT rects[F_COUNT]; bool laid[F_COUNT], clipped[F_COUNT];
-    bool shown, filling, dirty, stdio, enabled, all, loopback, uncertain, conflict, create_retry;
+    bool shown, filling, dirty, stdio, enabled, all, loopback, uncertain, conflict, create_retry, read_error;
     int tab;
     McpSecretMode secrets[3];
     McpSignIn sign_in;
@@ -76,7 +76,7 @@ static void fill(McpForm *s) {
 }
 static void changed(McpForm *s) { if (!s->filling) { s->dirty = true; pane_header_changed(s->base.pane); } }
 static void repaint(McpForm *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
-static void error_text(McpForm *s, const char *error) { set_string(&s->error, error); repaint(s); }
+static void error_text(McpForm *s, const char *error) { s->read_error = false; set_string(&s->error, error); repaint(s); }
 static bool field_shown(McpForm *s, int f) {
     if (FIELDS[f].tab != s->tab) return false;
     switch (f) {
@@ -136,6 +136,12 @@ static Json *body_now(McpForm *s, char **error) {
     if (s->enabled && !s->all && !json_count(s->repos)) *error = xstrdup("Select at least one repository, or choose all; disable the server to mount it nowhere.");
     else body = mcp_form_body(fields, s->stdio ? MCP_KEEP : s->secrets[0], s->stdio ? s->secrets[1] : MCP_KEEP, s->secrets[2], error);
     if (body && s->id && !repos_changed(s)) json_object_remove(body, "repos");
+    if (body && s->id && json_equal(json_get(body, "transport"), json_get(s->row, "transport"))) {
+        // Core checks connections by key presence, so metadata edits must omit unchanged connection fields.
+        static const char *const connection[] = { "transport", "url", "command", "args", "oauthClientId", "oauthScope", "oauthClientName", "oauthRedirect" };
+        for (size_t i = 0; i < sizeof connection / sizeof *connection; i++)
+            if (json_equal(json_get(body, connection[i]), json_get(s->row, connection[i]))) json_object_remove(body, connection[i]);
+    }
     json_free(fields); return body;
 }
 static void note(Doc *doc, int w, const char *text) { doc_text(doc, 0, w, text, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(12)); }
@@ -302,15 +308,18 @@ static void read_done(void *owner, Request *req) {
         if (creating) adopt_id(s, mcp_server_id(row));
         status_update(s, row);
         if (visible_changed) settings_mcp_changed();
-        if (s->uncertain) set_string(&s->error, creating ? "The created server was found. Your draft is preserved; review it before saving any further changes." : NULL);
+        if (s->uncertain || s->read_error) set_string(&s->error, creating ? "The created server was found. Your draft is preserved; review it before saving any further changes." : NULL);
+        s->read_error = false;
         s->uncertain = false; s->create_retry = false;
     } else if (creating && listed) {
+        s->read_error = false;
         s->create_retry = true;
         set_string(&s->error, "The submitted name is not listed yet; the create may still complete. Save retries with the original name. Your draft name is preserved for an update after the server is found.");
     }
     else {
         mcp_sign_in_failed(&s->sign_in);
         if (s->edits[F_CALLBACK]) set_text(s->edits[F_CALLBACK], "");
+        s->read_error = !listed;
         if (listed) { s->uncertain = true; settings_mcp_changed(); set_string(&s->error, "This MCP server is no longer listed. Reopen it from Settings."); }
         else { char *e = xstrfmt("MCP status could not be refreshed (HTTP %d). Refresh or reconnect before finishing sign-in.", req->error.status); set_string(&s->error, e); free(e); }
     }
@@ -328,14 +337,15 @@ static void write_done(void *owner, Request *req) {
     if (!req->ok || (req->tag != ACT_DELETE && (!mcp_server_id(row) || (s->id && mcp_server_id(row) != s->id)))) {
         char *e = req->ok ? xstrdup("Unexpected MCP response; refresh before trying again.") : xstrfmt("MCP action failed (HTTP %d). Refresh status; sign-in callbacks are single-use and must not be resubmitted automatically.", req->error.status);
         error_text(s, e); free(e);
-        s->uncertain = s->uncertain || req->ok || request_outcome_unknown(req);
+        // Create may commit before a follow-up connection/status save returns an HTTP error.
+        s->uncertain = s->uncertain || req->ok || request_outcome_unknown(req) || (req->tag == ACT_SAVE && !s->id);
         // Reads recover an unknown outcome; honor rate limits/unavailability before that read.
         if (req->error.status != 429 && req->error.status != 503) load(s);
         poller_finished(&s->poll, true, req->error.retry_after); return;
     }
     if (req->tag == ACT_DELETE) { s->dirty = false; settings_mcp_changed(); app_clear_detail(); return; }
     char *draft_name = req->tag == ACT_SAVE && !s->id ? edit_text(s->edits[F_NAME]) : NULL;
-    adopt_id(s, mcp_server_id(row)); status_update(s, row); s->uncertain = false; s->create_retry = false; set_string(&s->error, NULL);
+    adopt_id(s, mcp_server_id(row)); status_update(s, row); s->uncertain = false; s->create_retry = false; s->read_error = false; set_string(&s->error, NULL);
     if (req->tag == ACT_SAVE) {
         fill(s);
         if (draft_name && !str_eq(draft_name, json_str(json_get(row, "name")))) { set_text(s->edits[F_NAME], draft_name); changed(s); }
@@ -419,7 +429,7 @@ static void detach_write(McpForm *s) {
     if (!s->write) return;
     // The worker continues on core. Observe completion without retaining the form or its controls.
     s->write->owner = NULL; s->write->slot = NULL; s->write->done = departed_write_done;
-    s->write = NULL; s->uncertain = true; s->create_retry = false;
+    s->write = NULL; s->uncertain = true; s->create_retry = false; s->read_error = false;
     set_string(&s->error, "An action is still completing on core. Refresh status before repeating it.");
 }
 static void form_visible(Screen *base, bool shown) {

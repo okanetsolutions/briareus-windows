@@ -149,6 +149,74 @@ static void test_normalized_endpoint_partial_updates(void) {
     body = body_now(&s, &why); CHECK(body != NULL); CHECK_STR(json_str(json_get(body, "url")), "https://draft.example"); json_free(body);
     json_free(next); str_free(&endpoint); form_cleanup(&s);
 }
+static void test_metadata_updates_preserve_connection(void) {
+    McpForm s; form_fixture(&s, true); char *why = NULL;
+    json_set_str(s.row, "oauthClientId", "client"); json_set_str(s.row, "oauthScope", "tools");
+    json_set_str(s.row, "oauthClientName", "Briareus");
+    json_set_str(s.row, "signInUrl", "https://auth.example/?state=pending"); json_set_bool(s.row, "signInNeedsPaste", true);
+    fill(&s); mcp_sign_in_update(&s.sign_in, s.row);
+    set_text(s.edits[F_CALLBACK], "http://localhost/?state=pending&code=approved");
+    set_text(s.edits[F_LABEL], "Renamed"); s.enabled = false; toggle_repo(&s, "owner/new");
+    form_save(&s); CHECK_INT(calls, 1); CHECK_STR(json_str(json_get(sent, "label")), "Renamed");
+    CHECK(json_bool_is(json_get(sent, "enabled"), false)); CHECK_INT(json_count(json_get(sent, "repos")), 2);
+    const char *const connection[] = { "transport", "url", "command", "args", "headers", "env", "oauthClientId", "oauthClientSecret", "oauthScope", "oauthClientName", "oauthRedirect" };
+    for (size_t i = 0; i < sizeof connection / sizeof *connection; i++) CHECK(json_is_null(json_get(sent, connection[i])));
+    s.write = NULL;
+    CHECK_STR(s.sign_in.url, "https://auth.example/?state=pending"); CHECK(mcp_sign_in_can_finish(&s.sign_in));
+    CHECK_OWNED_STR(edit_text(s.edits[F_CALLBACK]), "http://localhost/?state=pending&code=approved");
+    // Changes and explicit secret replacement/clearing still reach core.
+    const int fields[] = { F_URL, F_CLIENT_ID, F_SCOPE, F_CLIENT_NAME };
+    const char *const values[] = { "https://new.example", "new-client", "new-scope", "New name" };
+    for (size_t i = 0; i < sizeof fields / sizeof *fields; i++) {
+        fill(&s); set_text(s.edits[fields[i]], values[i]);
+        Json *body = body_now(&s, &why); CHECK(body != NULL); CHECK(why == NULL);
+        CHECK_STR(json_str(json_get(body, FIELDS[fields[i]].key)), values[i]); json_free(body);
+    }
+    fill(&s); s.loopback = true;
+    Json *body = body_now(&s, &why); CHECK_STR(json_str(json_get(body, "oauthRedirect")), "loopback"); json_free(body);
+    fill(&s); s.secrets[0] = MCP_REPLACE; s.secrets[2] = MCP_CLEAR;
+    set_text(s.edits[F_HEADERS], "{\"Authorization\":\"replacement\"}");
+    body = body_now(&s, &why); CHECK_STR(json_str(json_get(json_get(body, "headers"), "Authorization")), "replacement");
+    CHECK_STR(json_str(json_get(body, "oauthClientSecret")), ""); json_free(body);
+    fill(&s); s.stdio = true; set_text(s.edits[F_COMMAND], "mcp"); set_text(s.edits[F_ARGS], "[\"start\"]");
+    body = body_now(&s, &why); CHECK_STR(json_str(json_get(body, "transport")), "stdio"); CHECK_STR(json_str(json_get(body, "command")), "mcp");
+    CHECK_INT(json_count(json_get(body, "args")), 1); CHECK_STR(json_str(json_get(body, "url")), ""); json_free(body);
+    json_set_str(s.row, "transport", "stdio"); json_set_str(s.row, "command", "mcp"); json_set_str(s.row, "url", ""); fill(&s);
+    set_text(s.edits[F_LABEL], "Stdio label"); body = body_now(&s, &why);
+    for (size_t i = 0; i < sizeof connection / sizeof *connection; i++) CHECK(json_is_null(json_get(body, connection[i])));
+    json_free(body);
+    set_text(s.edits[F_ARGS], "[\"changed\"]"); body = body_now(&s, &why);
+    CHECK_STR(json_str(json_at(json_get(body, "args"), 0)), "changed"); json_free(body);
+    set_text(s.edits[F_COMMAND], "new-command"); body = body_now(&s, &why);
+    CHECK_STR(json_str(json_get(body, "command")), "new-command"); json_free(body);
+    // Creates always carry a complete validated connection configuration.
+    s.id = 0; body = body_now(&s, &why); CHECK_STR(json_str(json_get(body, "transport")), "stdio");
+    CHECK_STR(json_str(json_get(body, "oauthClientId")), "client"); CHECK_STR(json_str(json_get(body, "oauthRedirect")), "callback"); json_free(body);
+    form_cleanup(&s);
+}
+static void test_postcommit_create_error_reconciliation(void) {
+    for (int committed = 0; committed < 2; committed++) {
+        McpForm s; form_fixture(&s, false); s.stdio = true; s.dirty = true;
+        set_text(s.edits[F_COMMAND], "mcp"); set_text(s.edits[F_ENV], "{\"TOKEN\":\"private draft\"}"); s.secrets[1] = MCP_REPLACE;
+        form_save(&s); CHECK_INT(calls, 1); s.write = NULL;
+        Request req = {0}; req.client = s.account; req.tag = ACT_SAVE; api_error_init(&req.error);
+        api_error_set(&req.error, API_HTTP, 400, "database unavailable", -1);
+        CHECK(!request_outcome_unknown(&req)); write_done(&s, &req);
+        CHECK(s.uncertain); CHECK(s.read != NULL); CHECK_INT(calls, 2); CHECK_STR(s.create_name, "tools");
+        set_text(s.edits[F_NAME], "renamed-draft"); form_save(&s); CHECK_INT(calls, 2);
+        req.ok = true; req.result = json_object(); Json *rows = json_array();
+        if (committed) { Json *row = json_clone(s.row); json_set_num(row, "id", 456); json_set_str(row, "transport", "stdio"); json_set_str(row, "command", "mcp"); json_array_push(rows, row); }
+        json_object_set(req.result, "servers", rows); s.read = NULL; read_done(&s, &req);
+        CHECK_INT(s.id, committed ? 456 : 0); CHECK(s.uncertain == !committed); CHECK(s.create_retry == !committed);
+        CHECK_OWNED_STR(edit_text(s.edits[F_NAME]), "renamed-draft"); CHECK_OWNED_STR(edit_text(s.edits[F_ENV]), "{\"TOKEN\":\"private draft\"}");
+        CHECK_INT(s.secrets[1], MCP_REPLACE); CHECK_INT(calls, 2);
+        confirm_result = true; form_save(&s); CHECK_INT(calls, 3);
+        CHECK_STR(json_str(json_get(sent, "name")), committed ? "renamed-draft" : "tools");
+        if (committed) CHECK_INT(json_int_or(json_get(sent, "id"), 0), 456);
+        else CHECK(json_is_null(json_get(sent, "id")));
+        s.write = NULL; json_free(req.result); api_error_clear(&req.error); form_cleanup(&s);
+    }
+}
 static void test_uncertain_create_reconciliation(void) {
     for (int committed = 0; committed < 2; committed++) {
         McpForm s; form_fixture(&s, false); s.dirty = true;
@@ -259,14 +327,34 @@ static void test_polled_deletion_refreshes_settings(void) {
     g_store.device.permission = "admin"; read_done(&s, &req); CHECK_INT(registry_changes, 1); CHECK(s.uncertain); CHECK(s.error != NULL);
     json_free(req.result); api_error_clear(&req.error); form_cleanup(&s);
 }
+static void test_successful_refresh_clears_read_notice(void) {
+    McpForm s; form_fixture(&s, true);
+    Request req = {0}; req.client = s.account; api_error_init(&req.error);
+    api_error_set(&req.error, API_HTTP, 502, "Unavailable", -1);
+    read_done(&s, &req); CHECK(s.read_error); CHECK(s.error != NULL); CHECK(!s.uncertain);
+    req.ok = true; req.result = json_object(); Json *rows = json_array(), *row = json_clone(s.row); json_array_push(rows, row); json_object_set(req.result, "servers", rows);
+    req.client = NULL; read_done(&s, &req); CHECK(s.read_error); CHECK(s.error != NULL);
+    req.client = s.account; read_done(&s, &req); CHECK(!s.read_error); CHECK(s.error == NULL);
+    // A later validation/mutation notice supersedes a read notice and survives healthy polling.
+    req.ok = false; read_done(&s, &req); CHECK(s.read_error);
+    error_text(&s, "Invalid draft"); req.ok = true; read_done(&s, &req); CHECK_STR(s.error, "Invalid draft"); CHECK(!s.read_error);
+    req.ok = false; req.tag = ACT_SAVE; api_error_set(&req.error, API_HTTP, 400, "Invalid update", -1);
+    write_done(&s, &req); CHECK(!s.uncertain); CHECK(!s.read_error);
+    char *mutation_notice = xstrdup(s.error); req.ok = true; s.read = NULL; read_done(&s, &req); CHECK_STR(s.error, mutation_notice); free(mutation_notice);
+    s.dirty = true; json_set_str(row, "label", "Remote label"); read_done(&s, &req); CHECK(s.conflict); CHECK(s.error != NULL);
+    json_free(req.result); api_error_clear(&req.error); form_cleanup(&s);
+}
 void app_mcp_settings_tests(void) {
     test_run("MCP form omits retained assignments and allows disabled empty selections", test_assignments_and_disabled_empty_selection);
     test_run("MCP form refreshes clean controls and preserves drafts behind conflict confirmation", test_clean_refresh_and_dirty_conflict);
     test_run("MCP clean saves preserve pending OAuth while new and dirty forms can save", test_clean_save_preserves_pending_sign_in);
     test_run("MCP updates omit unchanged normalized endpoints but validate creates and replacements", test_normalized_endpoint_partial_updates);
+    test_run("MCP metadata updates omit unchanged connections while edits and secrets still reach core", test_metadata_updates_preserve_connection);
+    test_run("MCP failed creates reconcile postcommit HTTP errors without automatic write retries", test_postcommit_create_error_reconciliation);
     test_run("MCP uncertain creates reconcile by submitted name without losing drafts or retrying writes", test_uncertain_create_reconciliation);
     test_run("MCP authored JSON rejects NUL without changing literal escapes or response parsing", test_nul_authoring);
     test_run("MCP departed mutations refresh only their current account after completion", test_departed_mutation_completion);
     test_run("MCP polled OAuth status changes refresh Settings without extra reads on unchanged polls", test_polled_status_refreshes_settings);
     test_run("MCP authoritative deletion refreshes Settings only for the current admin account", test_polled_deletion_refreshes_settings);
+    test_run("MCP successful refresh clears read notices while preserving other errors and conflicts", test_successful_refresh_clears_read_notice);
 }
