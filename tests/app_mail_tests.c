@@ -52,6 +52,23 @@ static void lifecycle(void) {
     request_cancel(&slot); CHECK(cancelled.cancelled && !slot && !cancelled.slot);
     api_client_release(one); api_client_release(two); api_error_clear(&e); memset(&g_store, 0, sizeof g_store);
 }
+typedef struct { int calls, tag; } MailAnswer;
+static void answered(void *owner, Request *r) { MailAnswer *answer = owner; answer->calls++; answer->tag = r->tag; }
+static void cancellation(void) {
+    setup("admin", 6); // No connection: refusals are posted to this thread, exercising real delivery/cancellation.
+    MailAnswer retired = {0}, replacement = {0}; Request *old_slot = NULL, *new_slot = NULL;
+    store_call("settings_mail_accounts", json_object(), 1000, &retired, answered, 7, &old_slot);
+    store_call("finish_mail_account", json_object(), 1000, &retired, answered, 7, &old_slot);
+    request_cancel(&old_slot); CHECK(old_slot == NULL);
+    store_call("sync_mail_account", json_object(), 1000, &replacement, answered, 8, &new_slot);
+    MSG msg; int delivered = 0;
+    while (PeekMessageW(&msg, (HWND)-1, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
+        store_handle_message(msg.message, msg.wParam, msg.lParam); delivered++;
+    }
+    CHECK_INT(delivered, 3); CHECK_INT(retired.calls, 0); CHECK_INT(replacement.calls, 1);
+    CHECK_INT(replacement.tag, 8); CHECK(new_slot == NULL);
+    memset(&g_store, 0, sizeof g_store);
+}
 static void backoff(void) {
     CHECK_INT(mail_settings_retry_ms(0, -1), 10000); CHECK_INT(mail_settings_retry_ms(1, -1), 10000);
     CHECK_INT(mail_settings_retry_ms(2, -1), 20000); CHECK_INT(mail_settings_retry_ms(3, -1), 40000);
@@ -62,5 +79,6 @@ static void backoff(void) {
 void app_mail_tests(void) {
     test_run("mail navigation and each write require deployed routes and admin permission", permissions);
     test_run("mail results are discarded on screen connection or permission changes", lifecycle);
+    test_run("cancelled and superseded mail requests never reach the retired owner", cancellation);
     test_run("mail status polling is conservative and respects rate-limit delays", backoff);
 }
