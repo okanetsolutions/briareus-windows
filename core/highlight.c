@@ -150,6 +150,10 @@ static size_t find(const char *token, const char *s, size_t n, size_t from, bool
     }
     return n + 1;
 }
+/// Whether a backslash escapes the character after it in a string `delim` opens: not in Go's raw `...` strings.
+static bool escapes_in(const CodeLanguage *l, const char *delim) {
+    return !(str_eq(delim, "`") && str_eq(l->name, "Go"));
+}
 static bool is_keyword(const CodeLanguage *l, const char *word, size_t len) {
     for (int k = 0; k < 2; k++) {
         for (const char *const *w = l->keywords[k]; w && *w; w++) {
@@ -189,7 +193,7 @@ CodeToken *code_lexer_line(CodeLexer *lexer, const char *s, size_t n, size_t *co
         if (end > n) { emit(&t, 0, n, CODE_COMMENT); *count = t.count; return t.items; }
         emit(&t, 0, end, CODE_COMMENT); i = end; lexer->open_comment = false;
     } else if (lexer->open_string) {
-        size_t end = find(lexer->open_string, s, n, 0, true);
+        size_t end = find(lexer->open_string, s, n, 0, escapes_in(l, lexer->open_string));
         if (end > n) { emit(&t, 0, n, CODE_STRING); *count = t.count; return t.items; }
         emit(&t, 0, end, CODE_STRING); i = end; lexer->open_string = NULL;
     }
@@ -215,7 +219,7 @@ CodeToken *code_lexer_line(CodeLexer *lexer, const char *s, size_t n, size_t *co
         for (int k = 0; !delim && l->multiline[k]; k++) if (matches(l->multiline[k], s, n, i)) delim = l->multiline[k];
         if (delim) {
             emit(&t, plain, i, CODE_PLAIN);
-            size_t end = find(delim, s, n, i + strlen(delim), true);
+            size_t end = find(delim, s, n, i + strlen(delim), escapes_in(l, delim));
             if (end > n) { emit(&t, i, n, CODE_STRING); lexer->open_string = delim; *count = t.count; return t.items; }
             emit(&t, i, end, CODE_STRING); i = plain = end;
             continue;

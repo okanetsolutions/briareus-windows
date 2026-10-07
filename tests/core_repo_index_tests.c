@@ -86,6 +86,9 @@ static void test_finds_declarations_in_other_languages(void) {
                     "c:Repo@1 f:__init__@2<Repo f:main@4");
     CHECK_OWNED_STR(symbols_of("a.go", "package main\ntype Server struct {\n}\nfunc (s *Server) Start() error {\nfunc main() {\nconst Limit = 3\n"),
                     "c:Server@2 f:Start@4 f:main@5 k:Limit@6");
+    // A raw string ending in a backslash closes at its backtick, so the declarations after it are found.
+    CHECK_OWNED_STR(symbols_of("a.go", "func Fix(p string) string {\n\treturn strings.ReplaceAll(p, `\\`, \"/\")\n}\nfunc Foo() {}\ntype Bar struct {}\n"),
+                    "f:Fix@1 f:Foo@4 c:Bar@5");
     CHECK_OWNED_STR(symbols_of("a.rb", "module Billing\n  class Invoice\n    def self.build\n    def total\n"),
                     "c:Billing@1 c:Invoice@2<Billing f:build@3<Invoice f:total@4<Invoice");
     CHECK_OWNED_STR(symbols_of("a.c", "struct point {\n};\nstruct point *p = NULL;\nstatic int add(int a, int b)\n{\n    return add(a, b);\n}\nint main(void) {\n    if (x) {\n    foo(x)\n"),
@@ -93,6 +96,10 @@ static void test_finds_declarations_in_other_languages(void) {
     CHECK_OWNED_STR(symbols_of("a.cpp", "void Widget::draw(Canvas *cv) const {\n~Widget() {\n"), "f:draw@1<Widget f:~Widget@2");
     CHECK_OWNED_STR(symbols_of("A.java", "public class A {\n    @Override\n    @GetMapping(\"/x\")\n    public String name()\n    public void run() throws Exception {\n        String s = make(1);\n        return build(\n        new Thread() {\n"),
                     "c:A@1 f:name@4<A f:run@5<A");
+    // Try-with-resources and a ternary's continuation line declare nothing.
+    CHECK_OWNED_STR(symbols_of("A.java", "class A {\n    void run() {\n        try (Foo f = new Foo()) {\n        return c\n            ? compute(1)\n            : 0;\n"),
+                    "c:A@1 f:run@2<A");
+    CHECK_OWNED_STR(symbols_of("a.js", "class A {\n  pick() {\n    return cond\n      ? foo(a)\n      : bar(b);\n"), "c:A@1 f:pick@2<A");
     CHECK_OWNED_STR(symbols_of("a.rs", "pub struct Config {\npub fn load() -> Config {\nconst MAX: u32 = 1;\ntrait Shape {}\n"), "c:Config@1 f:load@2 k:MAX@3 c:Shape@4");
     CHECK_OWNED_STR(symbols_of("a.lua", "local function M.helper()\nfunction obj:method()\n"), "f:helper@1 f:method@2");
     CHECK_OWNED_STR(symbols_of("a.kt", "object Registry {\n    fun get() = 1\n"), "c:Registry@1 f:get@2<Registry");

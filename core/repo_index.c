@@ -68,7 +68,7 @@ static const Declarer DECLARERS[] = {
 static const char *const METHOD_LANGUAGES = "Java|C#|C|C++|Objective-C|Dart|JavaScript|TypeScript|Groovy";
 /// Words before a parenthesis that are not a declaration's name, or start a statement that is not one.
 static const char *const NOT_NAMES[] = {
-    "if", "for", "while", "switch", "catch", "return", "new", "else", "sizeof", "typeof", "function", "await", "throw", "yield",
+    "if", "for", "while", "switch", "try", "catch", "return", "new", "else", "sizeof", "typeof", "function", "await", "throw", "yield",
     "case", "do", "delete", "in", "of", "using", "lock", "foreach", "synchronized", "super", "this", "assert", "with", "when",
     "match", "elif", "until", "unless", "defined", "decltype", "alignof", "static_assert", "operator", "echo", "print", NULL,
 };
@@ -154,11 +154,12 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
 }
 
 /// A method declared without a keyword: its name right before the first parenthesis, only modifiers and a type before
-/// it, and a line that does not end as a statement does. `*container` is set for C++'s `Type::name(`.
+/// it, and a line that does not end as a statement does. `*container` is set for C++'s `Type::name(`. A line that starts
+/// with `?` continues a ternary, `? foo(a)`, and declares nothing.
 static bool method_declaration(const char *code, size_t n, const char *language, size_t *name_at, size_t *name_len, char **container) {
     size_t a = skip_spaces(code, n, 0), b = n;
     while (b > a && (code[b - 1] == ' ' || code[b - 1] == '\t')) b--;
-    if (b <= a || code[b - 1] == ';') return false;
+    if (b <= a || code[b - 1] == ';' || code[a] == '?') return false;
     const char *paren = memchr(code + a, '(', b - a);
     if (!paren) return false;
     size_t p = (size_t)(paren - code), e = p;

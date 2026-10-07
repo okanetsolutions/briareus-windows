@@ -231,6 +231,11 @@ static void test_colours_a_line(void) {
     code_lexer_init(&lx, code_language_of("a.js"));
     CHECK_OWNED_STR(runs_of(&lx, "const s = `a"), "k:const|p: s = |s:`a");
     CHECK_OWNED_STR(runs_of(&lx, "b` + ALL"), "s:b`|p: + ALL");
+    // Go's raw strings have no escapes: a backslash before the closing backtick does not hide it.
+    code_lexer_init(&lx, code_language_of("a.go"));
+    CHECK_OWNED_STR(runs_of(&lx, "x := `\\` + y"), "p:x := |s:`\\`|p: + y");
+    CHECK_OWNED_STR(runs_of(&lx, "s := `a"), "p:s := |s:`a");
+    CHECK_OWNED_STR(runs_of(&lx, "b\\` + y"), "s:b\\`|p: + y");
 }
 
 void repo_tests(void) {
