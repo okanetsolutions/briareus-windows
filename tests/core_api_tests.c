@@ -291,6 +291,7 @@ static const Expected ROUTE_TABLE[] = {
     { "issue", "GET", "issues/{issue}" }, { "issue_timeline", "GET", "issues/{issue}/timeline" }, { "close_issue", "POST", "issues/{issue}/close" },
     { "update_issue", "PATCH", "issues/{issue}" },
     { "project_board", "GET", "project-board" }, { "project_board_move", "POST", "project-board/move" },
+    { "repo_tree", "GET", "repo/tree" }, { "repo_file", "GET", "repo/file" }, { "commit", "GET", "commits/{sha}" },
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" }, { "start_session", "POST", "sessions" },
     { "review", "POST", "sessions", "review" }, { "qa", "POST", "sessions", "qa" },
     { "session", "GET", "sessions/{sessionId}" }, { "rename", "PATCH", "sessions/{sessionId}" }, { "delete", "DELETE", "sessions/{sessionId}" },

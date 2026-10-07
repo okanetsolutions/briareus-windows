@@ -73,6 +73,12 @@ int doc_add(Doc *doc, const RECT *rc, ItemPaint paint);
 int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color, UINT flags);
 /// Text at an explicit rectangle.
 int doc_text_at(Doc *doc, const RECT *rc, const char *text, FontId f, COLORREF color, UINT flags);
+/// A run of a code line in one colour, as byte offsets into the line.
+typedef struct { size_t start, len; COLORREF color; } DocSpan;
+/// One line of source code, `len` bytes of `text`, at `rc`, coloured span by span (in order, covering the line; none paints it in the text
+/// colour) and selectable as text; copied, lines keep their empty ones. Tabs stop every four columns, and the columns sit
+/// on a monospaced grid `advance` hundredths of a pixel wide, so a long file lays out without measuring its text.
+int doc_code_line(Doc *doc, const RECT *rc, const char *text, size_t len, const DocSpan *spans, size_t count, FontId f, int advance);
 /// Inline Markdown (bold, code, links) wrapped in `w`; advances. Links open on click.
 int doc_rich(Doc *doc, int x, int w, const char *inline_markdown, FontId base, COLORREF color);
 /// The height inline Markdown would take, without adding it.

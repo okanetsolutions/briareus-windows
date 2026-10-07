@@ -7,6 +7,7 @@
 #include <string.h>
 
 Store g_store;
+static volatile LONG cache_jobs;    // async_run_cache's work, queued or running
 
 static void notify(void) { if (g_store.hwnd) PostMessageW(g_store.hwnd, WM_APP_STORE_CHANGED, 0, 0); }
 
@@ -49,6 +50,8 @@ void store_init(HWND main_window) {
     if (!g_store.server) g_store.server = xstrdup("");
 }
 void store_shutdown(void) {
+    // A repository index still being written or read finishes first: the cache and its lock go next.
+    while (InterlockedCompareExchange(&cache_jobs, 0, 0) > 0) Sleep(10);
     drop_client();
     cache_free(g_store.cache); g_store.cache = NULL;
     free(g_store.server); free(g_store.connection_error);
@@ -66,18 +69,26 @@ bool store_supports_attachments(void) { return store_supports_attachments_on("me
 
 // MARK: - Async
 
-typedef struct { AsyncWork work, done; void *ctx; } AsyncJob;
+typedef struct { AsyncWork work, done; void *ctx; bool cache; } AsyncJob;
 static DWORD WINAPI async_thread(LPVOID p) {
     AsyncJob *job = p;
+    bool cache = job->cache;
     job->work(job->ctx);
     PostMessageW(g_store.hwnd, WM_APP_ASYNC_DONE, 0, (LPARAM)job);
+    if (cache) InterlockedDecrement(&cache_jobs);
     return 0;
 }
-void async_run(AsyncWork work, AsyncWork done, void *ctx) {
+static void async_queue(AsyncWork work, AsyncWork done, void *ctx, bool cache) {
     AsyncJob *job = xcalloc(1, sizeof *job);
-    job->work = work; job->done = done; job->ctx = ctx;
-    if (!QueueUserWorkItem(async_thread, job, WT_EXECUTELONGFUNCTION)) { work(ctx); if (done) done(ctx); free(job); }
+    job->work = work; job->done = done; job->ctx = ctx; job->cache = cache;
+    if (cache) InterlockedIncrement(&cache_jobs);
+    if (!QueueUserWorkItem(async_thread, job, WT_EXECUTELONGFUNCTION)) {
+        work(ctx); if (done) done(ctx); free(job);
+        if (cache) InterlockedDecrement(&cache_jobs);
+    }
 }
+void async_run(AsyncWork work, AsyncWork done, void *ctx) { async_queue(work, done, ctx, false); }
+void async_run_cache(AsyncWork work, AsyncWork done, void *ctx) { async_queue(work, done, ctx, true); }
 
 // MARK: - Pairing
 

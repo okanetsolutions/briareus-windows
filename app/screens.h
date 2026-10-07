@@ -169,6 +169,38 @@ void board_tab_header(BoardTab *p, HeaderInfo *info);
 bool board_tab_action(BoardTab *p, int action, intptr_t arg, POINT pt);
 /// A card carried over the board: the column under `pt` (content coordinates) lights up, and a drop moves the card there.
 void board_tab_drag(BoardTab *p, int action, intptr_t arg, POINT pt, DragPhase phase);
+/// A project's Files tab: its repository read through the server (`repo_tree`, `repo_file`), as PhpStorm's project
+/// view shows it. The tree, at the branch the header's picker names, is on the left under PhpStorm's finders (Go to
+/// Class, File and Symbol, and Find in Files, the last three over an index of the source kept on this PC); the open
+/// files are tabs on the right, each read at the tree's commit, numbered and coloured. Its items and header
+/// buttons use `PROJECT_FILES_ACTIONS` actions from `action_base` up.
+typedef struct ProjectFiles ProjectFiles;
+enum { PROJECT_FILES_ACTIONS = 16 };
+/// `timer` is the host's timer id the tab scrolls to a found line with.
+ProjectFiles *project_files_new(const char *repo, Screen *host, int action_base, UINT timer);
+void project_files_free(ProjectFiles *p);
+/// Whether the server reads repositories' files for this token.
+bool project_files_offered(void);
+/// Reads the tree (and the branches) the first time the tab is shown; the refresh reads the tree and the open files again.
+void project_files_open(ProjectFiles *p);
+void project_files_refresh(ProjectFiles *p);
+/// Lays the tab out from `doc->y` down.
+void project_files_layout(ProjectFiles *p, Doc *doc, int w);
+/// The repository, commit and file count in the line under the title, and the branch picker.
+void project_files_header(ProjectFiles *p, HeaderInfo *info);
+/// Shows the Go to File field over its place, or hides it when `shown` is false.
+void project_files_place(ProjectFiles *p, const RECT *content, int scroll_y, bool shown);
+/// True when the action was the tab's.
+bool project_files_action(ProjectFiles *p, int action, intptr_t arg, POINT pt);
+/// A right click on an open file's tab: its menu. True when the item was the tab's.
+bool project_files_context(ProjectFiles *p, int action, intptr_t arg, POINT pt);
+/// The Go to File field's notifications, and Ctrl+P that focuses it: true when handled.
+bool project_files_command(ProjectFiles *p, int id, int code);
+/// The finders' keys, as PhpStorm's: Ctrl+N a class, Ctrl+Shift+N (or Ctrl+P) a file, Ctrl+Shift+Alt+N a symbol and
+/// Ctrl+Shift+F text in the files.
+bool project_files_key(ProjectFiles *p, WPARAM vk, bool ctrl, bool shift);
+/// True when the timer was the tab's.
+bool project_files_timer(ProjectFiles *p, UINT id);
 /// A project's Forge tab, laid out inside its board: the servers of the Laravel Forge accounts available to the project
 /// down the left, and the server picked there with its Forge sites on the right. Its items use `PROJECT_FORGE_ACTIONS`
 /// actions from `action_base` up.

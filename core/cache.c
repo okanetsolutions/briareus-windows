@@ -122,6 +122,37 @@ bool cache_store(DiskCache *c, const Json *value, const char *key) {
     return ok;
 }
 
+bool cache_bytes(DiskCache *c, const char *key, char **data, size_t *len) {
+    EnterCriticalSection(&c->lock);
+    wchar_t *path = path_for(c, key);
+    bool ok = read_file(path, data, len);
+    free(path);
+    LeaveCriticalSection(&c->lock);
+    return ok;
+}
+bool cache_store_bytes(DiskCache *c, const char *data, size_t len, const char *key) {
+    EnterCriticalSection(&c->lock);
+    wchar_t *path = path_for(c, key);
+    bool ok = write_atomic(c, path, data, len);
+    free(path);
+    LeaveCriticalSection(&c->lock);
+    return ok;
+}
+bool cache_touch(DiskCache *c, const char *key) {
+    EnterCriticalSection(&c->lock);
+    wchar_t *path = path_for(c, key);
+    HANDLE h = CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    bool ok = false;
+    if (h != INVALID_HANDLE_VALUE) {
+        FILETIME now; GetSystemTimeAsFileTime(&now);
+        ok = SetFileTime(h, NULL, NULL, &now) != 0;
+        CloseHandle(h);
+    }
+    free(path);
+    LeaveCriticalSection(&c->lock);
+    return ok;
+}
+
 Json *cache_lines(DiskCache *c, const char *key) {
     Json *result = json_array();
     EnterCriticalSection(&c->lock);

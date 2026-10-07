@@ -303,6 +303,11 @@ static const ApiRoute ROUTES[] = {
     { "update_issue", "PATCH", "issues/{issue}" },          // its `title`, `body`, `labels` and `assignees`, as update_pull
     { "project_board", "GET", "project-board" },           // the project's GitHub Projects board as its view groups it; `fresh` skips the cache
     { "project_board_move", "POST", "project-board/move" }, // a card to another column: `itemId`, and `columnId` (null for "No <field>")
+    // The repository's files, read through the server's GitHub token: every path at a `ref` (the default branch when
+    // absent) with the commit it pointed at, and one file's text at a `ref`, best the tree's `sha`.
+    { "repo_tree", "GET", "repo/tree" },
+    { "repo_file", "GET", "repo/file" },
+    { "commit", "GET", "commits/{sha}" },                   // one commit and the files it changed, for walking an index back
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
     { "start_session", "POST", "sessions" },

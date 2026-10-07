@@ -191,6 +191,25 @@ static void test_values_round_trip_through_a_directory_made_on_first_write(void)
     CHECK(!exists(root));
     free(dir); free(root);
 }
+static void test_bytes_round_trip_as_they_are(void) {
+    wchar_t *dir = fresh_directory();
+    DiskCache *cache = cache_new(dir);
+    char *data = NULL; size_t len = 0;
+    CHECK(!cache_bytes(cache, "repo-index", &data, &len));
+    const char bytes[] = "BRIAREUS-INDEX 1\n\0binary\xFF";
+    CHECK(cache_store_bytes(cache, bytes, sizeof bytes - 1, "repo-index"));
+    CHECK(cache_bytes(cache, "repo-index", &data, &len));
+    CHECK_INT(len, sizeof bytes - 1);
+    CHECK(data && memcmp(data, bytes, len) == 0 && data[len] == 0);
+    free(data);
+    CHECK(cache_store_bytes(cache, "", 0, "repo-index"));
+    CHECK(cache_bytes(cache, "repo-index", &data, &len)); CHECK_INT(len, 0);
+    free(data);
+    cache_remove_all(cache);
+    cache_free(cache);
+    remove_tree(dir);
+    free(dir);
+}
 static void test_keys_with_odd_characters_are_kept_apart(void) {
     wchar_t *dir = fresh_directory();
     DiskCache *cache = cache_new(dir);
@@ -445,6 +464,13 @@ static void test_prune_drops_entries_older_than_the_age(void) {
     CHECK(cache_append(cache, log, "log"));
     cache_prune(cache, 3600, time(NULL));
     lines = cache_lines(cache, "log"); CHECK_INT(json_count(lines), 2); json_free(lines);
+    // A touch does, without changing the entry; there is nothing to touch under a key never written.
+    CHECK(cache_store(cache, v, "read"));
+    set_modified(dir, "read", time(NULL) - 7200);
+    CHECK(cache_touch(cache, "read"));
+    cache_prune(cache, 3600, time(NULL));
+    Json *touched = cache_value(cache, "read"); CHECK(touched != NULL && json_equal(touched, v)); json_free(touched);
+    CHECK(!cache_touch(cache, "never"));
     // Pruning leaves the directory in place, even when it empties it.
     cache_prune(cache, 0, now + 10L * 365 * 86400);
     CHECK_INT(count_entries(dir), 0);
@@ -483,4 +509,5 @@ void cache_tests(void) {
     test_run("remove takes one key and remove all the directory", test_remove_takes_one_key_and_remove_all_the_directory);
     test_run("prune drops entries older than the age", test_prune_drops_entries_older_than_the_age);
     test_run("two caches on one directory see each other's writes", test_two_caches_on_one_directory_see_each_others_writes);
+    test_run("bytes round trip as they are", test_bytes_round_trip_as_they_are);
 }

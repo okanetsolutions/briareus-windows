@@ -153,6 +153,7 @@ RECT pane_content_rect(Pane *p) {
 }
 int pane_content_width(Pane *p) { RECT rc = client(p); return rc.right - rc.left - 2 * margin(p); }
 int pane_scroll_y(Pane *p) { return p->scroll_y; }
+int pane_scroll_x(Pane *p) { return p->scroll_x; }
 
 static int max_scroll(Pane *p) {
     RECT rc = pane_content_rect(p);
@@ -168,6 +169,9 @@ static void set_scroll_x(Pane *p, int x) {
     if (x < 0) x = 0;
     if (x == p->scroll_x) return;
     p->scroll_x = x;
+    // A screen's controls sit over the content, so they move with it.
+    Screen *s = pane_top(p);
+    if (s && s->vt->place) { RECT rc = pane_content_rect(p); s->vt->place(s, &rc, p->scroll_y); }
     InvalidateRect(p->hwnd, NULL, FALSE);
 }
 
