@@ -321,6 +321,56 @@ int doc_text(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color,
     return i;
 }
 
+/// The columns a run of UTF-8 text takes, its tabs expanded to the next multiple of four from `*col`; `*col` follows.
+static char *expand_code_tabs(const char *text, size_t len, size_t *col) {
+    Str out; str_init(&out);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\t') { size_t spaces = 4 - *col % 4; for (size_t k = 0; k < spaces; k++) str_appendc(&out, ' '); *col += spaces; continue; }
+        str_appendc(&out, (char)c);
+        if ((c & 0xC0) != 0x80) (*col)++;
+    }
+    return str_detach(&out);
+}
+int doc_code_line(Doc *doc, const RECT *rc, const char *text, size_t len, const DocSpan *spans, size_t count, FontId f, int advance) {
+    int i = doc_add(doc, rc, paint_rich);
+    Item *it = &doc->items[i];
+    Rich *r = xcalloc(1, sizeof *r);
+    r->single = true;
+    int line_h = font_height(doc->cv, f);
+    size_t col = 0, cap = 64;
+    r->plain = xmalloc(cap * sizeof *r->plain); r->plain[0] = 0;
+    DocSpan whole = { 0, len, theme.text };
+    if (!count) { spans = &whole; count = 1; }
+    for (size_t k = 0; k < count; k++) {
+        if (!spans[k].len || spans[k].start + spans[k].len > len) continue;
+        size_t from = col;
+        char *part = expand_code_tabs(text + spans[k].start, spans[k].len, &col);
+        wchar_t *w = utf8_to_wide(part);
+        free(part);
+        size_t wlen = wcslen(w);
+        if (r->plain_len + wlen + 1 > cap) { cap = (r->plain_len + wlen + 1) * 2; r->plain = xrealloc(r->plain, cap * sizeof *r->plain); }
+        memcpy(r->plain + r->plain_len, w, (wlen + 1) * sizeof *w);
+        // On the grid: the run starts at its first column and ends where the next one starts, measuring nothing.
+        Run *run = rich_push(r);
+        memset(run, 0, sizeof *run);
+        run->x = (int)((long long)from * advance / 100);
+        run->w = run->wt = (int)((long long)col * advance / 100) - run->x;
+        run->h = line_h; run->font = f; run->color = spans[k].color;
+        run->start = r->plain_len; run->len = wlen; run->text = w;
+        r->plain_len += wlen;
+    }
+    r->lines = 1;
+    r->line_y = xcalloc(1, sizeof *r->line_y); r->line_h = xcalloc(1, sizeof *r->line_h); r->line_start = xcalloc(1, sizeof *r->line_start);
+    r->line_h[0] = line_h; r->height = line_h;
+    int dy = (rc->bottom - rc->top - line_h) / 2;
+    if (dy > 0) rich_offset(r, 0, dy);
+    it->data = r; it->free_data = rich_free; it->sel = r; it->font = f;
+    // Copied, an empty line keeps its place among the others.
+    it->cell = true;
+    return i;
+}
+
 // MARK: - Boxes
 
 static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {

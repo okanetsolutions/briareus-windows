@@ -16,6 +16,7 @@ void sftp_tests(void);
 void browser_tests(void);
 void meet_tests(void);
 void update_tests(void);
+void repo_tests(void);
 
 // app_tests.exe
 void app_format_tests(void);

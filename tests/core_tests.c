@@ -901,5 +901,6 @@ int main(void) {
     browser_tests();
     meet_tests();
     update_tests();
+    repo_tests();
     return test_summary();
 }
