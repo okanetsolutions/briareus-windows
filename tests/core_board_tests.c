@@ -1242,6 +1242,20 @@ static void test_project_boards_move_a_card_and_its_totals(void) {
     CHECK_INT((int)b.columns[1].card_count, 1);
     project_board_free(&b); json_free(j);
 }
+static void test_project_boards_find_cards_and_columns_by_id(void) {
+    Json *j = json_parsez("{\"columns\":["
+        "{\"id\":null,\"name\":\"No Status\",\"count\":0,\"items\":[]},"
+        "{\"id\":\"t\",\"name\":\"Todo\",\"count\":2,\"items\":[{\"id\":\"a\"},{\"id\":\"b\"}]},"
+        "{\"id\":\"d\",\"name\":\"Done\",\"count\":1,\"items\":[{\"id\":\"c\"}]}]}");
+    ProjectBoard b; CHECK(project_board_parse(j, &b));
+    size_t column = 9, card = 9;
+    CHECK(project_board_find(&b, "b", &column, &card)); CHECK_INT((int)column, 1); CHECK_INT((int)card, 1);
+    CHECK(project_board_find(&b, "c", &column, &card)); CHECK_INT((int)column, 2); CHECK_INT((int)card, 0);
+    CHECK(!project_board_find(&b, "z", &column, &card)); CHECK(!project_board_find(&b, NULL, &column, &card)); CHECK(!project_board_find(&b, "", &column, &card));
+    // A move's null columnId is the "No Status" column.
+    CHECK_INT(project_board_column(&b, NULL), 0); CHECK_INT(project_board_column(&b, "d"), 2); CHECK_INT(project_board_column(&b, "x"), -1);
+    project_board_free(&b); json_free(j);
+}
 static void test_project_option_colours_are_githubs_names(void) {
     int rgb[3];
     CHECK(project_color_rgb("GREEN", rgb)); CHECK(rgb[1] > rgb[0] && rgb[1] > rgb[2]);
@@ -1397,6 +1411,7 @@ void board_tests(void) {
     test_run("project board cards list their pull requests", test_project_board_cards_list_their_pull_requests);
     test_run("project boards keep only the project's cards", test_project_boards_keep_only_the_projects_cards);
     test_run("project boards move a card and its totals", test_project_boards_move_a_card_and_its_totals);
+    test_run("project boards find cards and columns by id", test_project_boards_find_cards_and_columns_by_id);
     test_run("project option colours are GitHub's names", test_project_option_colours_are_githubs_names);
     test_run("column sums drop needless decimals", test_column_sums_drop_needless_decimals);
     test_run("board settings are read from their GitHub address", test_board_settings_are_read_from_their_github_address);
