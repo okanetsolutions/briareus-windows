@@ -125,6 +125,9 @@ int doc_badges_width(Doc *doc, const BadgeSpec *badges, size_t count);
 /// A section header in small caps style, as an inset grouped list has; advances.
 int doc_section(Doc *doc, int x, int w, const char *title);
 
+/// Drops the items from `count` on, as when a part of the page is laid out again.
+void doc_truncate(Doc *doc, size_t count);
+
 /// Items [first, last) follow the scroll down to `limit`, as a sidebar beside a long column: they stay in view, and
 /// one taller than the view scrolls on its own inside a window the view's height, as GitHub's file tree does. The page
 /// needs room for that window: `limit` at least the group's top plus the view's height less 24px. One group per
