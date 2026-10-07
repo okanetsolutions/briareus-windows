@@ -6,6 +6,7 @@
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@ struct ProjectRun {
     // The log of the Run under way, from its session's transcript: `log_session` is the session followed (found among the
     // project's sessions while `serve_branch` prepares it).
     char *log_session; RunLog log;
-    WebView *web; RECT web_rc; bool shown;
+    WebView *web; RECT web_rc; bool shown; RunAddress address;
     // The Cloudflare Access service token the browser sends to preview hosts, read once before it first opens.
     char *access_id, *access_secret, *access_suffix; bool access_read;
     Request *req_run, *req_profiles, *req_log, *req_sessions, *req_delete, *req_access;
@@ -249,6 +250,75 @@ static void delete_run(ProjectRun *p) {
 
 // MARK: - The address bar
 
+static void address_sync(RunAddress *a) {
+    if (!a->edit || GetFocus() == a->edit) return;
+    wchar_t *text = utf8_to_wide(a->url ? a->url : "");
+    SetWindowTextW(a->edit, text);
+    free(text);
+}
+static LRESULT CALLBACK run_address_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    RunAddress *a = (RunAddress *)ref;
+    if (msg == WM_KEYDOWN && wp == VK_RETURN) {
+        int n = GetWindowTextLengthW(hwnd);
+        wchar_t *text = xmalloc(((size_t)n + 1) * sizeof *text);
+        GetWindowTextW(hwnd, text, n + 1);
+        char *typed = wide_to_utf8(text), *url = browser_address(typed);
+        free(typed); free(text);
+        if (url && a->web && webview_navigate(*a->web, url)) {
+            set_string(&a->url, url);
+            SetFocus(GetParent(hwnd));
+            address_sync(a);
+        } else {
+            EDITBALLOONTIP tip = { sizeof tip, L"Cannot open this address", L"Enter a web address: http, https or about:blank.", TTI_ERROR };
+            SendMessageW(hwnd, EM_SHOWBALLOONTIP, 0, (LPARAM)&tip);
+        }
+        free(url);
+        return 0;
+    }
+    if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); address_sync(a); return 0; }
+    if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) < 0) && (wp == 'A' || wp == 'L')) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+    if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_ESCAPE || wp == 1 || wp == 12)) return 0;
+    if (msg == WM_LBUTTONDOWN && GetFocus() != hwnd) { SetFocus(hwnd); SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+    if (msg == WM_KILLFOCUS) { LRESULT r = DefSubclassProc(hwnd, msg, wp, lp); address_sync(a); return r; }
+    if (msg == WM_NCDESTROY) { RemoveWindowSubclass(hwnd, run_address_proc, id); a->edit = NULL; }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+void run_address_place(RunAddress *a, Screen *host, WebView **web, const char *url, const RECT *content, int scroll_y, bool shown) {
+    a->web = web;
+    bool on = shown && content && !IsRectEmpty(&a->rc);
+    if (on && !a->edit) {
+        a->edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10,
+                                 pane_hwnd(host->pane), NULL, GetModuleHandleW(NULL), NULL);
+        SetWindowSubclass(a->edit, run_address_proc, 1, (DWORD_PTR)a);
+        SendMessageW(a->edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Enter a web address");
+        theme_apply_control(a->edit);
+    }
+    if (!a->edit) return;
+    if (*web && webview_url(*web)) url = webview_url(*web);
+    set_string(&a->url, url);
+    address_sync(a);  // Page events must not replace an address while it is being edited.
+    if (on) {
+        RECT rc; GetClientRect(pane_hwnd(host->pane), &rc);
+        int m = (rc.right - rc.left - pane_content_width(host->pane)) / 2;
+        RECT r = a->rc;
+        OffsetRect(&r, content->left + m, content->top - scroll_y);
+        // Keep the native edit out of the header when the bar scrolls above the content.
+        on = r.top >= content->top && r.bottom <= content->bottom && r.right > r.left;
+        if (on) {
+            SendMessageW(a->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), FALSE);
+            MoveWindow(a->edit, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
+        }
+    }
+    if (!on && GetFocus() == a->edit) SetFocus(GetParent(a->edit));
+    EnableWindow(a->edit, *web && webview_ready(*web));
+    ShowWindow(a->edit, on ? SW_SHOWNA : SW_HIDE);
+}
+void run_address_free(RunAddress *a) {
+    if (a->edit) DestroyWindow(a->edit);
+    free(a->url);
+    memset(a, 0, sizeof *a);
+}
+
 static void paint_field(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_round_rect(cv, rc, px(8), theme.field, theme.line); }
 static void paint_lock(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; draw_glyph(cv, (wchar_t)it->arg, rc, FONT_ICON_SMALL, theme.muted); }
 /// A toolbar glyph, as the shared browser's: no frame, tinted under the mouse, greyed while it cannot act.
@@ -268,7 +338,7 @@ static void icon(Doc *doc, int x, int y, int size, wchar_t glyph, const char *ti
     it->tip = xstrdup(tip);
     doc->y = keep;
 }
-void run_browser_bar(Doc *doc, int w, WebView *web, const char *url, const int actions[4]) {
+void run_browser_bar(Doc *doc, int w, WebView *web, const char *url, const int actions[4], RunAddress *address) {
     bool ready = web && webview_ready(web);
     if (web && webview_url(web)) url = webview_url(web);
     int nh = px(32), ib = px(28), gap = px(2), ny = doc->y, by = ny + (nh - ib) / 2;
@@ -280,9 +350,8 @@ void run_browser_bar(Doc *doc, int w, WebView *web, const char *url, const int a
     doc_add(doc, &field, paint_field);
     RECT lock = { fx + px(10), ny, fx + px(26), ny + nh };
     doc_item(doc, doc_add(doc, &lock, paint_lock))->arg = url && str_has_prefix(url, "https://") ? 0xE72E : 0xE774;
-    // The address can be selected and copied.
-    RECT text = { fx + px(34), ny, fr - px(10), ny + nh };
-    doc_text_at(doc, &text, url ? url : "", FONT_BODY, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    int eh = edit_line_height(FONT_BODY);
+    SetRect(&address->rc, fx + px(34), ny + (nh - eh) / 2, fr - px(10), ny + (nh - eh) / 2 + eh);
     icon(doc, w - ib, by, ib, 0xE8A7, "Open in your browser", actions[3], url != NULL);
     doc->y = ny + nh + px(8);
 }
@@ -296,7 +365,7 @@ void project_run_layout(ProjectRun *p, Doc *doc, int w) {
     if (page && p->serve_error) { doc_text(doc, 0, w, p->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
     if (p->url && !p->busy) {
         int actions[4] = { p->base + A_BACK, p->base + A_FORWARD, p->base + A_RELOAD, p->base + A_BROWSER };
-        run_browser_bar(doc, w, p->web, p->url, actions);
+        run_browser_bar(doc, w, p->web, p->url, actions, &p->address);
     }
     int area = doc->y, h = (view.bottom - view.top) - area - px(12);
     if (h < px(320)) h = px(320);
@@ -372,6 +441,7 @@ void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool sh
         WebViewAccess access = { p->access_id, p->access_secret, p->access_suffix };
         p->web = webview_new(pane_hwnd(p->host->pane), p->url, &access, web_changed, p);
     }
+    run_address_place(&p->address, p->host, &p->web, p->url, content, scroll_y, on);
     if (!p->web) return;
     if (on && content) {
         RECT rc; GetClientRect(pane_hwnd(p->host->pane), &rc);
@@ -418,6 +488,7 @@ void project_run_free(ProjectRun *p) {
     request_cancel(&p->req_run); request_cancel(&p->req_profiles); request_cancel(&p->req_log);
     request_cancel(&p->req_sessions); request_cancel(&p->req_delete); request_cancel(&p->req_access);
     timer_on(p, false);
+    run_address_free(&p->address);
     webview_free(p->web);
     run_log_clear(&p->log);
     str_array_free(p->profiles, p->profile_count);

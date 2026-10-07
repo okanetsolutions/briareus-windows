@@ -245,7 +245,11 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// The address bar over a Run tab's browser: back, forward and reload, the page's address (`url` until the browser
 /// reports one), and open in the browser; `actions` holds the four actions in that order. Advances.
 struct WebView;
-void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4]);
+typedef struct { HWND edit; RECT rc; struct WebView **web; char *url; } RunAddress;
+void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4], RunAddress *address);
+/// Places the editable address in the host pane, or hides it when the Run tab is not shown.
+void run_address_place(RunAddress *address, Screen *host, struct WebView **web, const char *url, const RECT *content, int scroll_y, bool shown);
+void run_address_free(RunAddress *address);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
 /// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
 /// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
