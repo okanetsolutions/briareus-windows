@@ -379,6 +379,7 @@ static void find_reveal(Pane *p) {
 }
 static void find_hide(Pane *p, bool restore_focus) {
     if (!p->finding) return;
+    if (pane_at_bottom(p)) p->scroll_y -= px(40);
     p->finding = false;
     HWND controls[] = { p->find_edit, p->find_status, p->find_prev, p->find_next, p->find_close };
     for (size_t i = 0; i < sizeof controls / sizeof *controls; i++) ShowWindow(controls[i], SW_HIDE);
@@ -403,6 +404,8 @@ static void find_open(Pane *p) {
         p->find_close = find_control(p, L"BUTTON", L"Close", WS_TABSTOP, ID_FIND_CLOSE);
     }
     if (!p->finding) {
+        // Keep the bottom in view as the find bar reduces the viewport height.
+        if (pane_at_bottom(p)) p->scroll_y += px(40);
         p->find_return = GetFocus(); p->finding = true;
         pane_relayout(p); layout_if_needed(p, NULL);
     }
