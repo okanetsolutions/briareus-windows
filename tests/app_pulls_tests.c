@@ -104,7 +104,7 @@ static void test_truncated_issue_is_not_gone_and_reads_detail(void) {
     CHECK_INT(detail_calls, 1); CHECK(layout_contains(s, "Still accessible"));
     CHECK(!layout_contains(s, "This issue is no longer on the board"));
     // Older servers without detail must still preserve the supplied row on an incomplete list.
-    pane_set_root(pane, NULL); g_store.route_count = 2;
+    pane_set_root(pane, NULL); cache_remove_all(g_store.cache); g_store.route_count = 2;
     s = issue_detail_screen_new(&p, &issue); pane_set_root(pane, s); s->vt->refresh(s); drain(2);
     CHECK(!layout_contains(s, "This issue is no longer on the board"));
     pane_set_root(pane, NULL);
