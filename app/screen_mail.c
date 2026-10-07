@@ -83,7 +83,10 @@ static void read_done(void *owner, Request *r) {
     repaint(s);
 }
 static void load(MailScreen *s) {
-    if (!s->shown || s->blocked || s->read || s->write || !mail_settings_offered() || GetTickCount64() < s->next_read || GetTickCount64() < s->retry_until) return;
+    if (!s->shown || s->blocked || s->read || s->write || !mail_settings_offered()) return;
+    ULONGLONG tick = GetTickCount64();
+    if (tick < s->retry_until) { arm(s, (int)(s->retry_until - tick)); return; }
+    if (tick < s->next_read) return;
     store_call("settings_mail_accounts", json_object(), 0, s, read_done, 0, &s->read);
     repaint(s);
 }
@@ -145,7 +148,7 @@ static void write_done(void *owner, Request *r) {
     repaint(s);
 }
 static void finish(MailScreen *s) {
-    if (!s->sign_in.state || s->sign_in.server_finish || s->write || !store_supports("finish_mail_account")) return;
+    if (!s->sign_in.state || s->sign_in.server_finish || s->write || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) return;
     char *url = dialog_text(pane_hwnd(s->base.pane), "Finish mail sign-in", "Paste the complete callback address immediately after sign-in", "Finish", "");
     if (!url) return;
     Json *body = mail_sign_in_finish(&s->sign_in, url, now_ms()); free(url);
@@ -208,7 +211,7 @@ static void layout(Screen *base, Doc *doc) {
     if (!s->loaded) { doc_loading(doc, x, w, "Loading mail accounts..."); return; }
     if (s->sign_in.state) {
         ButtonSpec pending[] = {
-            { 0, "Paste callback address", BUTTON_PROMINENT, ACT_FINISH, 0, !s->write && !s->sign_in.server_finish && store_supports("finish_mail_account") },
+            { 0, "Paste callback address", BUTTON_PROMINENT, ACT_FINISH, 0, !s->write && !s->sign_in.server_finish && GetTickCount64() >= s->retry_until && store_supports("finish_mail_account") },
             { 0, "Browser finished: refresh", BUTTON_PLAIN, ACT_BROWSER_DONE, 0, !s->write && s->sign_in.server_finish },
             { 0, "Cancel waiting", BUTTON_PLAIN, ACT_CANCEL, 0, !s->write },
         };
