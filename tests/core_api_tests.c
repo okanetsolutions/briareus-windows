@@ -325,6 +325,13 @@ static const Expected ROUTE_TABLE[] = {
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
     { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
+    { "settings_mcp_servers", "GET", "settings/mcp/servers" },
+    { "create_mcp_server", "POST", "settings/mcp/servers" },
+    { "update_mcp_server", "PUT", "settings/mcp/servers/{id}" },
+    { "delete_mcp_server", "DELETE", "settings/mcp/servers/{id}" },
+    { "connect_mcp_server", "POST", "settings/mcp/servers/{id}/connect" },
+    { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
+
 };
 #define ROUTE_COUNT (sizeof ROUTE_TABLE / sizeof *ROUTE_TABLE)
 
@@ -968,7 +975,36 @@ static void test_retry_after_http_dates(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { if (api_retry_after(bad[i], 0) >= 0) printf("  read %s\n", bad[i]); CHECK(api_retry_after(bad[i], 0) < 0); }
 }
 
+static void test_mcp_contract_and_errors(void) {
+    Stub stub = {0}; stub.status = 201; stub.content_type = "application/json";
+    stub.body = "{\"server\":{\"id\":1791403200000,\"status\":\"needs-sign-in\",\"signInUrl\":\"https://auth.example/?state=s\",\"signInNeedsPaste\":true,\"headerNames\":[\"Authorization\"],\"envNames\":[],\"hasOAuthClientSecret\":true}}";
+    ApiClient *c = client(&stub); ApiError e; api_error_init(&e);
+    Json *args = json_parsez("{\"id\":1791403200000,\"signIn\":true}");
+    Json *result = api_call(c, "connect_mcp_server", args, 60000, &e);
+    CHECK(result != NULL); CHECK_STR(stub.last_method, "POST");
+    CHECK_STR(stub.last_url, BASE "settings/mcp/servers/1791403200000/connect");
+    CHECK_STR(stub.last_body, "{\"signIn\":true}"); CHECK_INT(stub.last_timeout, 60000);
+    CHECK(json_bool_is(json_get(json_get(result, "server"), "signInNeedsPaste"), true)); json_free(result);
+    json_object_remove(args, "signIn"); json_set_str(args, "url", "http://127.0.0.1:4000/callback?code=one&state=s");
+    result = api_call(c, "finish_mcp_sign_in", args, 60000, &e); CHECK(result != NULL);
+    CHECK_STR(stub.last_url, BASE "settings/mcp/servers/1791403200000/finish-sign-in");
+    CHECK_STR(stub.last_body, "{\"url\":\"http://127.0.0.1:4000/callback?code=one&state=s\"}"); json_free(result);
+    const int errors[] = { 400, 401, 403, 404, 409, 429, 503 };
+    for (size_t i = 0; i < sizeof errors / sizeof *errors; i++) {
+        stub.status = errors[i]; stub.body = "{\"error\":\"sign-in unavailable\"}"; stub.retry_after = "45";
+        int before = stub.calls;
+        result = api_call(c, "finish_mcp_sign_in", args, 60000, &e);
+        CHECK(result == NULL); CHECK_INT(e.status, errors[i]); CHECK(e.retry_after == 45); CHECK_INT(stub.calls, before + 1);
+        CHECK(api_error_is_refusal(&e) == (errors[i] < 500)); api_error_clear(&e);
+    }
+    stub.fail = true; stub.fail_message = "timeout";
+    int before = stub.calls; result = api_call(c, "create_mcp_server", args, 60000, &e);
+    CHECK(result == NULL && e.kind == API_NETWORK); CHECK_INT(stub.calls, before + 1);
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+
 void api_tests(void) {
+    test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);

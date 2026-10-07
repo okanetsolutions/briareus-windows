@@ -4,6 +4,7 @@
 #include "json.h"
 #include "models.h"
 #include "store.h"
+#include "screens.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
@@ -328,7 +329,47 @@ static void test_only_a_refusal_leaves_the_outcome_known(void) {
     api_error_clear(&req.error);
 }
 
+static void test_mcp_admin_catalog_and_account_gates(void) {
+    Route routes[] = {
+        { "GET", "/settings/mcp/servers", "admin" }, { "POST", "/settings/mcp/servers", "admin" },
+        { "PUT", "/settings/mcp/servers/{id}", "admin" }, { "DELETE", "/settings/mcp/servers/{id}", "admin" },
+        { "POST", "/settings/mcp/servers/{id}/connect", "admin" }, { "POST", "/settings/mcp/servers/{id}/finish-sign-in", "admin" },
+    };
+    const char *const calls[] = { "settings_mcp_servers", "create_mcp_server", "update_mcp_server", "delete_mcp_server", "connect_mcp_server", "finish_mcp_sign_in" };
+    const char *const permissions[] = { "read", "manage", "admin" };
+    for (size_t p = 0; p < 3; p++) {
+        store_fake(permissions[p], routes, 6);
+        for (size_t i = 0; i < 6; i++) CHECK(mcp_settings_supported(calls[i]) == (p == 2));
+    }
+    // A mistakenly weakened catalog still cannot expose admin controls.
+    routes[0].access = "read"; store_fake("manage", routes, 6); CHECK(!mcp_settings_supported(calls[0])); routes[0].access = "admin";
+    store_fake("admin", routes, 0); for (size_t i = 0; i < 6; i++) CHECK(!mcp_settings_supported(calls[i]));
+    store_fake("admin", routes, 1); CHECK(mcp_settings_supported(calls[0])); CHECK(!mcp_settings_supported(calls[4]));
+    ServerAddress address; CHECK(server_address_parse("https://briareus.example.test", &address));
+    ApiError e; api_error_init(&e); ApiClient *first = api_client_new(&address, TOKEN, &e), *second = api_client_new(&address, TOKEN, &e);
+    store_fake("admin", routes, 6); g_store.client = first;
+    Json *defaults = json_parsez("{\"name\":\"test\",\"transport\":\"http\",\"url\":\"https://mcp.example\",\"args\":[],\"repos\":[],\"enabled\":true,\"oauthRedirect\":\"callback\"}");
+    Screen *screen = mcp_settings_screen_new(NULL, defaults); HeaderInfo h = {0}; screen->vt->header(screen, &h);
+    CHECK_STR(screen->id, "settings-mcp:new"); CHECK_INT(h.button_count, 1); CHECK(h.buttons[0].enabled);
+    // Replaced connection invalidates the open form even with the same server and permission.
+    g_store.client = second; memset(&h, 0, sizeof h); screen->vt->header(screen, &h); CHECK_INT(h.button_count, 0);
+    screen->vt->visible(screen, false); screen->vt->destroy(screen);
+    g_store.client = first; json_set_num(defaults, "id", 1791403200000.0);
+    screen = mcp_settings_screen_new(defaults, NULL); CHECK_STR(screen->id, "settings-mcp:1791403200000");
+    memset(&h, 0, sizeof h); screen->vt->header(screen, &h); CHECK_INT(h.button_count, 2); CHECK(h.buttons[1].enabled);
+    g_store.device.permission = "manage"; memset(&h, 0, sizeof h); screen->vt->header(screen, &h); CHECK_INT(h.button_count, 0);
+    screen->vt->destroy(screen); json_free(defaults); api_client_release(first); api_client_release(second); server_address_free(&address); api_error_clear(&e); store_reset();
+}
+static void test_cancelled_mcp_finish_is_never_delivered(void) {
+    store_reset(); Answer answer = {0}; Request *slot = NULL;
+    Json *args = json_parsez("{\"id\":1791403200000,\"url\":\"http://127.0.0.1/callback?code=private&state=private\"}");
+    store_call("finish_mcp_sign_in", args, 60000, &answer, answer_done, 0, &slot);
+    request_cancel(&slot); CHECK(slot == NULL); CHECK_INT(deliver(), 1); CHECK_INT(answer.calls, 0); answer_free(&answer);
+}
+
 void app_store_tests(void) {
+    test_run("MCP settings require admin catalog routes and the same account", test_mcp_admin_catalog_and_account_gates);
+    test_run("cancelled MCP callbacks are discarded", test_cancelled_mcp_finish_is_never_delivered);
     test_run("poll delay is the base without failures", test_poll_delay_is_the_base_without_failures);
     test_run("poll delay doubles per failure", test_poll_delay_doubles_per_failure);
     test_run("poll delay is capped at a minute", test_poll_delay_is_capped_at_a_minute);

@@ -15,6 +15,7 @@ void vt_tests(void);
 void sftp_tests(void);
 void browser_tests(void);
 void meet_tests(void);
+void mcp_tests(void);
 void update_tests(void);
 void repo_tests(void);
 void repo_index_tests(void);
