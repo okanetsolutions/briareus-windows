@@ -307,6 +307,7 @@ static const ApiRoute ROUTES[] = {
     // absent) with the commit it pointed at, and one file's text at a `ref`, best the tree's `sha`.
     { "repo_tree", "GET", "repo/tree" },
     { "repo_file", "GET", "repo/file" },
+    { "commit", "GET", "commits/{sha}" },                   // one commit and the files it changed, for walking an index back
     // Sessions. The list has no project parameter: a `repo` argument cuts the answer down here instead.
     { "sessions", "GET", "sessions", NULL, "repo", "sessions" },
     { "start_session", "POST", "sessions" },

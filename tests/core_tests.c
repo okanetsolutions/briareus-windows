@@ -902,5 +902,6 @@ int main(void) {
     meet_tests();
     update_tests();
     repo_tests();
+    repo_index_tests();
     return test_summary();
 }

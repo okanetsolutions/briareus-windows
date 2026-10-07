@@ -1,9 +1,15 @@
 // A project's Files tab: its repository as PhpStorm's project view shows it, read through the server's GitHub token
 // (`repo_tree`, `repo_file`), so no checkout or token of the user's own is needed. The tree is on the left, folders
-// first, at the branch the header's picker names (the default one until another is picked). Go to File (Ctrl+P) over
-// it finds a file by a few of its letters. Files open as tabs on the right, each read at the commit the tree was read
-// at, so what opens matches the tree shown while the branch moves on; their lines are numbered and coloured by
-// language, and select and copy as text. A binary file, or one over 1 MB, shows its size and a link to GitHub.
+// first, at the branch the header's picker names (the default one until another is picked). Files open as tabs on the
+// right, each read at the commit the tree was read at, so what opens matches the tree shown while the branch moves on;
+// their lines are numbered and coloured by language, and select and copy as text. A binary file, or one over 1 MB,
+// shows its size and a link to GitHub.
+//
+// Over the tree, PhpStorm's four finders: Go to Class (Ctrl+N), Go to File (Ctrl+Shift+N), Go to Symbol
+// (Ctrl+Shift+Alt+N) and Find in Files (Ctrl+Shift+F). Files need only the tree; the other three search an index of
+// the repository's source kept on this PC, in the encrypted response cache: every indexable file (repo_indexable) read
+// through the API at the tree's commit, a few at a time. When the branch moves on, the index walks back through the
+// new commits (`GET /commits/{sha}`) and reads again only the files they changed; one too far behind is read anew.
 #include "repo.h"
 #include "screens.h"
 #include "sftp.h"
@@ -14,9 +20,16 @@
 #include <string.h>
 
 // The actions, from the host's `action_base` up.
-enum { A_ROW, A_RESULT, A_TAB, A_TAB_CLOSE, A_BRANCH, A_OPEN_GITHUB, A_COPY, A_RETRY, A_FOCUS_FIND, A_CLEAR_FIND, A_RETRY_FILE };
-enum { ID_FIND = 0x5F30 };          // the Go to File edit's control id
-enum { MAX_TABS = 20, MAX_RESULTS = 50, GUTTER_BLOCK = 64 };
+enum { A_ROW, A_RESULT, A_TAB, A_TAB_CLOSE, A_BRANCH, A_OPEN_GITHUB, A_COPY, A_RETRY, A_FOCUS_FIND, A_CLEAR_FIND, A_RETRY_FILE, A_MODE, A_INDEX_RETRY };
+enum { ID_FIND = 0x5F30 };          // the finder's edit control id
+enum { MAX_TABS = 20, MAX_RESULTS = 50, MAX_HITS = 200, GUTTER_BLOCK = 64 };
+/// The finders, in the order their picker shows them.
+enum { FIND_CLASSES, FIND_FILES, FIND_SYMBOLS, FIND_TEXT, FIND_MODES };
+static const char *const FIND_TITLES[FIND_MODES] = { "Classes", "Files", "Symbols", "Text" };
+static const wchar_t *const FIND_CUES[FIND_MODES] = { L"Go to class (Ctrl+N)", L"Go to file (Ctrl+Shift+N)", L"Go to symbol (Ctrl+Shift+Alt+N)", L"Find in files (Ctrl+Shift+F)" };
+/// Files read at once while indexing; commits walked back before reading the index anew; symbols worked out again at
+/// most this often (ms) while a search waits on an index being filled.
+enum { FETCH_PARALLEL = 4, WALK_MAX = 50, SYMBOLS_EVERY_MS = 3000 };
 
 /// A file open as a tab, and its lines once read.
 typedef struct ProjectFiles ProjectFiles;
@@ -45,9 +58,20 @@ struct ProjectFiles {
     // The branch picker's choices, read once.
     char **branches; size_t branch_count; char *default_branch; bool branches_read; Request *req_branches;
     FileTab **tabs; size_t tab_count; int active;   // -1 for none
-    // Go to File: its edit, where the last layout put it, and what it finds.
+    // The finder: its edit, where the last layout put it, and what it finds: tree entries (Files), the index's symbols
+    // (Classes, Symbols) or lines (Text, `hits`).
     HWND find; RECT find_rc; bool find_laid, clipped;
-    char *query; size_t *results; size_t result_count; int pick;
+    int mode;
+    char *query; size_t *results; RepoTextHit *hits; size_t result_count, text_total; int pick;
+    // The index: read from disk once per branch, then brought to the tree's commit (`target`) by walking back through
+    // the commits since its own (`walk_at`, gathering `changed`) and reading the files in `queue`.
+    RepoIndex index; bool index_read, index_dirty, symbols_stale; ULONGLONG symbols_at;
+    struct IndexLoad *loading;
+    char *target, *walk_at; char **changed; size_t changed_count; int walk_steps; Request *req_walk;
+    char **queue; size_t queue_count, queue_next, fetched; Request *fetch[FETCH_PARALLEL];
+    char *index_error;
+    // A line to show once its file is laid out: a symbol's or a text hit's.
+    char *goto_path; int goto_line, goto_y; bool goto_scroll; UINT timer;
 };
 
 bool project_files_offered(void) { return store_supports("repo_tree") && store_supports("repo_file"); }
@@ -80,6 +104,7 @@ static void state_save(const ProjectFiles *p) {
     for (size_t i = 0; i < p->tab_count; i++) json_array_push(tabs, json_string(p->tabs[i]->path));
     json_object_set(saved, "tabs", tabs);
     json_set_num(saved, "active", p->active);
+    json_set_num(saved, "mode", p->mode);
     char *key = state_key(p); cache_store(g_store.cache, saved, key); free(key);
     json_free(saved);
 }
@@ -189,6 +214,7 @@ static void open_path(ProjectFiles *p, const char *path) {
 // MARK: - The tree
 
 static void find_update(ProjectFiles *p);
+static void index_sync(ProjectFiles *p);
 static void tree_done(void *owner, Request *req) {
     ProjectFiles *p = owner;
     p->loaded = true;
@@ -211,8 +237,195 @@ static void tree_done(void *owner, Request *req) {
     find_update(p);
     // The open file is read again when the tree is at another commit; the other tabs when they are shown.
     file_ensure(p, f, true);
+    index_sync(p);
     relayout(p);
 }
+
+// MARK: - The index
+
+static char *index_key(const ProjectFiles *p) { return xstrfmt("repo-index:%s@%s", p->repo, p->ref ? p->ref : ""); }
+
+/// Reading the index from disk, off the UI thread; `cancelled` when its tab went first.
+typedef struct IndexLoad { ProjectFiles *p; char *key; RepoIndex index; bool found, cancelled; } IndexLoad;
+static void load_work(void *ctx) {
+    IndexLoad *l = ctx;
+    char *data = NULL; size_t len = 0;
+    if (cache_bytes(g_store.cache, l->key, &data, &len)) {
+        l->found = repo_index_parse(data, len, &l->index);
+        if (l->found) repo_index_symbols(&l->index);
+    }
+    free(data);
+}
+static void load_done(void *ctx) {
+    IndexLoad *l = ctx;
+    ProjectFiles *p = l->p;
+    if (l->cancelled) { repo_index_free(&l->index); free(l->key); free(l); return; }
+    p->loading = NULL;
+    repo_index_free(&p->index);
+    if (l->found) p->index = l->index; else repo_index_init(&p->index);
+    set_string(&p->index.ref, p->ref);
+    p->index_read = true; p->symbols_stale = false;
+    free(l->key); free(l);
+    find_update(p);
+    index_sync(p);
+    relayout(p);
+}
+
+/// Writing it, off the UI thread too; the bytes are the index as it was when asked.
+typedef struct { char *key, *bytes; size_t len; } IndexSave;
+static void save_work(void *ctx) { IndexSave *s = ctx; cache_store_bytes(g_store.cache, s->bytes, s->len, s->key); }
+static void save_done(void *ctx) { IndexSave *s = ctx; free(s->key); free(s->bytes); free(s); }
+static void index_save(ProjectFiles *p) {
+    if (!p->index_read || !p->index_dirty) return;
+    // Mid-read, it is saved as partial: the next read takes it up where this one stopped.
+    if (p->target && p->queue) { set_string(&p->index.sha, NULL); set_string(&p->index.partial, p->target); }
+    IndexSave *s = xcalloc(1, sizeof *s);
+    s->key = index_key(p);
+    s->bytes = repo_index_serialize(&p->index, &s->len);
+    p->index_dirty = false;
+    async_run(save_work, save_done, s);
+}
+
+static void symbols_refresh(ProjectFiles *p) {
+    repo_index_symbols(&p->index);
+    p->symbols_stale = false; p->symbols_at = GetTickCount64();
+}
+static void sync_stop(ProjectFiles *p) {
+    request_cancel(&p->req_walk);
+    for (int i = 0; i < FETCH_PARALLEL; i++) request_cancel(&p->fetch[i]);
+    str_array_free(p->queue, p->queue_count); p->queue = NULL; p->queue_count = p->queue_next = p->fetched = 0;
+    str_array_free(p->changed, p->changed_count); p->changed = NULL; p->changed_count = 0;
+    set_string(&p->target, NULL); set_string(&p->walk_at, NULL);
+}
+static void sync_finish(ProjectFiles *p) {
+    set_string(&p->index.sha, p->target); set_string(&p->index.partial, NULL);
+    p->index_dirty = true;
+    sync_stop(p);
+    symbols_refresh(p);
+    index_save(p);
+    find_update(p);
+    relayout(p);
+}
+static void sync_fail(ProjectFiles *p, const Request *req) {
+    request_error_into(&p->index_error, req);
+    index_save(p);
+    sync_stop(p);
+    if (p->symbols_stale) symbols_refresh(p);
+    find_update(p);
+    relayout(p);
+}
+
+static void fetch_fill(ProjectFiles *p);
+static void fetch_done(void *owner, Request *req) {
+    ProjectFiles *p = owner;
+    // A file gone since the tree was read, or refused as a folder, is left out; anything else stops the read.
+    bool skipped = !req->ok && req->error.kind == API_HTTP && (req->error.status == 404 || req->error.status == 400);
+    if (!req->ok && !skipped) { sync_fail(p, req); return; }
+    RepoFile file;
+    if (req->ok && repo_file_parse(req->result, &file)) {
+        if (file.content) { repo_index_put(&p->index, file.path, file.size, file.content, strlen(file.content)); p->symbols_stale = true; }
+        repo_file_free(&file);
+    }
+    p->fetched++; p->index_dirty = true;
+    fetch_fill(p);
+    // The progress line, every so often rather than for each file.
+    if (p->target && p->fetched % 25 == 0) relayout(p);
+}
+static void fetch_fill(ProjectFiles *p) {
+    bool busy = false;
+    for (int i = 0; i < FETCH_PARALLEL; i++) {
+        if (!p->fetch[i] && p->queue_next < p->queue_count) {
+            Json *args = json_object();
+            json_set_str(args, "repo", p->repo);
+            json_set_str(args, "path", p->queue[p->queue_next++]);
+            json_set_str(args, "ref", p->target);
+            store_call("repo_file", args, 0, p, fetch_done, i, &p->fetch[i]);
+        }
+        if (p->fetch[i]) busy = true;
+    }
+    if (!busy) sync_finish(p);
+}
+/// Reads the files the index lacks at the target commit, after dropping the `changed` ones and those the tree has not.
+static void fetch_start(ProjectFiles *p) {
+    char **fetch = NULL;
+    size_t n = repo_index_reconcile(&p->index, &p->tree, p->changed, p->changed_count, &fetch);
+    str_array_free(p->changed, p->changed_count); p->changed = NULL; p->changed_count = 0;
+    // Dropping files renumbers those after them, and the results point at them.
+    symbols_refresh(p);
+    find_update(p);
+    p->index_dirty = true;
+    p->queue = fetch; p->queue_count = n; p->queue_next = p->fetched = 0;
+    fetch_fill(p);
+    relayout(p);
+}
+/// Starts the index over: every indexable file is read at the target commit.
+static void index_rebuild(ProjectFiles *p) {
+    repo_index_free(&p->index); repo_index_init(&p->index);
+    set_string(&p->index.ref, p->ref); set_string(&p->index.partial, p->target);
+    str_array_free(p->changed, p->changed_count); p->changed = NULL; p->changed_count = 0;
+    fetch_start(p);
+}
+
+static void walk_next(ProjectFiles *p);
+static void walk_done(void *owner, Request *req) {
+    ProjectFiles *p = owner;
+    char **paths = NULL, *parent = NULL; size_t n = 0; bool truncated = false;
+    if (!req->ok) {
+        // A commit GitHub no longer has (a force push) leaves nothing to walk back through.
+        if (req->error.kind == API_HTTP && (req->error.status == 404 || req->error.status == 422)) index_rebuild(p);
+        else sync_fail(p, req);
+        return;
+    }
+    if (!repo_commit_changes(req->result, &paths, &n, &parent, &truncated)) { index_rebuild(p); return; }
+    p->changed = xrealloc(p->changed, (p->changed_count + n + 1) * sizeof *p->changed);
+    memcpy(p->changed + p->changed_count, paths, n * sizeof *paths);
+    p->changed_count += n;
+    free(paths);
+    p->walk_steps++;
+    // A merge's files are against its first parent, so walking first parents back sees every change on the branch.
+    if (parent && str_eq(parent, p->index.sha)) fetch_start(p);
+    else if (truncated || !parent || p->walk_steps >= WALK_MAX) index_rebuild(p);
+    else { set_string(&p->walk_at, parent); walk_next(p); }
+    free(parent);
+}
+static void walk_next(ProjectFiles *p) {
+    Json *args = json_object();
+    json_set_str(args, "repo", p->repo);
+    json_set_str(args, "sha", p->walk_at);
+    store_call("commit", args, 0, p, walk_done, 0, &p->req_walk);
+}
+
+/// Brings the index to the tree's commit, reading it from disk first.
+static void index_sync(ProjectFiles *p) {
+    if (!p->has_tree || !p->tree.sha || !project_files_offered()) return;
+    if (!p->index_read) {
+        if (!p->loading) {
+            IndexLoad *l = xcalloc(1, sizeof *l);
+            l->p = p; l->key = index_key(p);
+            p->loading = l;
+            async_run(load_work, load_done, l);
+        }
+        return;
+    }
+    if (p->target) { if (str_eq(p->target, p->tree.sha)) return; index_save(p); sync_stop(p); }
+    if (str_eq(p->index.sha, p->tree.sha)) return;
+    set_string(&p->index_error, NULL);
+    p->target = xstrdup(p->tree.sha);
+    if (p->index.sha && store_supports("commit")) { p->walk_steps = 0; set_string(&p->walk_at, p->target); walk_next(p); }
+    else if (str_eq(p->index.partial, p->target)) fetch_start(p);
+    else index_rebuild(p);
+    relayout(p);
+}
+/// Lets the index go: another branch has one of its own.
+static void index_drop(ProjectFiles *p) {
+    index_save(p);
+    sync_stop(p);
+    if (p->loading) { p->loading->cancelled = true; p->loading = NULL; }
+    repo_index_free(&p->index); repo_index_init(&p->index);
+    p->index_read = false; p->symbols_stale = false;
+    set_string(&p->index_error, NULL);
+}
+
 static void load(ProjectFiles *p) {
     if (!project_files_offered()) return;
     request_cancel(&p->req);
@@ -247,11 +460,18 @@ void project_files_refresh(ProjectFiles *p) {
     relayout(p);
 }
 
-// MARK: - Go to File
+// MARK: - Finding
 
 static void find_update(ProjectFiles *p) {
-    free(p->results); p->results = NULL; p->result_count = 0;
-    if (p->has_tree && !str_empty(p->query)) p->results = repo_find_files(&p->tree, p->query, MAX_RESULTS, &p->result_count);
+    free(p->results); p->results = NULL; free(p->hits); p->hits = NULL; p->result_count = p->text_total = 0;
+    if (str_empty(p->query)) { p->pick = 0; return; }
+    if (p->mode == FIND_FILES) { if (p->has_tree) p->results = repo_find_files(&p->tree, p->query, MAX_RESULTS, &p->result_count); }
+    else if (p->mode == FIND_TEXT) { if (strlen(p->query) >= 2) p->hits = repo_index_find_text(&p->index, p->query, MAX_HITS, &p->result_count, &p->text_total); }
+    else {
+        // While files come in, the declarations are worked out again now and then, not for each one.
+        if (p->symbols_stale && GetTickCount64() - p->symbols_at >= SYMBOLS_EVERY_MS) symbols_refresh(p);
+        p->results = repo_index_find_symbols(&p->index, p->query, p->mode == FIND_CLASSES, MAX_RESULTS, &p->result_count);
+    }
     if (p->pick >= (int)p->result_count) p->pick = p->result_count ? (int)p->result_count - 1 : 0;
     if (p->pick < 0) p->pick = 0;
 }
@@ -259,18 +479,50 @@ static void find_clear(ProjectFiles *p) {
     if (p->find) SetWindowTextW(p->find, L"");   // its EN_CHANGE clears the query
     set_string(&p->query, NULL); find_update(p);
 }
+/// Opens a file at a line, which shows lit once the file is laid out; 0 for its top.
+static void open_at(ProjectFiles *p, const char *path, int line) {
+    set_string(&p->goto_path, line > 0 ? path : NULL);
+    p->goto_line = line; p->goto_scroll = line > 0; p->goto_y = -1;
+    open_path(p, path);
+}
 static void open_result(ProjectFiles *p, size_t k) {
     if (k >= p->result_count) return;
-    char *path = xstrdup(p->tree.entries[p->results[k]].path);
-    find_clear(p);
+    char *path; int line = 0;
+    if (p->mode == FIND_FILES) path = xstrdup(p->tree.entries[p->results[k]].path);
+    else if (p->mode == FIND_TEXT) { path = xstrdup(p->index.files[p->hits[k].file].path); line = p->hits[k].line; }
+    else { const RepoSymbol *sym = &p->index.symbols[p->results[k]]; path = xstrdup(p->index.files[sym->file].path); line = sym->line; }
+    // The query stays for Find in Files, so the next hit is a click away; the Go to finders close as PhpStorm's do.
+    if (p->mode != FIND_TEXT) find_clear(p);
     if (p->host->pane) SetFocus(pane_hwnd(p->host->pane));
-    open_path(p, path);
+    open_at(p, path, line);
     free(path);
+}
+static void set_mode(ProjectFiles *p, int mode) {
+    if (mode < 0 || mode >= FIND_MODES) return;
+    p->mode = mode; p->pick = 0;
+    if (p->find) SendMessageW(p->find, EM_SETCUEBANNER, TRUE, (LPARAM)FIND_CUES[mode]);
+    find_update(p);
+    state_save(p);
+    relayout(p);
+}
+/// PhpStorm's keys: Ctrl+N a class, Ctrl+Shift+N a file (Ctrl+P too), Ctrl+Shift+Alt+N a symbol, Ctrl+Shift+F text.
+static int mode_for_key(WPARAM vk, bool ctrl, bool shift) {
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    if (!ctrl) return -1;
+    if (vk == 'N') return alt ? (shift ? FIND_SYMBOLS : -1) : shift ? FIND_FILES : FIND_CLASSES;
+    if (alt) return -1;
+    if (vk == 'P' && !shift) return FIND_FILES;
+    if (vk == 'O' && shift) return FIND_FILES;
+    if (vk == 'F' && shift) return FIND_TEXT;
+    return -1;
 }
 static LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     ProjectFiles *p = (ProjectFiles *)ref;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     switch (msg) {
-    case WM_KEYDOWN:
+    case WM_KEYDOWN: {
+        int mode = mode_for_key(wp, ctrl, shift);
+        if (mode >= 0) { set_mode(p, mode); SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
         if (wp == VK_DOWN || wp == VK_UP) {
             int n = (int)p->result_count;
             if (n) { p->pick = (p->pick + (wp == VK_DOWN ? 1 : n - 1)) % n; relayout(p); }
@@ -278,10 +530,12 @@ static LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
         }
         if (wp == VK_RETURN) { open_result(p, (size_t)p->pick); return 0; }
         if (wp == VK_ESCAPE) { find_clear(p); SetFocus(GetParent(hwnd)); relayout(p); return 0; }
-        if (wp == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+        if (wp == 'A' && ctrl) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
         break;
+    }
     case WM_CHAR:
-        if (wp == '\r' || wp == 0x1B || wp == 0x01) return 0;
+        // Enter, Escape and the control characters the shortcuts above leave behind.
+        if (wp == '\r' || wp == 0x1B || (ctrl && wp < 0x20)) return 0;
         break;
     case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
     case WM_NCDESTROY: RemoveWindowSubclass(hwnd, find_proc, id); break;
@@ -293,7 +547,7 @@ static void find_ensure(ProjectFiles *p) {
     p->find = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(p->host->pane),
                               (HMENU)(INT_PTR)ID_FIND, GetModuleHandleW(NULL), NULL);
     SendMessageW(p->find, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
-    SendMessageW(p->find, EM_SETCUEBANNER, TRUE, (LPARAM)L"Go to file (Ctrl+P)");
+    SendMessageW(p->find, EM_SETCUEBANNER, TRUE, (LPARAM)FIND_CUES[p->mode]);
     SetWindowSubclass(p->find, find_proc, 0, (DWORD_PTR)p);
     theme_apply_control(p->find);
 }
@@ -313,14 +567,23 @@ bool project_files_command(ProjectFiles *p, int id, int code) {
     return true;
 }
 bool project_files_key(ProjectFiles *p, WPARAM vk, bool ctrl, bool shift) {
-    // Ctrl+P, or Ctrl+Shift+O as PhpStorm's Go to File on a Mac.
-    if (!ctrl || !((vk == 'P' && !shift) || (vk == 'O' && shift)) || !p->find) return false;
+    int mode = mode_for_key(vk, ctrl, shift);
+    if (mode < 0 || !p->find) return false;
+    set_mode(p, mode);
     if (p->host->pane) pane_scroll_to_top(p->host->pane);
     SetFocus(p->find);
     SendMessageW(p->find, EM_SETSEL, 0, -1);
     return true;
 }
+bool project_files_timer(ProjectFiles *p, UINT id) {
+    if (id != p->timer || !p->host->pane) return false;
+    KillTimer(pane_hwnd(p->host->pane), id);
+    pane_scroll_to(p->host->pane, p->goto_y);
+    return true;
+}
 void project_files_place(ProjectFiles *p, const RECT *content, int scroll_y, bool shown) {
+    // The line a finder opened, once its file is laid out: scrolled to after this layout, not inside it.
+    if (shown && p->goto_scroll && p->goto_y >= 0 && p->host->pane) { p->goto_scroll = false; SetTimer(pane_hwnd(p->host->pane), p->timer, 1, NULL); }
     if (!p->find) return;
     if (!shown || !content || !p->find_laid) { ShowWindow(p->find, SW_HIDE); return; }
     RECT rc; GetClientRect(pane_hwnd(p->host->pane), &rc);
@@ -376,25 +639,49 @@ static void paint_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, d->name, &t, d->selected ? FONT_FOOTNOTE_SEMIBOLD : FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
-/// A file Go to File found: its name, then the folder it is in.
-typedef struct { char *name, *folder; bool picked; } ResultData;
-static void result_free(void *v) { ResultData *d = v; free(d->name); free(d->folder); free(d); }
+/// A finder's result: a file's name and folder, a declaration's name and where it is (a letter in its kind's colour
+/// before it, as PhpStorm's C, m and K), or a line holding the text searched for and where it is.
+typedef struct { char *name, *detail; char badge; COLORREF badge_color; bool picked, line; } ResultData;
+static void result_free(void *v) { ResultData *d = v; free(d->name); free(d->detail); free(d); }
 static void paint_result(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     const ResultData *d = it->data;
     if (d->picked || doc_item_hovered(doc, it)) {
         COLORREF fill = d->picked ? blend(theme.accent, theme.canvas, 0.16) : theme.raise;
         fill_round_rect(cv, rc, px(6), fill, fill);
     }
-    int x = rc->left + px(8);
-    RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(cv, 0xE8A5, &g, FONT_ICON_SMALL, theme.muted);
+    int x = rc->left + px(8), right = rc->right - px(6);
+    if (d->line) {
+        // The line, then its file and number under it.
+        int mid = (rc->top + rc->bottom) / 2;
+        RECT t = { x, rc->top + px(2), right, mid + px(1) };
+        draw_text(cv, d->name, &t, FONT_MONO_CAPTION2, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | DT_EXPANDTABS);
+        RECT f = { x, mid + px(1), right, rc->bottom - px(2) };
+        draw_text(cv, d->detail, &f, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+        return;
+    }
+    int cy = (rc->top + rc->bottom) / 2;
+    if (d->badge) {
+        fill_circle(cv, x + px(7), cy, px(7), d->badge_color);
+        char letter[2] = { d->badge, 0 };
+        RECT b = { x, cy - px(7), x + px(14), cy + px(7) };
+        draw_text(cv, letter, &b, FONT_TINY_SEMIBOLD, RGB(0xFF, 0xFF, 0xFF), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else {
+        RECT g = { x, rc->top, x + px(16), rc->bottom }; draw_glyph(cv, 0xE8A5, &g, FONT_ICON_SMALL, theme.muted);
+    }
     x += px(22);
     int nw = text_width(cv, d->name, FONT_FOOTNOTE_SEMIBOLD);
-    RECT n = { x, rc->top, rc->right - px(6), rc->bottom };
+    RECT n = { x, rc->top, right, rc->bottom };
     draw_text(cv, d->name, &n, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    if (!str_empty(d->folder) && x + nw + px(8) < rc->right - px(6)) {
-        RECT f = { x + nw + px(8), rc->top, rc->right - px(6), rc->bottom };
-        draw_text(cv, d->folder, &f, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
+    if (!str_empty(d->detail) && x + nw + px(8) < right) {
+        RECT f = { x + nw + px(8), rc->top, right, rc->bottom };
+        draw_text(cv, d->detail, &f, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS | DT_NOPREFIX);
     }
+}
+
+/// A lit line: the one a finder opened.
+static void paint_lit(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc; (void)it;
+    fill_rect(cv, rc, blend(theme.accent, theme.raise, 0.18));
 }
 
 /// An editor tab: the file's name, lit when it is the one shown; its ✕ is an item of its own over it.
@@ -457,19 +744,82 @@ static void layout_find(ProjectFiles *p, Doc *doc, int x, int w) {
     doc->y = box.bottom;
 }
 
+/// The text of a hit's line, its leading spaces dropped and cut at 200 bytes.
+static char *hit_line(const RepoIndexFile *f, const RepoTextHit *h) {
+    size_t start = 0, n = f->len;
+    const char *s = f->content;
+    int line = 1;
+    for (size_t i = 0; line < h->line && i < n; i++) if (s[i] == '\n') { line++; start = i + 1; }
+    while (start < n && (s[start] == ' ' || s[start] == '\t')) start++;
+    size_t end = start;
+    while (end < n && s[end] != '\n' && s[end] != '\r' && end - start < 200) end++;
+    return xstrndup(s + start, end - start);
+}
 static void layout_results(ProjectFiles *p, Doc *doc, int x, int w) {
-    if (!p->result_count) { doc_text(doc, x + px(8), w - px(16), "No file matches.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_SINGLELINE); return; }
-    for (size_t k = 0; k < p->result_count; k++) {
-        const RepoEntry *e = &p->tree.entries[p->results[k]];
-        ResultData *d = xcalloc(1, sizeof *d);
-        d->name = xstrdup(e->name);
-        d->folder = xstrndup(e->path, (size_t)(e->name - e->path) ? (size_t)(e->name - e->path) - 1 : 0);
-        d->picked = (int)k == p->pick;
-        int i = doc_custom(doc, x, w, px(26), paint_result, d, result_free, p->base + A_RESULT, (intptr_t)k);
-        doc_item(doc, i)->hover_fill = false;
-        doc_item(doc, i)->tip = xstrdup(e->path);
+    if (p->mode == FIND_TEXT && strlen(p->query) < 2) { doc_text(doc, x + px(8), w - px(16), "Type at least two characters.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); return; }
+    if (!p->result_count) {
+        static const char *const NONE[FIND_MODES] = { "No class matches.", "No file matches.", "No symbol matches.", "No line holds this text." };
+        doc_text(doc, x + px(8), w - px(16), NONE[p->mode], FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        return;
     }
-    if (p->result_count == (size_t)MAX_RESULTS) { doc_space(doc, px(4)); doc_text(doc, x + px(8), w - px(16), "Only the 50 best matches are listed.", FONT_CAPTION2, theme.tertiary, DT_LEFT | DT_WORDBREAK); }
+    if (p->mode == FIND_TEXT) {
+        char *count = p->text_total > p->result_count ? xstrfmt("%zu lines; the first %zu are listed", p->text_total, p->result_count)
+                                                      : xstrfmt("%zu line%s", p->text_total, p->text_total == 1 ? "" : "s");
+        doc_text(doc, x + px(8), w - px(16), count, FONT_CAPTION2, theme.secondary, DT_LEFT | DT_SINGLELINE);
+        free(count);
+        doc_space(doc, px(4));
+    }
+    for (size_t k = 0; k < p->result_count; k++) {
+        ResultData *d = xcalloc(1, sizeof *d);
+        char *tip;
+        int h = px(26);
+        if (p->mode == FIND_FILES) {
+            const RepoEntry *e = &p->tree.entries[p->results[k]];
+            d->name = xstrdup(e->name);
+            d->detail = xstrndup(e->path, (size_t)(e->name - e->path) ? (size_t)(e->name - e->path) - 1 : 0);
+            tip = xstrdup(e->path);
+        } else if (p->mode == FIND_TEXT) {
+            const RepoTextHit *hit = &p->hits[k];
+            const RepoIndexFile *f = &p->index.files[hit->file];
+            d->name = hit_line(f, hit); d->line = true;
+            d->detail = xstrfmt("%s:%d", f->path, hit->line);
+            tip = xstrdup(d->detail);
+            h = px(38);
+        } else {
+            const RepoSymbol *sym = &p->index.symbols[p->results[k]];
+            const char *path = p->index.files[sym->file].path;
+            d->name = xstrdup(sym->name);
+            d->detail = sym->container ? xstrfmt("%s \xC2\xB7 %s:%d", sym->container, path, sym->line) : xstrfmt("%s:%d", path, sym->line);
+            d->badge = sym->kind == SYMBOL_CLASS ? 'C' : sym->kind == SYMBOL_FUNCTION ? (sym->container ? 'm' : 'f') : 'K';
+            d->badge_color = sym->kind == SYMBOL_CLASS ? RGB(0x3B, 0x7C, 0xD6) : sym->kind == SYMBOL_FUNCTION ? RGB(0xD0, 0x6F, 0x2A) : RGB(0x8E, 0x5C, 0xC4);
+            tip = xstrdup(d->detail);
+        }
+        d->picked = (int)k == p->pick;
+        int i = doc_custom(doc, x, w, h, paint_result, d, result_free, p->base + A_RESULT, (intptr_t)k);
+        doc_item(doc, i)->hover_fill = false;
+        doc_item(doc, i)->tip = tip;
+    }
+    if (p->mode != FIND_TEXT && p->result_count == (size_t)MAX_RESULTS) { doc_space(doc, px(4)); doc_text(doc, x + px(8), w - px(16), "Only the 50 best matches are listed.", FONT_CAPTION2, theme.tertiary, DT_LEFT | DT_WORDBREAK); }
+}
+
+/// The finders' picker, and what the index is doing: read from disk, catching up, filling, or how much it holds.
+static void layout_modes(ProjectFiles *p, Doc *doc, int x, int w) {
+    doc_segments(doc, x, w, FIND_TITLES, FIND_MODES, p->mode, p->base + A_MODE, 0, true);
+    char *status = NULL;
+    if (p->index_error) {
+        doc_space(doc, px(6));
+        char *line = xstrfmt("Indexing stopped: %s", p->index_error);
+        doc_notice(doc, x, w, line); free(line);
+        doc_space(doc, px(4));
+        doc_button(doc, x, 0, "Index again", BUTTON_BORDERED, p->base + A_INDEX_RETRY, 0, !p->target);
+        return;
+    }
+    if (!p->index_read && p->loading) status = xstrdup("Reading the index\xE2\x80\xA6");
+    else if (p->target && p->req_walk) status = xstrfmt("Looking for what changed since %.7s\xE2\x80\xA6", p->index.sha ? p->index.sha : "");
+    else if (p->target) status = xstrfmt("Indexing %zu of %zu files\xE2\x80\xA6", p->fetched, p->queue_count);
+    else if (p->mode != FIND_FILES && p->index_read && p->index.sha)
+        status = xstrfmt("%zu files and %zu declarations indexed at %.7s", p->index.count, p->index.symbol_count, p->index.sha);
+    if (status) { doc_space(doc, px(6)); doc_text(doc, x + px(4), w - px(8), status, FONT_CAPTION2, p->target ? theme.secondary : theme.tertiary, DT_LEFT | DT_WORDBREAK); free(status); }
 }
 
 static void layout_tree(ProjectFiles *p, Doc *doc, int x, int w) {
@@ -564,6 +914,7 @@ static void layout_file(ProjectFiles *p, Doc *doc, int x, int w) {
     doc_item(doc, box)->hover_fill = false;
     doc_space(doc, px(6));
     const char *text = f->file.content;
+    int lit = str_eq(p->goto_path, f->path) ? (p->goto_line < 1 ? 1 : p->goto_line > (int)f->line_count ? (int)f->line_count : p->goto_line) : 0;
     size_t span_cap = 16;
     DocSpan *spans = xcalloc(span_cap, sizeof *spans);
     for (size_t i = 0; i < f->line_count; i++) {
@@ -581,6 +932,12 @@ static void layout_file(ProjectFiles *p, Doc *doc, int x, int w) {
             spans[k] = (DocSpan){ t->start, t->len, code_color(t->kind) };
         }
         RECT rc = { code_x, doc->y, right - px(12), doc->y + row_h };
+        if (lit == (int)i + 1) {
+            RECT lr = { x + 1, doc->y, right - 1, doc->y + row_h };
+            doc_add(doc, &lr, paint_lit);
+            // A few lines above it stay in view.
+            p->goto_y = doc->y - row_h * 4 > 0 ? doc->y - row_h * 4 : 0;
+        }
         doc_code_line(doc, &rc, text + f->lines[i].start, f->lines[i].len, spans, n, FONT_MONO_SMALL, advance);
         doc->y += row_h;
     }
@@ -609,7 +966,7 @@ void project_files_layout(ProjectFiles *p, Doc *doc, int w) {
     if (tree_w < px(240)) tree_w = px(240);
     if (tree_w > px(340)) tree_w = px(340);
     if (!wide) tree_w = w;
-    // Go to File, and the branch being read when it changes.
+    // The finder, and the branch being read when it changes.
     layout_find(p, doc, 0, tree_w);
     if (p->req && p->loaded) {
         char *line = xstrfmt("Reading %s\xE2\x80\xA6", shown_ref(p));
@@ -618,6 +975,8 @@ void project_files_layout(ProjectFiles *p, Doc *doc, int w) {
         doc_text_at(doc, &r, line, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         free(line);
     }
+    doc_space(doc, px(8));
+    layout_modes(p, doc, 0, tree_w);
     doc_space(doc, px(10));
     int top = doc->y, first = (int)doc->count;
     if (!str_empty(p->query)) layout_results(p, doc, 0, tree_w); else layout_tree(p, doc, 0, tree_w);
@@ -664,6 +1023,7 @@ void project_files_header(ProjectFiles *p, HeaderInfo *info) {
 
 static void set_ref(ProjectFiles *p, const char *ref) {
     if (str_eq(ref, p->ref)) return;
+    index_drop(p);
     set_string(&p->ref, ref);
     state_save(p);
     find_clear(p);
@@ -696,10 +1056,12 @@ bool project_files_action(ProjectFiles *p, int action, intptr_t arg, POINT pt) {
     case A_ROW:
         if (!p->has_tree || (size_t)arg >= p->tree.count) break;
         if (p->tree.entries[arg].folder) { p->tree.entries[arg].open = !p->tree.entries[arg].open; relayout(p); }
-        else open_path(p, p->tree.entries[arg].path);
+        else open_at(p, p->tree.entries[arg].path, 0);
         break;
     case A_RESULT: open_result(p, (size_t)arg); break;
-    case A_TAB: if ((size_t)arg < p->tab_count) { activate(p, (int)arg); state_save(p); relayout(p); } break;
+    case A_TAB: if ((size_t)arg < p->tab_count) { set_string(&p->goto_path, NULL); activate(p, (int)arg); state_save(p); relayout(p); } break;
+    case A_MODE: set_mode(p, (int)arg); if (p->find) SetFocus(p->find); break;
+    case A_INDEX_RETRY: set_string(&p->index_error, NULL); index_sync(p); relayout(p); break;
     case A_TAB_CLOSE: tab_close(p, (size_t)arg); state_save(p); relayout(p); break;
     case A_BRANCH: if (p->host->pane) pick_branch(p, pt); break;
     case A_OPEN_GITHUB: if (f && safe_web_url(f->file.url)) open_web_url(f->file.url); break;
@@ -745,9 +1107,11 @@ bool project_files_context(ProjectFiles *p, int action, intptr_t arg, POINT pt) 
 
 // MARK: - Lifetime
 
-ProjectFiles *project_files_new(const char *repo, Screen *host, int action_base) {
+ProjectFiles *project_files_new(const char *repo, Screen *host, int action_base, UINT timer) {
     ProjectFiles *p = xcalloc(1, sizeof *p);
-    p->repo = xstrdup(repo); p->host = host; p->base = action_base; p->active = -1;
+    p->repo = xstrdup(repo); p->host = host; p->base = action_base; p->active = -1; p->timer = timer; p->goto_y = -1;
+    p->mode = FIND_FILES;
+    repo_index_init(&p->index);
     // The branch and tabs open last time; each file is read once the tree says at which commit.
     char *key = state_key(p);
     Json *saved = cache_value(g_store.cache, key);
@@ -757,17 +1121,23 @@ ProjectFiles *project_files_new(const char *repo, Screen *host, int action_base)
     for (size_t i = 0; i < json_count(tabs) && p->tab_count < (size_t)MAX_TABS; i++) { const char *path = json_str_nonempty(json_at(tabs, i)); if (path) tab_add(p, path); }
     int active = json_int_or(json_get(saved, "active"), 0);
     p->active = p->tab_count ? (active >= 0 && (size_t)active < p->tab_count ? active : 0) : -1;
+    int mode = json_int_or(json_get(saved, "mode"), FIND_FILES);
+    if (mode >= 0 && mode < FIND_MODES) p->mode = mode;
     json_free(saved);
     return p;
 }
 void project_files_free(ProjectFiles *p) {
     if (!p) return;
     request_cancel(&p->req); request_cancel(&p->req_branches);
+    // What was read so far is kept for next time.
+    index_drop(p);
+    if (p->host->pane) KillTimer(pane_hwnd(p->host->pane), p->timer);
     for (size_t i = 0; i < p->tab_count; i++) file_free(p->tabs[i]);
     free(p->tabs);
     if (p->find) DestroyWindow(p->find);
     if (p->has_tree) repo_tree_free(&p->tree);
     str_array_free(p->branches, p->branch_count);
-    free(p->repo); free(p->ref); free(p->error); free(p->default_branch); free(p->query); free(p->results);
+    free(p->repo); free(p->ref); free(p->error); free(p->default_branch); free(p->query); free(p->results); free(p->hits);
+    free(p->goto_path);
     free(p);
 }

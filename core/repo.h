@@ -84,4 +84,65 @@ void code_lexer_init(CodeLexer *lexer, const CodeLanguage *language);
 /// NULL with `*count` 0 for an empty line.
 CodeToken *code_lexer_line(CodeLexer *lexer, const char *line, size_t len, size_t *count);
 
+// MARK: - Local index
+
+/// The most files an index holds; GitHub's rate limit makes more a long wait.
+enum { REPO_INDEX_MAX_FILES = 5000 };
+/// Whether a file of the tree is worth indexing: source or text in a language the colours know, at most 1 MB, and not
+/// under a folder of dependencies or build output (vendor/, node_modules/, dist/, ...), minified, a source map or a lock file.
+bool repo_indexable(const char *path, long long size);
+
+typedef enum { SYMBOL_CLASS, SYMBOL_FUNCTION, SYMBOL_CONSTANT } SymbolKind;
+/// A declaration found in a file: a class (interface, trait, enum, struct, type, ...), a function or method, or a constant.
+typedef struct {
+    char *name;
+    char *container;      // the class a method or constant is declared in; NULL at the top level
+    SymbolKind kind;
+    size_t file;          // the index's file it is in
+    int line;             // from 1
+} RepoSymbol;
+/// The declarations of one file, found line by line outside comments and strings; `file` is 0 in each.
+RepoSymbol *repo_symbols_of(const char *path, const char *content, size_t len, size_t *count);
+void repo_symbols_free(RepoSymbol *symbols, size_t count);
+
+typedef struct { char *path; long long size; char *content; size_t len; } RepoIndexFile;
+/// A repository's indexable files as text on this PC, for Go to Class, Go to Symbol and Find in Files.
+typedef struct {
+    char *ref;            // the branch it follows; NULL for the default one
+    char *sha;            // the commit every file is at; NULL while it is being built
+    char *partial;        // the commit a build not yet finished reads its files at
+    // Files keep their place as others are added, so the symbols' `file` stays right while an index is filled;
+    // removing one moves those after it, and repo_index_symbols is then due.
+    RepoIndexFile *files; size_t count, cap;
+    size_t *order;        // indices into `files` by path
+    RepoSymbol *symbols; size_t symbol_count;  // from repo_index_symbols
+} RepoIndex;
+void repo_index_init(RepoIndex *index);
+void repo_index_free(RepoIndex *index);
+int repo_index_find(const RepoIndex *index, const char *path);
+/// Adds a file, or replaces the one at its path; the content is copied.
+void repo_index_put(RepoIndex *index, const char *path, long long size, const char *content, size_t len);
+bool repo_index_remove(RepoIndex *index, const char *path);
+/// Every file's declarations, worked out again.
+void repo_index_symbols(RepoIndex *index);
+/// The index as bytes for the disk, and back; parsing fails on anything it did not write.
+char *repo_index_serialize(const RepoIndex *index, size_t *len);
+bool repo_index_parse(const char *data, size_t len, RepoIndex *out);
+/// Brings the index in line with a tree before it is read at the tree's commit: drops the files the tree no longer has
+/// or that are not indexable, and those `changed` names (they are read again), then lists the indexable files of the
+/// tree the index lacks, up to REPO_INDEX_MAX_FILES in all. Returns how many paths `*fetch` holds.
+size_t repo_index_reconcile(RepoIndex *index, const RepoTree *tree, char *const *changed, size_t changed_count, char ***fetch);
+
+/// What `GET /commits/{sha}` says for walking back to the index's commit: the paths it changed (old names of renamed
+/// files too), its first parent (NULL for none), and whether GitHub cut the list short.
+bool repo_commit_changes(const Json *value, char ***paths, size_t *count, char **parent, bool *truncated);
+
+/// The declarations a query finds, best first, as indices into `index->symbols`: classes alone when `classes` is set.
+/// Matched against the name as Go to File matches a file's name.
+size_t *repo_index_find_symbols(const RepoIndex *index, const char *query, bool classes, size_t limit, size_t *count);
+/// A line holding the text searched for.
+typedef struct { size_t file; int line; size_t column; } RepoTextHit;
+/// The lines holding `query`, case ignored, file by file in path order, at most `limit`; `*total` counts them all.
+RepoTextHit *repo_index_find_text(const RepoIndex *index, const char *query, size_t limit, size_t *count, size_t *total);
+
 #endif

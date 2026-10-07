@@ -52,7 +52,7 @@ enum { ACT_FORGE_BASE = 1180 }; // the Forge tab's, PROJECT_FORGE_ACTIONS of the
 enum { ACT_BOARD_BASE = 1200 }; // the Board tab's, BOARD_TAB_ACTIONS of them
 enum { ACT_REPO_FILES_BASE = 1220 }; // the Files tab's, PROJECT_FILES_ACTIONS of them
 enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD, TAB_REVIEW, TAB_FILES };
-enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3 };
+enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3, TIMER_FILES_GOTO = 4 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
 
 typedef struct {
@@ -738,6 +738,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
 static void pulls_timer(Screen *base, UINT id) {
     PullsScreen *s = (PullsScreen *)base;
     if (project_run_timer(s->run, id)) return;
+    if (project_files_timer(s->files, id)) return;
     if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
 }
 static void pulls_place(Screen *base, const RECT *content, int scroll_y) {
@@ -809,7 +810,7 @@ Screen *pulls_screen_new(const Project *project) {
     s->db = project_db_new(project->repo, &s->base, ACT_DB_BASE);
     s->forge = project_forge_new(project->repo, &s->base, ACT_FORGE_BASE);
     s->board_tab = board_tab_new(project, &s->base, ACT_BOARD_BASE);
-    s->files = project_files_new(project->repo, &s->base, ACT_REPO_FILES_BASE);
+    s->files = project_files_new(project->repo, &s->base, ACT_REPO_FILES_BASE, TIMER_FILES_GOTO);
     return &s->base;
 }
 
