@@ -20,7 +20,7 @@ typedef struct {
     Request *read, *write;
     char *error, *notice, *starting_provider;
     int starting_id, failures;
-    bool shown, loaded, blocked;
+    bool shown, loaded, blocked, modal, retired;
     ULONGLONG next_read, retry_until;
 } MailScreen;
 
@@ -40,8 +40,12 @@ static bool current(MailScreen *s, Request *r) { return mail_settings_result_cur
 static bool can_write(MailScreen *s, const char *op) { return s->shown && !s->blocked && !s->write && !s->sign_in.state && !s->read && GetTickCount64() >= s->retry_until && store_supports(op); }
 static void repaint(MailScreen *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
 static void load(MailScreen *s);
+static void release(MailScreen *s) {
+    mail_sign_in_free(&s->sign_in); mail_accounts_free(&s->accounts);
+    free(s->error); free(s->notice); free(s->starting_provider); screen_release(&s->base);
+}
 static void arm(MailScreen *s, int delay) {
-    if (!s->shown || s->blocked || !mail_settings_offered()) return;
+    if (!s->shown || s->blocked || s->modal || !g_store.active || !mail_settings_offered()) return;
     s->next_read = GetTickCount64() + (ULONGLONG)delay;
     SetTimer(pane_hwnd(s->base.pane), TIMER_MAIL, (UINT)delay, NULL);
 }
@@ -83,7 +87,7 @@ static void read_done(void *owner, Request *r) {
     repaint(s);
 }
 static void load(MailScreen *s) {
-    if (!s->shown || s->blocked || s->read || s->write || !mail_settings_offered()) return;
+    if (!s->shown || s->blocked || s->modal || s->read || s->write || !g_store.active || !mail_settings_offered()) return;
     ULONGLONG tick = GetTickCount64();
     if (tick < s->retry_until) { arm(s, (int)(s->retry_until - tick)); return; }
     if (tick < s->next_read) return;
@@ -128,7 +132,7 @@ static void write_done(void *owner, Request *r) {
     if (!r->ok) { failed(s, r, finish); }
     else {
         bool deletion = str_eq(r->operation, "delete_mail_account");
-        MailAccount a;
+        MailAccount a = {0};
         bool valid = deletion ? json_bool_is(json_get(r->result, "ok"), true) : mail_account_parse(json_get(r->result, "account"), &a);
         if (valid && !deletion) {
             if (!finish && a.id != r->tag) valid = false;
@@ -147,10 +151,24 @@ static void write_done(void *owner, Request *r) {
     if (!s->blocked && GetTickCount64() >= s->retry_until) { s->next_read = 0; load(s); }
     repaint(s);
 }
+// A token revocation can replace the screen inside a modal dialog's nested message loop.
+// Retain the screen until the dialog returns, then discard its input if it was retired.
+static void modal_begin(MailScreen *s) {
+    s->modal = true; KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL); request_cancel(&s->read); s->next_read = 0;
+}
+static bool modal_end(MailScreen *s) {
+    s->modal = false;
+    if (s->retired) { release(s); return false; }
+    if (s->sign_in.state || syncing(s)) arm(s, 10000);
+    return true;
+}
 static void finish(MailScreen *s) {
     if (!s->sign_in.state || s->sign_in.server_finish || s->write || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) return;
+    modal_begin(s);
     char *url = dialog_text(pane_hwnd(s->base.pane), "Finish mail sign-in", "Paste the complete callback address immediately after sign-in", "Finish", "");
+    if (!modal_end(s)) { free(url); return; }
     if (!url) return;
+    if (!s->shown || s->blocked || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) { free(url); return; }
     Json *body = mail_sign_in_finish(&s->sign_in, url, now_ms()); free(url);
     if (!body) { set_text(&s->error, "Callback does not match this sign-in, contains an error, or has expired. Check the final address or start again."); repaint(s); return; }
     request_cancel(&s->read); KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL);
@@ -164,14 +182,22 @@ static void update(MailScreen *s, const MailAccount *a, int action) {
     char *label = xstrdup(a->label ? a->label : ""), *days = xstrfmt("%d", a->sync_days);
     Json *body = NULL;
     if (action == ACT_LABEL) {
+        modal_begin(s);
         char *v = dialog_text(pane_hwnd(s->base.pane), "Mailbox label", "Label", "Save", label);
+        if (!modal_end(s)) { free(v); free(label); free(days); return; }
         if (v) { body = mail_settings_body(v, enabled, days); free(v); }
     } else if (action == ACT_DAYS) {
+        modal_begin(s);
         char *v = dialog_text(pane_hwnd(s->base.pane), "Mail sync window", "Days to keep (1-365); changing this restarts the first sync", "Save", days);
+        if (!modal_end(s)) { free(v); free(label); free(days); return; }
         if (v) { body = mail_settings_body(label, enabled, v); if (!body) set_text(&s->error, "Enter a whole number of days from 1 to 365."); free(v); }
     } else body = mail_settings_body(label, !enabled, days);
     free(label); free(days);
     if (body && can_write(s, "update_mail_account") && mail_account_find(&s->accounts, id)) {
+        // Send only the field edited; another client may have changed the other settings during the dialog.
+        if (action != ACT_LABEL) json_object_remove(body, "label");
+        if (action != ACT_ENABLED) json_object_remove(body, "enabled");
+        if (action != ACT_DAYS) json_object_remove(body, "syncDays");
         json_set_num(body, "id", id);
         store_call("update_mail_account", body, 0, s, write_done, id, &s->write);
     } else json_free(body);
@@ -196,7 +222,12 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     if (act == ACT_LABEL || act == ACT_DAYS || act == ACT_ENABLED) { update(s, a, act); return; }
     const char *op = act == ACT_DELETE ? "delete_mail_account" : act == ACT_SYNC ? "sync_mail_account" : NULL;
     if (!op || !can_write(s, op)) return;
-    if (act == ACT_DELETE && !app_confirm("Disconnect mailbox?", "Core deletes its synced copy, its messages and saved tokens. Your provider's mailbox is kept. To revoke the app's access too, remove it in Google or Microsoft account settings.", "Disconnect", true)) return;
+    if (act == ACT_DELETE) {
+        modal_begin(s);
+        bool confirmed = app_confirm("Disconnect mailbox?", "Core deletes its synced copy, its messages and saved tokens. Your provider's mailbox is kept. To revoke the app's access too, remove it in Google or Microsoft account settings.", "Disconnect", true);
+        if (!modal_end(s)) return;
+        if (!confirmed) return;
+    }
     if (!can_write(s, op) || !mail_account_find(&s->accounts, id)) return;
     Json *body = json_object(); json_set_num(body, "id", id);
     store_call(op, body, 0, s, write_done, id, &s->write); repaint(s);
@@ -283,8 +314,14 @@ static void visible(Screen *base, bool shown) {
 static void destroy(Screen *base) {
     MailScreen *s = (MailScreen *)base;
     if (base->pane) KillTimer(pane_hwnd(base->pane), TIMER_MAIL);
-    request_cancel(&s->read); request_cancel(&s->write); stop_waiting(s); mail_accounts_free(&s->accounts);
-    free(s->error); free(s->notice); free(s->starting_provider); screen_release(base);
+    request_cancel(&s->read); request_cancel(&s->write);
+    if (s->modal) { s->retired = true; s->shown = false; return; }
+    release(s);
 }
-static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh, .visible = visible };
+static void activated(Screen *base, bool active) {
+    MailScreen *s = (MailScreen *)base;
+    if (!active) { KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); }
+    else if (s->shown && !s->modal) { s->next_read = 0; timer(base, TIMER_MAIL); }
+}
+static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh, .visible = visible, .activated = activated };
 Screen *mail_screen_new(void) { MailScreen *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail"); return &s->base; }

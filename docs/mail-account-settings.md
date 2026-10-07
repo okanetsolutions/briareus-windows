@@ -12,7 +12,7 @@ Sync now accepts the server's 202 account response as running work and polls the
 
 Disconnect requires explicit confirmation explaining that core removes its synced copy and tokens, while the provider mailbox is kept. Google/Microsoft may still list the app as having access until it is removed in the provider's account settings.
 
-Leaving the screen cancels delivery of outstanding results, stops polling and clears local sign-in/account state; it does not revoke a sign-in already issued on the server. Results from another connection, hidden screen or changed permission/catalog are discarded. Requests use account IDs rather than list positions. Settings dialogs copy their input values before entering their nested message loop.
+Leaving the screen cancels delivery of outstanding results, stops polling and clears local sign-in/account state; it does not revoke a sign-in already issued on the server. Results from another connection, hidden screen or changed permission/catalog are discarded. Requests use account IDs rather than list positions. Settings dialogs copy their input values before entering their nested message loop, send only the field edited and discard input if the screen is retired during the dialog; polling pauses while the app is inactive.
 
 ## Pinned core contract
 
