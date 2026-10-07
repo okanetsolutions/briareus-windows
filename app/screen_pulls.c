@@ -2550,7 +2550,19 @@ static void pull_layout(Screen *base, Doc *doc) {
         if (doc->pin_last) {
             // The page is as long as the conversation, or as the sidebar's window when that is longer.
             int side_h = doc->y - side_top, room = view_h - side_top - px(12);
-            if (side_h > room) side_h = room;
+            if (side_h > room) {
+                // It scrolls on its own, so its bar takes the last 10px instead of covering the buttons' and badges'
+                // edges: laid out again that much narrower, with an unpainted spacer keeping its window to the edge.
+                // The spacer sits level with the first item, so the window's top stays where that item starts.
+                doc_truncate(doc, (size_t)side_first);
+                doc->y = side_top;
+                Col narrow = { side.x, side.w - px(10), side.ix, side.iw - px(10) };
+                layout_sidebar(s, doc, narrow);
+                int first_top = doc->count > (size_t)side_first ? doc->items[side_first].rc.top : side_top;
+                RECT spacer = { w - 1, first_top, w, first_top + 1 };
+                doc_add(doc, &spacer, NULL);
+                side_h = room;
+            }
             doc->y = side_top + side_h;
             if (doc->y < main_bottom) doc->y = main_bottom;
             doc_sticky(doc, side_first, (int)doc->count, doc->y);

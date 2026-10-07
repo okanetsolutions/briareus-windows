@@ -11,15 +11,16 @@ static void rich_free(void *data);
 // MARK: - Items
 
 void doc_init(Doc *doc) { memset(doc, 0, sizeof *doc); doc->hover = -1; doc->pressed = -1; doc->sel_anchor.item = doc->sel_focus.item = -1; }
-static void clear_items(Doc *doc) {
-    for (size_t i = 0; i < doc->count; i++) {
+void doc_truncate(Doc *doc, size_t count) {
+    for (size_t i = count; i < doc->count; i++) {
         Item *it = &doc->items[i];
         if (it->free_data) it->free_data(it->data);
         if (it->sel_owned) rich_free(it->sel);
         free(it->text); free(it->tip);
     }
-    doc->count = 0;
+    if (count < doc->count) doc->count = count;
 }
+static void clear_items(Doc *doc) { doc_truncate(doc, 0); }
 void doc_free(Doc *doc) { clear_items(doc); free(doc->items); free(doc->regions); doc_init(doc); }
 void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
