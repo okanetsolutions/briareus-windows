@@ -26,6 +26,43 @@ bool poller_fired(Poller *p, UINT id) {
 }
 void poller_set_base(Poller *p, int base_ms) { p->base_ms = base_ms; }
 
+// Keep this separate from the screen poller: sessions/actions still poll during a list cooldown.
+static char *pulls_retry_key(const char *repo) {
+    return xstrfmt("pulls-retry:%s:%s:%s", g_store.server ? g_store.server : "",
+                   g_store.device.id ? g_store.device.id : "", repo);
+}
+time_t pulls_retry_deadline(const char *repo) {
+    if (!g_store.cache) return 0;
+    char *key = pulls_retry_key(repo);
+    Json *saved = cache_value(g_store.cache, key);
+    double until = 0;
+    json_num(json_get(saved, "until"), &until);
+    json_free(saved); free(key);
+    return (time_t)until;
+}
+void pulls_note_failure(const char *repo, const ApiError *error, time_t now) {
+    if (!g_store.cache || error->kind == API_CANCELLED) return;
+    double seconds = error->retry_after;
+    if (seconds < 0) seconds = error->kind == API_HTTP && error->status == 429 ? 60 : 2;
+    // Round upwards so fractional Retry-After values cannot allow an early read.
+    if (seconds > 2147483647.0) seconds = 2147483647.0;
+    time_t duration = (time_t)seconds;
+    if ((double)duration < seconds) duration++;
+    time_t until = now + duration;
+    if (until <= pulls_retry_deadline(repo)) return;
+    char *key = pulls_retry_key(repo);
+    Json *saved = json_object(); json_set_num(saved, "until", (double)until);
+    cache_store(g_store.cache, saved, key);
+    json_free(saved); free(key);
+}
+time_t pulls_sync_time(const Json *result, bool saved, time_t now) {
+    time_t synced;
+    if (board_date_parse(json_str(json_get(result, "syncedAt")), &synced)) return synced;
+    double received;
+    if (saved) return json_num(json_get(result, "_receivedAt"), &received) ? (time_t)received : 0;
+    return now;
+}
+
 void set_string(char **slot, const char *value) { free(*slot); *slot = xstrdup(value); }
 
 const char *finding_severity_label(const char *severity, COLORREF *color) {

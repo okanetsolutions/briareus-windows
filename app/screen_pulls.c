@@ -159,6 +159,7 @@ static void status_restore(PullsScreen *s) {
 static void status_next(PullsScreen *s);
 static void status_done(void *owner, Request *req) {
     PullsScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     int number = json_int_or(json_get(req->args, "issue"), 0);
     // Throttling stops the round and leaves this issue unread, so it and the remaining reads wait for the
     // next poll rather than hitting the limit again.
@@ -196,6 +197,8 @@ static void status_next(PullsScreen *s) {
 
 static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
     json_free(s->board); s->board = json_clone(result);
+    s->synced_at = pulls_sync_time(result, saved, time(NULL));
+    if (!saved) json_set_num(s->board, "_receivedAt", (double)time(NULL));
     pull_summaries_free(s->pulls, s->pull_count); s->pulls = pull_summaries_parse(json_get(result, "pulls"), &s->pull_count);
     issue_summaries_free(s->issues, s->issue_count); s->issues = issue_summaries_parse(json_get(result, "issues"), &s->issue_count);
     board_tab_set_pulls(s->board_tab, s->issues, s->issue_count, s->pulls, s->pull_count);
@@ -218,25 +221,27 @@ static void pulls_show(PullsScreen *s, const Json *result, bool saved) {
 static void pulls_load(PullsScreen *s, bool fresh);
 static void pulls_done(void *owner, Request *req) {
     PullsScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) {
         // A server from before `fresh` refuses the argument it does not know.
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { pulls_load(s, false); return; }
+        pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->error, req);
         s->loaded = true;
     } else {
         pulls_show(s, req->result, false);
         set_string(&s->error, NULL);
-        s->synced_at = time(NULL);
         char *key = xstrfmt("pulls:%s", s->project.repo);
-        cache_store(g_store.cache, req->result, key);
+        cache_store(g_store.cache, s->board, key);
         free(key);
         status_next(s);
     }
-    poller_finished(&s->poller, !req->ok, req->error.retry_after);
+    poller_finished(&s->poller, false, -1);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void board_actions_done(void *owner, Request *req) {
     PullsScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) return;
     json_free(s->catalog); s->catalog = json_clone(json_get(req->result, "actions"));
     cache_store(g_store.cache, req->result, "actions");
@@ -244,6 +249,7 @@ static void board_actions_done(void *owner, Request *req) {
 }
 static void runs_done(void *owner, Request *req) {
     PullsScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) return;
     Session *all; size_t n;
     if (!sessions_parse(req->result, &all, &n)) return;
@@ -260,10 +266,11 @@ static void pulls_load(PullsScreen *s, bool fresh) {
         free(key);
         if (!json_count(s->catalog)) { Json *acts = cache_value(g_store.cache, "actions"); if (acts) { json_free(s->catalog); s->catalog = json_clone(json_get(acts, "actions")); json_free(acts); } }
     }
-    if (s->req) request_cancel(&s->req);
-    Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
-    if (fresh) json_set_str(args, "fresh", "1");
-    store_call("pulls", args, 0, s, pulls_done, 0, &s->req);
+    if (store_supports("pulls") && !s->req && time(NULL) >= pulls_retry_deadline(s->project.repo)) {
+        Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
+        if (fresh) json_set_str(args, "fresh", "1");
+        store_call("pulls", args, 0, s, pulls_done, 0, &s->req);
+    } else poller_finished(&s->poller, false, -1);
     if (store_can_manage() && store_supports("actions") && !s->req_actions) store_call("actions", json_object(), 0, s, board_actions_done, 0, &s->req_actions);
     if (store_supports("sessions") && !s->req_runs) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
 }
@@ -588,6 +595,8 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
     if (s->loaded && s->tab == TAB_REVIEW) { size_t n; free(review_rows(s, &n)); str_appendf(&sub, " \xC2\xB7 %zu waiting on %s", n, reviewer(s) ? reviewer(s) : "you"); }
     else if (s->loaded) str_appendf(&sub, " \xC2\xB7 %zu open pull request%s", s->pull_count, s->pull_count == 1 ? "" : "s");
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
+    time_t retry = pulls_retry_deadline(s->project.repo);
+    if (retry > time(NULL)) { char *at = format_event_time(retry); str_appendf(&sub, " \xC2\xB7 retry after %s", at); free(at); }
     // A meeting about this project leads the line: its time, cost and what it is doing.
     if (meeting_for(s->project.repo)) { char *m = meeting_status(); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", m, sub.data); free(m); }
     else snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
@@ -630,7 +639,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         HeaderButton *l = &info->buttons[info->button_count++];
         if (github_login()) snprintf(l->label, sizeof l->label, "Reviewing as %s", github_login()); else snprintf(l->label, sizeof l->label, "Set my GitHub login\xE2\x80\xA6");
         l->glyph = 0xE77B; l->action = ACT_REVIEW_LOGIN; l->enabled = true; l->tip = "The GitHub login whose reviews the Review List shows";
-        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the pull requests from GitHub again";
+        HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req && store_supports("pulls") && time(NULL) >= pulls_retry_deadline(s->project.repo); r->tip = "Refresh the list (the server may return cached data)";
         return;
     }
     if (s->tab == TAB_SFTP) {
@@ -648,7 +657,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : str_eq(assignee, PROJECT_NO_ASSIGNEE) ? "No assignee" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(label) ? "All labels" : label); b->action = ACT_FILTER_LABEL; b->enabled = s->loaded;
     }
-    HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the pull requests from GitHub again";
+    HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req && store_supports("pulls") && time(NULL) >= pulls_retry_deadline(s->project.repo); r->tip = "Refresh the list (the server may return cached data)";
 }
 /// One picker's menu: `All <kind>s`, then each option with how many rows it would show.
 static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
@@ -2987,7 +2996,7 @@ static void issue_board_show(IssueScreen *s, const Json *board, bool saved) {
         break;
     }
     // A board GitHub refused the issues of says nothing about this one.
-    if (!saved) s->gone = !found && !json_is_set(json_get(board, "issuesError"));
+    if (!saved) s->gone = !found && !json_is_set(json_get(board, "issuesError")) && !json_bool_is(json_get(board, "issuesTruncated"), true);
     s->board_read = true;
 }
 /// Takes the issue's own read: the row it shares with the board, and all the board does not carry.
@@ -2997,6 +3006,7 @@ static void issue_detail_show(IssueScreen *s, const Json *issue) {
     if (fresh.number != s->issue.number) { issue_summary_free(&fresh); return; }
     issue_summary_free(&s->issue); s->issue = fresh;
     json_free(s->detail); s->detail = json_clone(issue);
+    s->gone = false;
     issue_subs_free(s);
     const Json *items = json_get(json_get(issue, "subIssues"), "items");
     s->subs = xcalloc(json_count(items) ? json_count(items) : 1, sizeof *s->subs);
@@ -3011,6 +3021,7 @@ static void issue_timeline_show(IssueScreen *s, const Json *result, bool first) 
 static char *issue_cache_key(const IssueScreen *s, const char *what) { return xstrfmt("%s:%s#%d", what, s->project.repo, s->issue.number); }
 static void issue_timeline_done(void *owner, Request *req) {
     IssueScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) request_error_into(&s->timeline_error, req);
     else {
         bool first = json_int_or(json_get(req->args, "page"), 1) <= 1;
@@ -3033,6 +3044,7 @@ static void issue_timeline_load(IssueScreen *s, int page) {
 }
 static void issue_detail_done(void *owner, Request *req) {
     IssueScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) request_error_into(&s->detail_error, req);
     else {
         issue_detail_show(s, json_get(req->result, "issue"));
@@ -3054,6 +3066,7 @@ static bool issue_run_matches(const IssueScreen *s, const Session *run) {
 }
 static void issue_runs_done(void *owner, Request *req) {
     IssueScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) return;
     Session *all; size_t n;
     if (!sessions_parse(req->result, &all, &n)) return;
@@ -3065,22 +3078,24 @@ static void issue_runs_done(void *owner, Request *req) {
 static void issue_load(IssueScreen *s, bool fresh);
 static void issue_board_done(void *owner, Request *req) {
     IssueScreen *s = owner;
+    if (req->client != g_store.client || !store_supports(req->operation)) return;
     if (!req->ok) {
         if (req->error.kind == API_HTTP && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) { issue_load(s, false); return; }
+        pulls_note_failure(s->project.repo, &req->error, time(NULL));
         request_error_into(&s->load_error, req);
     } else {
         issue_board_show(s, req->result, false);
         set_string(&s->load_error, NULL);
         char *key = xstrfmt("pulls:%s", s->project.repo);
-        cache_store(g_store.cache, req->result, key);
+        Json *saved = json_clone(req->result); json_set_num(saved, "_receivedAt", (double)time(NULL));
+        cache_store(g_store.cache, saved, key); json_free(saved);
         free(key);
     }
-    poller_finished(&s->poller, !req->ok, req->error.retry_after);
+    poller_finished(&s->poller, false, -1);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void issue_load(IssueScreen *s, bool fresh) {
-    if (store_supports("pulls")) {
-        request_cancel(&s->req_board);
+    if (store_supports("pulls") && !s->req_board && time(NULL) >= pulls_retry_deadline(s->project.repo)) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo);
         if (fresh) json_set_str(args, "fresh", "1");
         store_call("pulls", args, 0, s, issue_board_done, 0, &s->req_board);
@@ -3571,7 +3586,9 @@ static void issue_layout(Screen *base, Doc *doc) {
 static void issue_header(Screen *base, HeaderInfo *info) {
     IssueScreen *s = (IssueScreen *)base;
     snprintf(info->title, sizeof info->title, "#%d", s->issue.number);
-    snprintf(info->subtitle, sizeof info->subtitle, "%s", s->project.repo);
+    time_t retry = pulls_retry_deadline(s->project.repo);
+    if (retry > time(NULL)) { char *at = format_event_time(retry); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 list retry after %s", s->project.repo, at); free(at); }
+    else snprintf(info->subtitle, sizeof info->subtitle, "%s", s->project.repo);
     HeaderButton *b = &info->buttons[info->button_count++]; b->glyph = 0xE8C8; b->action = ACT_ISSUE_COPY; b->enabled = safe_web_url(s->issue.url); b->tip = "Copy the issue\xE2\x80\x99s link";
     b = &info->buttons[info->button_count++]; b->glyph = 0xE72C; b->action = ACT_ISSUE_REFRESH; b->enabled = !s->req_board && !s->req_detail; b->tip = "Read the issue from GitHub again";
 }
