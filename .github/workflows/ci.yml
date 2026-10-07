@@ -97,6 +97,39 @@ jobs:
           CL: /fsanitize=address /Zi
         run: build.bat
 
+  leaks:
+    name: Tests for leaks (MSVC debug CRT)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      # AddressSanitizer on Windows has no leak checker: the debug heap fails a test that leaves an allocation behind,
+      # and /RTC1 stops on reads of uninitialised locals and stack frames written past their end.
+      - name: Build against the debug CRT and run the tests
+        shell: cmd
+        env:
+          CLOPT: /Od /MTd /RTC1 /Zi
+          CL: /WX
+        run: build.bat
+
+  sanitize:
+    name: Tests under UBSan, fortify and stack protector (MinGW-w64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: false
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make curl
+      - name: Build with run-time checks and run the tests
+        run: mingw32-make WERROR=1 sanitize
+
   editorconfig:
     name: Formatting (.editorconfig)
     runs-on: ubuntu-latest
