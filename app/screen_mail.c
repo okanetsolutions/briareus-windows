@@ -119,10 +119,7 @@ static void start(MailScreen *s, const char *provider, int id) {
     if (!can_write(s, "connect_mail_account") || !s->loaded || !mail_provider_available(&s->accounts, provider)) return;
     Json *body = json_object(); json_set_str(body, "provider", provider);
     if (id) json_set_num(body, "accountId", id);
-    else {
-        json_set_str(body, "label", s->accounts.default_label ? s->accounts.default_label : "");
-        json_set_bool(body, "enabled", s->accounts.default_enabled); json_set_num(body, "syncDays", s->accounts.default_sync_days);
-    }
+    // Let the server apply defaults only to new mailboxes and preserve settings on reconnect.
     set_text(&s->starting_provider, provider); s->starting_id = id;
     set_error(s, NULL, false); set_text(&s->notice, NULL);
     store_call("connect_mail_account", body, 0, s, start_done, 0, &s->write); repaint(s);
