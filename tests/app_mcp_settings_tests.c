@@ -109,6 +109,46 @@ static void test_clean_refresh_and_dirty_conflict(void) {
     s.dirty = true; status_update(&s, next); CHECK(!s.conflict);
     json_free(next); form_cleanup(&s);
 }
+static void test_clean_save_preserves_pending_sign_in(void) {
+    McpForm s; form_fixture(&s, true);
+    json_set_str(s.row, "signInUrl", "https://auth.example/?state=pending"); json_set_bool(s.row, "signInNeedsPaste", true);
+    mcp_sign_in_update(&s.sign_in, s.row);
+    set_text(s.edits[F_CALLBACK], "http://localhost/?state=pending&code=approved");
+    HeaderInfo header = {0}; form_header(&s.base, &header); CHECK(!header.buttons[0].enabled);
+    form_save(&s); CHECK_INT(calls, 0); CHECK(s.write == NULL);
+    CHECK_STR(s.sign_in.url, "https://auth.example/?state=pending"); CHECK(mcp_sign_in_can_finish(&s.sign_in));
+    CHECK_OWNED_STR(edit_text(s.edits[F_CALLBACK]), "http://localhost/?state=pending&code=approved");
+    set_text(s.edits[F_LABEL], "Renamed"); changed(&s); form_save(&s); CHECK_INT(calls, 1); s.write = NULL;
+    form_cleanup(&s);
+    form_fixture(&s, false); CHECK(!s.dirty); form_save(&s); CHECK_INT(calls, 1); s.write = NULL; form_cleanup(&s);
+}
+static void test_normalized_endpoint_partial_updates(void) {
+    McpForm s; form_fixture(&s, true); char *why = NULL;
+    Str endpoint; str_init(&endpoint); str_appendz(&endpoint, "https://mcp.example/");
+    for (int i = 0; i < 300; i++) str_appendz(&endpoint, "%E4%B8%AD");
+    CHECK(endpoint.len > 2048); json_set_str(s.row, "url", endpoint.data); fill(&s);
+    set_text(s.edits[F_LABEL], "Renamed"); s.enabled = false; changed(&s);
+    Json *body = body_now(&s, &why); CHECK(body != NULL); CHECK(why == NULL);
+    CHECK(json_is_null(json_get(body, "url"))); CHECK_STR(json_str(json_get(body, "label")), "Renamed");
+    CHECK(json_bool_is(json_get(body, "enabled"), false)); json_free(body);
+    form_save(&s); CHECK_INT(calls, 1); CHECK(json_is_null(json_get(sent, "url"))); s.write = NULL;
+    // A changed overlong endpoint must fail, and valid replacements must be sent.
+    char *changed_url = xstrfmt("%s/changed", endpoint.data); set_text(s.edits[F_URL], changed_url); free(changed_url);
+    body = body_now(&s, &why); CHECK(body == NULL); CHECK(why != NULL); free(why); why = NULL;
+    set_text(s.edits[F_URL], "https://new.example/mcp");
+    body = body_now(&s, &why); CHECK(body != NULL); CHECK_STR(json_str(json_get(body, "url")), "https://new.example/mcp"); json_free(body);
+    // Even unchanged text needs validation on create or when switching from stored stdio to HTTP.
+    set_text(s.edits[F_URL], endpoint.data); s.id = 0;
+    body = body_now(&s, &why); CHECK(body == NULL); CHECK(why != NULL); free(why); why = NULL;
+    s.id = 123; json_set_str(s.row, "transport", "stdio");
+    body = body_now(&s, &why); CHECK(body == NULL); CHECK(why != NULL); free(why); why = NULL;
+    // A newer remote endpoint must not cause a preserved dirty draft to be silently omitted.
+    Json *next = json_clone(s.row); json_set_str(next, "transport", "http"); json_set_str(next, "url", "https://remote.example");
+    status_update(&s, next); CHECK(s.conflict);
+    set_text(s.edits[F_URL], "https://draft.example");
+    body = body_now(&s, &why); CHECK(body != NULL); CHECK_STR(json_str(json_get(body, "url")), "https://draft.example"); json_free(body);
+    json_free(next); str_free(&endpoint); form_cleanup(&s);
+}
 static void test_uncertain_create_reconciliation(void) {
     for (int committed = 0; committed < 2; committed++) {
         McpForm s; form_fixture(&s, false); s.dirty = true;
@@ -210,11 +250,23 @@ static void test_polled_status_refreshes_settings(void) {
     json_set_str(row, "status", "error"); req.client = NULL; read_done(&s, &req); CHECK_INT(registry_changes, 1);
     json_free(req.result); api_error_clear(&req.error); form_cleanup(&s);
 }
+static void test_polled_deletion_refreshes_settings(void) {
+    McpForm s; form_fixture(&s, true);
+    Request req = {0}; req.client = s.account; req.ok = true; req.result = json_parsez("{\"servers\":[]}"); api_error_init(&req.error);
+    req.client = NULL; read_done(&s, &req); CHECK_INT(registry_changes, 0); CHECK(!s.uncertain);
+    req.client = s.account; req.ok = false; read_done(&s, &req); CHECK_INT(registry_changes, 0); CHECK(!s.uncertain);
+    req.ok = true; g_store.device.permission = "read"; read_done(&s, &req); CHECK_INT(registry_changes, 0);
+    g_store.device.permission = "admin"; read_done(&s, &req); CHECK_INT(registry_changes, 1); CHECK(s.uncertain); CHECK(s.error != NULL);
+    json_free(req.result); api_error_clear(&req.error); form_cleanup(&s);
+}
 void app_mcp_settings_tests(void) {
     test_run("MCP form omits retained assignments and allows disabled empty selections", test_assignments_and_disabled_empty_selection);
     test_run("MCP form refreshes clean controls and preserves drafts behind conflict confirmation", test_clean_refresh_and_dirty_conflict);
+    test_run("MCP clean saves preserve pending OAuth while new and dirty forms can save", test_clean_save_preserves_pending_sign_in);
+    test_run("MCP updates omit unchanged normalized endpoints but validate creates and replacements", test_normalized_endpoint_partial_updates);
     test_run("MCP uncertain creates reconcile by submitted name without losing drafts or retrying writes", test_uncertain_create_reconciliation);
     test_run("MCP authored JSON rejects NUL without changing literal escapes or response parsing", test_nul_authoring);
     test_run("MCP departed mutations refresh only their current account after completion", test_departed_mutation_completion);
     test_run("MCP polled OAuth status changes refresh Settings without extra reads on unchanged polls", test_polled_status_refreshes_settings);
+    test_run("MCP authoritative deletion refreshes Settings only for the current admin account", test_polled_deletion_refreshes_settings);
 }

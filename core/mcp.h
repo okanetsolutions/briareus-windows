@@ -6,6 +6,7 @@
 typedef enum { MCP_KEEP, MCP_REPLACE, MCP_CLEAR } McpSecretMode;
 /// Copies only writable fields, validates them, and includes secrets only with explicit replacement/clearing.
 /// fields holds JSON args/repos and string-to-string headers/env; error is a new, value-free diagnostic.
+/// An omitted HTTP url preserves the endpoint on updates; creates and transport changes must supply it.
 Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env, McpSecretMode client_secret, char **error);
 bool mcp_secure_url(const char *url);
 bool mcp_callback_url(const char *url);

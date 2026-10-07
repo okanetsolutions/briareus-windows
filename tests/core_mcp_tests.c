@@ -142,6 +142,22 @@ static void test_urls_and_large_ids(void) {
     for (size_t i = 0; i < sizeof good / sizeof *good; i++) CHECK(mcp_secure_url(good[i]));
     const char *const bad[] = { NULL, "", "file:///a", "http://remote.example", "https://", "https:///a", "https://:443", "https://user:pw@host", "https://host\\evil/a", "https://host name/a", "http://localhost.evil", "https://[::1", "https://[::1]x/a", "https://host:", "https://host:abc", "https://host:0", "https://host:65536", "https://host\n" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(!mcp_secure_url(bad[i]));
+    // Core percent-encodes an accepted 1024-unit scope without capping the full authorization URL.
+    char *scope = repeat_utf8("%E4%B8%AD", 1024);
+    char *url = xstrfmt("https://auth.example/authorize?state=s&scope=%s", scope);
+    CHECK(strlen(url) > 8192); CHECK(mcp_secure_url(url));
+    Json *sign_in = json_object(); json_set_str(sign_in, "signInUrl", url); json_set_bool(sign_in, "signInNeedsPaste", true);
+    McpSignIn state = {0}; mcp_sign_in_update(&state, sign_in);
+    CHECK_STR(state.url, url); CHECK(mcp_sign_in_can_finish(&state));
+    char *unsafe = xstrfmt("%s\n", url); CHECK(!mcp_secure_url(unsafe)); free(unsafe);
+    unsafe = xstrfmt("http://remote.example/authorize?scope=%s", scope); CHECK(!mcp_secure_url(unsafe)); free(unsafe);
+    Json *form = http_form(); json_set_str(form, "url", url); rejects(form, MCP_KEEP, MCP_KEEP, MCP_KEEP);
+    // Partial updates can preserve normalized endpoints; supplied endpoints retain input validation.
+    json_object_remove(form, "url");
+    Json *body = mcp_form_body(form, MCP_KEEP, MCP_KEEP, MCP_KEEP, NULL);
+    CHECK(body != NULL); CHECK(json_is_null(json_get(body, "url"))); json_free(body);
+    json_set_str(form, "url", ""); rejects(form, MCP_KEEP, MCP_KEEP, MCP_KEEP);
+    json_free(form); mcp_sign_in_clear(&state); json_free(sign_in); free(url); free(scope);
     CHECK(mcp_callback_url("http://127.0.0.1:3000/callback?code=a%20b&state=s"));
     CHECK(mcp_callback_url("http://localhost/callback?error=access_denied&state=s"));
     CHECK(!mcp_callback_url("http://localhost/?state=s")); CHECK(!mcp_callback_url("http://localhost/?state=&code=c"));

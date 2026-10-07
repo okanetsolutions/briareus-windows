@@ -46,7 +46,7 @@ static void open_sign_in(const char *url) {
     ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL); free(w);
 }
 static bool busy(McpForm *s) { return s->write != NULL; }
-static bool can_save(McpForm *s) { return !busy(s) && (!s->uncertain || (!s->id && s->create_retry)); }
+static bool can_save(McpForm *s) { return !busy(s) && (s->dirty || !s->id) && (!s->uncertain || (!s->id && s->create_retry)); }
 static char *edit_text(HWND edit) {
     int n = GetWindowTextLengthW(edit);
     wchar_t *w = xmalloc(((size_t)n + 1) * sizeof *w); GetWindowTextW(edit, w, n + 1);
@@ -113,6 +113,12 @@ static Json *body_now(McpForm *s, char **error) {
     Json *fields = json_object();
     for (int f = 0; f < F_CALLBACK; f++) {
         char *text = edit_text(s->edits[f]);
+        if (f == F_URL && s->id && !s->stdio && str_eq(json_str(json_get(s->row, "transport")), "http")) {
+            char *trim = str_trim(text);
+            bool unchanged = str_eq(trim, json_str(json_get(s->row, "url")));
+            free(trim);
+            if (unchanged) { free(text); continue; }
+        }
         bool authored_json = (f == F_ARGS && s->stdio) || (f == F_HEADERS && !s->stdio && s->secrets[0] == MCP_REPLACE) || (f == F_ENV && s->stdio && s->secrets[1] == MCP_REPLACE);
         if (authored_json && nul_escape(text)) {
             *error = xstrfmt("%s must not contain NUL escapes.", FIELDS[f].label);
@@ -196,7 +202,7 @@ static void form_layout(Screen *base, Doc *doc) {
             const Json *projects = settings_project_rows();
             for (size_t i = 0; i < json_count(projects); i++) {
                 const Json *p = json_at(projects, i); const char *repo = json_str_nonempty(json_get(p, "repo")); if (!repo) continue;
-                char *label = xstrfmt("%s %s%s", selected(s, repo) ? "[x]" : "[ ]", repo, json_bool_is(json_get(p, "active"), false) ? " (inactive project)" : "");
+                char *label = xstrfmt("%s %s%s", selected(s, repo) ? "[x]" : "[ ]", repo, json_bool_is(json_get(p, "enabled"), false) ? " (inactive project)" : "");
                 doc_button(doc, 0, w, label, BUTTON_BORDERED, ACT_REPO, (intptr_t)i, !busy(s)); free(label); doc_space(doc, px(6));
             }
             // Keep assignments that disappeared from the project picker visible and removable.
@@ -220,7 +226,7 @@ static void form_header(Screen *base, HeaderInfo *info) {
     snprintf(info->subtitle, sizeof info->subtitle, "MCP settings%s", s->dirty ? " · unsaved changes" : "");
     if (!account_current(s)) return;
     HeaderButton *b = &info->buttons[info->button_count++]; b->glyph = 0xE74E; b->action = ACT_SAVE; b->prominent = true;
-    snprintf(b->label, sizeof b->label, "Save"); b->enabled = can_save(s) && (s->dirty || !s->id) && mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server");
+    snprintf(b->label, sizeof b->label, "Save"); b->enabled = can_save(s) && mcp_settings_supported(s->id ? "update_mcp_server" : "create_mcp_server");
     if (s->id) { b = &info->buttons[info->button_count++]; b->glyph = 0xE74D; b->action = ACT_DELETE; b->destructive = true; b->tip = "Delete MCP server"; b->enabled = !busy(s) && mcp_settings_supported("delete_mcp_server"); }
 }
 static void form_place(Screen *base, const RECT *content, int scroll_y) {
@@ -305,7 +311,7 @@ static void read_done(void *owner, Request *req) {
     else {
         mcp_sign_in_failed(&s->sign_in);
         if (s->edits[F_CALLBACK]) set_text(s->edits[F_CALLBACK], "");
-        if (listed) { s->uncertain = true; set_string(&s->error, "This MCP server is no longer listed. Reopen it from Settings."); }
+        if (listed) { s->uncertain = true; settings_mcp_changed(); set_string(&s->error, "This MCP server is no longer listed. Reopen it from Settings."); }
         else { char *e = xstrfmt("MCP status could not be refreshed (HTTP %d). Refresh or reconnect before finishing sign-in.", req->error.status); set_string(&s->error, e); free(e); }
     }
     poller_finished(&s->poll, !listed, req->error.retry_after); repaint(s);

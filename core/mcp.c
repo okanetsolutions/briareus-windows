@@ -36,7 +36,8 @@ static bool text_ok(const char *s, size_t limit) {
     return true;
 }
 bool mcp_secure_url(const char *url) {
-    if (!url || !text_ok(url, 8192)) return false;
+    if (!url) return false;
+    for (const char *p = url; *p; p++) if ((unsigned char)*p < 32) return false;
     bool https = str_has_prefix(url, "https://"), http = str_has_prefix(url, "http://");
     if (!https && !http) return false;
     const char *host = url + (https ? 8 : 7), *end = host + strcspn(host, "/?#");
@@ -98,6 +99,7 @@ Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env
     Json *body = json_object();
     char *transport = str_trim(json_str_or(json_get(fields, "transport"), ""));
     bool stdio = str_eq(transport, "stdio"), http = str_eq(transport, "http");
+    bool preserve_url = http && json_is_null(json_get(fields, "url"));
     free(transport);
     if (!stdio && !http) return fail(body, error, "Choose HTTP or stdio.");
     static const struct { const char *key; size_t max; } texts[] = {
@@ -105,6 +107,7 @@ Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env
         { "oauthClientId", 256 }, { "oauthScope", 1024 }, { "oauthClientName", 100 }, { "oauthRedirect", 8 },
     };
     for (size_t i = 0; i < sizeof texts / sizeof *texts; i++) {
+        if (preserve_url && str_eq(texts[i].key, "url")) continue;
         bool inactive = (stdio && str_eq(texts[i].key, "url")) || (http && str_eq(texts[i].key, "command"));
         char *s = str_trim(inactive ? "" : json_str_or(json_get(fields, texts[i].key), ""));
         if (!text_ok(s, texts[i].max)) { free(s); return fail(body, error, "A text field is too long or contains control characters."); }
@@ -132,7 +135,7 @@ Json *mcp_form_body(const Json *fields, McpSecretMode headers, McpSecretMode env
     if (json_bool_tristate(json_get(fields, "enabled")) < 0) return fail(body, error, "Enabled must be a boolean.");
     json_object_set(body, "enabled", json_clone(json_get(fields, "enabled")));
     if (http) {
-        if (!mcp_secure_url(json_str(json_get(body, "url")))) return fail(body, error, "Enter an HTTPS endpoint, or HTTP on core's loopback host.");
+        if (!preserve_url && !mcp_secure_url(json_str(json_get(body, "url")))) return fail(body, error, "Enter an HTTPS endpoint, or HTTP on core's loopback host.");
         json_set_str(body, "command", ""); json_object_set(body, "args", json_array());
     } else {
         if (str_empty(json_str(json_get(body, "command")))) return fail(body, error, "Enter a command to run on the core machine.");
