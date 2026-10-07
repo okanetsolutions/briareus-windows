@@ -34,7 +34,7 @@ CORE_TEST_OBJ = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(CORE_TEST_SRC))
 APP_TEST_OBJ  = $(patsubst tests/%.c,$(BUILD)/tests/%.o,$(APP_TEST_SRC))
 RES      = $(BUILD)/briareus.res.o
 
-.PHONY: all app test coverage lint clean run
+.PHONY: all app test coverage sanitize lint clean run
 
 all: app test
 
@@ -63,6 +63,14 @@ coverage:
 	$(MAKE) BUILD=build-cov OPT="-O0 --coverage" test
 	mkdir -p build-cov/coverage
 	$(GCOVR) --root . --object-directory build-cov --filter core/ --txt-summary --html-details build-cov/coverage/index.html 		--fail-under-line $(COVERAGE_MIN)
+
+# The tests in a build of their own with the checks GCC adds at run time: undefined behaviour (signed overflow, bad shifts,
+# misaligned or null access, out-of-bounds indexing of arrays) traps, fortified libc calls stop on an overrun they can
+# see, and the stack protector on a smashed frame. Traps need no runtime library, so this works with MinGW, where
+# AddressSanitizer does not: CI runs that one with MSVC.
+SANITIZE = -fsanitize=undefined -fsanitize-undefined-trap-on-error -fno-sanitize=vptr -D_FORTIFY_SOURCE=2 -fstack-protector-strong
+sanitize:
+	$(MAKE) BUILD=build-san OPT="-O1 -g $(SANITIZE)" test
 
 # Static analysis with cppcheck: fails on any finding. canvas.cpp is C in a .cpp file, so the C++-only checks are off there.
 # third_party/ (miniaudio, compiled through app/miniaudio.c) is someone else's code and is left out.
@@ -108,4 +116,4 @@ $(BUILD) $(BUILD)/core $(BUILD)/app $(BUILD)/tests:
 	mkdir -p $@
 
 clean:
-	rm -rf $(BUILD) build-cov
+	rm -rf $(BUILD) build-cov build-san
