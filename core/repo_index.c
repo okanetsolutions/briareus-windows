@@ -258,13 +258,13 @@ static size_t index_slot(const RepoIndex *index, const char *path, bool *found) 
     return lo;
 }
 int repo_index_find(const RepoIndex *index, const char *path) {
-    bool found;
+    bool found = false;
     if (!path) return -1;
     size_t at = index_slot(index, path, &found);
     return found ? (int)index->order[at] : -1;
 }
 void repo_index_put(RepoIndex *index, const char *path, long long size, const char *content, size_t len) {
-    bool found;
+    bool found = false;
     size_t at = index_slot(index, path, &found), file;
     if (!found) {
         if (index->count == index->cap) {
@@ -286,9 +286,9 @@ void repo_index_put(RepoIndex *index, const char *path, long long size, const ch
     index->files[file].len = content ? len : 0;
 }
 bool repo_index_remove(RepoIndex *index, const char *path) {
-    bool found;
+    bool found = false;
     size_t at = path ? index_slot(index, path, &found) : 0;
-    if (!path || !found) return false;
+    if (!found) return false;
     size_t file = index->order[at];
     index_file_free(&index->files[file]);
     memmove(&index->files[file], &index->files[file + 1], (index->count - file - 1) * sizeof *index->files);
