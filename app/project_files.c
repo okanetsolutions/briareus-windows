@@ -574,7 +574,7 @@ bool project_files_command(ProjectFiles *p, int id, int code) {
         p->pick = 0;
         find_update(p);
         relayout(p);
-    }
+    } else if ((code == EN_SETFOCUS || code == EN_KILLFOCUS) && p->host->pane) pane_repaint(p->host->pane);
     return true;
 }
 bool project_files_key(ProjectFiles *p, WPARAM vk, bool ctrl, bool shift) {
@@ -613,11 +613,10 @@ void project_files_place(ProjectFiles *p, const RECT *content, int scroll_y, boo
 // MARK: - Painting
 
 /// The Go to File box; the edit sits over it.
-typedef struct { bool focused; } FindData;
 static void paint_find(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     (void)doc;
-    const FindData *d = it->data;
-    fill_round_rect(cv, rc, px(6), theme.raise, d->focused ? theme.accent_dim : theme.line);
+    const ProjectFiles *p = it->data;
+    fill_round_rect(cv, rc, px(6), theme.raise, p->find && GetFocus() == p->find ? theme.accent_dim : theme.line);
     RECT g = { rc->left + px(10), rc->top, rc->left + px(26), rc->bottom };
     draw_glyph(cv, 0xE721, &g, FONT_ICON_SMALL, theme.muted);
 }
@@ -740,10 +739,8 @@ static void layout_find(ProjectFiles *p, Doc *doc, int x, int w) {
     find_ensure(p);
     int h = px(34), fh = edit_line_height(FONT_BODY);
     RECT box = { x, doc->y, x + w, doc->y + h };
-    FindData *d = xcalloc(1, sizeof *d);
-    d->focused = p->find && GetFocus() == p->find;
     Item *it = doc_item(doc, doc_add(doc, &box, paint_find));
-    it->data = d; it->free_data = free; it->action = p->base + A_FOCUS_FIND; it->hover_fill = false;
+    it->data = p; it->action = p->base + A_FOCUS_FIND; it->hover_fill = false;
     int clear_w = !str_empty(p->query) ? px(28) : 0;
     p->find_rc = (RECT){ x + px(32), box.top + (h - fh) / 2, x + w - px(10) - clear_w, box.top + (h - fh) / 2 + fh };
     p->find_laid = true;
