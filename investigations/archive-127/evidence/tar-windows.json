@@ -1,0 +1,125 @@
+{
+  "cases": [
+    {
+      "stdoutBytes": 54,
+      "name": "valid-root",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "valid-github-pax",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "gzip-bad-crc",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "gzip-bad-isize",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 0,
+      "name": "gzip-missing-footer",
+      "stderr": "tar.exe: Error opening archive: (null)\r\n",
+      "killed": false,
+      "exit": 1
+    },
+    {
+      "stdoutBytes": 0,
+      "name": "gzip-short-footer",
+      "stderr": "tar.exe: Error opening archive: (null)\r\n",
+      "killed": false,
+      "exit": 1
+    },
+    {
+      "stdoutBytes": 0,
+      "name": "gzip-truncated-deflate",
+      "stderr": "tar.exe: Error opening archive: truncated gzip input\r\n",
+      "killed": false,
+      "exit": 1
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "gzip-trailing-junk",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "gzip-forged-trailing-footer",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "gzip-concatenated",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "tar-no-end",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "tar-one-end",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 54,
+      "name": "tar-trailing-junk",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 92,
+      "name": "traversal",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 84,
+      "name": "symlink",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    },
+    {
+      "stdoutBytes": 55,
+      "name": "pax-traversal",
+      "stderr": "",
+      "killed": false,
+      "exit": 0
+    }
+  ],
+  "tarPath": "C:\\Windows\\system32\\tar.exe",
+  "tarVersion": "bsdtar 3.8.4 - libarchive 3.8.4 zlib/1.2.13.1-motley liblzma/5.8.1 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled",
+  "rawReaderAttempt": {
+    "stdoutBytes": 0,
+    "stderr": "tar.exe: Option --format is not permitted in mode -x\r\n",
+    "killed": false,
+    "exit": 1
+  },
+  "present": true
+}

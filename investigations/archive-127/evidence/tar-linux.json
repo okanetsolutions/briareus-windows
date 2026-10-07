@@ -1,0 +1,125 @@
+{
+  "present": true,
+  "rawReaderAttempt": {
+    "exit": 1,
+    "stderr": "bsdtar: Option --format is not permitted in mode -x\n",
+    "killed": false,
+    "stdoutBytes": 0
+  },
+  "tarPath": "/tmp/archive-127-tools/usr/bin/bsdtar",
+  "cases": [
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "valid-root",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "valid-github-pax",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "gzip-bad-crc",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "gzip-bad-isize",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 1,
+      "stderr": "bsdtar: Error opening archive: (null)\n",
+      "killed": false,
+      "name": "gzip-missing-footer",
+      "stdoutBytes": 0
+    },
+    {
+      "exit": 1,
+      "stderr": "bsdtar: Error opening archive: (null)\n",
+      "killed": false,
+      "name": "gzip-short-footer",
+      "stdoutBytes": 0
+    },
+    {
+      "exit": 1,
+      "stderr": "bsdtar: Error opening archive: truncated gzip input\n",
+      "killed": false,
+      "name": "gzip-truncated-deflate",
+      "stdoutBytes": 0
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "gzip-trailing-junk",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "gzip-forged-trailing-footer",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "gzip-concatenated",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "tar-no-end",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "tar-one-end",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "tar-trailing-junk",
+      "stdoutBytes": 52
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "traversal",
+      "stdoutBytes": 89
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "symlink",
+      "stdoutBytes": 81
+    },
+    {
+      "exit": 0,
+      "stderr": "",
+      "killed": false,
+      "name": "pax-traversal",
+      "stdoutBytes": 53
+    }
+  ],
+  "tarVersion": "bsdtar 3.7.2 - libarchive 3.7.2 zlib/1.3 liblzma/5.4.5 bz2lib/1.0.8 liblz4/1.9.4 libzstd/1.5.5"
+}

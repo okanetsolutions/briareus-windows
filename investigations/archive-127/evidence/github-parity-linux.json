@@ -1,0 +1,23 @@
+{
+  "root": "nadinyamaui-briareus-cb38ed7",
+  "compressedBytes": 940081,
+  "compressedSha256": "9020716731b23eb66f7579284ac08de9bfe77cb9390fa80ad3b0c4abe916a2ae",
+  "source": "GitHub codeload; no deployed-core request",
+  "files": [
+    {
+      "path": "lib/repofiles.js",
+      "bytes": 8025,
+      "canonicalParity": true,
+      "sha256": "84b8d9ca0b9c31e264aa6490cda2e51740dd3a77d81cdcf64bbd79a3020c629a"
+    },
+    {
+      "path": "docs/api-v1-reference.md",
+      "bytes": 198561,
+      "canonicalParity": true,
+      "sha256": "52942741859d5a4b489f6144da323d90d4f7f651aec18f88e49b26b9be6dcafd"
+    }
+  ],
+  "attributesInArchive": [
+    ".gitattributes"
+  ]
+}

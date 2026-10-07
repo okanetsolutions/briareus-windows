@@ -1,0 +1,47 @@
+[
+  {
+    "name": "valid-root",
+    "result": "ACCEPT",
+    "rawBytes": 2560
+  },
+  {
+    "name": "gzip-missing-footer",
+    "result": "REJECT",
+    "reason": "gzip missing EOF"
+  },
+  {
+    "name": "gzip-short-footer",
+    "result": "REJECT",
+    "reason": "gzip missing EOF"
+  },
+  {
+    "name": "gzip-truncated-deflate",
+    "result": "REJECT",
+    "reason": "gzip missing EOF"
+  },
+  {
+    "name": "gzip-bad-crc",
+    "result": "REJECT",
+    "reason": "Error -3 while decompressing data: incorrect data check"
+  },
+  {
+    "name": "gzip-bad-isize",
+    "result": "REJECT",
+    "reason": "Error -3 while decompressing data: incorrect length check"
+  },
+  {
+    "name": "gzip-concatenated",
+    "result": "REJECT",
+    "reason": "trailing gzip input"
+  },
+  {
+    "name": "gzip-trailing-junk",
+    "result": "REJECT",
+    "reason": "trailing gzip input"
+  },
+  {
+    "name": "gzip-forged-trailing-footer",
+    "result": "REJECT",
+    "reason": "trailing gzip input"
+  }
+]

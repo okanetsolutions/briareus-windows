@@ -1,0 +1,20 @@
+{
+  "sha": "2a972e9d6030bc57f8a3fcd041b1bacb242483ea",
+  "tree": [
+    ".gitattributes",
+    "src/hidden.cs",
+    "src/plain.cs",
+    "src/version.cs"
+  ],
+  "archive": [
+    "owner-project-c0ffee",
+    "owner-project-c0ffee/src",
+    "owner-project-c0ffee/src/plain.cs",
+    "owner-project-c0ffee/src/version.cs"
+  ],
+  "canonicalVersion": "// $Format:%H$\nclass Version {}\n",
+  "archiveVersion": "// 2a972e9d6030bc57f8a3fcd041b1bacb242483ea\nclass Version {}\n",
+  "canonicalSha256": "85c6b02dd24cc14354dcc497f42d04a0f8ab17d206a47ca65ebb155ead14edbc",
+  "archiveSha256": "355ff16b29ff6b617289fbe880ddf9e9cf2e8bfef091106e7f9d8ed0541b86b1",
+  "fallback": "Whole index uses canonical per-file reads because the TREE contains .gitattributes, even though the archive omits it."
+}

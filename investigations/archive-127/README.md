@@ -7,7 +7,9 @@ archive capability. The branch-only workflow runs it without a PR.
 
 The inspected core PR #122 is open at
 `cb38ed74572bd759df5db2c0c3316737e524ccf8` (2026-10-07).
-See the final investigation report and evidence files added after verification.
+See [REPORT.md](REPORT.md) and [evidence/SUMMARY.json](evidence/SUMMARY.json) for
+the native Windows results, processing design, capability/fallback rules and
+remaining work.
 
 ## Reproduce
 

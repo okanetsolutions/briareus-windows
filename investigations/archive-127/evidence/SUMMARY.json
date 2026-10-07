@@ -1,0 +1,63 @@
+{
+  "decision": "NO-GO",
+  "date": "2026-10-07",
+  "coreRepository": "nadinyamaui/briareus",
+  "corePr": 122,
+  "coreHead": "cb38ed74572bd759df5db2c0c3316737e524ccf8",
+  "coreState": "open, unmerged; unchanged on final recheck",
+  "windowsRun": {
+    "url": "https://github.com/okanetsolutions/briareus-windows/actions/runs/37689523528",
+    "head": "cf4536a9342b974ea57250cabaac15d1a71c0253",
+    "conclusion": "success means reproduced expected experiment outcomes, NOT safe for integration",
+    "os": "Microsoft Windows Server 2025 Datacenter x64",
+    "image": "windows-2025-vs2026 20260925.250.1",
+    "environment": {
+      "capabilityReason": "Strict gzip completion/consumption is unresolved; per-file fallback is required.",
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE",
+      "platform": "Microsoft Windows NT 10.0.26100.0",
+      "productionCapability": false,
+      "tar": "C:\\Windows\\system32\\tar.exe",
+      "powershell": "5.1.26100.33438",
+      "tarVersion": "bsdtar 3.8.4 - libarchive 3.8.4 zlib/1.2.13.1-motley liblzma/5.8.1 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled",
+      "clr": "4.0.30319.42000",
+      "tarPresent": true,
+      "nativeWindows": true
+    },
+    "cases": 68,
+    "outcomes": {
+      "ACCEPT": 7,
+      "REJECT": 59,
+      "CANCEL": 1,
+      "KILL": 1
+    },
+    "unexpectedResults": 0,
+    "allJobDirectoriesCleaned": true,
+    "unsafeAcceptedCases": [
+      "gzip-concatenated",
+      "gzip-forged-trailing-footer"
+    ],
+    "largestCompressedStreamingWrite": 314572800,
+    "largestRawWrite": 536870912
+  },
+  "linuxRun": {
+    "nativeWindows": false,
+    "cases": 68,
+    "unexpectedResults": 0,
+    "unsafeAcceptedCases": [
+      "gzip-forged-trailing-footer"
+    ]
+  },
+  "registeredSshServers": [],
+  "missingEvidence": [
+    "Windows 10 1809 / Windows 11 desktop runs",
+    "native Win32 UI and branch/account-switch QA",
+    "deployed-core archive transfer and HTTP transport integration",
+    "full-repository canonical search/index parity and performance comparison",
+    "Job Object process-tree/crash ownership"
+  ],
+  "initialFailedWindowsRun": {
+    "url": "https://github.com/okanetsolutions/briareus-windows/actions/runs/37689082685",
+    "reason": "Git for Windows inherited EOL conversion made ordinary-file parity assertion fail; fixture now writes LF and pins Git EOL settings"
+  },
+  "previousSuccessfulWindowsRun": "https://github.com/okanetsolutions/briareus-windows/actions/runs/37689243022"
+}
