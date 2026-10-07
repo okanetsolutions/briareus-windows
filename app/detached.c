@@ -148,6 +148,9 @@ void detached_close_all(void) {
         if (g_window_count == before) break;
     }
 }
+void detached_enable(HWND except, bool enabled) {
+    for (size_t i = 0; i < g_window_count; i++) if (g_windows[i]->hwnd != except) EnableWindow(g_windows[i]->hwnd, enabled);
+}
 void detached_themed(void) {
     for (size_t i = 0; i < g_window_count; i++) {
         theme_apply_window(g_windows[i]->hwnd);

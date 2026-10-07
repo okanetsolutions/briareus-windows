@@ -40,9 +40,21 @@ static int g_browser_width;    // the docked browser's width once the divider wa
 static bool g_browser_expanded, g_dragging_splitter;
 static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
+static int g_modal;            // dialogs open
 
 HWND app_window(void) { return g_main; }
 HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
+// The dialog disables its owner itself, and enables it again before it hands the foreground back.
+void app_modal_begin(HWND owner) {
+    if (g_modal++) return;
+    if (g_main && g_main != owner) EnableWindow(g_main, FALSE);
+    detached_enable(owner, false);
+}
+void app_modal_end(void) {
+    if (--g_modal) return;
+    if (g_main) EnableWindow(g_main, TRUE);
+    detached_enable(NULL, true);
+}
 Pane *app_sidebar_pane(void) { return g_sidebar; }
 Pane *app_detail_pane(void) { return g_detail; }
 Pane *app_panel_pane(void) { return g_panel; }
@@ -254,7 +266,13 @@ void app_push_detail(Screen *screen) {
     pane_push(overlay_shown() ? g_overlay : g_detail, screen); g_narrow_detail = true; layout();
 }
 void app_push_from(Screen *from, Screen *screen) {
-    if (from && from->pane && detached_pane(from->pane)) { if (!raise_detached(screen)) pane_push(from->pane, screen); return; }
+    if (from && from->pane && detached_pane(from->pane)) {
+        // The window's own page, asked for from deeper in that window, comes back to the top there.
+        Pane *held = screen->id ? detached_find(screen->id) : NULL;
+        if (held == from->pane) { screen->vt->destroy(screen); pane_pop_to_root(held); return; }
+        if (!raise_detached(screen)) pane_push(from->pane, screen);
+        return;
+    }
     app_push_detail(screen);
 }
 /// The detail's page moves, as it is, into a window of its own over where it was, and the detail empties.
@@ -298,7 +316,9 @@ static HRESULT task_dialog(const char *title, const char *message, const TASKDIA
     cfg.pButtons = buttons; cfg.cButtons = count; cfg.nDefaultButton = buttons[0].nButtonID;
     cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
     int button = 0;
+    app_modal_begin(cfg.hwndParent);
     HRESULT hr = g_task_dialog ? g_task_dialog(&cfg, &button, NULL, NULL) : E_NOTIMPL;
+    app_modal_end();
     *chosen = button;
     free(wt); free(wm);
     return hr;
@@ -312,7 +332,10 @@ bool app_confirm(const char *title, const char *message, const char *continue_la
     free(label);
     if (FAILED(hr)) {
         wchar_t *wt = utf8_to_wide(title), *wm = utf8_to_wide(message ? message : "");
-        int r = MessageBoxW(app_dialog_owner(), *wm ? wm : wt, wt, MB_OKCANCEL | (destructive ? MB_ICONWARNING : MB_ICONQUESTION));
+        HWND owner = app_dialog_owner();
+        app_modal_begin(owner);
+        int r = MessageBoxW(owner, *wm ? wm : wt, wt, MB_OKCANCEL | (destructive ? MB_ICONWARNING : MB_ICONQUESTION));
+        app_modal_end();
         free(wt); free(wm);
         return r == IDOK;
     }
@@ -331,7 +354,10 @@ int app_choose(const char *title, const char *message, const char *const *choice
 }
 void app_alert(const char *title, const char *message) {
     wchar_t *wt = utf8_to_wide(title), *wm = utf8_to_wide(message ? message : "");
-    MessageBoxW(app_dialog_owner(), wm, wt, MB_OK | MB_ICONINFORMATION);
+    HWND owner = app_dialog_owner();
+    app_modal_begin(owner);
+    MessageBoxW(owner, wm, wt, MB_OK | MB_ICONINFORMATION);
+    app_modal_end();
     free(wt); free(wm);
 }
 

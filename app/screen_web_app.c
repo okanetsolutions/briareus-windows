@@ -63,7 +63,7 @@ static void web_app_header(Screen *base, HeaderInfo *info) {
     r->glyph = 0xE72C; r->action = ACT_RELOAD; r->enabled = g_web[s->app] && webview_ready(g_web[s->app]);
     r->tip = a->reload_tip;
     HeaderButton *o = &info->buttons[info->button_count++];
-    o->glyph = 0xE8A7; o->action = ACT_BROWSER; o->enabled = true; o->tip = "Open in your browser";
+    o->glyph = 0xE774; o->action = ACT_BROWSER; o->enabled = true; o->tip = "Open in your browser";
 }
 
 static void web_app_action(Screen *base, int action, intptr_t arg, POINT pt) {

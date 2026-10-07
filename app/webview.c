@@ -153,6 +153,8 @@ static HRESULT WINAPI controller_created(Handler *h, HRESULT hr, void *controlle
         handler_release(rr);
         COM(core, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER, HRESULT (WINAPI *)(void *, LPCWSTR, int))(core, L"*", RESOURCE_CONTEXT_ALL);
     }
+    // The page may have moved to another window while the browser started.
+    COM(controller, CTRL_PUT_PARENT_WINDOW, HRESULT (WINAPI *)(void *, HWND))(controller, wv->parent);
     COM(controller, CTRL_PUT_BOUNDS, HRESULT (WINAPI *)(void *, RECT))(controller, wv->bounds);
     COM(controller, CTRL_PUT_IS_VISIBLE, HRESULT (WINAPI *)(void *, BOOL))(controller, wv->shown);
     if (FAILED(hr = COM(core, CORE_NAVIGATE, HRESULT (WINAPI *)(void *, LPCWSTR))(core, wv->url))) fail(wv, "The browser would not open the address", hr);

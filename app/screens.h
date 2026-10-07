@@ -287,6 +287,10 @@ void app_set_browser_expanded(bool expanded);
 HWND app_window(void);
 /// The window a dialog opens over: the one of ours in front (a conversation in a window of its own), else the main one.
 HWND app_dialog_owner(void);
+/// Around a dialog over `owner`: every other window of ours waits for it too, so none docks, pops out or closes the
+/// screen that asked while its dialog is open. Nested dialogs count.
+void app_modal_begin(HWND owner);
+void app_modal_end(void);
 /// False when the detail's page keeps its unsaved changes rather than make way for another.
 bool app_detail_can_leave(void);
 /// Opens what a screen links to over it: in its window when it is in one of its own, else as app_push_detail does.
@@ -312,6 +316,8 @@ bool detached_any_shown(void);
 /// They all close (signing out, quitting) or take a new theme.
 void detached_close_all(void);
 void detached_themed(void);
+/// Enables or disables every one of them but `except`.
+void detached_enable(HWND except, bool enabled);
 
 /// A confirmation with one continue button; true when confirmed.
 bool app_confirm(const char *title, const char *message, const char *continue_label, bool destructive);

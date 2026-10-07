@@ -71,6 +71,14 @@ LRESULT dialog_ctl_color(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
     return 0;
 }
 
+/// A dialog box over one of our windows keeps the others waiting too (app_modal_begin); one asked from elsewhere does not.
+static INT_PTR modal_box(int id, HWND owner, DLGPROC proc, LPARAM param) {
+    if (owner) app_modal_begin(owner);
+    INT_PTR result = DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(id), owner, proc, param);
+    if (owner) app_modal_end();
+    return result;
+}
+
 // MARK: - Drawing the dialogs' own controls
 
 /// Edits lose their system border and get a rounded frame painted by the dialog, focused in the accent colour.
@@ -435,7 +443,7 @@ static INT_PTR CALLBACK new_conversation_proc(HWND dialog, UINT msg, WPARAM wp, 
 bool dialog_new_conversation(HWND owner, const Project *project, Session *started) {
     NewConversation d; memset(&d, 0, sizeof d);
     d.project = project; d.started = started;
-    INT_PTR result = DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_NEW_CONVERSATION), owner, new_conversation_proc, (LPARAM)&d);
+    INT_PTR result = modal_box(IDD_NEW_CONVERSATION, owner, new_conversation_proc, (LPARAM)&d);
     request_cancel(&d.req_runtimes); request_cancel(&d.req_branches); request_cancel(&d.req_start);
     if (d.voice.note) voice_free(d.voice.note);
     if (d.has_catalog) runtime_catalog_free(&d.catalog);
@@ -485,12 +493,12 @@ static INT_PTR CALLBACK rename_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp)
 }
 char *dialog_text(HWND owner, const char *caption, const char *label, const char *ok_label, const char *current) {
     RenameState r = { caption, label, ok_label, current ? current : "", NULL, false };
-    if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_RENAME), owner, rename_proc, (LPARAM)&r) != IDOK) { free(r.result); return NULL; }
+    if (modal_box(IDD_RENAME, owner, rename_proc, (LPARAM)&r) != IDOK) { free(r.result); return NULL; }
     return r.result;
 }
 char *dialog_password(HWND owner, const char *caption, const char *label) {
     RenameState r = { caption, label, "OK", "", NULL, true };
-    if (DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_RENAME), owner, rename_proc, (LPARAM)&r) != IDOK) {
+    if (modal_box(IDD_RENAME, owner, rename_proc, (LPARAM)&r) != IDOK) {
         if (r.result) SecureZeroMemory(r.result, strlen(r.result));
         free(r.result); return NULL;
     }
@@ -549,7 +557,7 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
 bool dialog_action_input(HWND owner, const BoardAction *action, int number, char **input) {
     InputState s; memset(&s, 0, sizeof s);
     s.action = action; s.number = number;
-    INT_PTR result = DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_ACTION_INPUT), owner, input_proc, (LPARAM)&s);
+    INT_PTR result = modal_box(IDD_ACTION_INPUT, owner, input_proc, (LPARAM)&s);
     if (s.voice.note) voice_free(s.voice.note);
     if (result != IDOK) { free(s.input); return false; }
     *input = s.input ? s.input : xstrdup("");
@@ -615,7 +623,7 @@ static INT_PTR CALLBACK meet_prompt_proc(HWND dialog, UINT msg, WPARAM wp, LPARA
 bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_prompt, const char *default_first,
                            char **prompt, char **first_message) {
     MeetPromptState s = { project, default_prompt, default_first, prompt, first_message };
-    return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_MEET_PROMPT), owner, meet_prompt_proc, (LPARAM)&s) == IDOK;
+    return modal_box(IDD_MEET_PROMPT, owner, meet_prompt_proc, (LPARAM)&s) == IDOK;
 }
 
 // MARK: - Edit an issue or pull request
@@ -676,5 +684,5 @@ static INT_PTR CALLBACK edit_item_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM 
 }
 bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body) {
     EditItemState s = { caption, title, body };
-    return DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_EDIT_ITEM), owner, edit_item_proc, (LPARAM)&s) == IDOK;
+    return modal_box(IDD_EDIT_ITEM, owner, edit_item_proc, (LPARAM)&s) == IDOK;
 }
