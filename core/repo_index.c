@@ -280,16 +280,19 @@ void repo_index_put(RepoIndex *index, const char *path, long long size, const ch
     } else {
         file = index->order[at];
         free(index->files[file].content);
+        index->bytes -= index->files[file].len;
     }
     index->files[file].size = size;
     index->files[file].content = xstrndup(content ? content : "", content ? len : 0);
     index->files[file].len = content ? len : 0;
+    index->bytes += index->files[file].len;
 }
 bool repo_index_remove(RepoIndex *index, const char *path) {
     bool found = false;
     size_t at = path ? index_slot(index, path, &found) : 0;
     if (!found) return false;
     size_t file = index->order[at];
+    index->bytes -= index->files[file].len;
     index_file_free(&index->files[file]);
     memmove(&index->files[file], &index->files[file + 1], (index->count - file - 1) * sizeof *index->files);
     memmove(&index->order[at], &index->order[at + 1], (index->count - at - 1) * sizeof *index->order);
@@ -382,11 +385,13 @@ size_t repo_index_reconcile(RepoIndex *index, const RepoTree *tree, char *const 
         repo_index_remove(index, path);
         free(path);
     }
-    size_t n = 0, cap = 0;
+    size_t n = 0, cap = 0, bytes = index->bytes;
     char **out = NULL;
     for (size_t i = 0; i < tree->count && index->count + n < REPO_INDEX_MAX_FILES; i++) {
         const RepoEntry *e = &tree->entries[i];
         if (e->folder || !repo_indexable(e->path, e->size) || repo_index_find(index, e->path) >= 0) continue;
+        // A size the tree does not give counts for nothing here; the file is held to the limit once read.
+        if (e->size > 0) { if (bytes > REPO_INDEX_MAX_BYTES || (unsigned long long)e->size > REPO_INDEX_MAX_BYTES - bytes) continue; bytes += (size_t)e->size; }
         if (n == cap) { cap = cap ? cap * 2 : 64; out = xrealloc(out, cap * sizeof *out); }
         out[n++] = xstrdup(e->path);
     }
@@ -469,7 +474,7 @@ RepoTextHit *repo_index_find_text(const RepoIndex *index, const char *query, siz
             (*total)++;
             if (*count < limit) {
                 if (*count == cap) { cap = cap ? cap * 2 : 32; out = xrealloc(out, cap * sizeof *out); }
-                out[(*count)++] = (RepoTextHit){ f, line, i - line_start };
+                out[(*count)++] = (RepoTextHit){ f, line, i - line_start, line_start };
             }
             // One hit per line: the rest of it is skipped.
             const char *nl = memchr(s + i, '\n', n - i);

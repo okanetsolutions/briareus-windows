@@ -165,6 +165,30 @@ static void test_keeps_up_with_the_tree(void) {
     repo_index_free(&x); repo_tree_free(&t);
 }
 
+static void test_holds_to_its_byte_limit(void) {
+    RepoIndex x; repo_index_init(&x);
+    repo_index_put(&x, "a.php", 1, "abc", 3);
+    repo_index_put(&x, "b.php", 1, "de", 2);
+    CHECK_INT(x.bytes, 5);
+    repo_index_put(&x, "a.php", 1, "a", 1);
+    CHECK_INT(x.bytes, 3);
+    repo_index_remove(&x, "b.php");
+    CHECK_INT(x.bytes, 1);
+    // A tree of 1 MB files is read only as far as the limit allows, the index's own bytes counted.
+    Str s; str_init(&s);
+    str_appendz(&s, "{\"entries\":[");
+    for (int i = 0; i < 300; i++) str_appendf(&s, "%s{\"path\":\"f%d.php\",\"type\":\"blob\",\"size\":1048576}", i ? "," : "", i);
+    str_appendz(&s, ",{\"path\":\"a.php\",\"type\":\"blob\",\"size\":1},{\"path\":\"small.php\",\"type\":\"blob\",\"size\":-1}]}");
+    Json *j = json_parse(s.data, s.len); str_free(&s);
+    RepoTree t; CHECK(repo_tree_parse(j, &t)); json_free(j);
+    char **fetch; size_t n = repo_index_reconcile(&x, &t, NULL, 0, &fetch);
+    // 191 whole megabytes fit beside a.php's byte; the file of unknown size is read and held to the limit then.
+    CHECK_INT(n, 192);
+    if (n == 192) CHECK_STR(fetch[191], "small.php");
+    str_array_free(fetch, n);
+    repo_index_free(&x); repo_tree_free(&t);
+}
+
 static void test_reads_a_commit_for_walking_back(void) {
     Json *j = json_parsez("{\"commit\":{\"sha\":\"c2\",\"parents\":[\"c1\",\"m\"]},\"files\":[{\"filename\":\"a.php\"},"
                           "{\"filename\":\"new.php\",\"previousFilename\":\"old.php\"},{\"status\":\"x\"}],\"truncated\":true}");
@@ -210,6 +234,7 @@ static void test_searches_symbols_and_text(void) {
     CHECK_INT(total, 3); CHECK_INT(n, 2);
     if (n == 2) {
         CHECK_STR(x.files[hits[0].file].path, "app/Http/UserController.php"); CHECK_INT(hits[0].line, 3); CHECK_INT(hits[0].column, 11);
+        CHECK_INT(hits[0].start, 29);
         CHECK_STR(x.files[hits[1].file].path, "app/UserRepository.php"); CHECK_INT(hits[1].line, 3);
     }
     free(hits);
@@ -228,6 +253,7 @@ void repo_index_tests(void) {
     test_run("index finds declarations in other languages", test_finds_declarations_in_other_languages);
     test_run("index keeps files in order and on disk", test_keeps_files_in_order_and_on_disk);
     test_run("index keeps up with the tree", test_keeps_up_with_the_tree);
+    test_run("index holds to its byte limit", test_holds_to_its_byte_limit);
     test_run("index reads a commit for walking back", test_reads_a_commit_for_walking_back);
     test_run("index searches symbols and text", test_searches_symbols_and_text);
 }

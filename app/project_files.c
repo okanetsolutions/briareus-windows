@@ -244,6 +244,9 @@ static void tree_done(void *owner, Request *req) {
 // MARK: - The index
 
 static char *index_key(const ProjectFiles *p) { return xstrfmt("repo-index:%s@%s", p->repo, p->ref ? p->ref : ""); }
+/// The commit the index's files are at, for walking back to: the one it was finished at, else the one a read cut short
+/// was at (the files it lacks are read anyway).
+static const char *index_base(const ProjectFiles *p) { return p->index.sha ? p->index.sha : p->index.partial; }
 
 /// Reading the index from disk, off the UI thread; `cancelled` when its tab went first.
 typedef struct IndexLoad { ProjectFiles *p; char *key; RepoIndex index; bool found, cancelled; } IndexLoad;
@@ -276,14 +279,15 @@ typedef struct { char *key, *bytes; size_t len; } IndexSave;
 static void save_work(void *ctx) { IndexSave *s = ctx; cache_store_bytes(g_store.cache, s->bytes, s->len, s->key); }
 static void save_done(void *ctx) { IndexSave *s = ctx; free(s->key); free(s->bytes); free(s); }
 static void index_save(ProjectFiles *p) {
-    if (!p->index_read || !p->index_dirty) return;
+    // Signed out, or refused (a 401): the cache was just cleared, and the repository's source is not written back.
+    if (!p->index_read || !p->index_dirty || !store_connected()) return;
     // Mid-read, it is saved as partial: the next read takes it up where this one stopped.
     if (p->target && p->queue) { set_string(&p->index.sha, NULL); set_string(&p->index.partial, p->target); }
     IndexSave *s = xcalloc(1, sizeof *s);
     s->key = index_key(p);
     s->bytes = repo_index_serialize(&p->index, &s->len);
     p->index_dirty = false;
-    async_run(save_work, save_done, s);
+    async_run_cache(save_work, save_done, s);
 }
 
 static void symbols_refresh(ProjectFiles *p) {
@@ -323,7 +327,9 @@ static void fetch_done(void *owner, Request *req) {
     if (!req->ok && !skipped) { sync_fail(p, req); return; }
     RepoFile file;
     if (req->ok && repo_file_parse(req->result, &file)) {
-        if (file.content) { repo_index_put(&p->index, file.path, file.size, file.content, strlen(file.content)); p->symbols_stale = true; }
+        // One the tree gave no size for is held to the index's limit here.
+        size_t len = file.content ? strlen(file.content) : 0;
+        if (file.content && p->index.bytes <= REPO_INDEX_MAX_BYTES && len <= REPO_INDEX_MAX_BYTES - p->index.bytes) { repo_index_put(&p->index, file.path, file.size, file.content, len); p->symbols_stale = true; }
         repo_file_free(&file);
     }
     p->fetched++; p->index_dirty = true;
@@ -383,7 +389,7 @@ static void walk_done(void *owner, Request *req) {
     free(paths);
     p->walk_steps++;
     // A merge's files are against its first parent, so walking first parents back sees every change on the branch.
-    if (parent && str_eq(parent, p->index.sha)) fetch_start(p);
+    if (parent && str_eq(parent, index_base(p))) fetch_start(p);
     else if (truncated || !parent || p->walk_steps >= WALK_MAX) index_rebuild(p);
     else { set_string(&p->walk_at, parent); walk_next(p); }
     free(parent);
@@ -403,7 +409,7 @@ static void index_sync(ProjectFiles *p) {
             IndexLoad *l = xcalloc(1, sizeof *l);
             l->p = p; l->key = index_key(p);
             p->loading = l;
-            async_run(load_work, load_done, l);
+            async_run_cache(load_work, load_done, l);
         }
         return;
     }
@@ -411,8 +417,8 @@ static void index_sync(ProjectFiles *p) {
     if (str_eq(p->index.sha, p->tree.sha)) return;
     set_string(&p->index_error, NULL);
     p->target = xstrdup(p->tree.sha);
-    if (p->index.sha && store_supports("commit")) { p->walk_steps = 0; set_string(&p->walk_at, p->target); walk_next(p); }
-    else if (str_eq(p->index.partial, p->target)) fetch_start(p);
+    if (!p->index.sha && str_eq(p->index.partial, p->target)) fetch_start(p);
+    else if (index_base(p) && store_supports("commit")) { p->walk_steps = 0; set_string(&p->walk_at, p->target); walk_next(p); }
     else index_rebuild(p);
     relayout(p);
 }
@@ -746,10 +752,8 @@ static void layout_find(ProjectFiles *p, Doc *doc, int x, int w) {
 
 /// The text of a hit's line, its leading spaces dropped and cut at 200 bytes.
 static char *hit_line(const RepoIndexFile *f, const RepoTextHit *h) {
-    size_t start = 0, n = f->len;
+    size_t n = f->len, start = h->start < n ? h->start : n;
     const char *s = f->content;
-    int line = 1;
-    for (size_t i = 0; line < h->line && i < n; i++) if (s[i] == '\n') { line++; start = i + 1; }
     while (start < n && (s[start] == ' ' || s[start] == '\t')) start++;
     size_t end = start;
     while (end < n && s[end] != '\n' && s[end] != '\r' && end - start < 200) end++;

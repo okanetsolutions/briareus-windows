@@ -85,6 +85,8 @@ char *request_error_or_unexpected(const Request *req);
 /// Any work on a thread with a UI-thread completion.
 typedef void (*AsyncWork)(void *ctx);
 void async_run(AsyncWork work, AsyncWork done, void *ctx);
+/// The same for work on `g_store.cache`: store_shutdown waits for it before freeing the cache.
+void async_run_cache(AsyncWork work, AsyncWork done, void *ctx);
 
 /// Called by the main window for WM_APP_REQUEST_DONE and WM_APP_ASYNC_DONE.
 void store_handle_message(UINT msg, WPARAM wp, LPARAM lp);

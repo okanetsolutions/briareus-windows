@@ -86,8 +86,9 @@ CodeToken *code_lexer_line(CodeLexer *lexer, const char *line, size_t len, size_
 
 // MARK: - Local index
 
-/// The most files an index holds; GitHub's rate limit makes more a long wait.
-enum { REPO_INDEX_MAX_FILES = 5000 };
+/// The most files an index holds; GitHub's rate limit makes more a long wait. And the most bytes of source: the cache
+/// reads back no file over 256 MB, so an index past that would be read anew on every launch.
+enum { REPO_INDEX_MAX_FILES = 5000, REPO_INDEX_MAX_BYTES = 192 * 1024 * 1024 };
 /// Whether a file of the tree is worth indexing: source or text in a language the colours know, at most 1 MB, and not
 /// under a folder of dependencies or build output (vendor/, node_modules/, dist/, ...), minified, a source map or a lock file.
 bool repo_indexable(const char *path, long long size);
@@ -114,6 +115,7 @@ typedef struct {
     // Files keep their place as others are added, so the symbols' `file` stays right while an index is filled;
     // removing one moves those after it, and repo_index_symbols is then due.
     RepoIndexFile *files; size_t count, cap;
+    size_t bytes;         // the files' contents, together
     size_t *order;        // indices into `files` by path
     RepoSymbol *symbols; size_t symbol_count;  // from repo_index_symbols
 } RepoIndex;
@@ -130,7 +132,7 @@ char *repo_index_serialize(const RepoIndex *index, size_t *len);
 bool repo_index_parse(const char *data, size_t len, RepoIndex *out);
 /// Brings the index in line with a tree before it is read at the tree's commit: drops the files the tree no longer has
 /// or that are not indexable, and those `changed` names (they are read again), then lists the indexable files of the
-/// tree the index lacks, up to REPO_INDEX_MAX_FILES in all. Returns how many paths `*fetch` holds.
+/// tree the index lacks, up to REPO_INDEX_MAX_FILES and REPO_INDEX_MAX_BYTES (as the tree gives sizes) in all. Returns how many paths `*fetch` holds.
 size_t repo_index_reconcile(RepoIndex *index, const RepoTree *tree, char *const *changed, size_t changed_count, char ***fetch);
 
 /// What `GET /commits/{sha}` says for walking back to the index's commit: the paths it changed (old names of renamed
@@ -140,8 +142,8 @@ bool repo_commit_changes(const Json *value, char ***paths, size_t *count, char *
 /// The declarations a query finds, best first, as indices into `index->symbols`: classes alone when `classes` is set.
 /// Matched against the name as Go to File matches a file's name.
 size_t *repo_index_find_symbols(const RepoIndex *index, const char *query, bool classes, size_t limit, size_t *count);
-/// A line holding the text searched for.
-typedef struct { size_t file; int line; size_t column; } RepoTextHit;
+/// A line holding the text searched for; `start` is where the line begins in the file's content.
+typedef struct { size_t file; int line; size_t column, start; } RepoTextHit;
 /// The lines holding `query`, case ignored, file by file in path order, at most `limit`; `*total` counts them all.
 RepoTextHit *repo_index_find_text(const RepoIndex *index, const char *query, size_t limit, size_t *count, size_t *total);
 
