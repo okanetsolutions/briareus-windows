@@ -391,8 +391,10 @@ static void walk_done(void *owner, Request *req) {
     free(paths);
     p->walk_steps++;
     // A merge's files are against its first parent, so walking first parents back sees every change on the branch.
-    if (parent && str_eq(parent, index_base(p))) fetch_start(p);
-    else if (truncated || !parent || p->walk_steps >= WALK_MAX) index_rebuild(p);
+    // A truncated commit's list misses files, so even one right after the base needs the whole tree read again.
+    if (truncated || !parent) index_rebuild(p);
+    else if (str_eq(parent, index_base(p))) fetch_start(p);
+    else if (p->walk_steps >= WALK_MAX) index_rebuild(p);
     else { set_string(&p->walk_at, parent); walk_next(p); }
     free(parent);
 }
@@ -542,8 +544,9 @@ static LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
         break;
     }
     case WM_CHAR:
-        // Enter, Escape and the control characters the shortcuts above leave behind.
-        if (wp == '\r' || wp == 0x1B || (ctrl && wp < 0x20)) return 0;
+        // Enter, Escape and the control characters the shortcuts above leave behind (^N, ^P, ^O, ^F, ^A);
+        // the rest reach the edit, so Ctrl+V, Ctrl+C, Ctrl+X and Ctrl+Z still paste, copy, cut and undo.
+        if (wp == '\r' || wp == 0x1B || (ctrl && (wp == 0x0E || wp == 0x10 || wp == 0x0F || wp == 0x06 || wp == 0x01))) return 0;
         break;
     case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
     case WM_NCDESTROY: RemoveWindowSubclass(hwnd, find_proc, id); break;
@@ -595,7 +598,7 @@ void project_files_place(ProjectFiles *p, const RECT *content, int scroll_y, boo
     if (!p->find) return;
     if (!shown || !content || !p->find_laid) { ShowWindow(p->find, SW_HIDE); return; }
     RECT rc; GetClientRect(pane_hwnd(p->host->pane), &rc);
-    int m = (rc.right - rc.left - pane_content_width(p->host->pane)) / 2;
+    int m = (rc.right - rc.left - pane_content_width(p->host->pane)) / 2 - pane_scroll_x(p->host->pane);
     RECT r = { content->left + m + p->find_rc.left, content->top + p->find_rc.top - scroll_y, content->left + m + p->find_rc.right, content->top + p->find_rc.bottom - scroll_y };
     RECT visible;
     if (!IntersectRect(&visible, &r, content)) { ShowWindow(p->find, SW_HIDE); return; }

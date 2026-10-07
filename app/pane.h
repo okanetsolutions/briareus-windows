@@ -113,6 +113,8 @@ int pane_content_width(Pane *pane);
 RECT pane_content_rect(Pane *pane);
 /// Content y of the top of the visible area.
 int pane_scroll_y(Pane *pane);
+/// Content x of the left of the visible area.
+int pane_scroll_x(Pane *pane);
 /// Scrolls so a content y is visible near the top.
 void pane_scroll_to(Pane *pane, int content_y);
 /// A screen asks the app to go to the foreground of the other pane, or to close itself.
