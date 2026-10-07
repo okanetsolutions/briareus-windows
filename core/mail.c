@@ -76,10 +76,22 @@ static bool oauth_web_url(const char *uri) {
 }
 static bool redirect_safe(const char *uri) {
     if (oauth_web_url(uri)) return !strchr(uri, '#') && !strchr(uri, '?');
-    if (!str_has_prefix(uri, "http://127.0.0.1:") && !str_has_prefix(uri, "http://localhost:")) return false;
-    const char *port = strchr(uri + 7, ':') + 1; char *end; long n = strtol(port, &end, 10);
-    if (n < 1 || n > 65535 || end == port || (*end && *end != '/')) return false;
-    for (const char *p = uri; *p; p++) if ((unsigned char)*p <= 32 || *p == '@' || *p == '?' || *p == '#' || *p == '\\') return false;
+    if (!str_has_prefix(uri, "http://")) return false;
+    const char *host = uri + 7, *end;
+    if (str_has_prefix(host, "127.0.0.1")) end = host + 9;
+    else if (str_has_prefix(host, "localhost")) end = host + 9;
+    else if (str_has_prefix(host, "[::1]")) end = host + 5;
+    else return false;
+    if (*end == ':') {
+        const char *port = ++end; unsigned n = 0;
+        while (*end >= '0' && *end <= '9') {
+            n = n * 10 + (unsigned)(*end++ - '0');
+            if (n > 65535) return false;
+        }
+        if (end == port || n == 0) return false;
+    }
+    if (*end && *end != '/') return false;
+    for (const char *p = uri; *p; p++) if ((unsigned char)*p <= 32 || (unsigned char)*p == 127 || *p == '@' || *p == '?' || *p == '#' || *p == '\\') return false;
     return true;
 }
 bool mail_sign_in_parse(const Json *j, const char *provider, int id, const MailAccounts *before, MailSignIn *s) {
@@ -114,7 +126,15 @@ static char *decode(const char *p, size_t n) {
 Json *mail_sign_in_finish(const MailSignIn *s, const char *url, double now) {
     if (!s->state || s->server_finish || now >= s->expires_at || !isfinite(now) || !url || strchr(url, '#')) return NULL;
     const char *q = strchr(url, '?');
-    if (!q || (size_t)(q - url) != strlen(s->redirect_uri) || strncmp(url, s->redirect_uri, (size_t)(q - url))) return NULL;
+    if (!q) return NULL;
+    size_t destination = (size_t)(q - url), expected = strlen(s->redirect_uri);
+    const char *path = strchr(s->redirect_uri + (str_has_prefix(s->redirect_uri, "https://") ? 8 : 7), '/');
+    // Browsers serialize an empty HTTP(S) path as /; nonempty paths still match exactly.
+    if (!path || !path[1]) {
+        if (path) expected--;
+        if (destination && url[destination - 1] == '/') destination--;
+    }
+    if (destination != expected || strncmp(url, s->redirect_uri, expected)) return NULL;
     char *state = NULL, *code = NULL; bool ok = true;
     for (const char *p = q + 1; *p;) {
         const char *end = strchr(p, '&'); if (!end) end = p + strlen(p);
@@ -132,6 +152,7 @@ Json *mail_sign_in_finish(const MailSignIn *s, const char *url, double now) {
     free(state); free(code); return body;
 }
 bool mail_sign_in_completed(const MailSignIn *s, const MailAccounts *a) {
+    if (!s->server_finish) return false;
     for (size_t i = 0; i < a->count; i++) {
         const MailAccount *current = &a->accounts[i], *old = mail_account_find(&s->before, current->id);
         if (s->account_id && current->id != s->account_id) continue;
@@ -140,7 +161,8 @@ bool mail_sign_in_completed(const MailSignIn *s, const MailAccounts *a) {
     }
     return false;
 }
-const char *mail_error_message(int status, bool finishing) {
+const char *mail_error_message(int status, bool finishing, const char *detail) {
+    if (status == 400 && !finishing && str_eq(detail, "Label too long")) return "Mailbox labels must be at most 200 characters after trimming whitespace.";
     switch (status) {
     case 400: return finishing ? "Sign-in expired, was already used, or was refused. Start sign-in again." : "The server refused these settings; check its OAuth and encryption configuration.";
     case 401: return "This token expired or was revoked. Reconnect to the server.";

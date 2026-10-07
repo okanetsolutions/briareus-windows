@@ -40,6 +40,6 @@ void mail_sign_in_free(MailSignIn *sign_in);
 Json *mail_sign_in_finish(const MailSignIn *sign_in, const char *url, double now_ms);
 /// No updatedAt heuristic: normal syncs update that timestamp too.
 bool mail_sign_in_completed(const MailSignIn *sign_in, const MailAccounts *current);
-/// Safe user-facing errors without echoing OAuth codes, URLs or server error payloads.
-const char *mail_error_message(int status, bool finishing);
+/// Safe user-facing errors; only recognized validation details affect the message.
+const char *mail_error_message(int status, bool finishing, const char *detail);
 #endif

@@ -20,7 +20,7 @@ typedef struct {
     Request *read, *write;
     char *error, *notice, *starting_provider;
     int starting_id, failures;
-    bool shown, loaded, blocked, modal, retired;
+    bool shown, loaded, blocked, modal, retired, read_error;
     ULONGLONG next_read, retry_until;
 } MailScreen;
 
@@ -35,6 +35,9 @@ int mail_settings_retry_ms(int failures, double retry_after) {
         delay = retry_after >= (double)INT_MAX / 1000 ? INT_MAX : (int)ceil(retry_after * 1000);
     }
     return delay;
+}
+static void set_error(MailScreen *s, const char *text, bool from_read) {
+    set_text(&s->error, text); s->read_error = from_read;
 }
 static bool current(MailScreen *s, Request *r) { return mail_settings_result_current(s->shown, r); }
 static bool can_write(MailScreen *s, const char *op) { return s->shown && !s->blocked && !s->write && !s->sign_in.state && !s->read && GetTickCount64() >= s->retry_until && store_supports(op); }
@@ -52,7 +55,7 @@ static void arm(MailScreen *s, int delay) {
 static bool syncing(MailScreen *s) { for (size_t i = 0; i < s->accounts.count; i++) if (s->accounts.accounts[i].syncing) return true; return false; }
 static void stop_waiting(MailScreen *s) { mail_sign_in_free(&s->sign_in); }
 static void failed(MailScreen *s, Request *r, bool finish) {
-    set_text(&s->error, mail_error_message(r->error.status, finish));
+    set_error(s, mail_error_message(r->error.status, finish, r->error.message), str_eq(r->operation, "settings_mail_accounts"));
     if (r->error.status == 401 || r->error.status == 403 || r->error.status == 404) s->blocked = true;
     if (r->error.status == 429) {
         s->failures++;
@@ -74,9 +77,10 @@ static void read_done(void *owner, Request *r) {
             arm(s, delay);
         }
     } else if (!mail_accounts_parse(r->result, &fresh)) {
-        set_text(&s->error, "The server returned an unexpected mail account list.");
+        set_error(s, "The server returned an unexpected mail account list.", true);
         s->blocked = true;
     } else {
+        if (s->read_error) set_error(s, NULL, false);
         s->loaded = true; s->failures = 0; s->next_read = 0; s->retry_until = 0;
         if (s->sign_in.state && mail_sign_in_completed(&s->sign_in, &fresh)) {
             stop_waiting(s); set_text(&s->notice, "The account list now reflects a connected mailbox.");
@@ -101,9 +105,9 @@ static void start_done(void *owner, Request *r) {
     else if (!mail_sign_in_parse(r->result, s->starting_provider, s->starting_id, &s->accounts, &s->sign_in)
              || now_ms() >= s->sign_in.expires_at
              || (!s->sign_in.server_finish && !store_supports("finish_mail_account"))) {
-        stop_waiting(s); set_text(&s->error, "The server returned an invalid or expired sign-in. Start again.");
+        stop_waiting(s); set_error(s, "The server returned an invalid or expired sign-in. Start again.", false);
     } else {
-        set_text(&s->error, NULL);
+        set_error(s, NULL, false);
         set_text(&s->notice, s->sign_in.server_finish
             ? "Finish sign-in in the browser. This page checks every 10 seconds. The browser reports errors, including a different mailbox (409). For an already connected mailbox, confirm the browser result then refresh here."
             : "Finish sign-in in the browser, then immediately paste the complete final callback address here; Microsoft codes may expire within a minute.");
@@ -121,7 +125,7 @@ static void start(MailScreen *s, const char *provider, int id) {
         json_set_bool(body, "enabled", s->accounts.default_enabled); json_set_num(body, "syncDays", s->accounts.default_sync_days);
     }
     set_text(&s->starting_provider, provider); s->starting_id = id;
-    set_text(&s->error, NULL); set_text(&s->notice, NULL);
+    set_error(s, NULL, false); set_text(&s->notice, NULL);
     store_call("connect_mail_account", body, 0, s, start_done, 0, &s->write); repaint(s);
 }
 static void write_done(void *owner, Request *r) {
@@ -139,9 +143,9 @@ static void write_done(void *owner, Request *r) {
             if (finish && s->starting_id && a.id != s->starting_id) valid = false;
             mail_account_free(&a);
         }
-        if (!valid) set_text(&s->error, "The server returned an unexpected mail response. Refresh before trying again.");
+        if (!valid) set_error(s, "The server returned an unexpected mail response. Refresh before trying again.", false);
         else {
-            set_text(&s->error, NULL);
+            set_error(s, NULL, false);
             set_text(&s->notice, str_eq(r->operation, "sync_mail_account")
                 ? "Sync started (202); polling account status until it finishes."
                 : deletion ? "Disconnected. The provider may still list this app as having access; remove it there to revoke access."
@@ -170,7 +174,7 @@ static void finish(MailScreen *s) {
     if (!url) return;
     if (!s->shown || s->blocked || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) { free(url); return; }
     Json *body = mail_sign_in_finish(&s->sign_in, url, now_ms()); free(url);
-    if (!body) { set_text(&s->error, "Callback does not match this sign-in, contains an error, or has expired. Check the final address or start again."); repaint(s); return; }
+    if (!body) { set_error(s, "Callback does not match this sign-in, contains an error, or has expired. Check the final address or start again.", false); repaint(s); return; }
     request_cancel(&s->read); KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL);
     s->next_read = 0;
     store_call("finish_mail_account", body, 0, s, write_done, s->starting_id, &s->write); repaint(s);
@@ -190,7 +194,7 @@ static void update(MailScreen *s, const MailAccount *a, int action) {
         modal_begin(s);
         char *v = dialog_text(pane_hwnd(s->base.pane), "Mail sync window", "Days to keep (1-365); changing this restarts the first sync", "Save", days);
         if (!modal_end(s)) { free(v); free(label); free(days); return; }
-        if (v) { body = mail_settings_body(label, enabled, v); if (!body) set_text(&s->error, "Enter a whole number of days from 1 to 365."); free(v); }
+        if (v) { body = mail_settings_body(label, enabled, v); if (!body) set_error(s, "Enter a whole number of days from 1 to 365.", false); free(v); }
     } else body = mail_settings_body(label, !enabled, days);
     free(label); free(days);
     if (body && can_write(s, "update_mail_account") && mail_account_find(&s->accounts, id)) {
@@ -286,7 +290,7 @@ static void timer(Screen *base, UINT id) {
     if (id != TIMER_MAIL) return;
     MailScreen *s = (MailScreen *)base; KillTimer(pane_hwnd(base->pane), id);
     if (s->sign_in.state && now_ms() >= s->sign_in.expires_at) {
-        stop_waiting(s); set_text(&s->error, "Sign-in waiting expired. Check the browser result and refresh before starting again.");
+        stop_waiting(s); set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
     }
     load(s); repaint(s);
 }
@@ -294,7 +298,7 @@ static void refresh(Screen *base) {
     MailScreen *s = (MailScreen *)base;
     if (s->write || GetTickCount64() < s->retry_until) return;
     s->next_read = 0;
-    s->blocked = false; request_cancel(&s->read); set_text(&s->error, NULL); load(s);
+    s->blocked = false; request_cancel(&s->read); set_error(s, NULL, false); load(s);
 }
 static void visible(Screen *base, bool shown) {
     MailScreen *s = (MailScreen *)base; s->shown = shown;

@@ -68,7 +68,10 @@ static void callbacks(void) {
 static void invalid_starts(void) {
     MailAccounts a = accounts(); MailSignIn s; Json *j = start_json(true);
     CHECK(!mail_sign_in_parse(j, "outlook", 0, &a, &s));
-    const char *bad[] = { "javascript:alert(1)", "http://remote.example/x", "https://u@host/x", "https://host/x#fragment", "https://host/x?query", "http://127.0.0.1:0/x", "http://localhost:65536/x", "http://localhost:8x", "http://localhost:8/a b", "http://localhost:8/a\\b" };
+    const char *bad[] = { "javascript:alert(1)", "http://remote.example/x", "https://u@host/x", "https://host/x#fragment", "https://host/x?query", "http://127.0.0.1:0/x", "http://localhost:65536/x", "http://localhost:8x", "http://localhost:8/a b", "http://localhost:8/a\\b",
+        "http://localhost.evil/callback", "http://127.0.0.10/callback", "http://localhost@evil/callback", "http://localhost:/callback",
+        "http://localhost:+80/callback", "http://localhost:999999999999999999999/callback", "http://localhost/callback?query", "http://localhost/callback#fragment",
+        "http://localhost/a\177", "http://[::1].evil/callback", "http://[::1]:0/callback", "http://[::2]/callback", "http://::1/callback" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { json_set_str(j, "redirectUri", bad[i]); CHECK(!mail_sign_in_parse(j, "gmail", 0, &a, &s)); }
     json_set_str(j, "redirectUri", "https://core.example/oauth/mail/callback");
     CHECK(mail_sign_in_parse(j, "gmail", 0, &a, &s)); mail_sign_in_free(&s);
@@ -80,11 +83,54 @@ static void invalid_starts(void) {
     json_set_str(j, "url", "http://evil.example/"); CHECK(!mail_sign_in_parse(j, "gmail", 0, &a, &s));
     json_free(j); mail_accounts_free(&a);
 }
+static void loopback_redirects(void) {
+    MailAccounts a = accounts(); a.outlook = true; Json *j = start_json(false); MailSignIn s;
+    const char *valid[] = { "http://localhost/callback", "http://127.0.0.1/callback", "http://localhost", "http://127.0.0.1",
+        "http://localhost:80/callback", "http://127.0.0.1:65535/callback", "http://[::1]/callback", "http://[::1]:8888/callback" };
+    for (size_t i = 0; i < sizeof valid / sizeof *valid; i++) {
+        json_set_str(j, "redirectUri", valid[i]);
+        bool parsed = mail_sign_in_parse(j, "outlook", 0, &a, &s); CHECK(parsed);
+        if (!parsed) continue;
+        CHECK_STR(s.redirect_uri, valid[i]);
+        char *callback = xstrfmt("%s?state=s%%2B1&code=c", valid[i]);
+        Json *body = mail_sign_in_finish(&s, callback, 1); CHECK(body != NULL);
+        json_free(body); free(callback); mail_sign_in_free(&s);
+    }
+    json_free(j); mail_accounts_free(&a);
+}
+static void empty_paths(void) {
+    MailAccounts a = accounts(); Json *j = start_json(false); MailSignIn s;
+    const char *redirects[] = { "http://localhost:8888", "http://localhost:8888/", "https://core.example", "https://core.example/" };
+    for (size_t i = 0; i < sizeof redirects / sizeof *redirects; i++) {
+        json_set_str(j, "redirectUri", redirects[i]);
+        bool parsed = mail_sign_in_parse(j, "gmail", 0, &a, &s); CHECK(parsed);
+        if (!parsed) continue;
+        char *origin = xstrdup(redirects[i]); size_t n = strlen(origin); if (origin[n - 1] == '/') origin[n - 1] = 0;
+        const char *paths[] = { "", "/", "//", "/callback" };
+        for (size_t k = 0; k < sizeof paths / sizeof *paths; k++) {
+            char *callback = xstrfmt("%s%s?state=s%%2B1&code=c", origin, paths[k]);
+            Json *body = mail_sign_in_finish(&s, callback, 1); CHECK((body != NULL) == (k < 2));
+            json_free(body); free(callback);
+        }
+        CHECK(mail_sign_in_finish(&s, "http://localhost:8889/?state=s%2B1&code=c", 1) == NULL);
+        CHECK(mail_sign_in_finish(&s, "http://localhost:8888.evil/?state=s%2B1&code=c", 1) == NULL);
+        CHECK_STR(s.redirect_uri, redirects[i]); free(origin); mail_sign_in_free(&s);
+    }
+    json_set_str(j, "redirectUri", "http://localhost:8888/callback");
+    bool parsed = mail_sign_in_parse(j, "gmail", 0, &a, &s); CHECK(parsed);
+    if (parsed) {
+        CHECK(mail_sign_in_finish(&s, "http://localhost:8888/callback/?state=s%2B1&code=c", 1) == NULL);
+        mail_sign_in_free(&s);
+    }
+    json_free(j); mail_accounts_free(&a);
+}
 static void completion(void) {
     MailAccounts a = accounts(); Json *j = start_json(true); MailSignIn s;
     CHECK(mail_sign_in_parse(j, "gmail", 7, &a, &s)); CHECK(!mail_sign_in_completed(&s, &a));
     free(a.accounts[0].status); a.accounts[0].status = xstrdup("connected");
-    CHECK(mail_sign_in_completed(&s, &a)); mail_sign_in_free(&s);
+    CHECK(mail_sign_in_completed(&s, &a));
+    s.server_finish = false; CHECK(!mail_sign_in_completed(&s, &a)); CHECK(s.state != NULL);
+    mail_sign_in_free(&s);
     CHECK(mail_sign_in_parse(j, "gmail", 7, &a, &s));
     a.accounts[0].updated_at += 600000; a.accounts[0].syncing = true;
     CHECK(!mail_sign_in_completed(&s, &a)); // A sync timestamp is not an OAuth completion.
@@ -93,20 +139,27 @@ static void completion(void) {
     CHECK(mail_sign_in_parse(j, "gmail", 0, &a, &s)); a.accounts[0].id = 9;
     free(a.accounts[0].provider); a.accounts[0].provider = xstrdup("outlook"); CHECK(!mail_sign_in_completed(&s, &a));
     free(a.accounts[0].provider); a.accounts[0].provider = xstrdup("gmail"); CHECK(mail_sign_in_completed(&s, &a));
+    s.server_finish = false; CHECK(!mail_sign_in_completed(&s, &a)); CHECK(s.state != NULL);
     mail_sign_in_free(&s); mail_accounts_free(&a); json_free(j);
 }
 static void errors(void) {
-    CHECK(strstr(mail_error_message(409, true), "different mailbox") != NULL);
-    CHECK(strstr(mail_error_message(409, false), "sign-in again") != NULL);
-    CHECK(strstr(mail_error_message(400, true), "expired") != NULL);
+    CHECK(strstr(mail_error_message(409, true, NULL), "different mailbox") != NULL);
+    CHECK(strstr(mail_error_message(409, false, NULL), "sign-in again") != NULL);
+    CHECK(strstr(mail_error_message(400, true, NULL), "expired") != NULL);
+    CHECK(strstr(mail_error_message(400, false, "Label too long"), "200 characters") != NULL);
+    CHECK_STR(mail_error_message(400, false, "Label too long: secret"), mail_error_message(400, false, NULL));
+    CHECK_STR(mail_error_message(400, true, "Label too long"), mail_error_message(400, true, NULL));
+    CHECK_STR(mail_error_message(500, false, "Label too long"), mail_error_message(500, false, NULL));
     const int codes[] = { 0, 400, 401, 403, 404, 429, 503, 500 };
-    for (size_t i = 0; i < sizeof codes / sizeof *codes; i++) CHECK(!str_empty(mail_error_message(codes[i], false)));
+    for (size_t i = 0; i < sizeof codes / sizeof *codes; i++) CHECK(!str_empty(mail_error_message(codes[i], false, NULL)));
 }
 void mail_tests(void) {
     test_run("mail accounts are credential-free and providers come from the server", models);
     test_run("mail settings validate the sync window and send only editable fields", settings);
     test_run("mail callback validates destination state expiry and single-use parameters", callbacks);
     test_run("mail sign-in refuses malformed and unavailable provider starts", invalid_starts);
+    test_run("mail redirects accept exact loopback hosts with optional valid ports", loopback_redirects);
+    test_run("mail callbacks equate only empty and root paths", empty_paths);
     test_run("mail server completion requires the right account and ignores sync timestamps", completion);
     test_run("mail failures explain reauth unavailable provider and wrong mailbox", errors);
 }
