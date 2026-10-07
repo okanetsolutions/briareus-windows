@@ -126,6 +126,11 @@ def generate(out, large):
     # The managed decoder may stop at the first member and read ahead through junk;
     # checking only the final 8 bytes against output does not establish consumption.
     save("gzip-forged-trailing-footer", compressed=gz + b"NOT-A-GZIP-MEMBER" + gz[-8:], result="SECURITY_PROBE")
+    save("truncated-body-known-length", compressed=gz[:-8], declaredLength=len(gz))
+    save("truncated-body-unknown-length", compressed=gz[:-8], unknownLength=True)
+    save("compressed-streaming-limit-scaled", good, compressedLimit=len(gz) - 1, unknownLength=True)
+    save("exact-boundaries-scaled", good, compressedLimit=len(gz), rawLimit=len(good),
+         fileLimit=11, indexLimit=11, fileCountLimit=1, result="ACCEPT")
     save("compressed-limit-scaled", good, compressedLimit=len(gz) - 1)
     save("raw-limit-scaled", good, rawLimit=len(good) - 1)
     save("file-limit-real", base + entry(ROOT + "/src/a.cs", b"x" * (1024 * 1024 + 1)) + ZERO * 2)
@@ -142,6 +147,7 @@ def generate(out, large):
         with huge.open("wb") as f:
             f.truncate(300 * 1024 * 1024 + 1)
         cases.append(dict(name="compressed-limit-real", file=huge.name, result="REJECT", selected=[]))
+        cases.append(dict(name="compressed-streaming-limit-real", file=huge.name, result="REJECT", selected=[], unknownLength=True))
         # Streaming generator: the raw-limit case should stop without persisting >512 MiB.
         with (out / "raw-limit-real.tgz").open("wb") as compressed_file, gzip.GzipFile(filename="", mode="wb", fileobj=compressed_file, mtime=0) as f:
             block = b"\0" * 1048576

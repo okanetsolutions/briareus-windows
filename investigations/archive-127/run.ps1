@@ -103,6 +103,7 @@ foreach ($case in $cases) {
         name = $case.name; expected = $case.result; actual = $result.status; passed = $pass
         knownUnsafeAcceptance = $knownGap -and $result.status -eq 'ACCEPT'
         reason = $result.reason; rawBytes = $result.rawBytes; candidateFiles = $result.candidateFiles
+        compressedBytes = $result.compressedBytes
         candidateBytes = $result.candidateBytes; cleanup = $cleaned; launcherTicks = $heartbeat
         elapsedMs = $timer.ElapsedMilliseconds
     }

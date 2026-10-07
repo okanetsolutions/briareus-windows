@@ -38,6 +38,28 @@ public static class ArchiveProbe {
             throw new OperationCanceledException("cancelled");
     }
 
+    // Simulates a response body using a source stream. No full-body allocation;
+    // supplied Content-Length is checked independently from observed byte count.
+    public static long CopyCompressed(Stream source, string output, long declaredLength,
+                                      long limit, string cancel) {
+        if (declaredLength > limit) throw new InvalidDataException("compressed declared limit");
+        long total = 0;
+        using (FileStream dest = new FileStream(output, FileMode.CreateNew, FileAccess.Write)) {
+            byte[] buffer = new byte[65536];
+            for (;;) {
+                CheckCancel(cancel);
+                int n = source.Read(buffer, 0, buffer.Length);
+                if (n == 0) break;
+                if (n > limit - total) throw new InvalidDataException("compressed streaming limit");
+                if (declaredLength >= 0 && n > declaredLength - total) throw new InvalidDataException("compressed length mismatch");
+                dest.Write(buffer, 0, n);
+                total += n;
+            }
+        }
+        if (declaredLength >= 0 && total != declaredLength) throw new InvalidDataException("compressed truncated response body");
+        return total;
+    }
+
     // A fixed-size buffer and subtraction checks bound every write, including skipped files.
     // Trailer CRC/ISIZE adds checks, but is NOT proof of DEFLATE termination or no trailing input.
     public static long Inflate(string input, string output, long compressedLimit,
