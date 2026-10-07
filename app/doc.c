@@ -226,7 +226,7 @@ static void rich_paint(Doc *doc, Item *it, Rich *r, Canvas *cv, const RECT *rc) 
     }
     if (it) for (size_t i = it->match_first; i < it->match_first + it->match_count; i++) {
         size_t start = (size_t)doc->matches[i].offset;
-        COLORREF color = blend(i == doc->match_current ? theme.warn : theme.accent, theme.background, 0.4);
+        COLORREF color = blend(theme.warn, theme.background, i == doc->match_current ? 0.4 : 0.2);
         rich_highlight(cv, r, start, start + doc->query_len, rc, color);
     }
     size_t from, to;
