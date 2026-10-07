@@ -77,7 +77,7 @@ static void test_cached_sync_and_error_recovery_transitions(void) {
     list_status = 429; list_body = "{\"error\":\"Allowance spent\"}"; retry_header = "3600";
     s->vt->refresh(s); drain(2);
     CHECK(layout_contains(s, "Keep this row"));
-    CHECK(layout_contains(s, "Allowance spent"));
+    CHECK(layout_contains(s, "rate limiting requests"));
     HeaderInfo limited = header(s); CHECK(strstr(limited.subtitle, "retry after"));
     LONG sent = list_calls;
     s->vt->refresh(s); drain(1);
@@ -91,7 +91,7 @@ static void test_cached_sync_and_error_recovery_transitions(void) {
     expire(); list_status = 200; retry_header = NULL;
     list_body = "{\"pulls\":[{\"number\":2,\"title\":\"Recovered\"}],\"syncedAt\":\"2026-10-07T13:00:00Z\"}";
     s->vt->refresh(s); drain(2); CHECK_INT(list_calls, sent + 1);
-    CHECK(layout_contains(s, "Recovered")); CHECK(!layout_contains(s, "Allowance spent"));
+    CHECK(layout_contains(s, "Recovered")); CHECK(!layout_contains(s, "rate limiting requests"));
     pane_set_root(pane, NULL);
 }
 static void test_truncated_issue_is_not_gone_and_reads_detail(void) {
@@ -181,6 +181,8 @@ void app_pulls_tests(void) {
     ApiError e; api_error_init(&e);
     g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &e);
     api_client_set_transport(g_store.client, transport, NULL);
+    // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
+    board(); pane_set_root(pane, NULL);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);
