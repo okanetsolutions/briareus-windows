@@ -16,7 +16,9 @@ static Json *start_json(bool server) {
 }
 static void models(void) {
     MailAccounts a = accounts(); const MailAccount *m = mail_account_find(&a, 7);
-    CHECK(m != NULL); CHECK_INT(m->sync_days, 60); CHECK_INT(m->messages, 12); CHECK_INT(m->unread, 3);
+    CHECK(m != NULL);
+    if (!m) { mail_accounts_free(&a); return; }
+    CHECK_INT(m->sync_days, 60); CHECK_INT(m->messages, 12); CHECK_INT(m->unread, 3);
     CHECK_STR(m->label, "Work"); CHECK_STR(m->email, "a@example.com"); CHECK_STR(m->last_sync_error, "Access revoked");
     CHECK(m->enabled && !m->syncing && m->last_sync_at == 1791400000000 && m->created_at == 1791300000000 && m->updated_at == 1791400000001);
     CHECK(mail_provider_available(&a, "gmail") && !mail_provider_available(&a, "outlook") && !mail_provider_available(&a, "future"));
