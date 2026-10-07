@@ -96,6 +96,12 @@ static void test_finds_declarations_in_other_languages(void) {
     CHECK_OWNED_STR(symbols_of("a.rs", "pub struct Config {\npub fn load() -> Config {\nconst MAX: u32 = 1;\ntrait Shape {}\n"), "c:Config@1 f:load@2 k:MAX@3 c:Shape@4");
     CHECK_OWNED_STR(symbols_of("a.lua", "local function M.helper()\nfunction obj:method()\n"), "f:helper@1 f:method@2");
     CHECK_OWNED_STR(symbols_of("a.kt", "object Registry {\n    fun get() = 1\n"), "c:Registry@1 f:get@2<Registry");
+    // A keyword where the name would be: the declaration is named by the word after it, or there is none.
+    CHECK_OWNED_STR(symbols_of("a.kt", "enum class Color { RED }\nfun interface Runner {\n"), "c:Color@1 c:Runner@2");
+    CHECK_OWNED_STR(symbols_of("a.cpp", "enum class Mode { On };\n"), "c:Mode@1");
+    CHECK_OWNED_STR(symbols_of("a.py", "from enum import Enum\n"), "");
+    CHECK_OWNED_STR(symbols_of("a.js", "export default class extends React.Component {\n  render() {\n"), "f:render@2");
+    CHECK_OWNED_STR(symbols_of("a.ts", "const type = 'a';\n"), "k:type@1");
     // Languages without declarations of their own, and nothing to read.
     CHECK_OWNED_STR(symbols_of("a.json", "{\"class\": 1}"), "");
     CHECK_OWNED_STR(symbols_of("README.md", "class Foo"), "");

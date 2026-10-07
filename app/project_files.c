@@ -819,7 +819,7 @@ static void layout_modes(ProjectFiles *p, Doc *doc, int x, int w) {
         return;
     }
     if (!p->index_read && p->loading) status = xstrdup("Reading the index\xE2\x80\xA6");
-    else if (p->target && p->req_walk) status = xstrfmt("Looking for what changed since %.7s\xE2\x80\xA6", p->index.sha ? p->index.sha : "");
+    else if (p->target && p->req_walk) status = xstrfmt("Looking for what changed since %.7s\xE2\x80\xA6", index_base(p));
     else if (p->target) status = xstrfmt("Indexing %zu of %zu files\xE2\x80\xA6", p->fetched, p->queue_count);
     else if (p->mode != FIND_FILES && p->index_read && p->index.sha)
         status = xstrfmt("%zu files and %zu declarations indexed at %.7s", p->index.count, p->index.symbol_count, p->index.sha);

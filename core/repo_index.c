@@ -81,6 +81,13 @@ static void symbol_add(Symbols *s, const char *name, size_t len, const char *con
     s->items[s->count++] = (RepoSymbol){ xstrndup(name, len), container ? xstrdup(container) : NULL, kind, 0, line };
 }
 
+/// The declarer `word` is in `language`, or NULL.
+static const Declarer *declarer_of(const char *word, size_t len, const char *language) {
+    for (size_t k = 0; k < sizeof DECLARERS / sizeof *DECLARERS; k++)
+        if (word_is(word, len, DECLARERS[k].word) && (!DECLARERS[k].languages || language_in(language, DECLARERS[k].languages))) return &DECLARERS[k];
+    return NULL;
+}
+
 /// The class the lines below are in: the last one declared, while lines are indented past it.
 typedef struct { char *name; int indent; } Scope;
 
@@ -94,9 +101,7 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         size_t before = i;
         while (before && (code[before - 1] == ' ' || code[before - 1] == '\t')) before--;
         char prev = before ? code[before - 1] : 0;
-        const Declarer *d = NULL;
-        for (size_t k = 0; k < sizeof DECLARERS / sizeof *DECLARERS && !d; k++)
-            if (word_is(code + i, j - i, DECLARERS[k].word) && (!DECLARERS[k].languages || language_in(language, DECLARERS[k].languages))) d = &DECLARERS[k];
+        const Declarer *d = declarer_of(code + i, j - i, language);
         // `Foo::class`, `$this->type`, `options.type` name a word; they declare nothing.
         if (!d || prev == '.' || prev == '>' || prev == ':' || prev == '$') { i = j; continue; }
         size_t k = skip_spaces(code, n, j);
@@ -113,6 +118,10 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         // A function named through what holds it, Ruby's `def self.name` or Lua's `function M.name`: its last part.
         while (d->kind == SYMBOL_FUNCTION && e + 1 < n && (code[e] == '.' || code[e] == ':') && code[e + 1] != ':' && ident_start(code[e + 1])) { k = e + 1; e = k; while (e < n && ident_char(code[e])) e++; }
         size_t after = skip_spaces(code, n, e);
+        // A keyword in the name's place: Kotlin's `enum class Color` and `fun interface Runner` declare with the next
+        // word, and Python's `from enum import`, or JavaScript's `class extends Base`, declare nothing here.
+        if (word_is(code + k, e - k, "import") || word_is(code + k, e - k, "extends") || word_is(code + k, e - k, "implements") ||
+            (declarer_of(code + k, e - k, language) && after < n && ident_start(code[after]))) { i = j; continue; }
         bool ok = true;
         // `type` and `module` lead their line, after `export` or `declare` at most.
         if (str_eq(d->word, "type") || str_eq(d->word, "module")) {
