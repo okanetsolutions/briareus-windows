@@ -256,6 +256,8 @@ static void load_work(void *ctx) {
     if (cache_bytes(g_store.cache, l->key, &data, &len)) {
         l->found = repo_index_parse(data, len, &l->index);
         if (l->found) repo_index_symbols(&l->index);
+        // An index at the branch's commit is not written again, and pruning goes by the last write.
+        if (l->found) cache_touch(g_store.cache, l->key);
     }
     free(data);
 }

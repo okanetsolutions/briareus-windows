@@ -400,6 +400,11 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DestroyWindow(hwnd);
         return 0;
     }
+    case WM_ENDSESSION:
+        // Windows ends the process once this returns, without WM_DESTROY: the teardown runs here, so what it saves
+        // (a repository index read halfway) is kept.
+        if (wp) DestroyWindow(hwnd);
+        return 0;
     case WM_DESTROY:
         meeting_shutdown();
         browser_windows_close_all();

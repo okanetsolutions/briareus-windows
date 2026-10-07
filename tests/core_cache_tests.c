@@ -464,6 +464,13 @@ static void test_prune_drops_entries_older_than_the_age(void) {
     CHECK(cache_append(cache, log, "log"));
     cache_prune(cache, 3600, time(NULL));
     lines = cache_lines(cache, "log"); CHECK_INT(json_count(lines), 2); json_free(lines);
+    // A touch does, without changing the entry; there is nothing to touch under a key never written.
+    CHECK(cache_store(cache, v, "read"));
+    set_modified(dir, "read", time(NULL) - 7200);
+    CHECK(cache_touch(cache, "read"));
+    cache_prune(cache, 3600, time(NULL));
+    Json *touched = cache_value(cache, "read"); CHECK(touched != NULL && json_equal(touched, v)); json_free(touched);
+    CHECK(!cache_touch(cache, "never"));
     // Pruning leaves the directory in place, even when it empties it.
     cache_prune(cache, 0, now + 10L * 365 * 86400);
     CHECK_INT(count_entries(dir), 0);

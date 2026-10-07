@@ -20,6 +20,8 @@ bool cache_store(DiskCache *cache, const Json *value, const char *key);
 /// Bytes kept as they are, such as a repository's index; `*data` ends in a NUL past `*len`.
 bool cache_bytes(DiskCache *cache, const char *key, char **data, size_t *len);
 bool cache_store_bytes(DiskCache *cache, const char *data, size_t len, const char *key);
+/// Marks the entry written now, so pruning keeps one still read but left unchanged; false when there is none.
+bool cache_touch(DiskCache *cache, const char *key);
 
 /// A log of values, one JSON document per line, that grows without being rewritten. Returns an array.
 Json *cache_lines(DiskCache *cache, const char *key);
