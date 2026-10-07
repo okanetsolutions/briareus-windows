@@ -250,7 +250,14 @@ static const Json *conversation(SlackScreen *s) {
 }
 static char *destination_name(SlackScreen *s) {
     char *name = slack_conversation_name(conversation(s), s->people);
-    char *title = xstrfmt("%s / %s%s%s", s->workspace ? s->workspace : "Slack", name, str_empty(s->thread) ? "" : " / thread ", s->thread ? s->thread : "");
+    const char *label = "Slack";
+    for (size_t i = 0; i < json_count(s->workspaces); i++) {
+        const Json *row = json_at(s->workspaces, i); char *id = slack_workspace_id(row);
+        bool selected = str_eq(id, s->workspace); free(id);
+        if (selected) { label = json_str_or(json_get(row, "label"), "Slack"); break; }
+    }
+    char *title = xstrfmt("%s [%s] / %s [%s]%s%s", label, s->workspace ? s->workspace : "", name,
+        s->channel ? s->channel : "", str_empty(s->thread) ? "" : " / thread ", s->thread ? s->thread : "");
     free(name); return title;
 }
 static void layout(Screen *base, Doc *doc) {
@@ -438,7 +445,7 @@ static void observed(SlackScreen *s, int scroll, int height) {
         if (s->view[i].rc.bottom > scroll && s->view[i].rc.bottom <= scroll + height)
             slack_read_viewed(r, s->view[i].ts, GetTickCount64());
     }
-    if (slack_read_due(r, GetTickCount64() + 1000)) SetTimer(pane_hwnd(s->base.pane), TIMER_READ, 1000, NULL);
+    if (s->base.pane && slack_read_due(r, GetTickCount64() + 1000)) SetTimer(pane_hwnd(s->base.pane), TIMER_READ, 1000, NULL);
 }
 static void place(Screen *base, const RECT *content, int scroll) {
     SlackScreen *s = (SlackScreen *)base;

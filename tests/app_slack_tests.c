@@ -110,6 +110,27 @@ static void errors_and_read_marks(void) {
     load_navigation(s); apply(s, TAG_HISTORY, "slack_history", "{}", s->state.generation, 0); CHECK(strstr(s->error, "unexpected") != NULL);
     teardown(s);
 }
+static void viewed_messages_only(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, s->state.generation, 0);
+    if (!theme.canvas) theme_init();
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600); s->base.vt->layout(&s->base, &doc); doc_end(&doc);
+    CHECK_INT(s->view_count, 2);
+    RECT viewport = {0, 0, 600, 100};
+    s->base.vt->place(&s->base, &viewport, s->view[0].rc.bottom - 90);
+    CHECK_INT(s->state.read_count, 0); // Hidden: loading messages is not viewing them.
+    s->shown = true; g_store.active = false;
+    s->base.vt->place(&s->base, &viewport, s->view[0].rc.bottom - 90); CHECK_INT(s->state.read_count, 0);
+    g_store.active = true;
+    s->base.vt->place(&s->base, &viewport, s->view[0].rc.bottom - 90);
+    SlackRead *r = slack_read(&s->state, s->workspace, s->channel); CHECK_STR(r->viewed, "1712345678.000001");
+    CHECK(slack_read_due(r, GetTickCount64()) == NULL);
+    s->base.vt->place(&s->base, &viewport, s->view[1].rc.bottom - 90); CHECK_STR(r->viewed, "1712345678.000002");
+    s->directory = true; r->due = 0;
+    s->base.vt->place(&s->base, &viewport, s->view[0].rc.bottom - 90); CHECK_STR(r->viewed, "1712345678.000002");
+    s->shown = false; doc_free(&doc); teardown(s);
+}
+
 static void cancellation_and_thread_send(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, s->state.generation, 0);
@@ -131,6 +152,7 @@ static void cancellation_and_thread_send(void) {
 }
 
 void app_slack_tests(void) {
+    test_run("Slack viewport debounce ignores hidden background and unfetched messages", viewed_messages_only);
     test_run("Slack screen thread sends hidden cancellation and late completion", cancellation_and_thread_send);
     test_run("Slack admin and catalog gates preserve old servers", permissions);
     test_run("Slack screen destinations directory Open DM drafts and stale results", navigation_and_stale);
