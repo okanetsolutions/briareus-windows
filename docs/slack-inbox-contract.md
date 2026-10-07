@@ -45,7 +45,8 @@ Cancellation discards pending completions and treats an in-flight send as uncert
 Read marks debounce for one second to the newest message whose bottom entered the visible viewport while the app was active.
 Hidden screens/background activity never generate read marks; failures stop automatic marks until refresh/navigation.
 429 exposes Retry-After and blocks actions until the cooldown expires; no send is automatically retried.
-401 uses the existing credential invalidation flow; 403, removed/changed workspaces and refused workspace credentials clear private inbox data.
+401 uses the existing credential invalidation flow, and 403 clears private state even if the local device record still says Admin.
+Read failures indicating removed/changed workspaces or refused workspace credentials clear private inbox data; ambiguous send failures retain their drafts until explicit recovery or an account/access change.
 Slack scope/credential errors arrive as 502 with explanatory provider text; they remain visible, and sends conservatively remain uncertain.
 Every completion checks account identity, current catalog/admin access and the navigation generation before touching state.
 Account or access changes clear private state in all registered inbox screens, including detached screens.

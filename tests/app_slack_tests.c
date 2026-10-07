@@ -108,6 +108,11 @@ static void errors_and_read_marks(void) {
     load_navigation(s); apply(s, TAG_HISTORY, "slack_history", NULL, s->state.generation, 404); CHECK(!s->workspace);
     load_navigation(s); apply(s, TAG_HISTORY, "slack_history", NULL, s->state.generation, 403); CHECK(!s->workspace);
     load_navigation(s); apply(s, TAG_HISTORY, "slack_history", "{}", s->state.generation, 0); CHECK(strstr(s->error, "unexpected") != NULL);
+    SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL);
+    free(d->text); d->text = xstrdup("private draft"); CHECK(slack_draft_begin(d));
+    apply(s, TAG_SEND, "slack_send", NULL, s->state.generation, 403);
+    CHECK(!s->workspace); CHECK_INT(s->state.draft_count, 0); CHECK_INT(json_count(s->people), 0);
+    CHECK(strstr(s->error, "denied") != NULL);
     teardown(s);
 }
 static void viewed_messages_only(void) {

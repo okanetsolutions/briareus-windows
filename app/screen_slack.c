@@ -145,7 +145,12 @@ void slack_inbox_done(void *owner, Request *req) {
             slack_message_merge(&s->state, d->workspace, d->channel, m); json_free(m);
             set_string(&s->error, NULL); composer_set(s); if (s->base.pane) pane_scroll_to_bottom(s->base.pane);
         } else {
-            error_from(s, req); composer_set(s);
+            error_from(s, req);
+            if (req->error.status == 403) {
+                // The server may learn of an admin downgrade before discovery is refreshed.
+                char *message = xstrdup(s->error); private_clear(s); set_string(&s->error, message); free(message);
+            }
+            composer_set(s);
         }
         changed(s); return;
     }
