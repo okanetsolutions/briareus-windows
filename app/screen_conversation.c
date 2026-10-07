@@ -1090,7 +1090,7 @@ static const ScreenVTable conversation_vt = {
     .timer = conversation_timer, .footer_height = conversation_footer_height,
     .footer_layout = conversation_footer_layout, .footer_paint = conversation_footer_paint, .footer_click = conversation_footer_click,
     .visible = conversation_visible, .command = conversation_command, .key = conversation_key, .refresh = conversation_refresh,
-    .scrolled = conversation_scrolled, .activated = conversation_activated, .detachable = true,
+    .scrolled = conversation_scrolled, .activated = conversation_activated, .detachable = true, .searchable = true,
 };
 
 Screen *conversation_screen_new(const Session *initial) {

@@ -7,6 +7,7 @@
 #include <wctype.h>
 
 static void rich_free(void *data);
+static void search_rebuild(Doc *doc);
 
 // MARK: - Items
 
@@ -21,7 +22,7 @@ void doc_truncate(Doc *doc, size_t count) {
     if (count < doc->count) doc->count = count;
 }
 static void clear_items(Doc *doc) { doc_truncate(doc, 0); }
-void doc_free(Doc *doc) { clear_items(doc); free(doc->items); free(doc->regions); doc_init(doc); }
+void doc_free(Doc *doc) { clear_items(doc); free(doc->items); free(doc->regions); free(doc->query); free(doc->matches); doc_init(doc); }
 void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
     doc->cv = cv; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
@@ -30,7 +31,7 @@ void doc_begin(Doc *doc, Canvas *cv, int width) {
     doc->regions_kept = doc->region_count; doc->region_count = 0;
     doc->drag_first = doc->drag_last = 0;
 }
-void doc_end(Doc *doc) { doc->cv = NULL; }
+void doc_end(Doc *doc) { doc->cv = NULL; search_rebuild(doc); }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
 bool doc_item_hovered(const Doc *doc, const Item *it) { return doc->hover >= 0 && &doc->items[doc->hover] == it; }
 int doc_height(const Doc *doc) { return doc->y; }
@@ -216,16 +217,23 @@ static void rich_highlight(Canvas *cv, const Rich *r, size_t from, size_t to, co
 /// Paints runs at `rc`, with the selection behind them; `it` may be NULL for text that is not an item (a table cell).
 static void rich_paint(Doc *doc, Item *it, Rich *r, Canvas *cv, const RECT *rc) {
     if (!r) return;
+    for (size_t i = 0; i < r->count; i++) {
+        Run *run = &r->runs[i];
+        if (run->code) {
+            RECT bg = { rc->left + run->x, rc->top + run->y, rc->left + run->x + run->wt, rc->top + run->y + run->h };
+            fill_round_rect(cv, &bg, px(4), theme.sunken, theme.sunken);
+        }
+    }
+    if (it) for (size_t i = it->match_first; i < it->match_first + it->match_count; i++) {
+        size_t start = (size_t)doc->matches[i].offset;
+        COLORREF color = blend(i == doc->match_current ? theme.warn : theme.accent, theme.background, 0.4);
+        rich_highlight(cv, r, start, start + doc->query_len, rc, color);
+    }
     size_t from, to;
     if (it && item_selection(doc, it, &from, &to)) rich_highlight(cv, r, from, to, rc, selection_color());
     for (size_t i = 0; i < r->count; i++) {
         Run *run = &r->runs[i];
         RECT rr = { rc->left + run->x, rc->top + run->y, rc->left + run->x + run->w, rc->top + run->y + run->h };
-        if (run->code) {
-            // Trailing spaces stay outside the tint.
-            RECT bg = { rr.left, rr.top, rr.left + run->wt, rr.bottom };
-            fill_round_rect(cv, &bg, px(4), theme.sunken, theme.sunken);
-        }
         rr.left += run->pad;
         if (r->single) {
             if (rr.left >= rc->right) continue;
@@ -1135,6 +1143,64 @@ char *doc_item_plain_text(Doc *doc, int index) {
 int doc_find(Doc *doc, int id) {
     for (size_t i = 0; i < doc->count; i++) if (doc->items[i].id == id) return (int)i;
     return -1;
+}
+
+// MARK: - Find
+
+static void search_rebuild(Doc *doc) {
+    DocPos old = { -1, 0 };
+    if (doc->match_count) old = doc->matches[doc->match_current];
+    doc->match_count = 0; doc->match_current = 0;
+    bool restored = false;
+    for (size_t i = 0; i < doc->count; i++) {
+        Item *it = &doc->items[i];
+        it->match_first = doc->match_count; it->match_count = 0;
+        Rich *r = it->sel;
+        if (!r || !doc->query_len || doc->query_len > r->plain_len) continue;
+        for (size_t k = 0; k <= r->plain_len - doc->query_len;) {
+            if (CompareStringOrdinal(r->plain + k, (int)doc->query_len, doc->query, (int)doc->query_len, TRUE) != CSTR_EQUAL) { k++; continue; }
+            if (doc->match_count == doc->match_cap) {
+                doc->match_cap = doc->match_cap ? doc->match_cap * 2 : 32;
+                doc->matches = xrealloc(doc->matches, doc->match_cap * sizeof *doc->matches);
+            }
+            DocPos pos = { (int)i, (int)k };
+            if (!restored && (pos.item > old.item || (pos.item == old.item && pos.offset >= old.offset))) {
+                doc->match_current = doc->match_count; restored = true;
+            }
+            doc->matches[doc->match_count++] = pos; it->match_count++;
+            k += doc->query_len;
+        }
+    }
+}
+void doc_search(Doc *doc, const wchar_t *query) {
+    size_t len = query ? wcslen(query) : 0;
+    wchar_t *copy = xmalloc((len + 1) * sizeof *copy);
+    if (len) memcpy(copy, query, len * sizeof *copy);
+    copy[len] = 0;
+    free(doc->query); doc->query = copy; doc->query_len = len;
+    doc->match_count = 0;
+    search_rebuild(doc);
+}
+void doc_search_step(Doc *doc, bool backward) {
+    if (!doc->match_count) return;
+    doc->match_current = (doc->match_current + (backward ? doc->match_count - 1 : 1)) % doc->match_count;
+}
+bool doc_search_rect(Doc *doc, RECT *rc) {
+    if (!doc->match_count) return false;
+    DocPos pos = doc->matches[doc->match_current];
+    Item *it = doc_item(doc, pos.item);
+    if (!it || !it->sel) return false;
+    Rich *r = it->sel;
+    for (size_t i = 0; i < r->count; i++) {
+        Run *run = &r->runs[i];
+        if ((size_t)pos.offset < run->start || (size_t)pos.offset >= run->start + run->len) continue;
+        *rc = it->rc;
+        rc->left += run->x + run->pad + textw_extent(run->font, run->text, (size_t)pos.offset - run->start);
+        rc->right = rc->left + px(24);
+        rc->top += r->line_y[run->line]; rc->bottom = rc->top + r->line_h[run->line];
+        return true;
+    }
+    return false;
 }
 
 // MARK: - Selection
