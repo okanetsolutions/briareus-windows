@@ -74,7 +74,10 @@ static void fill(McpForm *s) {
     memset(s->secrets, 0, sizeof s->secrets);
     s->dirty = false; s->conflict = false; s->filling = false;
 }
-static void changed(McpForm *s) { if (!s->filling) { s->dirty = true; pane_header_changed(s->base.pane); } }
+static void changed(McpForm *s) {
+    if (s->filling || s->dirty) return;
+    s->dirty = true; pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
+}
 static void repaint(McpForm *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
 static void error_text(McpForm *s, const char *error) { s->read_error = false; set_string(&s->error, error); repaint(s); }
 static bool field_shown(McpForm *s, int f) {
@@ -256,7 +259,15 @@ static LRESULT CALLBACK edit_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
     if (msg == WM_KEYDOWN) {
         if (wp == VK_TAB) {
             int step = GetKeyState(VK_SHIFT) & 0x8000 ? -1 : 1;
-            for (int k = 1; k <= F_COUNT; k++) { int f = ((int)id + step * k + F_COUNT) % F_COUNT; if (s->laid[f]) { SetFocus(s->edits[f]); break; } }
+            for (int k = 1; k <= F_COUNT; k++) {
+                int f = ((int)id + step * k + F_COUNT) % F_COUNT;
+                if (!s->laid[f]) continue;
+                RECT content = pane_content_rect(s->base.pane);
+                int top = pane_scroll_y(s->base.pane);
+                if (s->rects[f].top < top || s->rects[f].bottom > top + content.bottom - content.top)
+                    pane_scroll_to(s->base.pane, s->rects[f].top);
+                SetFocus(s->edits[f]); break;
+            }
             return 0;
         }
         if ((GetKeyState(VK_CONTROL) & 0x8000) && wp == 'S') { form_save(s); return 0; }
