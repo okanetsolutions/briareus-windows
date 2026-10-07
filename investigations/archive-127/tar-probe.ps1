@@ -21,4 +21,4 @@ $rawResult = [ToolProbe]::Run($TarPath, '-xOf "' + $fixture + '" --format raw')
 @{ present = $true; tarPath = $TarPath; tarVersion = (& $TarPath --version | Out-String).Trim(); cases = $results;
    rawReaderAttempt = @{ exit = $rawResult.Exit; stdoutBytes = $rawResult.StdoutBytes; stderr = $rawResult.Stderr; killed = $rawResult.Killed } } |
     ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $Report
-$results | Format-Table name, exit, stdoutBytes
+$results | ForEach-Object { [pscustomobject]$_ } | Format-Table name, exit, stdoutBytes
