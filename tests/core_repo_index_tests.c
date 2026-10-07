@@ -99,6 +99,20 @@ static void test_finds_declarations_in_other_languages(void) {
     // A class named through its namespace is named by its last part.
     CHECK_OWNED_STR(symbols_of("a.rb", "class Admin::UsersController < ApplicationController\n  def index\nmodule Api::V1\n"),
                     "c:UsersController@1 f:index@2<UsersController c:V1@3");
+    // Elixir's dotted module names too.
+    CHECK_OWNED_STR(symbols_of("a.ex", "defmodule MyApp.Accounts.User do\n  def create(attrs) do\n"), "c:User@1 f:create@2<User");
+    // A template's parameters are no classes; the class after them is.
+    CHECK_OWNED_STR(symbols_of("a.cpp", "template <class T> class Vector {\n    int size() const {\ntemplate <class K, class V> struct Pair {\n"),
+                    "c:Vector@1 f:size@2<Vector c:Pair@3");
+    // A Go function literal is no declaration, whatever it returns.
+    CHECK_OWNED_STR(symbols_of("a.go", "func run() {\n\tsort.Slice(xs, func(i, j int) bool {\n\tf := func(a int) error {\n"), "f:run@1");
+    // Generic methods are named without their type parameters.
+    CHECK_OWNED_STR(symbols_of("A.cs", "class A {\n    public T Get<T>(string key) {\n    var x = Make<int>(1);\n"), "c:A@1 f:Get@2<A");
+    CHECK_OWNED_STR(symbols_of("a.ts", "class L {\n  map<T>(fn: (x: number) => T) {\n"), "c:L@1 f:map@2<L");
+    // Calls continuing a list or an expression declare nothing.
+    CHECK_OWNED_STR(symbols_of("a.dart", "class W {\n  Widget build(BuildContext context) {\n      const SizedBox(height: 8),\n"), "c:W@1 f:build@2<W");
+    CHECK_OWNED_STR(symbols_of("build.gradle", "dependencies {\n    implementation project(':core')\n    implementation platform('x:y:1')\n"), "");
+    CHECK_OWNED_STR(symbols_of("a.cpp", "Foo::Foo()\n    : m_foo(1)\n    , m_bar(2)\n{\n    std::cout << x\n        << compute(x)\n        && check(b)\n"), "f:Foo@1<Foo");
     // An anonymous typedef is named where its body closes; a named one where it opens.
     CHECK_OWNED_STR(symbols_of("a.h", "typedef struct {\n    union { int a; } u;\n    char *name;\n} RepoEntry;\ntypedef enum { A, B } Kind;\ntypedef struct Foo {\n} Foo;\nstruct Bar {\n};\ntypedef struct\n{\n} Pair, *PairPtr;\n"),
                     "c:RepoEntry@1 c:Kind@5 c:Foo@6 c:Bar@8 c:Pair@10");

@@ -102,13 +102,14 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         while (before && (code[before - 1] == ' ' || code[before - 1] == '\t')) before--;
         char prev = before ? code[before - 1] : 0;
         const Declarer *d = declarer_of(code + i, j - i, language);
-        // `Foo::class`, `$this->type`, `options.type` name a word; they declare nothing.
-        if (!d || prev == '.' || prev == '>' || prev == ':' || prev == '$') { i = j; continue; }
+        // `Foo::class`, `$this->type`, `options.type` name a word; they declare nothing. Nor does C++'s template
+        // parameter, `template <class K, class V>`: the class is declared after its `>`.
+        if (!d || prev == '.' || (prev == '>' && before >= 2 && code[before - 2] == '-') || prev == ':' || prev == '$' || prev == '<' || prev == ',') { i = j; continue; }
         size_t k = skip_spaces(code, n, j);
         // PHP's `function &name` returns a reference; JavaScript's `function* name` is a generator.
         if (str_eq(d->word, "function") && k < n && (code[k] == '&' || code[k] == '*')) k = skip_spaces(code, n, k + 1);
-        // Go's receiver: func (r *Repo) Name(.
-        if (str_eq(d->word, "func") && k < n && code[k] == '(') {
+        // Go's receiver: func (r *Repo) Name(. A `func(` further into the line is a function literal, named nothing.
+        if (str_eq(d->word, "func") && i == first_word && k < n && code[k] == '(') {
             int depth = 0;
             for (; k < n; k++) { if (code[k] == '(') depth++; else if (code[k] == ')' && --depth == 0) { k++; break; } }
             k = skip_spaces(code, n, k);
@@ -120,6 +121,8 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         while (d->kind == SYMBOL_FUNCTION && e + 1 < n && (code[e] == '.' || code[e] == ':') && code[e + 1] != ':' && ident_start(code[e + 1])) { k = e + 1; e = k; while (e < n && ident_char(code[e])) e++; }
         // A class named through its namespace, Ruby's `class Admin::UsersController`: its last part too.
         while (d->kind == SYMBOL_CLASS && e + 2 < n && code[e] == ':' && code[e + 1] == ':' && ident_start(code[e + 2])) { k = e + 2; e = k; while (e < n && ident_char(code[e])) e++; }
+        // Elixir's `defmodule MyApp.Accounts.User`.
+        while (str_eq(d->word, "defmodule") && e + 1 < n && code[e] == '.' && ident_start(code[e + 1])) { k = e + 1; e = k; while (e < n && ident_char(code[e])) e++; }
         size_t after = skip_spaces(code, n, e);
         // A keyword in the name's place: Kotlin's `enum class Color` and `fun interface Runner` declare with the next
         // word, and Python's `from enum import`, or JavaScript's `class extends Base`, declare nothing here.
@@ -158,15 +161,24 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
 
 /// A method declared without a keyword: its name right before the first parenthesis, only modifiers and a type before
 /// it, and a line that does not end as a statement does. `*container` is set for C++'s `Type::name(`. A line that starts
-/// with `?` continues a ternary, `? foo(a)`, and declares nothing.
+/// with `?`, `,`, `&&` or `<<` continues an expression, `? foo(a)` or `, m_bar(2)`, and declares nothing.
 static bool method_declaration(const char *code, size_t n, const char *language, size_t *name_at, size_t *name_len, char **container) {
     size_t a = skip_spaces(code, n, 0), b = n;
     while (b > a && (code[b - 1] == ' ' || code[b - 1] == '\t')) b--;
-    if (b <= a || code[b - 1] == ';' || code[a] == '?') return false;
+    if (b <= a || code[b - 1] == ';' || code[a] == '?' || code[a] == ',') return false;
+    if (b - a >= 2 && (memcmp(code + a, "&&", 2) == 0 || memcmp(code + a, "<<", 2) == 0)) return false;
     const char *paren = memchr(code + a, '(', b - a);
     if (!paren) return false;
     size_t p = (size_t)(paren - code), e = p;
     while (e > a && (code[e - 1] == ' ' || code[e - 1] == '\t')) e--;
+    // A generic method's type parameters, C#'s `T Get<T>(` or TypeScript's `map<T>(`, sit between its name and `(`.
+    if (e > a && code[e - 1] == '>') {
+        size_t g = e;
+        for (int depth = 0; g > a; g--) { if (code[g - 1] == '>') depth++; else if (code[g - 1] == '<' && --depth == 0) break; }
+        if (g == a) return false;
+        e = g - 1;
+        while (e > a && (code[e - 1] == ' ' || code[e - 1] == '\t')) e--;
+    }
     size_t s = e;
     while (s > a && ident_char(code[s - 1])) s--;
     // An annotation, @Get(...), names no method.
@@ -191,16 +203,19 @@ static bool method_declaration(const char *code, size_t n, const char *language,
     }
     // The parameters close on the line, and a body, a return type or `throws` follows; or they run on to the next line.
     // A body opens at the line's end, or closes there too: `int getX() { return x; }`.
-    // A call passing a callback, `describe('x', () => {`, leaves its parenthesis open with a body after it.
+    // A call passing a callback, `describe('x', () => {`, leaves its parenthesis open with a body after it. A call in a
+    // list, Dart's `const SizedBox(height: 8),`, has a comma after it; and Groovy's are written without parentheses
+    // around them, `implementation project(':core')`, so its methods need a body on the line.
     size_t close = p;
     for (int depth = 0; close < b; close++) { if (code[close] == '(') depth++; else if (code[close] == ')' && --depth == 0) break; }
     char last = code[b - 1];
     bool declared;
     if (close < b) {
         size_t after = skip_spaces(code, b, close + 1);
+        if (after < b && code[after] == ',') { free(scope); return false; }
         // C++'s `const`, `override` and `noexcept`, and Java's `throws A, B`, sit between the parameters and the body.
         if (prefix_end != a) while (after < b && (ident_char(code[after]) || code[after] == ',' || code[after] == '.' || code[after] == ' ')) after++;
-        declared = after >= b ? prefix_end != a : (code[after] == '{' && (after == b - 1 || last == '}')) || code[after] == ':' || (b - after >= 6 && memcmp(code + after, "throws", 6) == 0);
+        declared = after >= b ? prefix_end != a && !str_eq(language, "Groovy") : (code[after] == '{' && (after == b - 1 || last == '}')) || code[after] == ':' || (b - after >= 6 && memcmp(code + after, "throws", 6) == 0);
     } else declared = prefix_end != a && (last == ',' || last == '(' || ident_char(last));
     if (!declared) { free(scope); return false; }
     *name_at = prefix_end; *name_len = e - prefix_end; *container = scope;
