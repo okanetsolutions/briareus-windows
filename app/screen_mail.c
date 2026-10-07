@@ -94,7 +94,7 @@ static void load(MailScreen *s) {
     if (!s->shown || s->blocked || s->modal || s->read || s->write || !g_store.active || !mail_settings_offered()) return;
     ULONGLONG tick = GetTickCount64();
     if (tick < s->retry_until) { arm(s, (int)(s->retry_until - tick)); return; }
-    if (tick < s->next_read) return;
+    if (tick < s->next_read) { arm(s, (int)(s->next_read - tick)); return; }
     store_call("settings_mail_accounts", json_object(), 0, s, read_done, 0, &s->read);
     repaint(s);
 }
@@ -243,7 +243,7 @@ static void layout(Screen *base, Doc *doc) {
     if (!mail_settings_offered()) { doc_notice(doc, x, w, "Mail settings are unavailable: this server must advertise the mail account route and this device needs an Admin token."); return; }
     if (s->error) { doc_notice(doc, x, w, s->error); doc_space(doc, px(10)); }
     if (s->notice) { doc_text(doc, x, w, s->notice, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(10)); }
-    if (!s->loaded) { doc_loading(doc, x, w, "Loading mail accounts..."); return; }
+    if (!s->loaded) { if (!s->blocked) doc_loading(doc, x, w, "Loading mail accounts..."); return; }
     if (s->sign_in.state) {
         ButtonSpec pending[] = {
             { 0, "Paste callback address", BUTTON_PROMINENT, ACT_FINISH, 0, !s->write && !s->sign_in.server_finish && GetTickCount64() >= s->retry_until && store_supports("finish_mail_account") },
