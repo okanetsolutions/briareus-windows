@@ -193,15 +193,15 @@ static bool word_start(const char *s, size_t i) {
     char prev = s[i - 1];
     return prev == '/' || prev == '_' || prev == '-' || prev == '.' || prev == ' ' || (is_upper(s[i]) && is_lower(prev));
 }
-/// Greedy from `start`: each character at a word's start or right after the last one matched when there is one, else
-/// anywhere after the last.
-static bool score_from(const char *query, const char *path, size_t start, int *score) {
+/// Greedy from `start`. With `starts`, each character goes at a word's start or right after the last one matched when
+/// there is one, else anywhere after the last; without it, at its first place after the last (a plain subsequence).
+static bool score_from(const char *query, const char *path, size_t start, bool starts, int *score) {
     size_t n = strlen(path), at = start;
     long long last = -2;
     int total = 0;
     for (const char *q = query; *q; q++) {
         long long found = -1;
-        for (size_t i = at; i < n; i++) if (lower(path[i]) == *q && (word_start(path, i) || (long long)i == last + 1)) { found = (long long)i; break; }
+        if (starts) for (size_t i = at; i < n; i++) if (lower(path[i]) == *q && (word_start(path, i) || (long long)i == last + 1)) { found = (long long)i; break; }
         if (found < 0) for (size_t i = at; i < n; i++) if (lower(path[i]) == *q) { found = (long long)i; break; }
         if (found < 0) return false;
         if (found == last + 1) total += 8;
@@ -210,16 +210,20 @@ static bool score_from(const char *query, const char *path, size_t start, int *s
         total -= (int)(skipped < 10 ? skipped : 10);
         last = found; at = (size_t)found + 1;
     }
-    *score = total;
+    *score = starts ? total : total - 10;
     return true;
+}
+/// Word starts first; when that greedy choice leaves the rest of the query unmatched, a plain subsequence, scored lower.
+static bool score_in(const char *query, const char *path, size_t start, int *score) {
+    return score_from(query, path, start, true, score) || score_from(query, path, start, false, score);
 }
 bool repo_match_score(const char *query, const char *path, int *score) {
     if (str_empty(query) || !path) return false;
     const char *slash = strrchr(path, '/');
     size_t name = slash ? (size_t)(slash - path) + 1 : 0;
     // Inside the name alone when the query holds no slash and fits there; otherwise across the whole path.
-    if (!strchr(query, '/') && score_from(query, path, name, score)) { *score += 1000; return true; }
-    return score_from(query, path, 0, score);
+    if (!strchr(query, '/') && score_in(query, path, name, score)) { *score += 1000; return true; }
+    return score_in(query, path, 0, score);
 }
 
 typedef struct { int score; size_t index, len; const char *path; } Found;

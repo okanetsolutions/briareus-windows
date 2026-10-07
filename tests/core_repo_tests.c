@@ -109,6 +109,18 @@ static void test_finds_files_as_go_to_file_does(void) {
     CHECK(!repo_match_score("a", NULL, &score));
     CHECK(repo_match_score("ab", "x/ab", &score)); CHECK(score > 1000);
     CHECK(repo_match_score("xa", "x/ab", &score)); CHECK(score < 1000);
+    // A word start that leaves the rest of the query unmatched (the p of .php) falls back to a match inside a word.
+    CHECK(repo_match_score("port", "app/Http/Report.php", &score)); CHECK(score > 1000);
+    CHECK(repo_match_score("port", "ExportController.php", &score));
+    CHECK(repo_match_score("pper", "src/Mapper.php", &score));
+    CHECK(repo_match_score("pdate", "UpdateUser.php", &score));
+    CHECK(repo_match_score("rco", "UserController_report.php", &score));
+    CHECK(repo_match_score("ab", "Tab_a.txt", &score));
+    CHECK(repo_match_score("ab", "TabA", &score));
+    int mid;
+    CHECK(repo_match_score("port", "app/Report.php", &mid));
+    CHECK(repo_match_score("port", "app/Port.php", &score)); CHECK(score > mid);
+    CHECK(!repo_match_score("port", "app/Pot.php", &score));
     repo_tree_free(&t);
 }
 
