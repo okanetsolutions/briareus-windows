@@ -235,6 +235,46 @@ static void test_route_loss_rearms_board_and_issue_polling(void) {
         pane_set_root(pane, NULL);
     }
 }
+static void test_list_deadline_retries_board_and_issue(void) {
+    for (int issue_screen = 0; issue_screen < 2; issue_screen++) {
+        reset(); g_store.route_count = 3;
+        Project p = project(); IssueSummary issue; memset(&issue, 0, sizeof issue);
+        issue.number = 101; issue.title = "Outside page";
+        Screen *s = issue_screen ? issue_detail_screen_new(&p, &issue) : pulls_screen_new(&p);
+        pane_set_root(pane, s);
+        network_fail = true; s->vt->refresh(s); drain(issue_screen ? 3 : 2);
+        HeaderInfo limited = header(s); CHECK(strstr(limited.subtitle, "retry after"));
+        LONG sessions = session_calls, details = detail_calls;
+        network_fail = false;
+        // Removing the base timer lets us detect if the list retry resets ancillary polling.
+        CHECK(KillTimer(pane_hwnd(pane), 1));
+        // Observe the actual deadline timer, without a base poll or manual refresh.
+        DWORD start = GetTickCount(); bool fired = false;
+        while (!fired && GetTickCount() - start < 5000) {
+            MSG msg;
+            while (PeekMessageW(&msg, pane_hwnd(pane), WM_TIMER, WM_TIMER, PM_REMOVE)) {
+                if (msg.wParam == 5) { s->vt->timer(s, 5); fired = true; break; }
+            }
+            if (!fired) Sleep(1);
+        }
+        CHECK(fired); drain(1);
+        CHECK_INT(list_calls, 2); CHECK_INT(session_calls, sessions); CHECK_INT(detail_calls, details);
+        HeaderInfo recovered = header(s); CHECK(!strstr(recovered.subtitle, "retry after"));
+        CHECK(!KillTimer(pane_hwnd(pane), 1)); CHECK(!KillTimer(pane_hwnd(pane), 5));
+        // A 60s Retry-After has its own timer and early delivery rechecks the gate.
+        list_status = 429; retry_header = "60";
+        s->vt->refresh(s); drain(issue_screen ? 3 : 2);
+        CHECK(KillTimer(pane_hwnd(pane), 5));
+        s->vt->timer(s, 5); CHECK_INT(list_calls, 3);
+        CHECK(KillTimer(pane_hwnd(pane), 5));
+        s->vt->visible(s, false); s->vt->timer(s, 5); CHECK_INT(list_calls, 3);
+        CHECK(!KillTimer(pane_hwnd(pane), 5));
+        s->vt->visible(s, true); CHECK(KillTimer(pane_hwnd(pane), 5));
+        expire(); list_status = 200; retry_header = NULL;
+        s->vt->timer(s, 5); drain(1); CHECK_INT(list_calls, 4);
+        pane_set_root(pane, NULL); CHECK(!KillTimer(pane_hwnd(pane), 5));
+    }
+}
 static void test_failed_deadline_write_keeps_account_repository_cooldown(void) {
     reset(); g_store.device.id = "d1";
     char *server = g_store.server;
@@ -313,6 +353,7 @@ void app_pulls_tests(void) {
     test_run("pull detail shares board list cooldown", test_pull_detail_shares_list_cooldown);
     test_run("pulls fresh reconciliation waits for in-flight snapshot", test_fresh_read_waits_for_inflight_snapshot);
     test_run("pulls route loss rearms board and issue polling", test_route_loss_rearms_board_and_issue_polling);
+    test_run("pulls board and issue retry at list deadlines", test_list_deadline_retries_board_and_issue);
     test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
     test_run("pulls saved cooldown survives cache invalidation", test_saved_deadline_survives_cache_invalidation);
     test_run("pull refresh invalidates in-flight rows", test_pull_refresh_invalidates_inflight_rows);

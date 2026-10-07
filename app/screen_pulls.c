@@ -52,8 +52,34 @@ enum { ACT_FORGE_BASE = 1180 }; // the Forge tab's, PROJECT_FORGE_ACTIONS of the
 enum { ACT_BOARD_BASE = 1200 }; // the Board tab's, BOARD_TAB_ACTIONS of them
 enum { ACT_REPO_FILES_BASE = 1220 }; // the Files tab's, PROJECT_FILES_ACTIONS of them
 enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD, TAB_REVIEW, TAB_FILES };
-enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3, TIMER_FILES_GOTO = 4 };
+enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3, TIMER_FILES_GOTO = 4, TIMER_LIST_RETRY = 5 };
 enum { ACTION_STRIDE = 64 };   // ACT_PULL_ACTION's argument: row * stride + errand
+
+// A list deadline must not replace the timer for sessions/actions and issue details.
+static void list_retry_stop(Poller *poller, bool *armed) {
+    if (poller->pane) KillTimer(pane_hwnd(poller->pane), TIMER_LIST_RETRY);
+    *armed = false;
+}
+static void list_retry_arm(Poller *poller, bool *armed, const char *repo) {
+    list_retry_stop(poller, armed);
+    time_t seconds = pulls_retry_deadline(repo) - time(NULL);
+    if (!poller->running || !store_supports("pulls") || seconds <= 0) return;
+    // Win32 caps timer intervals; long deadlines are checked again when the timer fires.
+    UINT delay = seconds > USER_TIMER_MAXIMUM / 1000 ? USER_TIMER_MAXIMUM : (UINT)seconds * 1000;
+    *armed = SetTimer(pane_hwnd(poller->pane), TIMER_LIST_RETRY, delay, NULL) != 0;
+}
+static bool list_retry_fired(Poller *poller, bool *armed, const char *repo, UINT id, bool paused) {
+    if (id != TIMER_LIST_RETRY || !*armed) return false;
+    list_retry_stop(poller, armed);
+    if (!poller->running || !store_supports("pulls")) return false;
+    if (time(NULL) < pulls_retry_deadline(repo)) { list_retry_arm(poller, armed, repo); return false; }
+    pane_header_changed(poller->pane);
+    if (!g_store.active || paused) {
+        *armed = SetTimer(pane_hwnd(poller->pane), TIMER_LIST_RETRY, 2000, NULL) != 0;
+        return false;
+    }
+    return true;
+}
 
 typedef struct {
     Screen base;
@@ -78,7 +104,7 @@ typedef struct {
     char *error;
     Request *req;
     Poller poller;
-    bool fresh_pending;
+    bool fresh_pending, list_retry_armed, list_retry_read;
     Json *catalog;      // the server's `actions`, for the buttons under each pull request
     Request *req_actions, *req_start;
     bool busy, uncertain, dialog_open;
@@ -247,7 +273,9 @@ static void pulls_done(void *owner, Request *req) {
         free(key);
         status_next(s);
     }
-    poller_finished(&s->poller, false, -1);
+    if (!s->list_retry_read) poller_finished(&s->poller, false, -1);
+    s->list_retry_read = false;
+    list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void board_actions_done(void *owner, Request *req) {
@@ -280,6 +308,7 @@ static void pulls_load(PullsScreen *s, bool fresh) {
     s->fresh_pending = s->fresh_pending || fresh;
     if (pulls_read(s->project.repo, s->fresh_pending, s, pulls_done, &s->req)) s->fresh_pending = false;
     else poller_finished(&s->poller, false, -1);
+    list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo);
     if (store_can_manage() && store_supports("actions") && !s->req_actions) store_call("actions", json_object(), 0, s, board_actions_done, 0, &s->req_actions);
     if (store_supports("sessions") && !s->req_runs) { Json *a = json_object(); json_set_str(a, "repo", s->project.repo); store_call("sessions", a, 0, s, runs_done, 0, &s->req_runs); }
 }
@@ -365,7 +394,7 @@ static void board_merge(PullsScreen *s, size_t index) {
 
 static void pulls_destroy(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); request_cancel(&s->req_merge); poller_stop(&s->poller);
+    request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_start); request_cancel(&s->req_merge); poller_stop(&s->poller); list_retry_stop(&s->poller, &s->list_retry_armed);
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
     request_cancel(&s->req_status); json_free(s->issue_status); json_free(s->status_read);
@@ -755,6 +784,11 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
 }
 static void pulls_timer(Screen *base, UINT id) {
     PullsScreen *s = (PullsScreen *)base;
+    if (list_retry_fired(&s->poller, &s->list_retry_armed, s->project.repo, id, s->dialog_open)) {
+        if (pulls_read(s->project.repo, s->fresh_pending, s, pulls_done, &s->req)) { s->fresh_pending = false; s->list_retry_read = true; }
+        pane_header_changed(base->pane);
+        return;
+    }
     if (project_run_timer(s->run, id)) return;
     if (project_files_timer(s->files, id)) return;
     if (poller_fired(&s->poller, id)) { if (s->dialog_open) poller_finished(&s->poller, false, -1); else pulls_load(s, false); }
@@ -787,8 +821,8 @@ static void pulls_visible(Screen *base, bool shown) {
     PullsScreen *s = (PullsScreen *)base;
     s->shown = shown;
     if (!shown) { project_ssh_place(s->ssh, NULL, 0, false); project_sftp_place(s->sftp, NULL, 0, false); project_run_place(s->run, NULL, 0, false); project_forge_place(s->forge, NULL, 0, false); project_files_place(s->files, NULL, 0, false); }
-    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
-    else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); request_cancel(&s->req_status); }
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 45000); list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo); }
+    else { poller_stop(&s->poller); list_retry_stop(&s->poller, &s->list_retry_armed); s->list_retry_read = false; request_cancel(&s->req); request_cancel(&s->req_actions); request_cancel(&s->req_runs); request_cancel(&s->req_status); }
 }
 static void pulls_refresh(Screen *base) {
     PullsScreen *s = (PullsScreen *)base;
@@ -2958,7 +2992,7 @@ typedef struct {
     IssueSummary *board_issues; size_t board_issue_count;
     PullSummary *board_pulls; size_t board_pull_count;
     bool board_read, gone;      // gone: the board was read and this issue is not on it
-    bool fresh_pending;
+    bool fresh_pending, list_retry_armed, list_retry_read;
     char *load_error, *detail_error;
     Json *detail;                        // the issue in full; NULL until read
     BoardLink *subs; size_t sub_count;   // every sub-issue it lists, closed ones and other repositories' included
@@ -2984,7 +3018,7 @@ static void issue_subs_free(IssueScreen *s) {
 static void issue_destroy(Screen *base) {
     IssueScreen *s = (IssueScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_close);
-    request_cancel(&s->req_detail); request_cancel(&s->req_timeline); poller_stop(&s->poller);
+    request_cancel(&s->req_detail); request_cancel(&s->req_timeline); poller_stop(&s->poller); list_retry_stop(&s->poller, &s->list_retry_armed);
     request_cancel(&s->req_edit); free(s->closed_reason);
     issue_summaries_free(s->board_issues, s->board_issue_count); pull_summaries_free(s->board_pulls, s->board_pull_count);
     sessions_free(s->runs, s->run_count);
@@ -3107,13 +3141,16 @@ static void issue_board_done(void *owner, Request *req) {
         cache_store(g_store.cache, saved, key); json_free(saved);
         free(key);
     }
-    poller_finished(&s->poller, false, -1);
+    if (!s->list_retry_read) poller_finished(&s->poller, false, -1);
+    s->list_retry_read = false;
+    list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void issue_load(IssueScreen *s, bool fresh) {
     s->fresh_pending = s->fresh_pending || fresh;
     if (pulls_read(s->project.repo, s->fresh_pending, s, issue_board_done, &s->req_board)) s->fresh_pending = false;
     else poller_finished(&s->poller, false, -1);
+    list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo);
     if (store_supports("issue") && !s->req_detail) {
         Json *a = json_object(); json_set_num(a, "issue", s->issue.number); json_set_str(a, "repo", s->project.repo);
         store_call("issue", a, 0, s, issue_detail_done, 0, &s->req_detail);
@@ -3763,12 +3800,17 @@ static Json *link_json(const BoardLink *l) {
 }
 static void issue_timer(Screen *base, UINT id) {
     IssueScreen *s = (IssueScreen *)base;
+    if (list_retry_fired(&s->poller, &s->list_retry_armed, s->project.repo, id, false)) {
+        if (pulls_read(s->project.repo, s->fresh_pending, s, issue_board_done, &s->req_board)) { s->fresh_pending = false; s->list_retry_read = true; }
+        pane_header_changed(base->pane);
+        return;
+    }
     if (poller_fired(&s->poller, id)) { request_cancel(&s->req_runs); issue_load(s, false); }
 }
 static void issue_visible(Screen *base, bool shown) {
     IssueScreen *s = (IssueScreen *)base;
-    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 45000);
-    else { poller_stop(&s->poller); request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_detail); }
+    if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 45000); list_retry_arm(&s->poller, &s->list_retry_armed, s->project.repo); }
+    else { poller_stop(&s->poller); list_retry_stop(&s->poller, &s->list_retry_armed); s->list_retry_read = false; request_cancel(&s->req_board); request_cancel(&s->req_runs); request_cancel(&s->req_detail); }
 }
 static void issue_activated(Screen *base, bool active) { if (active) issue_visible(base, true); }
 static const ScreenVTable issue_vt = {
