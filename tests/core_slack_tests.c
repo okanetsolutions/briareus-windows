@@ -102,6 +102,43 @@ static char *render_text(const char *source) {
     Json *m = json_object(); json_set_str(m, "text", source);
     char *text = slack_message_text(m, NULL); json_free(m); return text;
 }
+static void block_punctuation(void) {
+    const char *literals[] = {
+        "# deployment", "## deployment", "###### deployment", "  # deployment",
+        "---", "- - -", "___", "_ _ _", "***", "* * *", "~~~",
+        "- item", "+ item", "* item", "1. item", "2) item", "  999. item",
+        "first\n# deployment\n---\n+ item\n3) item",
+        "name | status\n--- | :---:\ndeploy | ready",
+        "| name | status |\n| --- | ---: |\n| deploy | ready |",
+        "# deployment\r\n---",
+    };
+    for (size_t i = 0; i < sizeof literals / sizeof *literals; i++) {
+        char *text = render_text(literals[i]); size_t n;
+        MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 1);
+        if (n == 1) {
+            CHECK_INT(blocks[0].kind, MD_PARAGRAPH);
+            char *expected = str_replace(literals[i], "\r\n", "\n");
+            CHECK_OWNED_STR(md_plain(blocks[0].text), expected); free(expected);
+        }
+        md_free(blocks, n); free(text);
+    }
+    char *text = render_text("> # quoted\n> ---\n\n```# code\n---\n1. code```# after\n\n*bold* _italic_ ~gone~ <https://example.com/a-b|open>");
+    size_t n; MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 4);
+    if (n == 4) {
+        CHECK_INT(blocks[0].kind, MD_QUOTE); CHECK_OWNED_STR(md_plain(blocks[0].text), "# quoted\n---");
+        CHECK_INT(blocks[1].kind, MD_CODE); CHECK_STR(blocks[1].text, "# code\n---\n1. code");
+        CHECK_INT(blocks[2].kind, MD_PARAGRAPH); CHECK_OWNED_STR(md_plain(blocks[2].text), "# after");
+        CHECK_INT(blocks[3].kind, MD_PARAGRAPH); CHECK_OWNED_STR(md_plain(blocks[3].text), "bold italic gone open");
+        size_t span_count; MdSpan *spans = md_inline(blocks[3].text, &span_count); CHECK_INT(span_count, 7);
+        if (span_count == 7) {
+            CHECK_INT(spans[0].flags, SPAN_BOLD); CHECK_INT(spans[2].flags, SPAN_ITALIC);
+            CHECK_INT(spans[4].flags, SPAN_STRIKE); CHECK_INT(spans[6].flags, SPAN_LINK);
+            CHECK_STR(spans[6].url, "https://example.com/a-b");
+        }
+        md_spans_free(spans, span_count);
+    }
+    md_free(blocks, n); free(text);
+}
 static void code_fences(void) {
     const struct { const char *source, *body; } cases[] = {
         { "```const x = 1;```", "const x = 1;" },
@@ -201,6 +238,7 @@ void slack_tests(void) {
     test_run("Slack empty cursors history and replies pagination", pagination);
     test_run("Slack workspace conversation and people shapes", directory);
     test_run("Slack mrkdwn blocks and metadata without attachment transport", rendering);
+    test_run("Slack literal block punctuation preserves rendered and copied text", block_punctuation);
     test_run("Slack fence boundaries preserve rendered and copied code", code_fences);
     test_run("Slack paired emphasis and literal unmatched markers", emphasis);
     test_run("Slack scoped drafts confirmed changed ambiguous refused and cancelled sends", drafts);

@@ -154,16 +154,44 @@ static const char *emphasis_close(const char *open) {
     }
     return NULL;
 }
+static const char *block_literal(const char *line) {
+    const char *p = line;
+    while (*p && *p != '\n' && isspace((unsigned char)*p)) p++;
+    if (*p == '#' || *p == '-' || *p == '+') return p;
+    const char *number = p;
+    while (isdigit((unsigned char)*p)) p++;
+    if (p > number && p - number <= 3 && (*p == '.' || *p == ')') && p[1] == ' ') return p;
+    // Marker-only lines and table delimiters are literal in ordinary Slack mrkdwn.
+    p = number;
+    if (*p == '_' || *p == '*' || *p == '~') {
+        const char *mark = p;
+        for (; *p && *p != '\n'; p++) if (*p != *mark && !isspace((unsigned char)*p)) return NULL;
+        return mark;
+    }
+    const char *dash = NULL;
+    for (; *p && *p != '\n'; p++) {
+        if (*p == '-' && !dash) dash = p;
+        else if (*p != '-' && *p != ':' && *p != '|' && !isspace((unsigned char)*p)) return NULL;
+    }
+    return dash;
+}
 static char *mrkdwn(const char *source, const Json *people) {
     Str s; str_init(&s); bool code = false, fence = false;
     const char *bold_close = NULL, *strike_close = NULL;
-    for (const char *p = source ? source : ""; *p; p++) {
-        if (*p == '`') {
+    const char *start = source ? source : "", *block_escape = NULL;
+    for (const char *p = start; *p; p++) {
+        if (p == start || p[-1] == '\n') block_escape = block_literal(p);
+        if (!code && !fence && p == block_escape && strchr("_*~", *p)) {
+            // Keep the entire literal rule from becoming inline emphasis as well.
+            for (; *p && *p != '\n'; p++) { if (strchr("_*~", *p)) str_appendc(&s, '\\'); str_appendc(&s, *p); }
+            p--;
+        } else if (*p == '`') {
             if (strncmp(p, "```", 3) == 0) {
                 // Slack has no fence language: adjacent text belongs to the code body.
                 if (s.len && s.data[s.len - 1] != '\n') str_appendc(&s, '\n');
                 fence = !fence; str_appendz(&s, "```");
                 if ((fence || p[3]) && p[3] != '\n' && !(p[3] == '\r' && p[4] == '\n')) str_appendc(&s, '\n');
+                if (!fence) block_escape = block_literal(p + 3);
                 p += 2;
             }
             else { code = !code; str_appendc(&s, '`'); }
@@ -188,6 +216,7 @@ static char *mrkdwn(const char *source, const Json *people) {
             else if (!*close) { *close = emphasis_close(p); paired = *close != NULL; }
             str_appendc(&s, paired ? *p : '\\'); str_appendc(&s, *p);
         }
+        else if (p == block_escape) { str_appendc(&s, '\\'); str_appendc(&s, *p); }
         else if (*p == '[' || *p == ']') { str_appendc(&s, '\\'); str_appendc(&s, *p); }
         else str_appendc(&s, *p);
     }
