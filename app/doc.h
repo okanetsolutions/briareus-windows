@@ -26,6 +26,7 @@ struct Item {
     bool hand;            // hand cursor
     int id;               // a screen's own marker, such as the bottom anchor
     Rich *sel;            // the item's text in runs, relative to rc, when it can be selected
+    size_t match_first, match_count; // this item's find matches
     bool sel_owned;       // `sel` is freed with the item (otherwise it is `data`)
     bool cell;            // a table cell, joined to one beside it with a tab when copied and kept even when empty
     char *tip;            // shown in a tooltip while the item is hovered; freed with the item
@@ -46,6 +47,8 @@ struct Doc {
     int hover;            // index of the hovered item or -1
     int pressed;
     DocPos sel_anchor, sel_focus;   // the text selection's ends, in either order; item -1 when there is none
+    wchar_t *query; size_t query_len;
+    DocPos *matches; size_t match_count, match_cap, match_current;
     bool selecting;                 // the mouse is dragging the selection
     int sticky_first, sticky_last;  // items that follow the scroll, as CSS `position: sticky`; none when equal
     int sticky_limit, sticky_shift; // the content y they stop at, and how far they are moved now
@@ -165,6 +168,13 @@ const char *doc_link_at(Doc *doc, int index, int x, int y);
 char *doc_item_plain_text(Doc *doc, int index);
 /// The first item with this id, or -1.
 int doc_find(Doc *doc, int id);
+
+/// Case-insensitive find in the rendered text (including Markdown and code); an empty query clears it.
+/// Matches and the current position survive layouts, independently of the mouse selection.
+void doc_search(Doc *doc, const wchar_t *query);
+void doc_search_step(Doc *doc, bool backward);
+/// The first line of the current match, in content coordinates; false when there is no match.
+bool doc_search_rect(Doc *doc, RECT *rc);
 
 // Selection: text items are selected with the mouse across items, as in a browser. The selection survives a layout at the
 // same items; the pane clears it when a screen changes.

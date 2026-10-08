@@ -63,6 +63,8 @@ typedef struct ScreenVTable {
     /// The screen may move, as it is, out of the main window into a window of its own and back: its child controls
     /// follow the pane it is shown in, and what it opens goes into that pane.
     bool detachable;
+    /// Ctrl+F searches this screen's rendered document, including from child controls.
+    bool searchable;
 } ScreenVTable;
 
 struct Screen {
@@ -130,6 +132,8 @@ int pane_scroll_x(Pane *pane);
 void pane_scroll_to(Pane *pane, int content_y);
 /// A screen asks the app to go to the foreground of the other pane, or to close itself.
 void pane_activate_all(bool active);
+/// Handles find shortcuts before TranslateMessage, including in detached windows and composers.
+bool pane_find_message(const MSG *message);
 
 /// Frees a screen's base fields; a screen's destroy calls it last.
 void screen_release(Screen *screen);

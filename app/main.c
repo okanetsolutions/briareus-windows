@@ -42,6 +42,7 @@ static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
 static int g_modal;            // dialogs open
 static bool g_modal_disabled;  // whether the first of them disabled the main window
+static HWND g_focus;           // what had the keyboard when the main window lost the foreground
 
 HWND app_window(void) { return g_main; }
 HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
@@ -263,6 +264,9 @@ void app_show_detail(Screen *screen) {
     pane_set_selected_id(g_sidebar, pane_root(g_detail) ? pane_root(g_detail)->id : NULL);
     g_narrow_detail = true;
     layout();
+    // Opened from the sidebar, keys follow to what opened, so Ctrl+F reaches the detail pane.
+    HWND focus = GetFocus(), detail = pane_hwnd(g_detail);
+    if (focus && g_sidebar && (focus == pane_hwnd(g_sidebar) || IsChild(pane_hwnd(g_sidebar), focus)) && IsWindowVisible(detail)) SetFocus(detail);
     InvalidateRect(g_main, NULL, TRUE);
 }
 // From the side panel, what an item links to opens in the panel, as GitHub's does.
@@ -400,6 +404,13 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == SIZE_MINIMIZED) set_active(detached_any_shown());
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }
         return 0;
+    case WM_ACTIVATE:
+        // Keys go back to where they went before the window lost the foreground, so Ctrl+F still reaches a pane.
+        if (LOWORD(wp) == WA_INACTIVE) { g_focus = GetFocus(); return 0; }
+        if (g_focus && IsChild(hwnd, g_focus) && IsWindowVisible(g_focus)) SetFocus(g_focus);
+        else if (g_detail && IsWindowVisible(pane_hwnd(g_detail))) SetFocus(pane_hwnd(g_detail));
+        else break;
+        return 0;
     case WM_ACTIVATEAPP: set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
@@ -536,6 +547,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     UpdateWindow(hwnd);
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
+        if (pane_find_message(&m)) continue;
         if (m.message == WM_KEYDOWN && (GetKeyState(VK_MENU) & 0x8000) && m.wParam == VK_LEFT) {
             // Alt+Left goes back in whichever pane has the focus: the detail's, or a window of its own's.
             HWND focus = GetFocus();

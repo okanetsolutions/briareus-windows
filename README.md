@@ -11,6 +11,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Lists the projects and conversations the device token permits, with search and status updates.
 - Shows incremental transcripts with the time of each message, agent questions, tool activity (collapsed into clusters, expandable) and queued messages. Workspace setup steps are left out.
 - Renders agent replies as Markdown: headings, paragraphs, bullet and numbered lists, task lists, quotes, code blocks with a copy button, tables, rules, bold, italic, strikethrough, inline code and links.
+- Finds text in a conversation with Ctrl+F, even from the composer or in a detached window: case-insensitive matches are highlighted with a count, Enter/F3 advances, Shift+Enter/Shift+F3 goes back, and Escape closes the find bar; searches include rendered Markdown and code in expanded tool output.
 - Selects text as a browser does: drag across messages, double-click a word, Ctrl+A for everything; Ctrl+C or the right-click menu copies it. The menu also copies the paragraph under the pointer.
 - Starts conversations on a chosen branch, provider, model and effort, or on the project default.
 - Sends follow-ups (Enter sends, Shift+Enter breaks a line), renames, stops, closes, reopens and deletes sessions.
