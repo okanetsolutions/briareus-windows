@@ -353,6 +353,10 @@ static void find_status(Pane *p) {
     else if (!p->doc.match_count) snprintf(status, sizeof status, "No matches");
     else snprintf(status, sizeof status, "%zu / %zu", p->doc.match_current + 1, p->doc.match_count);
     wchar_t *w = utf8_to_wide(status); SetWindowTextW(p->find_status, w); free(w);
+    if (!p->doc.match_count) {
+        HWND f = GetFocus(); // a disabled focused button would leave nothing focused and the find keys dead
+        if (f == p->find_prev || f == p->find_next) SetFocus(p->find_edit);
+    }
     EnableWindow(p->find_prev, p->doc.match_count != 0); EnableWindow(p->find_next, p->doc.match_count != 0);
 }
 static void find_layout(Pane *p) {
