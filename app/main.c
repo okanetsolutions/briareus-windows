@@ -422,7 +422,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_ERASEBKGND: return 1;
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(360); return 0; }
-    case WM_APP_STORE_CHANGED: rebuild_for_connection(); return 0;
+    case WM_APP_STORE_CHANGED: slack_inbox_store_changed(); rebuild_for_connection(); return 0;
     case WM_APP_POP_OUT: pop_out_detail(); return 0;
     case WM_APP_MEDIA_CHANGED: if (g_sidebar) pane_footer_changed(g_sidebar); return 0;
     case WM_APP_REQUEST_DONE: case WM_APP_ASYNC_DONE: store_handle_message(msg, wp, lp); return 0;

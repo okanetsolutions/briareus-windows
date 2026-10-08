@@ -907,5 +907,6 @@ int main(void) {
     mail_tests();
     mail_inbox_tests();
     repo_index_tests();
+    slack_tests();
     return test_summary();
 }

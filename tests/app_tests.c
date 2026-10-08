@@ -9,6 +9,7 @@ int main(void) {
     app_store_tests();
     app_contract_tests();
     app_sql_tests();
+    app_slack_tests();
     app_mcp_settings_tests();
     app_mail_tests();
     app_mail_inbox_tests();

@@ -542,7 +542,7 @@ static void layout_slack(SettingsScreen *s, Doc *doc, int w, const char *selecte
         d->label = xstrdup("New Slack workspace"); d->repo = xstrdup("not saved yet"); d->selected = true;
         doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, 0, 0);
     }
-    if (s->slack_loaded && !json_count(rows) && !s->slack_error) doc_text(doc, px(8), w - px(16), "No Slack workspaces yet. \xEF\xBC\x8B New lets a project's sessions send Slack messages as you and hear the replies.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (s->slack_loaded && !json_count(rows) && !s->slack_error) doc_text(doc, px(8), w - px(16), "No Slack workspaces yet. \xEF\xBC\x8B New connects an operator inbox and optionally lets project sessions send messages.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->slack_loaded) doc_loading(doc, 0, w, "Loading Slack workspaces\xE2\x80\xA6");
 }
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
@@ -2717,7 +2717,7 @@ static const FieldDef SLACK_FIELDS[W_COUNT] = {
         "Lets the replies Slack sends to the Request URL below reach the sessions. Stored encrypted and never sent back.", 0, true },
 };
 /// The user token scopes the server's Slack tools call with.
-static const char SLACK_SCOPES[] = "chat:write, users:read, channels:read, groups:read, im:write, im:history, channels:history and groups:history";
+static const char SLACK_SCOPES[] = "chat:write, users:read, channels:read, groups:read, im:read, mpim:read, im:write, mpim:write, channels:write, groups:write, im:history, mpim:history, channels:history and groups:history";
 
 enum { ACT_SLACK_SAVE = 1400, ACT_SLACK_DELETE, ACT_SLACK_REPO, ACT_SLACK_FOCUS, ACT_SLACK_DM, ACT_SLACK_MODE, ACT_SLACK_COPY };
 enum { ID_SLACK_FIELD = 2300, ID_SLACK_CHANNELS = 2400 };
@@ -3008,7 +3008,7 @@ static void slack_connection(SlackForm *s, Doc *doc, int x, int w) {
 /// Where Slack sends the replies: the Request URL for the app's Event Subscriptions, with a Copy button.
 static void slack_events(SlackForm *s, Doc *doc, int x, int w) {
     doc_field_label(doc, x, w, "Request URL", theme.ink,
-        "Turn on the Slack app's Event Subscriptions with this as the Request URL, and subscribe on behalf of users to message.im, message.channels and message.groups. Like the server's other webhooks, the path must bypass Cloudflare Access.");
+        "Turn on the Slack app's Event Subscriptions with this as the Request URL, and subscribe on behalf of users to message.im, message.mpim, message.channels and message.groups. Like the server's other webhooks, the path must bypass Cloudflare Access.");
     doc_space(doc, px(6));
     const char *url = json_str_nonempty(json_get(s->row, "eventsUrl"));
     if (!s->id) {
@@ -3025,7 +3025,7 @@ static void slack_events(SlackForm *s, Doc *doc, int x, int w) {
         doc_button(doc, x + cw + px(14), 0, "Copy", BUTTON_PLAIN, ACT_SLACK_COPY, 0, true);
         if (doc->y < bottom) doc->y = bottom;
         doc_space(doc, px(6));
-        doc_text(doc, x, w, "Subscribe on behalf of users to message.im, message.channels and message.groups.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        doc_text(doc, x, w, "Subscribe on behalf of users to message.im, message.mpim, message.channels and message.groups.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
         if (!slack_has(s, "hasSigningSecret")) {
             doc_space(doc, px(4));
             doc_text(doc, x, w, "Replies reach the sessions once the signing secret is saved.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
@@ -3036,7 +3036,7 @@ static void slack_events(SlackForm *s, Doc *doc, int x, int w) {
 /// The projects that may send through the workspace, one tick box each; a ticked one opens its channels, whether it may
 /// write to people and whether each message waits for approval.
 static void slack_projects(SlackForm *s, Doc *doc, int x, int w) {
-    doc_field_label(doc, x, w, "Projects", theme.ink, "The projects whose sessions may send through this workspace. A project sends through one workspace at most.");
+    doc_field_label(doc, x, w, "Projects", theme.ink, "The projects whose sessions may send through this workspace. Leave every project unticked for an inbox-only workspace (projects: []). A project sends through one workspace at most.");
     doc_space(doc, px(6));
     Json *choices = slack_choices(s);
     const Json *rows = g_settings ? settings_rows(g_settings) : NULL;
@@ -3074,7 +3074,7 @@ static void slack_projects(SlackForm *s, Doc *doc, int x, int w) {
             FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
         doc_space(doc, px(14));
     }
-    if (!json_count(choices)) doc_text(doc, x, w, "No projects yet. Add one under Projects first.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    if (!json_count(choices)) doc_text(doc, x, w, "No projects assigned: this workspace can be used only in the operator inbox (projects: []).", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     json_free(choices);
     doc_space(doc, px(14));
 }

@@ -324,6 +324,15 @@ static const Expected ROUTE_TABLE[] = {
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
+    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
+    { "slack_people", "GET", "slack/workspaces/{id}/people" },
+    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
+    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
+    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     { "mail_messages", "GET", "mail/messages" },
     { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
     { "settings_mail_accounts", "GET", "settings/mail/accounts" },
@@ -984,6 +993,31 @@ static void test_retry_after_http_dates(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { if (api_retry_after(bad[i], 0) >= 0) printf("  read %s\n", bad[i]); CHECK(api_retry_after(bad[i], 0) < 0); }
 }
 
+static void test_slack_json_contract_and_no_retry(void) {
+    Stub stub = {0}; stub_json(&stub, 201, "{\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"workspaceChanged\":true}");
+    ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    Json *args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"threadTs\":\"1712345678.000001\",\"text\":\"human reply\"}");
+    Json *result = api_call(c, "slack_send", args, 0, &error);
+    CHECK(result && json_bool_is(json_get(result, "workspaceChanged"), true)); CHECK_INT(stub.calls, 1);
+    CHECK_STR(stub.last_url, BASE "slack/workspaces/1727000000002/conversations/C1/messages");
+    Json *sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "threadTs")), "1712345678.000001");
+    CHECK(json_is_null(json_get(sent, "id"))); CHECK(json_is_null(json_get(sent, "channel"))); json_free(sent); json_free(result);
+    const int failures[] = {401, 403, 404, 409, 429, 503};
+    for (size_t i = 0; i < sizeof failures / sizeof *failures; i++) {
+        stub_json(&stub, failures[i], "{\"error\":\"Slack refused the workspace token\"}"); stub.retry_after = "60";
+        int calls = stub.calls; result = api_call(c, "slack_send", args, 0, &error);
+        CHECK(!result); CHECK_INT(stub.calls, calls + 1); CHECK_INT(error.status, failures[i]); CHECK(error.retry_after == 60);
+    }
+    stub.fail = true; stub.fail_message = "Timed out"; int calls = stub.calls;
+    CHECK(api_call(c, "slack_send", args, 0, &error) == NULL); CHECK_INT(stub.calls, calls + 1); CHECK(error.kind == API_NETWORK);
+    stub_json(&stub, 200, "{\"messages\":[],\"nextCursor\":\"more\",\"hasMore\":true}"); json_free(args);
+    args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"cursor\":\"empty page\",\"oldest\":\"1.000000001\",\"latest\":\"2.000000001\"}");
+    result = api_call(c, "slack_thread", args, 0, &error); CHECK(result != NULL);
+    CHECK(strstr(stub.last_url, "/threads/1712345678.000001?") != NULL);
+    CHECK(strstr(stub.last_url, "cursor=empty%20page") != NULL); CHECK(strstr(stub.last_url, "oldest=1.000000001") != NULL); CHECK(strstr(stub.last_url, "latest=2.000000001") != NULL);
+    json_free(result); json_free(args); api_client_release(c); api_error_clear(&error); stub_reset(&stub);
+}
+
 static void test_final_catalog_transport_and_session_requests(void) {
     Str fixture; str_init(&fixture);
     for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
@@ -1113,6 +1147,7 @@ static void test_mail_transport_contract(void) {
 }
 
 void api_tests(void) {
+    test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
     test_run("mail read routes encode opaque IDs filters and cursors without writes or retries", test_mail_read_transport);

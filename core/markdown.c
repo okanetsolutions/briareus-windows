@@ -295,7 +295,7 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
 #define FLUSH() do { if (plain.len) { emit(out, flags, plain.data, plain.len, NULL); plain.len = 0; if (plain.data) plain.data[0] = 0; } } while (0)
     while (p < end) {
         char c = *p;
-        if (c == '\\' && p + 1 < end && strchr("\\`*_[]()<>#~!|", p[1])) { str_appendc(&plain, p[1]); p += 2; continue; }
+        if (c == '\\' && p + 1 < end && strchr("\\`*_[]()<>#~!|-+.", p[1])) { str_appendc(&plain, p[1]); p += 2; continue; }
         if (c == '&') {
             // The entities GitHub's renderer leaves in agent replies.
             static const struct { const char *name; const char *text; } entities[] = {
