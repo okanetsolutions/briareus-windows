@@ -242,6 +242,8 @@ static void paint_pill(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 /// `text` is the hit-test name; `shown` is what the pill draws. The item's text stays exact for the account address.
 static void add_pill(Doc *doc, int *x, int *y, int left, int right, int h, const char *text, const char *shown, bool on, bool enabled, int action, intptr_t arg) {
     int tw = text_width(doc->cv, shown, FONT_CAPTION) + px(22), maxw = right - left;
+    // A raw provider address (Outlook's #EXT# name) must not stretch the whole row.
+    if (tw > px(240)) tw = px(240);
     if (tw > maxw) tw = maxw;
     if (tw < px(36)) tw = px(36);
     if (*x > left && *x + tw > right) { *x = left; *y += h + px(6); }
@@ -272,6 +274,22 @@ static void filter_row(Doc *doc, int x, int w, const char *label, const char *co
     doc_text_at(doc, &lr, label, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     doc_segments(doc, x + label_w + px(8), w - label_w - px(8), titles, 3, selected, action, -1, true);
     doc_space(doc, px(6));
+}
+/// Label beside the address. The shared labeled row pins short values to the right edge, which strands a recipient across a wide reader.
+static void layout_address(Doc *doc, int x, int w, const char *label, const char *value) {
+    int y = doc->y, gap = px(8), lw = text_width(doc->cv, label, FONT_CAPTION);
+    int vw = w - lw - gap;
+    if (vw < px(120)) { vw = w; lw = 0; }
+    int h = measure_text(doc->cv, value, vw, FONT_CAPTION, DT_WORDBREAK | DT_EDITCONTROL);
+    int lh = font_height(doc->cv, FONT_CAPTION);
+    if (h < lh) h = lh;
+    if (lw) {
+        RECT lr = { x, y, x + lw, y + lh };
+        doc_text_at(doc, &lr, label, FONT_CAPTION, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    }
+    RECT vr = { x + (lw ? lw + gap : 0), y, x + w, y + h };
+    doc_text_at(doc, &vr, value, FONT_CAPTION, theme.ink, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_EDITCONTROL);
+    doc->y = y + h + px(2);
 }
 static bool row_open(const Inbox *s, const MailMessage *m) {
     return s->selected_id && s->selected_account == m->account_id && str_eq(s->selected_id, m->id);
@@ -333,9 +351,9 @@ static void layout_reader(Inbox *s, Doc *doc, int x, int w, bool available) {
         doc_space(doc, px(4));
         message_meta(doc, ix, iw, m, &s->accounts);
         doc_space(doc, px(10));
-        if (!str_empty(m->to)) doc_labeled(doc, ix, iw, "To", m->to, theme.ink);
-        if (!str_empty(m->cc)) doc_labeled(doc, ix, iw, "Cc", m->cc, theme.ink);
-        if (!str_empty(m->reply_to)) doc_labeled(doc, ix, iw, "Reply-To", m->reply_to, theme.ink);
+        if (!str_empty(m->to)) layout_address(doc, ix, iw, "To", m->to);
+        if (!str_empty(m->cc)) layout_address(doc, ix, iw, "Cc", m->cc);
+        if (!str_empty(m->reply_to)) layout_address(doc, ix, iw, "Reply-To", m->reply_to);
         if (m->web_url || m->truncated) doc_space(doc, px(8));
         if (m->web_url) doc_button(doc, ix, 0, "Open at provider", BUTTON_BORDERED, ACT_PROVIDER, 0, true);
         if (m->truncated) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, "The server truncated this body. Open at the provider to read the complete message."); }
