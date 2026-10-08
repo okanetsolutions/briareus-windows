@@ -3,6 +3,7 @@
 #include "dialogs.h"
 #include "mail.h"
 #include "mail_settings.h"
+#include <commctrl.h>
 #include <limits.h>
 #include <math.h>
 #include "str.h"
@@ -11,8 +12,8 @@
 #include <string.h>
 #include <time.h>
 
-enum { ACT_CONNECT = 1800, ACT_REAUTH, ACT_LABEL, ACT_ENABLED, ACT_DAYS, ACT_DELETE, ACT_SYNC, ACT_FINISH, ACT_CANCEL, ACT_BROWSER_DONE };
-enum { TIMER_MAIL = 1810 };
+enum { ACT_CONNECT = 1800, ACT_REAUTH, ACT_ENABLED, ACT_DAYS, ACT_DELETE, ACT_SYNC, ACT_FINISH, ACT_CANCEL, ACT_BROWSER_DONE, ACT_SAVE, ACT_FOCUS };
+enum { TIMER_MAIL = 1810, ID_MAIL_LABEL = 2500 };
 typedef struct {
     Screen base;
     MailAccounts accounts;
@@ -22,7 +23,16 @@ typedef struct {
     int starting_id, failures, focus;
     bool shown, loaded, blocked, modal, retired, read_error;
     ULONGLONG next_read, retry_until;
+    // The label is a field on the page, as a project's Label is, saved with Save. Not a dialog.
+    HWND label_edit;
+    RECT label_rect;
+    bool label_laid, label_clipped, label_focused, dirty, filling, label_write;
 } MailScreen;
+static char *edit_text(HWND edit);
+static void set_edit_text(HWND edit, const char *text);
+static void label_fill(MailScreen *s);
+static void label_save(MailScreen *s);
+static void label_field(MailScreen *s, Doc *doc, int x, int w);
 
 bool mail_settings_offered(void) { return g_store.has_device && permission_rank(g_store.device.permission) == 2 && store_supports("settings_mail_accounts"); }
 static double now_ms(void) { FILETIME ft; GetSystemTimeAsFileTime(&ft); ULARGE_INTEGER n; n.LowPart = ft.dwLowDateTime; n.HighPart = ft.dwHighDateTime; return (double)(n.QuadPart / 10000ULL - 11644473600000ULL); }
@@ -44,6 +54,7 @@ static bool can_write(MailScreen *s, const char *op) { return s->shown && !s->bl
 static void repaint(MailScreen *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
 static void load(MailScreen *s);
 static void release(MailScreen *s) {
+    if (s->label_edit) { DestroyWindow(s->label_edit); s->label_edit = NULL; }
     mail_sign_in_free(&s->sign_in); mail_accounts_free(&s->accounts);
     free(s->error); free(s->notice); free(s->starting_provider); screen_release(&s->base);
 }
@@ -86,6 +97,7 @@ static void read_done(void *owner, Request *r) {
         }
         mail_accounts_free(&s->accounts); s->accounts = fresh;
         settings_mail_changed(r->result);
+        label_fill(s);
         if (s->sign_in.state || syncing(s)) arm(s, 10000);
     }
     repaint(s);
@@ -133,7 +145,9 @@ static void write_done(void *owner, Request *r) {
     MailScreen *s = owner;
     if (!current(s, r)) return;
     bool finish = str_eq(r->operation, "finish_mail_account");
+    bool label_write = s->label_write;
     if (finish) { stop_waiting(s); set_text(&s->notice, NULL); } // Exchanges are single-use, including a refusal or ambiguous network failure.
+    char *saved_label = NULL;
     if (!r->ok) { failed(s, r, finish); }
     else {
         bool deletion = str_eq(r->operation, "delete_mail_account");
@@ -142,6 +156,7 @@ static void write_done(void *owner, Request *r) {
         if (valid && !deletion) {
             if (!finish && a.id != r->tag) valid = false;
             if (finish && s->starting_id && a.id != s->starting_id) valid = false;
+            if (valid && label_write) saved_label = xstrdup(a.label ? a.label : "");
             mail_account_free(&a);
         }
         if (!valid) set_error(s, "The server returned an unexpected mail response. Refresh before trying again.", false);
@@ -153,6 +168,19 @@ static void write_done(void *owner, Request *r) {
                 : finish ? "Mailbox connected; refreshing status."
                 : "Account settings saved; refreshing status.");
         }
+    }
+    if (label_write) {
+        s->label_write = false;
+        // A keystroke after Save started is kept. The box is saved only when it still matches the answer.
+        if (saved_label && s->label_edit) {
+            char *now = edit_text(s->label_edit), *trim = str_trim(now);
+            if (str_eq(trim, saved_label)) {
+                s->filling = true; set_edit_text(s->label_edit, saved_label); s->filling = false; s->dirty = false;
+            }
+            free(now); free(trim);
+        }
+        free(saved_label);
+        pane_header_changed(s->base.pane);
     }
     if (!s->blocked && GetTickCount64() >= s->retry_until) { s->next_read = 0; load(s); }
     repaint(s);
@@ -187,12 +215,7 @@ static void update(MailScreen *s, const MailAccount *a, int action) {
     int id = a->id; bool enabled = a->enabled;
     char *label = xstrdup(a->label ? a->label : ""), *days = xstrfmt("%d", a->sync_days);
     Json *body = NULL;
-    if (action == ACT_LABEL) {
-        modal_begin(s);
-        char *v = dialog_text(pane_hwnd(s->base.pane), "Mailbox label", "Label", "Save", label);
-        if (!modal_end(s)) { free(v); free(label); free(days); return; }
-        if (v) { body = mail_settings_body(v, enabled, days); free(v); }
-    } else if (action == ACT_DAYS) {
+    if (action == ACT_DAYS) {
         modal_begin(s);
         char *v = dialog_text(pane_hwnd(s->base.pane), "Mail sync window", "Days to keep (1-365); changing this restarts the first sync", "Save", days);
         if (!modal_end(s)) { free(v); free(label); free(days); return; }
@@ -200,8 +223,8 @@ static void update(MailScreen *s, const MailAccount *a, int action) {
     } else body = mail_settings_body(label, !enabled, days);
     free(label); free(days);
     if (body && can_write(s, "update_mail_account") && mail_account_find(&s->accounts, id)) {
-        // Send only the field edited; another client may have changed the other settings during the dialog.
-        if (action != ACT_LABEL) json_object_remove(body, "label");
+        // Send only the field edited. The label is the page's own field, saved with Save.
+        json_object_remove(body, "label");
         if (action != ACT_ENABLED) json_object_remove(body, "enabled");
         if (action != ACT_DAYS) json_object_remove(body, "syncDays");
         json_set_num(body, "id", id);
@@ -221,11 +244,13 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     }
     if (act == ACT_FINISH) { finish(s); return; }
     if (act == ACT_CONNECT) { start(s, arg == 0 ? "gmail" : "outlook", 0); return; }
+    if (act == ACT_SAVE) { label_save(s); return; }
+    if (act == ACT_FOCUS) { if (s->label_edit && IsWindowEnabled(s->label_edit)) SetFocus(s->label_edit); return; }
     const MailAccount *a = mail_account_find(&s->accounts, (int)arg);
     if (!a) return;
     int id = a->id;
     if (act == ACT_REAUTH) { start(s, a->provider, id); return; }
-    if (act == ACT_LABEL || act == ACT_DAYS || act == ACT_ENABLED) { update(s, a, act); return; }
+    if (act == ACT_DAYS || act == ACT_ENABLED) { update(s, a, act); return; }
     const char *op = act == ACT_DELETE ? "delete_mail_account" : act == ACT_SYNC ? "sync_mail_account" : NULL;
     if (!op || !can_write(s, op)) return;
     if (act == ACT_DELETE) {
@@ -246,6 +271,12 @@ static void header(Screen *base, HeaderInfo *info) {
         snprintf(info->title, sizeof info->title, "%s", title ? title : "Mailbox");
         if (!str_empty(a->label) && a->email) snprintf(info->subtitle, sizeof info->subtitle, "%s", a->email);
         else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+        if (store_supports("update_mail_account")) {
+            HeaderButton *b = &info->buttons[info->button_count++];
+            snprintf(b->label, sizeof b->label, "%s", s->label_write ? "Saving\xE2\x80\xA6" : "Save");
+            b->glyph = 0xE74E; b->action = ACT_SAVE; b->prominent = true; b->tip = "Save this mailbox (Ctrl+S)";
+            b->enabled = s->dirty && can_write(s, "update_mail_account");
+        }
         return;
     }
     snprintf(info->title, sizeof info->title, "Mail accounts");
@@ -278,24 +309,142 @@ static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccoun
     if (str_eq(a->status, "reauth")) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, "Provider access expired or was revoked. Sign in again with this mailbox."); }
     bool edit = can_write(s, "update_mail_account");
     ButtonSpec buttons[] = {
-        { 0, "Label", BUTTON_BORDERED, ACT_LABEL, a->id, edit },
         { 0, a->enabled ? "Disable" : "Enable", BUTTON_BORDERED, ACT_ENABLED, a->id, edit },
         { 0, "Sync days", BUTTON_BORDERED, ACT_DAYS, a->id, edit },
         { 0, "Sign in again", BUTTON_BORDERED, ACT_REAUTH, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
         { 0, "Sync now", BUTTON_BORDERED, ACT_SYNC, a->id, can_write(s, "sync_mail_account") && !a->syncing && str_eq(a->status, "connected") },
         { 0, "Disconnect", BUTTON_DESTRUCTIVE, ACT_DELETE, a->id, can_write(s, "delete_mail_account") },
     };
-    const char *ops[] = { "update_mail_account", "update_mail_account", "update_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
-    ButtonSpec offered[6]; size_t n = 0;
+    const char *ops[] = { "update_mail_account", "update_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
+    ButtonSpec offered[5]; size_t n = 0;
     for (size_t k = 0; k < sizeof buttons / sizeof *buttons; k++) if (store_supports(ops[k])) offered[n++] = buttons[k];
     if (n) { doc_space(doc, px(12)); doc_button_row(doc, ix, iw, offered, n); }
     doc_box_end(doc, box, pad);
     doc_space(doc, px(12));
 }
+static char *edit_text(HWND edit) {
+    int n = GetWindowTextLengthW(edit);
+    wchar_t *w = xmalloc(((size_t)n + 1) * sizeof *w);
+    GetWindowTextW(edit, w, n + 1);
+    char *text = wide_to_utf8(w); free(w);
+    return text;
+}
+static void set_edit_text(HWND edit, const char *text) { wchar_t *w = utf8_to_wide(text ? text : ""); SetWindowTextW(edit, w); free(w); }
+static const char *saved_label(const MailScreen *s) {
+    const MailAccount *a = mail_account_find(&s->accounts, s->focus);
+    return a && a->label ? a->label : "";
+}
+static bool label_differs(MailScreen *s) {
+    if (!s->label_edit || s->focus <= 0) return false;
+    char *now = edit_text(s->label_edit);
+    bool differs = !str_eq(now, saved_label(s));
+    free(now);
+    return differs;
+}
+static void label_changed(MailScreen *s) {
+    if (s->filling) return;
+    bool dirty = label_differs(s);
+    if (dirty == s->dirty) return;
+    s->dirty = dirty;
+    pane_header_changed(s->base.pane);
+    pane_relayout(s->base.pane);
+}
+static void label_fill(MailScreen *s) {
+    if (!s->label_edit || s->dirty || s->focus <= 0 || !mail_account_find(&s->accounts, s->focus)) return;
+    s->filling = true;
+    set_edit_text(s->label_edit, saved_label(s));
+    s->filling = false;
+    s->dirty = false;
+}
+static LRESULT CALLBACK label_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref);
+static void label_ensure(MailScreen *s) {
+    if (s->label_edit || !s->base.pane) return;
+    HWND e = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(s->base.pane), (HMENU)(INT_PTR)ID_MAIL_LABEL, GetModuleHandleW(NULL), NULL);
+    SendMessageW(e, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
+    SendMessageW(e, EM_SETLIMITTEXT, 200, 0); // The server refuses a label longer than 200 characters.
+    { wchar_t *w = utf8_to_wide("shown in the mail menu"); SendMessageW(e, EM_SETCUEBANNER, TRUE, (LPARAM)w); free(w); }
+    SetWindowSubclass(e, label_proc, ID_MAIL_LABEL, (DWORD_PTR)s);
+    theme_apply_control(e);
+    s->label_edit = e;
+    label_fill(s);
+}
+static void label_save(MailScreen *s) {
+    if (!s->dirty || !s->label_edit || !can_write(s, "update_mail_account")) return;
+    const MailAccount *a = mail_account_find(&s->accounts, s->focus);
+    if (!a) return;
+    char *now = edit_text(s->label_edit), *label = str_trim(now);
+    free(now);
+    if (str_eq(label, a->label ? a->label : "")) {
+        s->filling = true; set_edit_text(s->label_edit, label); s->filling = false; s->dirty = false;
+        free(label); pane_header_changed(s->base.pane); pane_relayout(s->base.pane); return;
+    }
+    char *days = xstrfmt("%d", a->sync_days);
+    Json *body = mail_settings_body(label, a->enabled, days);
+    free(label); free(days);
+    if (!body) return;
+    json_object_remove(body, "enabled");
+    json_object_remove(body, "syncDays");
+    json_set_num(body, "id", a->id);
+    s->label_write = true;
+    store_call("update_mail_account", body, 0, s, write_done, a->id, &s->write);
+    repaint(s);
+}
+static LRESULT CALLBACK label_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    MailScreen *s = (MailScreen *)ref;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    switch (msg) {
+    case WM_KEYDOWN:
+        if (ctrl && wp == 'S') { label_save(s); return 0; }
+        if (ctrl && wp == 'A') { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+        if (wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+        if (wp == VK_RETURN) { label_save(s); return 0; }
+        break;
+    case WM_CHAR:
+        if (wp == 0x13 || wp == 0x01 || wp == 0x1B || wp == '\r') return 0;
+        break;
+    case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
+    case WM_NCDESTROY: RemoveWindowSubclass(hwnd, label_proc, id); break;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+static void paint_label_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc;
+    MailScreen *s = it->data;
+    bool on = s->label_edit && IsWindowEnabled(s->label_edit);
+    COLORREF border = s->label_focused ? theme.accent_dim : theme.line;
+    fill_round_rect(cv, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
+}
+/// The Label box, as a project form lays its fields out. The edit itself is placed over it.
+static void label_field(MailScreen *s, Doc *doc, int x, int w) {
+    label_ensure(s);
+    bool on = store_supports("update_mail_account") && !s->blocked;
+    doc_field_label(doc, x, w, "Label", on ? theme.ink : theme.muted, NULL);
+    doc_space(doc, px(6));
+    int fh = edit_line_height(FONT_BODY), h = px(36);
+    RECT box = { x, doc->y, x + w, doc->y + h };
+    Item *it = doc_item(doc, doc_add(doc, &box, paint_label_box));
+    it->data = s; it->action = ACT_FOCUS;
+    s->label_rect = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
+    s->label_laid = true;
+    if (s->label_edit) EnableWindow(s->label_edit, on);
+    doc->y = box.bottom;
+    doc_space(doc, px(14));
+}
+/// The project settings tab bar, with the one Mailbox tab. A dot follows the title while the label is unsaved.
+static void layout_tab(MailScreen *s, Doc *doc, int w) {
+    int h = px(42), tx = 0, ty = doc->y;
+    doc_tab(doc, &tx, &ty, 0, w, h, 0xE715, s->dirty ? "Mailbox \xE2\x80\xA2" : "Mailbox", NULL, true, 0, 0);
+    doc->y = ty + h;
+    doc_rule(doc, 0, w);
+    doc_space(doc, px(18));
+}
 static void layout(Screen *base, Doc *doc) {
-    MailScreen *s = (MailScreen *)base; int x = px(20), w = doc->width - 2 * x;
-    doc_space(doc, px(16));
+    MailScreen *s = (MailScreen *)base;
+    int col = doc->width, x = px(20), w = col - 2 * x;
+    s->label_laid = false;
+    doc_space(doc, px(8));
     if (!mail_settings_offered()) { doc_notice(doc, x, w, "Mail settings are unavailable: this server must advertise the mail account route and this device needs an Admin token."); return; }
+    layout_tab(s, doc, col);
     if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
     if (s->notice) { doc_text(doc, x, w, s->notice, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(12)); }
     if (!s->loaded) { if (!s->blocked) doc_loading(doc, x, w, "Loading mail accounts..."); return; }
@@ -315,7 +464,8 @@ static void layout(Screen *base, Doc *doc) {
     }
     if (s->focus > 0) {
         const MailAccount *a = mail_account_find(&s->accounts, s->focus);
-        if (!a) { doc_text(doc, x, w, "This mailbox is no longer connected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); return; }
+        if (!a) { s->label_laid = false; doc_text(doc, x, w, "This mailbox is no longer connected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); return; }
+        label_field(s, doc, x, w);
         account_card(s, doc, x, w, a);
         return;
     }
@@ -351,10 +501,66 @@ static void refresh(Screen *base) {
     s->next_read = 0;
     s->blocked = false; request_cancel(&s->read); set_error(s, NULL, false); load(s);
 }
+static int margin_of(Pane *pane) { RECT rc; GetClientRect(pane_hwnd(pane), &rc); return (rc.right - rc.left - pane_content_width(pane)) / 2; }
+static void place(Screen *base, const RECT *content, int scroll_y) {
+    MailScreen *s = (MailScreen *)base;
+    HWND e = s->label_edit;
+    if (!e) return;
+    if (!s->shown || !s->label_laid) { ShowWindow(e, SW_HIDE); return; }
+    int m = margin_of(base->pane);
+    RECT r = { content->left + m + s->label_rect.left, content->top + s->label_rect.top - scroll_y, content->left + m + s->label_rect.right, content->top + s->label_rect.bottom - scroll_y };
+    RECT visible;
+    if (!IntersectRect(&visible, &r, content)) { ShowWindow(e, SW_HIDE); return; }
+    MoveWindow(e, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
+    bool clipped = !EqualRect(&visible, &r);
+    if (clipped) SetWindowRgn(e, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
+    else if (s->label_clipped) SetWindowRgn(e, NULL, TRUE);
+    s->label_clipped = clipped;
+    ShowWindow(e, SW_SHOWNA);
+}
+static void command(Screen *base, int id, int code, HWND control) {
+    (void)control;
+    MailScreen *s = (MailScreen *)base;
+    if (id != ID_MAIL_LABEL || !s->label_edit) return;
+    switch (code) {
+    case EN_CHANGE: label_changed(s); break;
+    case EN_SETFOCUS: {
+        s->label_focused = true;
+        RECT content = pane_content_rect(base->pane);
+        int top = s->label_rect.top - px(40), bottom = s->label_rect.bottom + px(16), y = pane_scroll_y(base->pane);
+        if (top < y || bottom > y + (content.bottom - content.top)) pane_scroll_to(base->pane, top);
+        pane_repaint(base->pane);
+        break;
+    }
+    case EN_KILLFOCUS: s->label_focused = false; pane_repaint(base->pane); break;
+    }
+}
+static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    (void)shift;
+    if (ctrl && vk == 'S') { label_save((MailScreen *)base); return true; }
+    return false;
+}
+static bool can_leave(Screen *base) {
+    MailScreen *s = (MailScreen *)base;
+    if (!s->dirty) return true;
+    const MailAccount *a = mail_account_find(&s->accounts, s->focus);
+    const char *name = a && !str_empty(a->label) ? a->label : a && a->email ? a->email : "this mailbox";
+    char *message = xstrfmt("The changes to %s have not been saved.", name);
+    // Pause reads for the dialog. A screen retired inside it is left for the caller to destroy.
+    s->modal = true; KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); s->next_read = 0;
+    bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
+    free(message);
+    s->modal = false;
+    if (s->retired) return true;
+    if (leave) s->dirty = false;
+    else if (s->sign_in.state || syncing(s)) arm(s, 10000);
+    return leave;
+}
 static void visible(Screen *base, bool shown) {
     MailScreen *s = (MailScreen *)base; s->shown = shown;
     if (shown) {
         s->blocked = false; s->next_read = 0;
+        label_ensure(s);
         ULONGLONG tick = GetTickCount64();
         if (tick < s->retry_until) arm(s, (int)(s->retry_until - tick));
         else load(s);
@@ -362,6 +568,8 @@ static void visible(Screen *base, bool shown) {
     else {
         KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); request_cancel(&s->write);
         stop_waiting(s); set_text(&s->notice, NULL);
+        s->dirty = false; s->label_write = false;
+        if (s->label_edit) { s->filling = true; set_edit_text(s->label_edit, ""); s->filling = false; ShowWindow(s->label_edit, SW_HIDE); }
         // No retained account data crosses a hidden screen or account/server change.
         mail_accounts_free(&s->accounts); s->loaded = false;
     }
@@ -378,7 +586,10 @@ static void activated(Screen *base, bool active) {
     if (!active) { KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); }
     else if (s->shown && !s->modal) { s->next_read = 0; timer(base, TIMER_MAIL); }
 }
-static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh, .visible = visible, .activated = activated };
+static const ScreenVTable vt = {
+    .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh,
+    .place = place, .visible = visible, .command = command, .key = key, .can_leave = can_leave, .activated = activated,
+};
 static Screen *open_mail_settings(int account_id) {
     MailScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &vt;
