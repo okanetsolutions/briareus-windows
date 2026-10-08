@@ -1,6 +1,6 @@
 # Mail account settings (#123, epic #120)
 
-Mail is global navigation beside the sessions list and is also available under Settings → Mail account settings. It requires an Admin token and a deployed OpenAPI catalog advertising `GET /settings/mail/accounts`; each action additionally requires its own method/path. Older servers and read/manage tokens have no Mail navigation or actions. No message reading routes are registered here: the inbox is issue #124.
+Mail account setup lives in Settings → Mail → Mail accounts. The inbox, when the server also advertises the message routes, is the envelope icon beside WhatsApp; a settings-only server has no inbox icon and opens this screen from that same icon. It requires an Admin token and a deployed OpenAPI catalog advertising `GET /settings/mail/accounts`; each action additionally requires its own method/path. Older servers and read/manage tokens have no Mail navigation or actions. No message reading routes are registered here: the inbox is issue #124.
 
 The server's `providers` list controls which Gmail/Outlook connections are offered. Its defaults initialize a new connection. Accounts show their label/address, provider, enabled state, sync window, connection status, message/unread counts, last successful sync and last error. Label, Enable/Disable and Sync days save immediately; the window must be an integer from 1 to 365. Changing the window starts another first sync. OAuth credentials and provider cursors are never retained in the public model, displayed or copied into update bodies.
 

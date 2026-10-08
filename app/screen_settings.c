@@ -565,7 +565,13 @@ static void settings_layout(Screen *base, Doc *doc) {
     doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
     doc_space(doc, px(16));
     if (mail_settings_offered()) {
-        doc_button(doc, px(8), w - px(16), "Mail account settings", BUTTON_PLAIN, ACT_OPEN_MAIL, 0, true);
+        section_title(doc, w, "Mail", NULL, 0);
+        ProjectRowData *mail = xcalloc(1, sizeof *mail);
+        mail->label = xstrdup("Mail accounts");
+        mail->repo = xstrdup("Gmail and Outlook sign-in, labels and sync");
+        mail->enabled = true;
+        mail->selected = str_eq(selected, "mail-settings");
+        doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, mail, project_row_free, ACT_OPEN_MAIL, 0);
         doc_space(doc, px(16));
     }
     char *why = settings_unavailable();

@@ -1,6 +1,6 @@
 # Read-only Mail inbox
 
-Global **Mail** opens the synced inbox for Admin tokens when the server catalog advertises both `GET /settings/mail/accounts` and `GET /mail/messages`; a settings-only server retains the account-settings navigation. Selecting messages additionally requires `GET /mail/accounts/{account}/messages/{id}`. **Account settings** opens the existing connection/settings screen; closing it reloads the inbox from a fresh account snapshot.
+Global **Mail** is the envelope icon beside WhatsApp. It opens the synced inbox for Admin tokens when the server catalog advertises both `GET /settings/mail/accounts` and `GET /mail/messages`. A settings-only server keeps account setup under Settings → Mail. Selecting messages additionally requires `GET /mail/accounts/{account}/messages/{id}`. Connecting a mailbox, its label, sync window and disconnect live in Settings → Mail → Mail accounts, not on the inbox.
 
 All mailboxes or a selected connected account can be read newest first in pages of 50. **Load older messages** sends the opaque `nextCursor` unchanged; rows deduplicate by `(accountId, id)`. Search, exact label/folder and exact thread ID are editable text filters; read state, inbox and star state each offer any/false/true. Changing any filter/account or resetting filters cancels outstanding reads, clears selection and starts from the newest page. Search is limited by the server to 200 characters. Refresh revalidates accounts before rereading the first page.
 

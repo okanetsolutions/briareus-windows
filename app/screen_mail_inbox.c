@@ -12,7 +12,7 @@
 #include <time.h>
 
 enum { ACT_ACCOUNT = 1900, ACT_Q, ACT_LABEL, ACT_THREAD, ACT_UNREAD, ACT_INBOX, ACT_STARRED,
-       ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_SETTINGS, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS };
+       ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS };
 enum { TIMER_INBOX = 1910 };
 typedef struct {
     Screen base;
@@ -199,7 +199,6 @@ static void edit_filter(Inbox *s, int act) {
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     (void)pt; Inbox *s = (Inbox *)base;
     if (!s->shown || s->modal || !mail_inbox_offered()) return;
-    if (act == ACT_SETTINGS) { if (mail_settings_offered()) pane_push(base->pane, mail_settings_screen_new()); return; }
     if (act == ACT_Q || act == ACT_LABEL || act == ACT_THREAD) { edit_filter(s, act); return; }
     if (act == ACT_RESET) { mail_filter_free(&s->filter); reload(s); return; }
     if (act == ACT_ACCOUNT) {
@@ -225,14 +224,131 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
 }
 static void header(Screen *base, HeaderInfo *info) {
     (void)base; snprintf(info->title, sizeof info->title, "Mail");
-    snprintf(info->subtitle, sizeof info->subtitle, "Synced copy, newest first; reading here keeps provider read state");
+    snprintf(info->subtitle, sizeof info->subtitle, "Newest first. Opening a message here leaves it unread at the provider.");
 }
-static void message_heading(Doc *doc, int x, int w, const MailMessage *m, const MailAccounts *accounts) {
-    doc_text(doc, x, w, str_empty(m->subject) ? "(No subject)" : m->subject, m->is_read ? FONT_BODY : FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK);
+typedef struct { char *shown; bool on; } PillData;
+static void pill_free(void *p) { PillData *d = p; free(d->shown); free(d); }
+static void paint_pill(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    PillData *d = it->data;
+    bool hovered = doc_item_hovered(doc, it);
+    bool on = d && d->on;
+    COLORREF fill = on ? theme.accent : hovered && it->action ? theme.raise : theme.field;
+    COLORREF border = on ? theme.accent : hovered && it->action ? theme.accent_dim : theme.line;
+    COLORREF ink = on ? theme.on_accent : it->action ? theme.ink : theme.muted;
+    fill_round_rect(cv, rc, (rc->bottom - rc->top) / 2, fill, border);
+    RECT t = { rc->left + px(10), rc->top, rc->right - px(10), rc->bottom };
+    draw_text(cv, d && d->shown ? d->shown : "", &t, FONT_CAPTION, ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+/// `text` is the hit-test name; `shown` is what the pill draws. The item's text stays exact for the account address.
+static void add_pill(Doc *doc, int *x, int *y, int left, int right, int h, const char *text, const char *shown, bool on, bool enabled, int action, intptr_t arg) {
+    int tw = text_width(doc->cv, shown, FONT_CAPTION) + px(22), maxw = right - left;
+    if (tw > maxw) tw = maxw;
+    if (tw < px(36)) tw = px(36);
+    if (*x > left && *x + tw > right) { *x = left; *y += h + px(6); }
+    RECT rc = { *x, *y, *x + tw, *y + h };
+    Item *it = doc_item(doc, doc_add(doc, &rc, paint_pill));
+    PillData *d = xcalloc(1, sizeof *d); d->shown = xstrdup(shown ? shown : ""); d->on = on;
+    it->data = d; it->free_data = pill_free; it->text = xstrdup(text ? text : "");
+    if (enabled) { it->action = action; it->arg = arg; it->hand = true; }
+    *x += tw + px(6);
+}
+static void layout_mailboxes(Inbox *s, Doc *doc, int x, int w) {
+    int left = x, right = x + w, h = px(28), cx = left, y = doc->y;
+    add_pill(doc, &cx, &y, left, right, h, s->filter.account ? "All mailboxes" : "All mailboxes (selected)", "All mailboxes", s->filter.account == 0, true, ACT_ACCOUNT, 0);
+    for (size_t i = 0; i < s->accounts.count; i++) {
+        const MailAccount *a = &s->accounts.accounts[i];
+        const char *name = str_empty(a->label) ? (a->email ? a->email : "") : a->label;
+        bool readable = mail_account_readable(&s->accounts, a->id);
+        char *shown = readable ? xstrdup(name) : xstrfmt("%s · sign in", name ? name : "");
+        add_pill(doc, &cx, &y, left, right, h, name, shown, a->id == s->filter.account, readable, ACT_ACCOUNT, a->id);
+        free(shown);
+    }
+    doc->y = y + h;
+}
+/// One labelled segmented row. The segment item itself has no text and arg -1, which the filter tests address in order.
+static void filter_row(Doc *doc, int x, int w, const char *label, const char *const *titles, int selected, int action) {
+    int y = doc->y, h = font_height(doc->cv, FONT_CAPTION2) + px(4), label_w = px(52);
+    RECT lr = { x, y, x + label_w, y + h };
+    doc_text_at(doc, &lr, label, FONT_CAPTION_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_segments(doc, x + label_w + px(8), w - label_w - px(8), titles, 3, selected, action, -1, true);
+    doc_space(doc, px(6));
+}
+static bool row_open(const Inbox *s, const MailMessage *m) {
+    return s->selected_id && s->selected_account == m->account_id && str_eq(s->selected_id, m->id);
+}
+static void message_meta(Doc *doc, int x, int w, const MailMessage *m, const MailAccounts *accounts) {
     const MailAccount *a = mail_account_find(accounts, m->account_id);
     char *date = m->received_at ? format_relative((time_t)(m->received_at / 1000)) : xstrdup("Unknown date");
-    char *line = xstrfmt("%s | %s | %s%s%s", m->sender, a ? a->email : "", date, m->is_read ? "" : " | Unread", m->is_starred ? " | Starred" : "");
-    doc_text(doc, x, w, line, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); free(date); free(line);
+    char *line = xstrfmt("%s  ·  %s  ·  %s%s%s", m->sender ? m->sender : "", a && a->email ? a->email : "", date, m->is_read ? "" : "  ·  Unread", m->is_starred ? "  ·  Starred" : "");
+    doc_text(doc, x, w, line, FONT_CAPTION, theme.muted, DT_WORDBREAK | DT_END_ELLIPSIS); free(date); free(line);
+}
+typedef struct { char *name, *meta; } AttachRow;
+static void attach_free(void *p) { AttachRow *d = p; free(d->name); free(d->meta); free(d); }
+static void paint_attach(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    (void)doc; AttachRow *d = it->data;
+    RECT chip = *rc; chip.right = chip.left + px(36); chip.bottom = chip.top + px(36);
+    if (chip.bottom > rc->bottom) chip.bottom = rc->bottom;
+    fill_round_rect(cv, &chip, px(6), theme.field, theme.line);
+    draw_glyph(cv, 0xE8A5, &chip, FONT_ICON_SMALL, theme.muted);
+    int tx = chip.right + px(10);
+    RECT n = { tx, rc->top, rc->right, rc->top + px(18) };
+    draw_text(cv, d->name, &n, FONT_CAPTION_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT m = { tx, n.bottom, rc->right, rc->bottom };
+    draw_text(cv, d->meta, &m, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+static void layout_attachment(Doc *doc, int x, int w, const MailAttachment *a) {
+    const char *name = a->name ? a->name : "Unnamed", *type = a->mime_type ? a->mime_type : "Unknown type";
+    AttachRow *d = xcalloc(1, sizeof *d);
+    d->name = xstrdup(name); d->meta = xstrfmt("%s  ·  %.0f bytes", type, a->size);
+    Item *it = doc_item(doc, doc_custom(doc, x, w, px(36), paint_attach, d, attach_free, 0, 0));
+    it->text = xstrfmt("%s | %s | %.0f bytes", name, type, a->size);
+}
+static void layout_message(Inbox *s, Doc *doc, int x, int w, size_t index) {
+    const MailMessage *m = &s->messages.messages[index];
+    bool unread = !m->is_read, open = row_open(s, m);
+    COLORREF fill = open ? blend(theme.accent, theme.canvas, theme.dark ? 0.22 : 0.10) : unread ? theme.raise : theme.surface;
+    COLORREF border = open ? theme.accent : theme.line;
+    int pad = px(12), box = doc_box_begin(doc, x, w, pad, fill, border, px(8));
+    int ix = x + pad, iw = w - pad * 2;
+    // The subject item has to follow the box immediately: selecting a row clicks the item before its subject.
+    doc_text(doc, ix, iw, str_empty(m->subject) ? "(No subject)" : m->subject, unread || open ? FONT_BODY_SEMIBOLD : FONT_BODY, theme.ink, DT_WORDBREAK);
+    doc_space(doc, px(2));
+    message_meta(doc, ix, iw, m, &s->accounts);
+    if (!str_empty(m->snippet)) { doc_space(doc, px(4)); doc_text(doc, ix, iw, m->snippet, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); }
+    doc_box_end(doc, box, pad);
+    if (store_supports("mail_message")) doc_box_action(doc, box, ACT_SELECT, (intptr_t)index);
+    doc_space(doc, px(8));
+}
+static void layout_reader(Inbox *s, Doc *doc, int x, int w, bool available) {
+    int pad = px(16), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(10));
+    int ix = x + pad, iw = w - pad * 2;
+    doc_button(doc, ix, 0, "Close message", BUTTON_BORDERED, ACT_CLOSE, 0, true);
+    doc_space(doc, px(8));
+    if (s->body_error) doc_notice(doc, ix, iw, s->body_error);
+    if (s->body_read) doc_loading(doc, ix, iw, "Loading message body...");
+    else if (!s->body.id) doc_button(doc, ix, 0, "Retry message", BUTTON_BORDERED, ACT_RETRY_BODY, 0, available && store_supports("mail_message"));
+    if (s->body.id) {
+        const MailMessage *m = &s->body;
+        doc_text(doc, ix, iw, str_empty(m->subject) ? "(No subject)" : m->subject, FONT_TITLE, theme.ink, DT_WORDBREAK);
+        doc_space(doc, px(4));
+        message_meta(doc, ix, iw, m, &s->accounts);
+        doc_space(doc, px(10));
+        if (!str_empty(m->to)) doc_labeled(doc, ix, iw, "To", m->to, theme.ink);
+        if (!str_empty(m->cc)) doc_labeled(doc, ix, iw, "Cc", m->cc, theme.ink);
+        if (!str_empty(m->reply_to)) doc_labeled(doc, ix, iw, "Reply-To", m->reply_to, theme.ink);
+        if (m->web_url || m->truncated) doc_space(doc, px(8));
+        if (m->web_url) doc_button(doc, ix, 0, "Open at provider", BUTTON_BORDERED, ACT_PROVIDER, 0, true);
+        if (m->truncated) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, "The server truncated this body. Open at the provider to read the complete message."); }
+        doc_space(doc, px(12));
+        doc_rule(doc, ix, iw);
+        doc_space(doc, px(12));
+        // Literal selectable text: no Markdown, HTML, scripts, remote images, WebView or link actions.
+        doc_text(doc, ix, iw, str_empty(m->text) ? "No plain-text body is available in the synced copy." : m->text, FONT_BODY, theme.ink, DT_WORDBREAK);
+        if (m->attachment_count) { doc_space(doc, px(16)); doc_section(doc, ix, iw, "Attachments"); doc_space(doc, px(6)); }
+        for (size_t i = 0; i < m->attachment_count; i++) { layout_attachment(doc, ix, iw, &m->attachments[i]); doc_space(doc, px(6)); }
+    }
+    doc_box_end(doc, box, pad);
+    doc_space(doc, px(18));
 }
 static void layout(Screen *base, Doc *doc) {
     Inbox *s = (Inbox *)base; int x = px(20), w = doc->width - x * 2;
@@ -240,66 +356,46 @@ static void layout(Screen *base, Doc *doc) {
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
     bool available = ready(s);
-    if (s->notice) doc_notice(doc, x, w, s->notice);
-    if (g_store.mail_retry_until > GetTickCount64()) doc_notice(doc, x, w, "Mail cooldown is active. Retry buttons become available when it ends.");
+    if (s->notice) { doc_notice(doc, x, w, s->notice); doc_space(doc, px(8)); }
+    if (g_store.mail_retry_until > GetTickCount64()) { doc_notice(doc, x, w, "Mail cooldown is active. Retry buttons become available when it ends."); doc_space(doc, px(8)); }
     ButtonSpec controls[] = {
-        {0, "Search", BUTTON_PLAIN, ACT_Q, 0, true}, {0, "Label/folder", BUTTON_PLAIN, ACT_LABEL, 0, true},
-        {0, "Thread", BUTTON_PLAIN, ACT_THREAD, 0, true}, {0, "Reset filters", BUTTON_PLAIN, ACT_RESET, 0, true},
-        {0, "Account settings", BUTTON_PLAIN, ACT_SETTINGS, 0, mail_settings_offered()}
+        {0, "Search", BUTTON_BORDERED, ACT_Q, 0, true}, {0, "Label/folder", BUTTON_BORDERED, ACT_LABEL, 0, true},
+        {0, "Thread", BUTTON_BORDERED, ACT_THREAD, 0, true}, {0, "Reset filters", BUTTON_BORDERED, ACT_RESET, 0, true}
     };
     doc_button_row(doc, x, w, controls, sizeof controls / sizeof *controls);
-    char *filters = xstrfmt("Search: %s | Label: %s | Thread: %s", s->filter.q ? s->filter.q : "Any", s->filter.label ? s->filter.label : "Any", s->filter.thread ? s->filter.thread : "Any");
-    doc_text(doc, x, w, filters, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); free(filters);
-    const char *unread[] = { "Any read state", "Read", "Unread" }, *inbox[] = { "Any folder", "Outside inbox", "Inbox" }, *starred[] = { "Any star state", "Unstarred", "Starred" };
-    doc_segments(doc, x, w, unread, 3, s->filter.unread + 1, ACT_UNREAD, -1, true);
-    doc_segments(doc, x, w, inbox, 3, s->filter.inbox + 1, ACT_INBOX, -1, true);
-    doc_segments(doc, x, w, starred, 3, s->filter.starred + 1, ACT_STARRED, -1, true);
-    doc_button(doc, x, 0, s->filter.account ? "All mailboxes" : "All mailboxes (selected)", BUTTON_PLAIN, ACT_ACCOUNT, 0, true);
-    for (size_t i = 0; i < s->accounts.count; i++) {
-        const MailAccount *a = &s->accounts.accounts[i];
-        char *title = xstrfmt("%s%s%s", str_empty(a->label) ? a->email : a->label, a->id == s->filter.account ? " (selected)" : "", mail_account_readable(&s->accounts, a->id) ? "" : " (sign-in required)");
-        doc_button(doc, x, 0, title, BUTTON_PLAIN, ACT_ACCOUNT, a->id, mail_account_readable(&s->accounts, a->id)); free(title);
+    if (s->filter.q || s->filter.label || s->filter.thread) {
+        char *filters = xstrfmt("%s%s%s%s%s%s",
+            s->filter.q ? "Search  " : "", s->filter.q ? s->filter.q : "",
+            s->filter.label ? (s->filter.q ? "   ·   Label  " : "Label  ") : "", s->filter.label ? s->filter.label : "",
+            s->filter.thread ? ((s->filter.q || s->filter.label) ? "   ·   Thread  " : "Thread  ") : "", s->filter.thread ? s->filter.thread : "");
+        doc_space(doc, px(6));
+        doc_text(doc, x, w, filters, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(filters);
     }
-    if (s->account_error) { doc_notice(doc, x, w, s->account_error); doc_button(doc, x, 0, "Retry account status", BUTTON_PLAIN, ACT_RETRY_ACCOUNTS, 0, available && !s->account_read); }
+    doc_space(doc, px(14));
+    layout_mailboxes(s, doc, x, w);
+    doc_space(doc, px(12));
+    static const char *const unread[] = { "Any", "Read", "Unread" }, *const inbox[] = { "Any", "Outside", "Inbox" }, *const starred[] = { "Any", "No", "Starred" };
+    filter_row(doc, x, w, "Read", unread, s->filter.unread + 1, ACT_UNREAD);
+    filter_row(doc, x, w, "Folder", inbox, s->filter.inbox + 1, ACT_INBOX);
+    filter_row(doc, x, w, "Star", starred, s->filter.starred + 1, ACT_STARRED);
+    if (s->account_error) { doc_space(doc, px(8)); doc_notice(doc, x, w, s->account_error); doc_button(doc, x, 0, "Retry account status", BUTTON_BORDERED, ACT_RETRY_ACCOUNTS, 0, available && !s->account_read); }
     if (!s->accounts_loaded) { if (s->account_read) doc_loading(doc, x, w, "Loading mail accounts..."); return; }
-    if (s->selected_id) {
-        doc_rule(doc, x, w);
-        doc_button(doc, x, 0, "Close message", BUTTON_PLAIN, ACT_CLOSE, 0, true);
-        if (s->body_error) doc_notice(doc, x, w, s->body_error);
-        if (s->body_read) doc_loading(doc, x, w, "Loading message body...");
-        else if (!s->body.id) doc_button(doc, x, 0, "Retry message", BUTTON_PLAIN, ACT_RETRY_BODY, 0, available && store_supports("mail_message"));
-        if (s->body.id) {
-            MailMessage *m = &s->body; message_heading(doc, x, w, m, &s->accounts);
-            if (!str_empty(m->to)) doc_labeled(doc, x, w, "To", m->to, theme.muted);
-            if (!str_empty(m->cc)) doc_labeled(doc, x, w, "Cc", m->cc, theme.muted);
-            if (!str_empty(m->reply_to)) doc_labeled(doc, x, w, "Reply-To", m->reply_to, theme.muted);
-            if (m->web_url) doc_button(doc, x, 0, "Open at provider", BUTTON_PLAIN, ACT_PROVIDER, 0, true);
-            if (m->truncated) doc_notice(doc, x, w, "The server truncated this body. Open at the provider to read the complete message.");
-            doc_space(doc, px(12));
-            // Literal selectable text: no Markdown, HTML, scripts, remote images, WebView or link actions.
-            doc_text(doc, x, w, str_empty(m->text) ? "No plain-text body is available in the synced copy." : m->text, FONT_BODY, theme.ink, DT_WORDBREAK);
-            if (m->attachment_count) doc_section(doc, x, w, "Attachments (metadata only)");
-            for (size_t i = 0; i < m->attachment_count; i++) {
-                MailAttachment *a = &m->attachments[i]; char *line = xstrfmt("%s | %s | %.0f bytes", a->name ? a->name : "Unnamed", a->mime_type ? a->mime_type : "Unknown type", a->size);
-                doc_text(doc, x, w, line, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); free(line);
-            }
-        }
-        doc_rule(doc, x, w);
-    }
-    if (s->list_error) { doc_notice(doc, x, w, s->list_error); doc_button(doc, x, 0, "Retry list", BUTTON_PLAIN, ACT_RETRY_LIST, 0, available && !s->list_read); }
-    if (s->list_read) doc_loading(doc, x, w, "Loading messages...");
-    if (s->loaded && !s->messages.count) doc_text(doc, x, w, s->messages.next_cursor
-        ? "No readable messages on the loaded pages. Load older messages to keep looking."
-        : "No synced messages match these filters.", FONT_BODY, theme.muted, DT_WORDBREAK);
-    for (size_t i = 0; i < s->messages.count; i++) {
-        MailMessage *m = &s->messages.messages[i]; int box = doc_box_begin(doc, x, w, px(10), theme.surface, theme.border, px(6));
-        message_heading(doc, x + px(10), w - px(20), m, &s->accounts);
-        doc_text(doc, x + px(10), w - px(20), m->snippet, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-        doc_box_end(doc, box, px(10));
-        if (store_supports("mail_message")) doc_box_action(doc, box, ACT_SELECT, (intptr_t)i);
+    if (s->accounts_loaded && !s->accounts.count && !s->account_error) {
         doc_space(doc, px(8));
+        doc_text(doc, x, w, "No mailbox is connected. Add Gmail or Outlook in Settings, under Mail.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     }
-    if (s->messages.next_cursor) doc_button(doc, x, 0, "Load older messages", BUTTON_PLAIN, ACT_MORE, 0, available && !s->list_read);
+    doc_space(doc, px(8));
+    if (s->selected_id) layout_reader(s, doc, x, w, available);
+    if (s->list_error) { doc_notice(doc, x, w, s->list_error); doc_button(doc, x, 0, "Retry list", BUTTON_BORDERED, ACT_RETRY_LIST, 0, available && !s->list_read); }
+    if (s->list_read) doc_loading(doc, x, w, "Loading messages...");
+    if (s->loaded && !s->messages.count) {
+        doc_space(doc, px(8));
+        doc_text(doc, x, w, s->messages.next_cursor
+            ? "No readable messages on the loaded pages. Load older messages to keep looking."
+            : "No synced messages match these filters.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    }
+    for (size_t i = 0; i < s->messages.count; i++) layout_message(s, doc, x, w, i);
+    if (s->messages.next_cursor) doc_button(doc, x, 0, "Load older messages", BUTTON_BORDERED, ACT_MORE, 0, available && !s->list_read);
 }
 static void refresh(Screen *base) { Inbox *s = (Inbox *)base; if (ready(s)) reload(s); }
 static void timer(Screen *base, UINT id) {

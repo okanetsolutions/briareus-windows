@@ -237,54 +237,85 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     Json *body = json_object(); json_set_num(body, "id", id);
     store_call(op, body, 0, s, write_done, id, &s->write); repaint(s);
 }
-static void header(Screen *base, HeaderInfo *info) { (void)base; snprintf(info->title, sizeof info->title, "Mail account settings"); snprintf(info->subtitle, sizeof info->subtitle, "Global Gmail and Outlook mailboxes; read-only provider access"); }
+static void header(Screen *base, HeaderInfo *info) { (void)base; snprintf(info->title, sizeof info->title, "Mail accounts"); snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only."); }
+static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccount *a) {
+    int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(8));
+    int ix = x + pad, iw = w - pad * 2;
+    const char *title = str_empty(a->label) ? a->email : a->label;
+    doc_text(doc, ix, iw, title ? title : "Mailbox", FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_WORDBREAK);
+    if (!str_empty(a->label) && a->email) { doc_space(doc, px(2)); doc_text(doc, ix, iw, a->email, FONT_CAPTION, theme.muted, DT_WORDBREAK); }
+    doc_space(doc, px(8));
+    COLORREF status_color = str_eq(a->status, "connected") ? theme.ok : str_eq(a->status, "reauth") ? theme.warn : theme.muted;
+    char *days = xstrfmt("%d day%s", a->sync_days, a->sync_days == 1 ? "" : "s");
+    char *counts = xstrfmt("%d messages, %d unread", a->messages, a->unread);
+    BadgeSpec badges[] = {
+        { 0, a->provider ? a->provider : "mail", theme.accent, true },
+        { 0, a->status ? a->status : "unknown", status_color, true },
+        { 0, a->enabled ? "Enabled" : "Disabled", a->enabled ? theme.ok : theme.muted, true },
+        { 0, days, theme.muted, true },
+        { 0, counts, theme.muted, true },
+    };
+    doc_badges(doc, ix, iw, badges, sizeof badges / sizeof *badges, theme.raise);
+    char *last = a->last_sync_at ? format_relative((time_t)(a->last_sync_at / 1000)) : xstrdup("never");
+    char *sync = xstrfmt("Last sync %s%s", last, a->syncing ? "  ·  Syncing" : "");
+    doc_space(doc, px(8));
+    doc_text(doc, ix, iw, sync, FONT_CAPTION, theme.muted, DT_WORDBREAK);
+    free(sync); free(last); free(days); free(counts);
+    if (!str_empty(a->last_sync_error)) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, a->last_sync_error); }
+    if (str_eq(a->status, "reauth")) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, "Provider access expired or was revoked. Sign in again with this mailbox."); }
+    bool edit = can_write(s, "update_mail_account");
+    ButtonSpec buttons[] = {
+        { 0, "Label", BUTTON_BORDERED, ACT_LABEL, a->id, edit },
+        { 0, a->enabled ? "Disable" : "Enable", BUTTON_BORDERED, ACT_ENABLED, a->id, edit },
+        { 0, "Sync days", BUTTON_BORDERED, ACT_DAYS, a->id, edit },
+        { 0, "Sign in again", BUTTON_BORDERED, ACT_REAUTH, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
+        { 0, "Sync now", BUTTON_BORDERED, ACT_SYNC, a->id, can_write(s, "sync_mail_account") && !a->syncing && str_eq(a->status, "connected") },
+        { 0, "Disconnect", BUTTON_DESTRUCTIVE, ACT_DELETE, a->id, can_write(s, "delete_mail_account") },
+    };
+    const char *ops[] = { "update_mail_account", "update_mail_account", "update_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
+    ButtonSpec offered[6]; size_t n = 0;
+    for (size_t k = 0; k < sizeof buttons / sizeof *buttons; k++) if (store_supports(ops[k])) offered[n++] = buttons[k];
+    if (n) { doc_space(doc, px(12)); doc_button_row(doc, ix, iw, offered, n); }
+    doc_box_end(doc, box, pad);
+    doc_space(doc, px(12));
+}
 static void layout(Screen *base, Doc *doc) {
     MailScreen *s = (MailScreen *)base; int x = px(20), w = doc->width - 2 * x;
     doc_space(doc, px(16));
     if (!mail_settings_offered()) { doc_notice(doc, x, w, "Mail settings are unavailable: this server must advertise the mail account route and this device needs an Admin token."); return; }
-    if (s->error) { doc_notice(doc, x, w, s->error); doc_space(doc, px(10)); }
-    if (s->notice) { doc_text(doc, x, w, s->notice, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(10)); }
+    if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
+    if (s->notice) { doc_text(doc, x, w, s->notice, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(12)); }
     if (!s->loaded) { if (!s->blocked) doc_loading(doc, x, w, "Loading mail accounts..."); return; }
     if (s->sign_in.state) {
+        int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.accent_dim, px(8));
+        int ix = x + pad, iw = w - pad * 2;
+        doc_text(doc, ix, iw, "Finish signing in", FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_SINGLELINE);
+        doc_space(doc, px(10));
         ButtonSpec pending[] = {
             { 0, "Paste callback address", BUTTON_PROMINENT, ACT_FINISH, 0, !s->write && !s->sign_in.server_finish && GetTickCount64() >= s->retry_until && store_supports("finish_mail_account") },
-            { 0, "Browser finished: refresh", BUTTON_PLAIN, ACT_BROWSER_DONE, 0, !s->write && s->sign_in.server_finish },
-            { 0, "Cancel waiting", BUTTON_PLAIN, ACT_CANCEL, 0, !s->write },
+            { 0, "Browser finished: refresh", BUTTON_BORDERED, ACT_BROWSER_DONE, 0, !s->write && s->sign_in.server_finish },
+            { 0, "Cancel waiting", BUTTON_BORDERED, ACT_CANCEL, 0, !s->write },
         };
-        doc_button_row(doc, x, w, pending, sizeof pending / sizeof *pending); doc_space(doc, px(12));
+        doc_button_row(doc, ix, iw, pending, sizeof pending / sizeof *pending);
+        doc_box_end(doc, box, pad);
+        doc_space(doc, px(16));
     }
-    ButtonSpec connect[] = {
-        { 0, "Connect Gmail", BUTTON_PROMINENT, ACT_CONNECT, 0, can_write(s, "connect_mail_account") },
-        { 0, "Connect Outlook", BUTTON_PROMINENT, ACT_CONNECT, 1, can_write(s, "connect_mail_account") },
-    };
+    doc_text(doc, x, w, "Add a mailbox", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
+    doc_space(doc, px(4));
+    doc_text(doc, x, w, "Sign-in opens in the browser. Tokens stay on the server.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+    doc_space(doc, px(10));
+    ButtonSpec gmail = { 0, "Connect Gmail", BUTTON_PROMINENT, ACT_CONNECT, 0, can_write(s, "connect_mail_account") };
+    ButtonSpec outlook = { 0, "Connect Outlook", BUTTON_PROMINENT, ACT_CONNECT, 1, can_write(s, "connect_mail_account") };
+    ButtonSpec connect[2]; size_t connect_count = 0;
     // Only configured providers appear; each operation also requires its deployed route.
-    if (s->accounts.gmail && store_supports("connect_mail_account")) doc_button_row(doc, x, w, connect, 1);
-    if (s->accounts.outlook && store_supports("connect_mail_account")) doc_button_row(doc, x, w, connect + 1, 1);
+    if (s->accounts.gmail && store_supports("connect_mail_account")) connect[connect_count++] = gmail;
+    if (s->accounts.outlook && store_supports("connect_mail_account")) connect[connect_count++] = outlook;
+    if (connect_count) doc_button_row(doc, x, w, connect, connect_count);
     if (!s->accounts.gmail && !s->accounts.outlook) doc_text(doc, x, w, "No mail providers are configured on this server.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-    doc_space(doc, px(16));
-    for (size_t i = 0; i < s->accounts.count; i++) {
-        const MailAccount *a = &s->accounts.accounts[i];
-        char *title = str_empty(a->label) ? xstrdup(a->email) : xstrfmt("%s (%s)", a->label, a->email);
-        doc_text(doc, x, w, title, FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK); free(title);
-        char *last = a->last_sync_at ? format_relative((time_t)(a->last_sync_at / 1000)) : xstrdup("never");
-        char *status = xstrfmt("%s | %s | %s | %d days | %d messages, %d unread | Last sync: %s%s", a->provider, a->status ? a->status : "unknown", a->enabled ? "Enabled" : "Disabled", a->sync_days, a->messages, a->unread, last, a->syncing ? " | Syncing..." : "");
-        doc_text(doc, x, w, status, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); free(status); free(last);
-        if (!str_empty(a->last_sync_error)) doc_notice(doc, x, w, a->last_sync_error);
-        if (str_eq(a->status, "reauth")) doc_notice(doc, x, w, "Provider access expired or was revoked. Sign in again with this mailbox.");
-        bool edit = can_write(s, "update_mail_account");
-        ButtonSpec buttons[] = {
-            { 0, "Label", BUTTON_PLAIN, ACT_LABEL, a->id, edit },
-            { 0, a->enabled ? "Disable" : "Enable", BUTTON_PLAIN, ACT_ENABLED, a->id, edit },
-            { 0, "Sync days", BUTTON_PLAIN, ACT_DAYS, a->id, edit },
-            { 0, "Sign in again", BUTTON_PLAIN, ACT_REAUTH, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
-            { 0, "Sync now", BUTTON_PLAIN, ACT_SYNC, a->id, can_write(s, "sync_mail_account") && !a->syncing && str_eq(a->status, "connected") },
-            { 0, "Disconnect", BUTTON_PLAIN, ACT_DELETE, a->id, can_write(s, "delete_mail_account") },
-        };
-        const char *ops[] = { "update_mail_account", "update_mail_account", "update_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
-        ButtonSpec offered[6]; size_t n = 0;
-        for (size_t k = 0; k < sizeof buttons / sizeof *buttons; k++) if (store_supports(ops[k])) offered[n++] = buttons[k];
-        doc_space(doc, px(6)); doc_button_row(doc, x, w, offered, n); doc_space(doc, px(20));
-    }
+    doc_space(doc, px(20));
+    if (s->accounts.count) doc_text(doc, x, w, "Connected", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
+    doc_space(doc, px(8));
+    for (size_t i = 0; i < s->accounts.count; i++) account_card(s, doc, x, w, &s->accounts.accounts[i]);
     if (!s->accounts.count) doc_text(doc, x, w, "No connected mailboxes yet.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
 }
 static void timer(Screen *base, UINT id) {
