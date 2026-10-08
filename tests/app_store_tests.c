@@ -40,6 +40,8 @@ static void test_pinned_catalog_gates_existing_calls(void) {
     const struct { const char *call; int least; } calls[] = {
         { "pulls", 0 }, { "sessions", 0 }, { "session", 0 }, { "runtimes", 0 },
         { "repo_tree", 0 }, { "repo_file", 0 }, { "pull_description", 0 }, { "findings", 0 },
+        { "settings_mail_accounts", 2 }, { "connect_mail_account", 2 }, { "finish_mail_account", 2 },
+        { "update_mail_account", 2 }, { "delete_mail_account", 2 }, { "sync_mail_account", 2 },
         { "start_session", 1 }, { "message", 1 }, { "cancel", 1 }, { "compact", 1 }, { "usage_all", 2 },
     };
     const char *permissions[] = { "read", "manage", "admin" };
