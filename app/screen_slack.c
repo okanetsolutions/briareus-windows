@@ -129,10 +129,12 @@ static void error_from(SlackScreen *s, const Request *req) {
         double delay = req->error.retry_after > 0 ? req->error.retry_after : 30;
         // Bound conversion while honoring a server cooldown longer than the default.
         if (delay > 86400 * 30) delay = 86400 * 30;
-        s->cooldown = GetTickCount64() + (uint64_t)(delay * 1000);
+        uint64_t now = GetTickCount64(), deadline = now + (uint64_t)(delay * 1000);
+        if (deadline > s->cooldown) s->cooldown = deadline;
+        double remaining = (double)((s->cooldown - now + 999) / 1000);
         free(message); message = xstrfmt(s->reconciling && (s->snapshot_pending & (1u << req->tag))
             ? "Slack is rate limiting this workspace. Sync resumes automatically in %.0f seconds."
-            : "Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", delay);
+            : "Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", remaining);
     } else if (req->error.status == 403) {
         char *detail = xstrfmt("Slack access was denied. Check the Admin device token and deployed routes. %s", message);
         free(message); message = detail;
@@ -673,7 +675,7 @@ static void header(Screen *base, HeaderInfo *info) {
     snprintf(info->title, sizeof info->title, "Slack inbox");
     snprintf(info->subtitle, sizeof info->subtitle, "Admin · Human replies · Live updates");
     info->buttons[info->button_count++] = (HeaderButton){ 0xE72C, ACT_REFRESH, slack_inbox_offered(), "Refresh Slack inbox", "Refresh" };
-    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack web", "Slack web" };
+    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack in your browser", "Slack web" };
     if (s->workspace) snprintf(info->subtitle, sizeof info->subtitle, "Workspace %s%s", s->workspace, s->directory ? " · People" : "");
 }
 static void send_message(SlackScreen *s) {
@@ -703,9 +705,17 @@ void slack_inbox_recover_confirmed(SlackScreen *s, const Json *destination, uint
         }
     }
 }
+void slack_inbox_find_confirmed(SlackScreen *s, const char *workspace, uint64_t generation, const char *query) {
+    // The text dialog's modal loop can invalidate access or destroy the inbox.
+    SlackScreen *live = screens; while (live && live != s) live = live->next;
+    if (!live || !query) return;
+    if (!sync_access(s) || !slack_state_current(&s->state, generation)
+        || !str_eq(s->workspace, workspace) || !s->directory) { changed(s); return; }
+    set_string(&s->search, query); changed(s);
+}
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
-    if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
+    if (act == ACT_WEB) { open_web_url("https://app.slack.com/client"); return; }
     if (!sync_access(s)) { changed(s); return; }
     if (GetTickCount64() < s->cooldown) { changed(s); return; }
     // A queued click can arrive before WM_PAINT rebuilds indices after a live edit/delete/snapshot.
@@ -741,8 +751,11 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         changed(s); break;
     case ACT_PERSON:
         if (arg == -1) {
+            char *workspace = xstrdup(s->workspace);
+            uint64_t generation = s->state.generation;
             char *query = dialog_text(pane_hwnd(base->pane), "Find people", "Name or Slack user ID (searches loaded pages)", "Find", s->search);
-            if (query) { set_string(&s->search, query); free(query); changed(s); }
+            slack_inbox_find_confirmed(s, workspace, generation, query);
+            free(query); free(workspace);
         } else if (slack_inbox_supports("slack_open_dm")) {
             const char *id = json_str_nonempty(json_get(json_at(s->people, (size_t)arg), "id"));
             if (id) { Json *args = arguments(s); json_set_str(args, "userId", id); call(s, TAG_DM, "slack_open_dm", args); }
@@ -864,7 +877,6 @@ static LRESULT CALLBACK composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 static void visible(Screen *base, bool shown) {
     SlackScreen *s = (SlackScreen *)base; s->shown = shown;
     if (!shown) { cancel(s); ShowWindow(s->composer, SW_HIDE); return; }
-    if (!sync_access(s)) return;
     if (!s->composer) {
         s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             0, 0, 0, 0, pane_hwnd(base->pane), (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
@@ -873,6 +885,7 @@ static void visible(Screen *base, bool shown) {
         SetWindowSubclass(s->composer, composer_proc, 1, (DWORD_PTR)s);
     }
     if (GetParent(s->composer) != pane_hwnd(base->pane)) SetParent(s->composer, pane_hwnd(base->pane));
+    if (!sync_access(s)) return;
     composer_set(s); refresh(base);
 }
 static void activated(Screen *base, bool active) {

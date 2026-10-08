@@ -1,6 +1,7 @@
 #include "pane.h"
 #include "canvas.h"
 #include "str.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <windowsx.h>
@@ -40,6 +41,8 @@ struct Pane {
     POINT carry_from, carry_grab, carry_at;   // the press and the mouse now (client), and where on the item it took it
     RECT thumb_rect, hthumb_rect;
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
+    bool finding;
+    HWND find_edit, find_status, find_prev, find_next, find_close, find_return;
     HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
     int tip_item;           // the item it shows for, or -1
 };
@@ -50,6 +53,9 @@ static Pane **all_panes; static size_t pane_count;
 static int margin(Pane *p) { return px(p->sidebar ? 10 : 18); }
 static COLORREF pane_bg(Pane *p) { return p->sidebar ? theme.sidebar : theme.canvas; }
 
+static void find_hide(Pane *p, bool restore_focus);
+static void find_layout(Pane *p);
+static void find_status(Pane *p);
 static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 static void register_class(void) {
@@ -94,6 +100,7 @@ void screen_release(Screen *s) { if (!s) return; free(s->id); free(s); }
 static void set_visible(Screen *s, bool shown) { if (s && s->vt->visible) s->vt->visible(s, shown); }
 
 void pane_push(Pane *p, Screen *s) {
+    find_hide(p, false);
     if (p->depth) set_visible(p->stack[p->depth - 1], false);
     if (p->depth == p->cap) { p->cap = p->cap ? p->cap * 2 : 8; p->stack = xrealloc(p->stack, p->cap * sizeof *p->stack); }
     s->pane = p;
@@ -104,6 +111,7 @@ void pane_push(Pane *p, Screen *s) {
     pane_relayout(p);
 }
 static void destroy_top(Pane *p) {
+    find_hide(p, false);
     Screen *s = p->stack[--p->depth];
     set_visible(s, false);
     // Timers a screen forgot die with it.
@@ -120,6 +128,7 @@ void pane_pop(Pane *p) {
 void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { set_visible(p->stack[0], true); pane_relayout(p); } }
 Screen *pane_take_root(Pane *p) {
     if (p->depth != 1) return NULL;
+    find_hide(p, false);
     Screen *s = p->stack[0];
     set_visible(s, false);
     p->depth = 0;
@@ -162,7 +171,7 @@ void pane_place_control(HWND control, const RECT *rc) {
 static RECT client(Pane *p) { RECT rc; GetClientRect(p->hwnd, &rc); return rc; }
 RECT pane_content_rect(Pane *p) {
     RECT rc = client(p);
-    rc.top += p->header_h; rc.bottom -= p->footer_h;
+    rc.top += p->header_h + (p->finding ? px(40) : 0); rc.bottom -= p->footer_h;
     if (rc.bottom < rc.top) rc.bottom = rc.top;
     return rc;
 }
@@ -320,7 +329,7 @@ static void layout_if_needed(Pane *p, Canvas *cv) {
         p->content_height = doc_height(&p->doc);
     }
     int m = max_scroll(p);
-    if ((p->stick_bottom && was_bottom) || p->scroll_y >= 0x3fffffff) p->scroll_y = m;
+    if ((!p->finding && p->stick_bottom && was_bottom) || p->scroll_y >= 0x3fffffff) p->scroll_y = m;
     if (p->scroll_y > m) p->scroll_y = m;
     if (p->scroll_y < 0) p->scroll_y = 0;
     int max_x = p->doc.content_width - content_width; if (max_x < 0) max_x = 0;
@@ -330,6 +339,123 @@ static void layout_if_needed(Pane *p, Canvas *cv) {
     if (s && s->vt->footer_layout) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_layout(s, &fr); }
     if (s && s->vt->place) s->vt->place(s, &content, p->scroll_y);
     if (s && s->vt->scrolled) s->vt->scrolled(s, pane_at_bottom(p));
+    find_layout(p); find_status(p);
+}
+
+// MARK: - Find in the conversation
+
+enum { ID_FIND_EDIT = 0x7E01, ID_FIND_PREV, ID_FIND_NEXT, ID_FIND_CLOSE };
+
+static void find_status(Pane *p) {
+    if (!p->finding) return;
+    char status[80];
+    if (!p->doc.query_len) snprintf(status, sizeof status, "Find");
+    else if (!p->doc.match_count) snprintf(status, sizeof status, "No matches");
+    else snprintf(status, sizeof status, "%zu / %zu", p->doc.match_current + 1, p->doc.match_count);
+    wchar_t *w = utf8_to_wide(status); SetWindowTextW(p->find_status, w); free(w);
+    if (!p->doc.match_count) {
+        HWND f = GetFocus(); // a disabled focused button would leave nothing focused and the find keys dead
+        if (f == p->find_prev || f == p->find_next) SetFocus(p->find_edit);
+    }
+    EnableWindow(p->find_prev, p->doc.match_count != 0); EnableWindow(p->find_next, p->doc.match_count != 0);
+}
+static void find_layout(Pane *p) {
+    if (!p->finding) return;
+    RECT rc = client(p);
+    int x = px(10), y = p->header_h + px(6), h = px(28);
+    int edit_w = rc.right - px(270); if (edit_w < px(40)) edit_w = px(40);
+    HWND controls[] = { p->find_edit, p->find_status, p->find_prev, p->find_next, p->find_close };
+    int widths[] = { edit_w, px(82), px(64), px(46), px(46) };
+    for (size_t i = 0; i < sizeof controls / sizeof *controls; i++) {
+        RECT r = { x, y, x + widths[i], y + h };
+        SendMessageW(controls[i], WM_SETFONT, (WPARAM)font(FONT_FOOTNOTE), FALSE);
+        pane_place_control(controls[i], &r); x += widths[i] + px(4);
+    }
+}
+static void find_reveal(Pane *p) {
+    RECT hit;
+    if (doc_search_rect(&p->doc, &hit)) {
+        RECT view = pane_content_rect(p);
+        set_scroll(p, hit.top - (view.bottom - view.top) / 3);
+        if (hit.left < p->scroll_x || hit.right > p->scroll_x + pane_content_width(p)) set_scroll_x(p, hit.left - px(16));
+    }
+    find_status(p); pane_repaint(p);
+}
+static void find_hide(Pane *p, bool restore_focus) {
+    if (!p->finding) return;
+    if (pane_at_bottom(p)) p->scroll_y -= px(40);
+    p->finding = false;
+    HWND controls[] = { p->find_edit, p->find_status, p->find_prev, p->find_next, p->find_close };
+    for (size_t i = 0; i < sizeof controls / sizeof *controls; i++) ShowWindow(controls[i], SW_HIDE);
+    doc_search(&p->doc, NULL);
+    SetWindowTextW(p->find_edit, L"");
+    if (restore_focus) SetFocus(IsWindow(p->find_return) && IsChild(p->hwnd, p->find_return) ? p->find_return : p->hwnd);
+    p->find_return = NULL;
+    pane_relayout(p);
+}
+static HWND find_control(Pane *p, const wchar_t *kind, const wchar_t *text, DWORD style, int id) {
+    HWND h = CreateWindowExW(0, kind, text, WS_CHILD | style, 0, 0, 10, 10, p->hwnd, (HMENU)(INT_PTR)id, GetModuleHandleW(NULL), NULL);
+    theme_apply_control(h);
+    return h;
+}
+static void find_open(Pane *p) {
+    if (!p->find_edit) {
+        p->find_edit = find_control(p, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, ID_FIND_EDIT);
+        SendMessageW(p->find_edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Find in conversation");
+        p->find_status = find_control(p, L"STATIC", L"", SS_CENTER | SS_CENTERIMAGE, 0);
+        p->find_prev = find_control(p, L"BUTTON", L"Previous", WS_TABSTOP, ID_FIND_PREV);
+        p->find_next = find_control(p, L"BUTTON", L"Next", WS_TABSTOP, ID_FIND_NEXT);
+        p->find_close = find_control(p, L"BUTTON", L"Close", WS_TABSTOP, ID_FIND_CLOSE);
+    }
+    if (!p->finding) {
+        // Keep the bottom in view as the find bar reduces the viewport height.
+        if (pane_at_bottom(p)) p->scroll_y += px(40);
+        p->find_return = GetFocus(); p->finding = true;
+        pane_relayout(p); layout_if_needed(p, NULL);
+    }
+    SetFocus(p->find_edit); SendMessageW(p->find_edit, EM_SETSEL, 0, -1);
+}
+bool pane_find_message(const MSG *message) {
+    if (message->message != WM_KEYDOWN || (GetKeyState(VK_MENU) & 0x8000)) return false;
+    HWND focus = GetFocus();
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    for (size_t i = 0; i < pane_count; i++) {
+        Pane *p = all_panes[i]; Screen *s = pane_top(p);
+        if (!s || !s->vt->searchable || (focus != p->hwnd && !IsChild(p->hwnd, focus))) continue;
+        WPARAM vk = message->wParam;
+        if (ctrl && !shift && vk == 'F') { find_open(p); return true; }
+        if (!p->finding) return false;
+        if (!ctrl && (vk == VK_ESCAPE || (vk == VK_RETURN && focus == p->find_close))) { find_hide(p, true); return true; }
+        bool find_enter = vk == VK_RETURN && (focus == p->find_edit || focus == p->find_prev || focus == p->find_next);
+        if (!ctrl && (vk == VK_F3 || find_enter)) {
+            layout_if_needed(p, NULL); doc_search_step(&p->doc, shift || (find_enter && focus == p->find_prev)); find_reveal(p); return true;
+        }
+        if (ctrl && vk == 'A' && focus == p->find_edit) { SendMessageW(focus, EM_SETSEL, 0, -1); return true; }
+        HWND controls[] = { p->find_edit, p->find_prev, p->find_next, p->find_close };
+        if (!ctrl && vk == VK_TAB) for (int j = 0; j < 4; j++) if (focus == controls[j]) {
+            do { j = (j + (shift ? 3 : 1)) % 4; } while (!IsWindowEnabled(controls[j]));
+            SetFocus(controls[j]); return true;
+        }
+    }
+    return false;
+}
+static bool find_command(Pane *p, HWND control, int code) {
+    if (!p->finding || !control) return false;
+    if (control == p->find_edit) {
+        if (code == EN_CHANGE) {
+            layout_if_needed(p, NULL);
+            int n = GetWindowTextLengthW(control);
+            wchar_t *w = xcalloc((size_t)n + 1, sizeof *w); GetWindowTextW(control, w, n + 1);
+            doc_search(&p->doc, w); free(w); find_reveal(p);
+        }
+        return true;
+    }
+    if (code != BN_CLICKED) return false;
+    if (control == p->find_close) { find_hide(p, true); return true; }
+    if (control == p->find_prev || control == p->find_next) {
+        layout_if_needed(p, NULL); doc_search_step(&p->doc, control == p->find_prev); find_reveal(p); return true;
+    }
+    return false;
 }
 
 static int header_button_width(Canvas *cv, const HeaderButton *b, bool labels) {
@@ -407,20 +533,22 @@ static void paint_header(Pane *p, Canvas *cv, const RECT *rc) {
     }
 }
 
-/// The screens' Edit controls follow the palette's mode (their scrollbars, their context menus).
+/// The screens' Edit controls and the find bar's controls follow the palette's mode.
 static BOOL CALLBACK retheme_child(HWND child, LPARAM lp) {
     (void)lp;
     wchar_t cls[16]; GetClassNameW(child, cls, 16);
-    if (_wcsicmp(cls, L"Edit") == 0) { theme_apply_control(child); InvalidateRect(child, NULL, TRUE); }
+    if (_wcsicmp(cls, L"Edit") == 0 || _wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"Static") == 0) {
+        theme_apply_control(child); InvalidateRect(child, NULL, TRUE);
+    }
     return TRUE;
 }
 
-/// The HWND render target presents a new frame even when an Edit has not moved. WS_CLIPCHILDREN keeps the Edit out
-/// of the pane's GDI update region, so it needs its own paint after the Direct2D frame has been presented.
-static BOOL CALLBACK repaint_edit(HWND child, LPARAM lp) {
+/// The HWND render target presents a new frame even when a control has not moved. WS_CLIPCHILDREN keeps controls out
+/// of the pane's GDI update region, so they need their own paint after the Direct2D frame has been presented.
+static BOOL CALLBACK repaint_child(HWND child, LPARAM lp) {
     (void)lp;
     wchar_t cls[16]; GetClassNameW(child, cls, 16);
-    if (IsWindowVisible(child) && _wcsicmp(cls, L"Edit") == 0)
+    if (IsWindowVisible(child) && (_wcsicmp(cls, L"Edit") == 0 || _wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"Static") == 0))
         RedrawWindow(child, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     return TRUE;
 }
@@ -743,7 +871,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps);
-        EnumChildWindows(hwnd, repaint_edit, 0);
+        EnumChildWindows(hwnd, repaint_child, 0);
         return 0;
     }
     case WM_ERASEBKGND: return 1;
@@ -821,7 +949,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (s && s->vt->timer) s->vt->timer(s, (UINT)wp);
         return 0;
-    case WM_COMMAND: if (s && s->vt->command) s->vt->command(s, LOWORD(wp), HIWORD(wp), (HWND)lp); return 0;
+    case WM_COMMAND: if (find_command(p, (HWND)lp, HIWORD(wp))) return 0; if (s && s->vt->command) s->vt->command(s, LOWORD(wp), HIWORD(wp), (HWND)lp); return 0;
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (p->carrying && wp == VK_ESCAPE) { end_carry(p, p->carry_at, DRAG_CANCEL); return 0; }

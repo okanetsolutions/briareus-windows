@@ -336,6 +336,7 @@ static void test_intraword_underscores_are_literal(void) {
 
 static void test_backslash_escapes_drop_the_backslash(void) {
     CHECK_OWNED_STR(spans_desc("\\*not\\*"), "[:*not*]");
+    CHECK_OWNED_STR(spans_desc("\\- item \\+ item 1\\. item 2\\) item"), "[:- item + item 1. item 2) item]");
     CHECK_OWNED_STR(spans_desc("\\`x\\` \\[a\\](b) \\_ \\# \\~ \\! \\| \\< \\> \\( \\)"), "[:`x` [a](b) _ # ~ ! | < > ( )]");
     CHECK_OWNED_STR(spans_desc("\\\\"), "[:\\]");
     CHECK_OWNED_STR(spans_desc("\\a \\n"), "[:\\a \\n]");

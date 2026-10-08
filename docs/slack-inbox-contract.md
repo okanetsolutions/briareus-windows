@@ -13,8 +13,9 @@ Inspected sources at that exact SHA:
 - [Core provider simulations](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/test/slack-inbox.test.js).
 
 All nine JSON operations require `admin`; paths below are relative to `/api/v1`.
-The app also checks the deployed catalog before navigation and each request, and independently requires an Admin device token even if a catalog entry is weaker.
-Servers without these routes retain the existing Slack web screen.
+The inbox checks the deployed catalog before loading private data and each request, and independently requires an Admin device token even if a catalog entry is weaker.
+The sidebar always opens the native inbox; servers without these routes or devices without Admin access see its unavailable state.
+The embedded Slack web screen is retired; the inbox’s Slack web button opens the default browser, and native message/file links remain available.
 
 | Client operation | Method/path | Contract |
 | --- | --- | --- |
@@ -35,7 +36,7 @@ A nonempty cursor is followed even if its page has no messages/people/conversati
 Thread and conversation timestamps stay decimal strings, including sub-microsecond fractions in fixtures; no floating point identity or bound comparisons are used.
 
 Messages merge by `(workspace, channel, ts)`; partial updates preserve other fields and deletion removes only that identity, for reuse by issue #126.
-Drafts live in memory keyed by `(workspace, channel, threadTs)` while navigating this inbox, including when hidden under Slack web or moved into another window.
+Drafts live in memory keyed by `(workspace, channel, threadTs)` while navigating this inbox, including when moved into another window or while Slack is open in the default browser.
 Leaving the screen warns before discarding drafts.
 The composer names its workspace/channel/thread destination and validates 1–8000 UTF-16 units to match the inspected JavaScript handler's limit, including emoji.
 A confirmed receipt clears only the submitted draft; `workspaceChanged: true` clears private state and reloads workspaces without resending.

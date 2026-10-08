@@ -1,5 +1,6 @@
 #include "slack.h"
 #include "slack_fixtures.h"
+#include "markdown.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
@@ -96,6 +97,105 @@ static void rendering(void) {
     CHECK(strstr(text, "Open in Slack to access this file") != NULL); free(text); json_free(m);
     m = json_parsez("{\"blocks\":[{\"type\":\"image\"}]}" ); CHECK_OWNED_STR(slack_message_text(m, people), "[Slack block content]"); json_free(m);
     CHECK_OWNED_STR(slack_message_text(NULL, people), "[Message without text]"); json_free(people);
+}
+static char *render_text(const char *source) {
+    Json *m = json_object(); json_set_str(m, "text", source);
+    char *text = slack_message_text(m, NULL); json_free(m); return text;
+}
+static void block_punctuation(void) {
+    const char *literals[] = {
+        "# deployment", "## deployment", "###### deployment", "  # deployment",
+        "---", "- - -", "___", "_ _ _", "***", "* * *", "~~~",
+        "- item", "+ item", "* item", "1. item", "2) item", "  999. item",
+        "first\n# deployment\n---\n+ item\n3) item",
+        "name | status\n--- | :---:\ndeploy | ready",
+        "| name | status |\n| --- | ---: |\n| deploy | ready |",
+        "# deployment\r\n---",
+    };
+    for (size_t i = 0; i < sizeof literals / sizeof *literals; i++) {
+        char *text = render_text(literals[i]); size_t n;
+        MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 1);
+        if (n == 1) {
+            CHECK_INT(blocks[0].kind, MD_PARAGRAPH);
+            char *expected = str_replace(literals[i], "\r\n", "\n");
+            CHECK_OWNED_STR(md_plain(blocks[0].text), expected); free(expected);
+        }
+        md_free(blocks, n); free(text);
+    }
+    char *text = render_text("> # quoted\n> ---\n\n```# code\n---\n1. code```# after\n\n*bold* _italic_ ~gone~ <https://example.com/a-b|open>");
+    size_t n; MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 4);
+    if (n == 4) {
+        CHECK_INT(blocks[0].kind, MD_QUOTE); CHECK_OWNED_STR(md_plain(blocks[0].text), "# quoted\n---");
+        CHECK_INT(blocks[1].kind, MD_CODE); CHECK_STR(blocks[1].text, "# code\n---\n1. code");
+        CHECK_INT(blocks[2].kind, MD_PARAGRAPH); CHECK_OWNED_STR(md_plain(blocks[2].text), "# after");
+        CHECK_INT(blocks[3].kind, MD_PARAGRAPH); CHECK_OWNED_STR(md_plain(blocks[3].text), "bold italic gone open");
+        size_t span_count; MdSpan *spans = md_inline(blocks[3].text, &span_count); CHECK_INT(span_count, 7);
+        if (span_count == 7) {
+            CHECK_INT(spans[0].flags, SPAN_BOLD); CHECK_INT(spans[2].flags, SPAN_ITALIC);
+            CHECK_INT(spans[4].flags, SPAN_STRIKE); CHECK_INT(spans[6].flags, SPAN_LINK);
+            CHECK_STR(spans[6].url, "https://example.com/a-b");
+        }
+        md_spans_free(spans, span_count);
+    }
+    md_free(blocks, n); free(text);
+}
+static void code_fences(void) {
+    const struct { const char *source, *body; } cases[] = {
+        { "```const x = 1;```", "const x = 1;" },
+        { "```const x = 1;\nconst y = 2;```", "const x = 1;\nconst y = 2;" },
+        { "```\nconst x = 1;\n```", "const x = 1;" },
+        { "```js\nconst x = 1;```", "js\nconst x = 1;" },
+        { "```  first  \n\n  last  ```", "  first  \n\n  last  " },
+        { "```\r\nfirst\r\nlast\r\n```", "first\nlast" },
+        { "``````", "" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        char *text = render_text(cases[i].source); size_t n;
+        MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 1);
+        if (n == 1) {
+            CHECK_INT(blocks[0].kind, MD_CODE); CHECK(blocks[0].language == NULL);
+            CHECK_STR(blocks[0].text, cases[i].body);
+        }
+        md_free(blocks, n); free(text);
+    }
+    char *text = render_text("Before```first```After\n```second```Done"); size_t n;
+    MdBlock *blocks = md_parse(text, &n); CHECK_INT(n, 5);
+    if (n == 5) {
+        CHECK_INT(blocks[0].kind, MD_PARAGRAPH); CHECK_STR(blocks[0].text, "Before");
+        CHECK_INT(blocks[1].kind, MD_CODE); CHECK_STR(blocks[1].text, "first");
+        CHECK_INT(blocks[2].kind, MD_PARAGRAPH); CHECK_STR(blocks[2].text, "After");
+        CHECK_INT(blocks[3].kind, MD_CODE); CHECK_STR(blocks[3].text, "second");
+        CHECK_INT(blocks[4].kind, MD_PARAGRAPH); CHECK_STR(blocks[4].text, "Done");
+    }
+    md_free(blocks, n); free(text);
+}
+static void emphasis(void) {
+    const char *literals[] = { "2 * 3 = 6", "Use ~/bin", "*unfinished", "unfinished*", "~unfinished", "unfinished~", "2 * 3 * 4", "*", "~" };
+    for (size_t i = 0; i < sizeof literals / sizeof *literals; i++) {
+        char *text = render_text(literals[i]); size_t n;
+        MdSpan *spans = md_inline(text, &n); CHECK_INT(n, 1);
+        if (n == 1) { CHECK_INT(spans[0].flags, 0); CHECK_STR(spans[0].text, literals[i]); }
+        md_spans_free(spans, n); free(text);
+    }
+    char *text = render_text("*bold* ~gone~ *again* ~/bin *"); size_t n;
+    MdSpan *spans = md_inline(text, &n); CHECK_INT(n, 6);
+    if (n == 6) {
+        CHECK_INT(spans[0].flags, SPAN_BOLD); CHECK_STR(spans[0].text, "bold");
+        CHECK_INT(spans[2].flags, SPAN_STRIKE); CHECK_STR(spans[2].text, "gone");
+        CHECK_INT(spans[4].flags, SPAN_BOLD); CHECK_STR(spans[4].text, "again");
+        CHECK_INT(spans[5].flags, 0); CHECK_STR(spans[5].text, " ~/bin *");
+    }
+    CHECK_OWNED_STR(md_plain(text), "bold gone again ~/bin *"); md_spans_free(spans, n); free(text);
+    text = render_text("*bold ~gone~* and ~strike *bold*~");
+    CHECK_OWNED_STR(md_plain(text), "bold gone and strike bold");
+    spans = md_inline(text, &n); CHECK_INT(n, 5);
+    if (n == 5) { CHECK_INT(spans[1].flags, SPAN_BOLD | SPAN_STRIKE); CHECK_INT(spans[4].flags, SPAN_BOLD | SPAN_STRIKE); }
+    md_spans_free(spans, n); free(text);
+    CHECK_OWNED_STR(render_text("*literal `*code*`"), "\\*literal `*code*`");
+    CHECK_OWNED_STR(render_text("~literal <https://example.com/~|open>"), "\\~literal [open](https://example.com/~)");
+    CHECK_OWNED_STR(render_text("*literal\n```*code*```"), "\\*literal\n```\n*code*\n```");
+    CHECK_OWNED_STR(render_text("`*literal* ~literal~`"), "`*literal* ~literal~`");
+    CHECK_OWNED_STR(render_text("*bold `*code*` end*"), "**bold `*code*` end**");
 }
 static void drafts(void) {
     SlackState s = {0}; SlackDraft *d = slack_draft(&s, "1", "C1", NULL); CHECK_STR(d->thread, "");
@@ -212,6 +312,9 @@ void slack_tests(void) {
     test_run("Slack empty cursors history and replies pagination", pagination);
     test_run("Slack workspace conversation and people shapes", directory);
     test_run("Slack mrkdwn blocks and metadata without attachment transport", rendering);
+    test_run("Slack literal block punctuation preserves rendered and copied text", block_punctuation);
+    test_run("Slack fence boundaries preserve rendered and copied code", code_fences);
+    test_run("Slack paired emphasis and literal unmatched markers", emphasis);
     test_run("Slack scoped drafts confirmed changed ambiguous refused and cancelled sends", drafts);
     test_run("Slack debounced viewed read positions remain scoped and monotonic", reads);
 }

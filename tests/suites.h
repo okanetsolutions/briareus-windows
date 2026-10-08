@@ -26,6 +26,7 @@ void repo_index_tests(void);
 void slack_tests(void);
 
 // app_tests.exe
+void app_find_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);
 void app_store_tests(void);
