@@ -130,7 +130,9 @@ static void error_from(SlackScreen *s, const Request *req) {
         // Bound conversion while honoring a server cooldown longer than the default.
         if (delay > 86400 * 30) delay = 86400 * 30;
         s->cooldown = GetTickCount64() + (uint64_t)(delay * 1000);
-        free(message); message = xstrfmt("Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", delay);
+        free(message); message = xstrfmt(s->reconciling && (s->snapshot_pending & (1u << req->tag))
+            ? "Slack is rate limiting this workspace. Sync resumes automatically in %.0f seconds."
+            : "Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", delay);
     } else if (req->error.status == 403) {
         char *detail = xstrfmt("Slack access was denied. Check the Admin device token and deployed routes. %s", message);
         free(message); message = detail;

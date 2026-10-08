@@ -149,6 +149,7 @@ static void sends_and_access_clear(void) {
 static void errors_and_read_marks(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     apply(s, TAG_HISTORY, "slack_history", NULL, s->state.generation, 429); CHECK(s->cooldown > GetTickCount64()); CHECK(strstr(s->error, "60 seconds") != NULL);
+    CHECK(strstr(s->error, "retry the read or action yourself") != NULL);
     uint64_t generation = s->state.generation; choose(s, ACT_REFRESH, 0); CHECK_INT(s->state.generation, generation);
     s->cooldown = 0; apply(s, TAG_READ, "slack_read", NULL, generation, 502); CHECK(s->read_failed); CHECK(strstr(s->error, "im:read") != NULL);
     SlackRead *r = slack_read(&s->state, s->workspace, s->channel); slack_read_viewed(r, "1712345678.000001", 0);
@@ -288,11 +289,15 @@ static void snapshot_rate_limit_resumes_progress(void) {
         CHECK_STR(s->snapshot_channel.cursor, "catchup"); CHECK_STR(s->snapshot_thread.cursor, "next");
         CHECK_INT(s->snapshot.message_count, 1); CHECK_INT(s->buffered.count, 2);
         CHECK(s->cooldown > GetTickCount64()); CHECK(strstr(s->error, "60 seconds") != NULL);
+        CHECK(strstr(s->error, "Sync resumes automatically") != NULL);
+        CHECK(strstr(s->error, "retry the read or action yourself") == NULL);
         // The timer keeps accepting events but must not issue any read before Retry-After.
         slack_inbox_pump(s);
         for (size_t j = 0; j < sizeof tags / sizeof *tags; j++) CHECK(s->requests[tags[j]] == NULL);
         if (!s->reconciling) { teardown(s); return; }
     }
+    apply(s, TAG_PEOPLE, "slack_people", NULL, generation, 429);
+    CHECK(strstr(s->error, "retry the read or action yourself") != NULL);
     s->cooldown = 0; slack_inbox_pump(s);
     for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) CHECK(s->requests[tags[i]] != NULL);
     const Request *list = s->requests[TAG_CONVERSATIONS], *channel = s->requests[TAG_SNAPSHOT_CHANNEL], *thread = s->requests[TAG_SNAPSHOT_THREAD];
