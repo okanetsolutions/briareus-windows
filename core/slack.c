@@ -142,11 +142,30 @@ static void literal(Str *s, const char *text) {
         str_appendc(s, *p);
     }
 }
+static const char *emphasis_close(const char *open) {
+    if (!open[1] || isspace((unsigned char)open[1])) return NULL;
+    bool code = false;
+    for (const char *p = open + 1; *p; p++) {
+        // A block boundary cannot be part of an inline emphasis span.
+        if (strncmp(p, "```", 3) == 0 || (*p == '\n' && p[1] == '\n')) return NULL;
+        if (*p == '`') code = !code;
+        else if (!code && *p == '<' && strchr(p, '>')) p = strchr(p, '>');
+        else if (!code && *p == *open && p > open + 1 && !isspace((unsigned char)p[-1])) return p;
+    }
+    return NULL;
+}
 static char *mrkdwn(const char *source, const Json *people) {
     Str s; str_init(&s); bool code = false, fence = false;
+    const char *bold_close = NULL, *strike_close = NULL;
     for (const char *p = source ? source : ""; *p; p++) {
         if (*p == '`') {
-            if (strncmp(p, "```", 3) == 0) { fence = !fence; str_appendz(&s, "```"); p += 2; }
+            if (strncmp(p, "```", 3) == 0) {
+                // Slack has no fence language: adjacent text belongs to the code body.
+                if (s.len && s.data[s.len - 1] != '\n') str_appendc(&s, '\n');
+                fence = !fence; str_appendz(&s, "```");
+                if ((fence || p[3]) && p[3] != '\n' && !(p[3] == '\r' && p[4] == '\n')) str_appendc(&s, '\n');
+                p += 2;
+            }
             else { code = !code; str_appendc(&s, '`'); }
         } else if (code || fence) str_appendc(&s, *p);
         else if (strncmp(p, "&amp;", 5) == 0) { str_appendc(&s, '&'); p += 4; }
@@ -162,7 +181,13 @@ static char *mrkdwn(const char *source, const Json *people) {
                 str_appendc(&s, '['); literal(&s, label ? label : token); str_appendf(&s, "](%s)", token);
             } else literal(&s, label ? label : token);
             free(token); p = end;
-        } else if (*p == '*' || *p == '~') { str_appendc(&s, *p); str_appendc(&s, *p); }
+        } else if (*p == '*' || *p == '~') {
+            const char **close = *p == '*' ? &bold_close : &strike_close;
+            bool paired = p == *close;
+            if (paired) *close = NULL;
+            else if (!*close) { *close = emphasis_close(p); paired = *close != NULL; }
+            str_appendc(&s, paired ? *p : '\\'); str_appendc(&s, *p);
+        }
         else if (*p == '[' || *p == ']') { str_appendc(&s, '\\'); str_appendc(&s, *p); }
         else str_appendc(&s, *p);
     }
