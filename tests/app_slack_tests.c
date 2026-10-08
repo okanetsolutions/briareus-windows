@@ -133,6 +133,12 @@ static void viewed_messages_only(void) {
     SlackRead *r = slack_read(&s->state, s->workspace, s->channel); CHECK_STR(r->viewed, "1712345678.000001");
     CHECK(slack_read_due(r, GetTickCount64()) == NULL);
     s->base.vt->place(&s->base, &viewport, s->view[1].rc.bottom - 90); CHECK_STR(r->viewed, "1712345678.000002");
+    // A newer reply in an old thread must never clear unseen channel messages.
+    free(r->viewed); r->viewed = xstrdup("1712345678.000001");
+    s->thread = xstrdup("1712345678.000001");
+    s->base.vt->place(&s->base, &viewport, s->view[1].rc.bottom - 90); CHECK_STR(r->viewed, "1712345678.000001");
+    free(s->thread); s->thread = NULL;
+    free(r->viewed); r->viewed = xstrdup("1712345678.000002");
     s->directory = true; r->due = 0;
     s->base.vt->place(&s->base, &viewport, s->view[0].rc.bottom - 90); CHECK_STR(r->viewed, "1712345678.000002");
     s->shown = false; doc_free(&doc); teardown(s);
@@ -313,7 +319,22 @@ static void recovery_revalidates_after_modal_events(void) {
     CHECK(!slack_inbox_recover(s, s->state.generation, "1727000000002", "G1", NULL)); CHECK(d->uncertain);
     teardown(s);
 }
+static void initial_empty_snapshot_and_signout(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    live(s, "ready", LIVE_READY); CHECK(s->snapshot_edge == NULL);
+    apply(s, TAG_SNAPSHOT_CHANNEL, "slack_history", SLACK_EMPTY_PAGE, s->state.generation, 0);
+    CHECK(s->snapshot_pending & (1u << TAG_SNAPSHOT_CHANNEL)); CHECK_STR(s->snapshot_channel.cursor, "next");
+    snapshots(s, SLACK_HISTORY); CHECK(!s->reconciling); CHECK_INT(s->state.message_count, 2);
+    s->shown = true; s->feed = slack_feed_new(g_store.client, s->workspace, s->stream_generation);
+    uint64_t old_stream = s->stream_generation, old_request = s->state.generation;
+    ApiClient *client = g_store.client; g_store.client = NULL; g_store.has_device = false;
+    slack_inbox_store_changed(); CHECK(!s->feed); CHECK(!s->workspace); CHECK_INT(s->state.message_count, 0);
+    slack_inbox_event(s, old_stream, "message", LIVE_MESSAGE, strlen(LIVE_MESSAGE));
+    apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, old_request, 0); CHECK_INT(s->state.message_count, 0);
+    api_client_release(client); teardown(s);
+}
 void app_slack_tests(void) {
+    test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);
     test_run("Slack every ready snapshots ordered events edits deletes parent and cross-client reads", ready_snapshot_ordering);
     test_run("Slack reconnect catchup pages and open thread snapshots", disconnect_catchup_thread);

@@ -216,7 +216,7 @@ void slack_inbox_done(void *owner, Request *req) {
             parsed = slack_page_merge(&s->snapshot, page, s->workspace, s->channel, thread, req->result) && !page->stalled;
             more = parsed && page->more;
             if (!thread) {
-                if (!s->snapshot_edge) more = false;
+                if (!s->snapshot_edge && json_count(json_get(req->result, "messages"))) more = false;
                 const Json *messages = json_get(req->result, "messages");
                 for (size_t i = 0; more && i < json_count(messages); i++) {
                     const char *ts = json_str(json_get(json_at(messages, i), "ts"));
@@ -258,7 +258,8 @@ void slack_inbox_done(void *owner, Request *req) {
         parsed = json_is_object(row) && str_eq(json_str(json_get(row, "id")), s->channel);
         if (parsed) {
             json_free(s->detail); s->detail = json_clone(row);
-            slack_read_confirm(slack_read(&s->state, s->workspace, s->channel), json_str(json_get(row, "last_read")));
+            const char *last_read = json_str(json_get(row, "last_read"));
+            if (slack_ts_valid(last_read)) slack_read_confirm(slack_read(&s->state, s->workspace, s->channel), last_read);
             if (s->reconciling) { s->snapshot_pending &= ~(1u << TAG_DETAIL); reconcile_finish(s); }
         } else if (s->reconciling) {
             ApiError error; api_error_init(&error); api_error_set(&error, API_NETWORK, 0, "Slack conversation snapshot was invalid", -1);
@@ -372,7 +373,8 @@ static void reconcile_finish(SlackScreen *s) {
     }
     for (size_t i = 0; i < json_count(s->conversations); i++) {
         const Json *row = json_at(s->conversations, i); const char *channel = json_str_nonempty(json_get(row, "id"));
-        if (channel) slack_read_confirm(slack_read(&s->state, s->workspace, channel), json_str(json_get(row, "last_read")));
+        const char *last_read = json_str(json_get(row, "last_read"));
+        if (channel && slack_ts_valid(last_read)) slack_read_confirm(slack_read(&s->state, s->workspace, channel), last_read);
     }
     if (s->channel) {
         for (size_t i = 0; i < s->snapshot.message_count; i++) {
@@ -455,6 +457,7 @@ void slack_inbox_event(SlackScreen *s, uint64_t generation, const char *name, co
             if (s->workspace_user && !str_eq(s->workspace_user, user)) {
                 char *workspace = xstrdup(s->workspace); private_clear(s); set_string(&s->workspace, workspace); free(workspace);
                 s->workspace_reload = true; load(s, TAG_WORKSPACES);
+                if (s->shown && s->base.pane) SetTimer(pane_hwnd(s->base.pane), TIMER_LIVE, 100, NULL);
             } else { set_string(&s->workspace_user, user); reconcile_begin(s); }
         } else if (result == SLACK_EVENT_CHANGED || result == SLACK_EVENT_REMOVED) {
             char *workspace = result == SLACK_EVENT_CHANGED ? xstrdup(s->workspace) : NULL;
@@ -462,6 +465,7 @@ void slack_inbox_event(SlackScreen *s, uint64_t generation, const char *name, co
             s->workspace_reload = result == SLACK_EVENT_CHANGED;
             set_string(&s->live_status, "Slack workspace credentials changed or were removed. Private inbox state cleared; reloading workspaces before reconnecting.");
             load(s, TAG_WORKSPACES);
+            if (s->workspace_reload && s->shown && s->base.pane) SetTimer(pane_hwnd(s->base.pane), TIMER_LIVE, 100, NULL);
         }
     } else if (s->reconciling) {
         if (!slack_events_push(&s->buffered, name, source, length)) {
@@ -469,8 +473,8 @@ void slack_inbox_event(SlackScreen *s, uint64_t generation, const char *name, co
             slack_inbox_stream_end(s, generation, &error); api_error_clear(&error);
         }
     } else {
-        slack_event_apply(&s->state, s->workspace, name, data);
-        if (str_eq(name, "conversation.read")) {
+        SlackEventResult result = slack_event_apply(&s->state, s->workspace, name, data);
+        if (result == SLACK_EVENT_APPLIED && str_eq(name, "conversation.read")) {
             const char *channel = json_str(json_get(data, "channel"));
             for (size_t i = 0; i < json_count(s->conversations); i++) {
                 Json *row = s->conversations->a.items[i];
@@ -482,7 +486,17 @@ void slack_inbox_event(SlackScreen *s, uint64_t generation, const char *name, co
 }
 void slack_inbox_pump(SlackScreen *s) {
     if (!sync_access(s) || !s->shown) { stream_stop(s); return; }
+    if (s->workspace_reload) {
+        if (GetTickCount64() >= s->cooldown && !s->requests[TAG_WORKSPACES]) load(s, TAG_WORKSPACES);
+        return;
+    }
     if (!s->feed) { stream_start(s); return; }
+    // A pre-existing JSON cooldown can delay reads beyond ready; drive them once it expires.
+    if (s->reconciling && GetTickCount64() >= s->cooldown) {
+        for (int tag = 0; tag < TAG_COUNT; tag++) if ((s->snapshot_pending & (1u << tag)) && !s->requests[tag]) {
+            if (tag == TAG_DETAIL) load(s, tag); else snapshot_load(s, tag);
+        }
+    }
     SlackEvents events = {0}; ApiError error; api_error_init(&error); uint64_t generation;
     bool ended = slack_feed_take(s->feed, &events, &error, &generation);
     if (events.overflow) {
