@@ -691,9 +691,11 @@ void slack_inbox_recover_confirmed(SlackScreen *s, const Json *destination, uint
         || !str_eq(s->channel, json_str(json_get(destination, "channel")))
         || !str_eq(s->thread, json_str(json_get(destination, "threadTs")))) { changed(s); return; }
     // Look up an existing draft; never create a replacement after account/access invalidation.
+    // Drafts store a channel's missing thread as "", as slack_draft does.
+    const char *thread = s->thread ? s->thread : "";
     for (size_t i = 0; i < s->state.draft_count; i++) {
         SlackDraft *d = &s->state.drafts[i];
-        if (str_eq(d->workspace, s->workspace) && str_eq(d->channel, s->channel) && str_eq(d->thread, s->thread ? s->thread : "")) {
+        if (str_eq(d->workspace, s->workspace) && str_eq(d->channel, s->channel) && str_eq(d->thread, thread)) {
             if (d->uncertain && !d->sending) { d->uncertain = false; set_string(&s->error, NULL); changed(s); }
             return;
         }

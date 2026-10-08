@@ -5,6 +5,7 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include "fixtures/october-2026/catalog.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -333,8 +334,23 @@ static const Expected ROUTE_TABLE[] = {
     { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
     { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
     { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
+    { "mail_messages", "GET", "mail/messages" },
+    { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
+    { "settings_mail_accounts", "GET", "settings/mail/accounts" },
+    { "connect_mail_account", "POST", "settings/mail/accounts/connect" },
+    { "finish_mail_account", "POST", "settings/mail/accounts/connect/finish" },
+    { "update_mail_account", "PUT", "settings/mail/accounts/{id}" },
+    { "delete_mail_account", "DELETE", "settings/mail/accounts/{id}" },
+    { "sync_mail_account", "POST", "settings/mail/accounts/{id}/sync" },
     { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
     { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
+    { "settings_mcp_servers", "GET", "settings/mcp/servers" },
+    { "create_mcp_server", "POST", "settings/mcp/servers" },
+    { "update_mcp_server", "PUT", "settings/mcp/servers/{id}" },
+    { "delete_mcp_server", "DELETE", "settings/mcp/servers/{id}" },
+    { "connect_mcp_server", "POST", "settings/mcp/servers/{id}/connect" },
+    { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
+
 };
 #define ROUTE_COUNT (sizeof ROUTE_TABLE / sizeof *ROUTE_TABLE)
 
@@ -1016,9 +1032,141 @@ static void test_slack_stream_route_and_cancellation(void) {
     api_stream_cancel_free(&cancel); json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_final_catalog_transport_and_session_requests(void) {
+    Str fixture; str_init(&fixture);
+    for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
+    Stub stub = {0}; ApiClient *c = client(&stub); ApiError e; api_error_init(&e);
+    stub_json(&stub, 200, fixture.data);
+    Route *routes = NULL; size_t n = 0;
+    CHECK(api_catalog(c, &routes, &n, &e));
+    CHECK(routes_allow(routes, n, "POST", "sessions/7/messages", "manage"));
+    CHECK(!routes_allow(routes, n, "POST", "sessions/7/messages", "read"));
+    routes_free(routes, n); str_free(&fixture);
+    const char *operations[] = { "start_session", "message", "cancel", "compact" };
+    for (size_t i = 0; i < sizeof operations / sizeof *operations; i++) {
+        Json *args = json_object();
+        if (i == 0) {
+            json_set_str(args, "repo", "o/r"); json_set_str(args, "prompt", "continue");
+            json_set_num(args, "provider", 2); json_set_str(args, "model", "gpt-5.6-sol"); json_set_str(args, "effort", "high");
+        } else {
+            json_set_str(args, "sessionId", "s/7");
+            if (i == 1) json_set_str(args, "text", "continue");
+        }
+        stub_json(&stub, i == 0 ? 201 : 200, "{\"session\":{\"id\":\"s/7\",\"status\":\"running\"}}");
+        Json *result = api_call(c, operations[i], args, 0, &e); CHECK(result != NULL); json_free(result);
+        CHECK_STR(stub.last_method, "POST");
+        CHECK_STR(stub.last_url, i == 0 ? BASE "sessions" : i == 1 ? BASE "sessions/s%2F7/messages" :
+            i == 2 ? BASE "sessions/s%2F7/cancel" : BASE "sessions/s%2F7/compact");
+        Json *body = json_parsez(stub.last_body);
+        if (i == 0) {
+            CHECK_INT(json_int_or(json_get(body, "provider"), 0), 2);
+            CHECK_STR(json_str(json_get(body, "model")), "gpt-5.6-sol"); CHECK_STR(json_str(json_get(body, "effort")), "high");
+            CHECK_STR(json_str(json_get(body, "repo")), "o/r"); CHECK_STR(json_str(json_get(body, "prompt")), "continue");
+            CHECK_INT(json_count(body), 5);
+        } else if (i == 1) {
+            CHECK_STR(json_str(json_get(body, "text")), "continue"); CHECK_INT(json_count(body), 1);
+        } else CHECK_INT(json_count(body), 0);
+        CHECK(json_is_null(json_get(body, "sessionId"))); json_free(body);
+        const int failures[] = { 401, 403, 404, 409, 429, 503 };
+        for (size_t k = 0; k < sizeof failures / sizeof *failures; k++) {
+            stub_json(&stub, failures[k], "{\"error\":\"Final contract refusal\"}");
+            stub.retry_after = failures[k] == 429 ? "120" : NULL;
+            int before = stub.calls;
+            result = api_call(c, operations[i], args, 0, &e);
+            CHECK(result == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(e.status, failures[k]);
+            CHECK(e.kind == API_HTTP); CHECK_STR(e.message, "Final contract refusal");
+            CHECK(api_error_unauthorized(&e) == (failures[k] == 401));
+            CHECK(api_error_is_refusal(&e) == (failures[k] < 500));
+            CHECK(e.retry_after == (failures[k] == 429 ? 120 : -1));
+            json_free(result);
+        }
+        stub.fail = true; stub.fail_message = "connection lost after write"; int before = stub.calls;
+        result = api_call(c, operations[i], args, 0, &e);
+        CHECK(result == NULL); CHECK(e.kind == API_NETWORK); CHECK_INT(stub.calls, before + 1);
+        json_free(result); json_free(args);
+    }
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+
+static void test_mcp_contract_and_errors(void) {
+    Stub stub = {0}; stub.status = 201; stub.content_type = "application/json";
+    stub.body = "{\"server\":{\"id\":1791403200000,\"status\":\"needs-sign-in\",\"signInUrl\":\"https://auth.example/?state=s\",\"signInNeedsPaste\":true,\"headerNames\":[\"Authorization\"],\"envNames\":[],\"hasOAuthClientSecret\":true}}";
+    ApiClient *c = client(&stub); ApiError e; api_error_init(&e);
+    Json *args = json_parsez("{\"id\":1791403200000,\"signIn\":true}");
+    Json *result = api_call(c, "connect_mcp_server", args, 60000, &e);
+    CHECK(result != NULL); CHECK_STR(stub.last_method, "POST");
+    CHECK_STR(stub.last_url, BASE "settings/mcp/servers/1791403200000/connect");
+    CHECK_STR(stub.last_body, "{\"signIn\":true}"); CHECK_INT(stub.last_timeout, 60000);
+    CHECK(json_bool_is(json_get(json_get(result, "server"), "signInNeedsPaste"), true)); json_free(result);
+    json_object_remove(args, "signIn"); json_set_str(args, "url", "http://127.0.0.1:4000/callback?code=one&state=s");
+    result = api_call(c, "finish_mcp_sign_in", args, 60000, &e); CHECK(result != NULL);
+    CHECK_STR(stub.last_url, BASE "settings/mcp/servers/1791403200000/finish-sign-in");
+    CHECK_STR(stub.last_body, "{\"url\":\"http://127.0.0.1:4000/callback?code=one&state=s\"}"); json_free(result);
+    const int errors[] = { 400, 401, 403, 404, 409, 429, 503 };
+    for (size_t i = 0; i < sizeof errors / sizeof *errors; i++) {
+        stub.status = errors[i]; stub.body = "{\"error\":\"sign-in unavailable\"}"; stub.retry_after = "45";
+        int before = stub.calls;
+        result = api_call(c, "finish_mcp_sign_in", args, 60000, &e);
+        CHECK(result == NULL); CHECK_INT(e.status, errors[i]); CHECK(e.retry_after == 45); CHECK_INT(stub.calls, before + 1);
+        CHECK(api_error_is_refusal(&e) == (errors[i] < 500)); api_error_clear(&e);
+    }
+    stub.fail = true; stub.fail_message = "timeout";
+    int before = stub.calls; result = api_call(c, "create_mcp_server", args, 60000, &e);
+    CHECK(result == NULL && e.kind == API_NETWORK); CHECK_INT(stub.calls, before + 1);
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+
+static void test_mail_read_transport(void) {
+    Stub s = {0}; ApiClient *c = client(&s); ApiError e; api_error_init(&e);
+    Json *args = json_object(); json_set_num(args, "account", 8); json_set_str(args, "id", "A/+=%?");
+    stub_json(&s, 200, "{\"message\":{}}");
+    Json *result = api_call(c, "mail_message", args, 1000, &e); CHECK(result != NULL); json_free(result);
+    CHECK_STR(s.last_url, BASE "mail/accounts/8/messages/A%2F%2B%3D%25%3F"); CHECK_STR(s.last_method, "GET"); CHECK(s.last_body == NULL);
+    json_object_remove(args, "id"); json_set_str(args, "q", "sender & subject"); json_set_num(args, "unread", 0);
+    json_set_num(args, "inbox", 1); json_set_num(args, "starred", 0); json_set_str(args, "label", "My /folder");
+    json_set_str(args, "thread", "thread/+="); json_set_str(args, "cursor", "cursor/+="); json_set_num(args, "limit", 50);
+    stub_json(&s, 200, "{\"messages\":[],\"nextCursor\":null}");
+    result = api_call(c, "mail_messages", args, 1000, &e); CHECK(result != NULL); json_free(result);
+    CHECK_STR(s.last_url, BASE "mail/messages?account=8&q=sender%20%26%20subject&unread=0&inbox=1&starred=0&label=My%20%2Ffolder&thread=thread%2F%2B%3D&cursor=cursor%2F%2B%3D&limit=50");
+    CHECK_STR(s.last_method, "GET"); CHECK(s.last_body == NULL);
+    const int errors[] = { 400, 401, 403, 404, 409, 429, 503 };
+    for (size_t i = 0; i < sizeof errors / sizeof *errors; i++) {
+        stub_json(&s, errors[i], "{\"error\":\"refused\"}"); s.retry_after = "91";
+        int calls = s.calls; CHECK(api_call(c, "mail_messages", args, 1000, &e) == NULL);
+        CHECK_INT(s.calls, calls + 1); CHECK_INT(e.status, errors[i]); CHECK(e.retry_after == 91);
+    }
+    s.fail = true; s.fail_message = "offline"; CHECK(api_call(c, "mail_messages", args, 1000, &e) == NULL); CHECK_INT(e.kind, API_NETWORK);
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&s);
+}
+
+static void test_mail_transport_contract(void) {
+    Stub s = {0}; ApiClient *c = client(&s); ApiError e; api_error_init(&e);
+    const char *ops[] = { "settings_mail_accounts", "connect_mail_account", "finish_mail_account", "update_mail_account", "delete_mail_account", "sync_mail_account" };
+    Json *args = json_object(); json_set_num(args, "id", 7); json_set_num(args, "accountId", 7);
+    json_set_str(args, "provider", "gmail"); json_set_str(args, "state", "pending"); json_set_str(args, "code", "single-use");
+    for (size_t i = 0; i < sizeof ops / sizeof *ops; i++) {
+        stub_json(&s, i == 5 ? 202 : i == 2 ? 201 : 200, "{}");
+        Json *result = api_call(c, ops[i], args, 1000, &e); CHECK(result != NULL); json_free(result);
+        if (i == 1) { Json *b = json_parsez(s.last_body); CHECK_INT(json_int_or(json_get(b, "accountId"), 0), 7); json_free(b); }
+        if (i == 3) { CHECK_STR(s.last_url, BASE "settings/mail/accounts/7"); Json *b = json_parsez(s.last_body); CHECK(json_is_null(json_get(b, "id"))); json_free(b); }
+        if (i == 5) CHECK(str_has_prefix(s.last_url, BASE "settings/mail/accounts/7/sync"));
+    }
+    const int errors[] = { 400, 401, 403, 404, 409, 429, 503 };
+    for (size_t i = 0; i < sizeof errors / sizeof *errors; i++) {
+        stub_json(&s, errors[i], "{\"error\":\"refused\"}"); s.retry_after = "30";
+        int calls = s.calls; CHECK(api_call(c, "finish_mail_account", args, 1000, &e) == NULL);
+        CHECK_INT(s.calls, calls + 1); CHECK_INT(e.status, errors[i]); CHECK(e.retry_after == 30);
+    }
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&s);
+}
+
 void api_tests(void) {
     test_run("Slack SSE route cancellable before start with required workspace ID", test_slack_stream_route_and_cancellation);
     test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
+    test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
+    test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
+    test_run("mail read routes encode opaque IDs filters and cursors without writes or retries", test_mail_read_transport);
+    test_run("mail six routes preserve accountId 202 failures and never retry exchanges", test_mail_transport_contract);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);

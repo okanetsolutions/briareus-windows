@@ -82,6 +82,14 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
 Screen *settings_screen_new(void);
+Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
+void settings_mcp_changed(void);
+bool mcp_settings_supported(const char *operation);
+/// Global mail navigation, gated by the deployed catalog and token permission.
+bool mail_settings_offered(void);
+Screen *mail_settings_screen_new(void);
+bool mail_inbox_offered(void);
+Screen *mail_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
 /// and the two models compared over the meetings recorded on this computer.
 Screen *meeting_settings_screen_new(void);
@@ -252,7 +260,11 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// The address bar over a Run tab's browser: back, forward and reload, the page's address (`url` until the browser
 /// reports one), and open in the browser; `actions` holds the four actions in that order. Advances.
 struct WebView;
-void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4]);
+typedef struct { HWND edit; RECT rc; struct WebView **web; char *url; bool clipped; } RunAddress;
+void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4], RunAddress *address);
+/// Places the editable address in the host pane, or hides it when the Run tab is not shown.
+void run_address_place(RunAddress *address, Screen *host, struct WebView **web, const char *url, const RECT *content, int scroll_y, bool shown);
+void run_address_free(RunAddress *address);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
 /// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
 /// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
@@ -375,6 +387,12 @@ void poller_finished(Poller *p, bool failed, double retry_after);
 /// True when this timer is the poller's and a read should go out now.
 bool poller_fired(Poller *p, UINT id);
 void poller_set_base(Poller *p, int base_ms);
+
+/// Pull-list cooldowns are shared across screens and persisted in the account's response cache.
+time_t pulls_retry_deadline(const char *repo);
+void pulls_note_failure(const char *repo, const ApiError *error, time_t now);
+void pulls_note_success(const char *repo);
+time_t pulls_sync_time(const Json *result, bool saved, time_t now);
 
 void set_string(char **slot, const char *value);
 /// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.
