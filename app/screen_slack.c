@@ -356,6 +356,7 @@ static void reconcile_begin(SlackScreen *s) {
     }
     set_string(&s->live_status, "Synchronizing Slack conversations and messages…");
     snapshot_load(s, TAG_CONVERSATIONS);
+    if (!json_count(s->people)) load(s, TAG_PEOPLE);
     if (s->channel) { load(s, TAG_DETAIL); snapshot_load(s, TAG_SNAPSHOT_CHANNEL); }
     if (!str_empty(s->thread)) snapshot_load(s, TAG_SNAPSHOT_THREAD);
 }
