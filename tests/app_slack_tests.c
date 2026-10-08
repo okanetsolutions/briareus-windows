@@ -61,6 +61,53 @@ static void permissions(void) {
     g_store.has_device = false; CHECK(!slack_inbox_offered()); g_store.has_device = true;
     SlackScreen *s = (SlackScreen *)slack_screen_new(); teardown(s);
 }
+static void workspace_team_label(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new();
+    apply(s, TAG_WORKSPACES, "slack_workspaces", SLACK_WORKSPACES, s->state.generation, 0);
+    if (!theme.canvas) theme_init();
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600); s->base.vt->layout(&s->base, &doc); doc_end(&doc);
+    bool found = false;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_WORKSPACE) {
+        CHECK_STR(doc.items[i].text, "Business · Example"); found = true;
+    }
+    CHECK(found); doc_free(&doc); teardown(s);
+}
+static void recovery_revalidates_draft(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    Json *destination = json_object(); json_set_str(destination, "id", s->workspace); json_set_str(destination, "channel", s->channel);
+    SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); d->uncertain = true;
+    set_string(&d->text, "retained draft"); set_string(&s->error, "Check history before resending");
+    uint64_t generation = s->state.generation;
+    // Another draft can relocate the array while the confirmation is open.
+    slack_draft(&s->state, s->workspace, "C2", NULL);
+    slack_inbox_recover_confirmed(s, destination, generation);
+    d = slack_draft(&s->state, s->workspace, s->channel, NULL);
+    CHECK(!d->uncertain); CHECK_STR(d->text, "retained draft"); CHECK(!s->error);
+    d->uncertain = true;
+    json_set_str(destination, "channel", "C2"); slack_inbox_recover_confirmed(s, destination, generation); CHECK(d->uncertain);
+    json_set_str(destination, "channel", "C1"); json_set_str(destination, "threadTs", "1.1");
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK(d->uncertain); json_object_remove(destination, "threadTs");
+    choose(s, ACT_REFRESH, 0); slack_inbox_recover_confirmed(s, destination, generation); CHECK(d->uncertain);
+    const int statuses[] = {403, 404, 409};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        generation = s->state.generation;
+        apply(s, TAG_HISTORY, "slack_history", NULL, generation, statuses[i]);
+        slack_inbox_recover_confirmed(s, destination, generation);
+        CHECK_INT(s->state.draft_count, 0); CHECK(!s->workspace); CHECK(s->error != NULL);
+        // Reloading the same destination must not authorize its new draft with the old confirmation.
+        load_navigation(s); d = slack_draft(&s->state, s->workspace, s->channel, NULL); d->uncertain = true;
+        slack_inbox_recover_confirmed(s, destination, generation); CHECK(d->uncertain);
+    }
+    generation = s->state.generation; g_store.device.id = "admin-2";
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK_INT(s->state.draft_count, 0); CHECK(!s->workspace);
+    load_navigation(s); d = slack_draft(&s->state, s->workspace, s->channel, NULL); d->uncertain = true;
+    generation = s->state.generation; g_store.device.permission = "manage";
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK_INT(s->state.draft_count, 0);
+    g_store.device.permission = "admin"; slack_inbox_store_changed(); load_navigation(s);
+    slack_state_clear(&s->state); generation = s->state.generation;
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK_INT(s->state.draft_count, 0);
+    teardown(s); slack_inbox_recover_confirmed(s, destination, generation); json_free(destination);
+}
 static void navigation_and_stale(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     uint64_t old = s->state.generation;
@@ -307,17 +354,18 @@ static void snapshot_read_sync_and_private_access(void) {
 
 static void recovery_revalidates_after_modal_events(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    Json *destination = json_object(); json_set_str(destination, "id", s->workspace); json_set_str(destination, "channel", s->channel);
     SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); d->uncertain = true;
     uint64_t generation = s->state.generation;
-    CHECK(slack_inbox_recover(s, generation, "1727000000002", "C1", NULL)); CHECK(!d->uncertain);
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK(!d->uncertain);
     d->uncertain = true;
     live(s, "workspace.removed", "{\"workspaceId\":1727000000002}");
-    CHECK(!slack_inbox_recover(s, generation, "1727000000002", "C1", NULL)); CHECK_INT(s->state.draft_count, 0);
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK_INT(s->state.draft_count, 0);
     load_navigation(s); d = slack_draft(&s->state, s->workspace, s->channel, NULL); d->uncertain = true;
     generation = s->state.generation; live(s, "ready", LIVE_READY);
-    CHECK(!slack_inbox_recover(s, generation, "1727000000002", "C1", NULL)); CHECK(d->uncertain);
-    CHECK(!slack_inbox_recover(s, s->state.generation, "1727000000002", "G1", NULL)); CHECK(d->uncertain);
-    teardown(s);
+    slack_inbox_recover_confirmed(s, destination, generation); CHECK(d->uncertain);
+    json_set_str(destination, "channel", "G1"); slack_inbox_recover_confirmed(s, destination, s->state.generation); CHECK(d->uncertain);
+    json_free(destination); teardown(s);
 }
 static void initial_empty_snapshot_and_signout(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
@@ -343,6 +391,8 @@ void app_slack_tests(void) {
     test_run("Slack stream rotation removal account change settings and cancellation", workspace_rotation_removal_revocation);
     test_run("Slack delayed own receipts cannot overwrite live edits or resurrect deletes", own_receipts_after_events);
     test_run("Slack snapshot read synchronization private revocation and JSON 409", snapshot_read_sync_and_private_access);
+    test_run("Slack workspace labels use the provider team field", workspace_team_label);
+    test_run("Slack recovery revalidates cleared relocated and replacement drafts", recovery_revalidates_draft);
     test_run("Slack viewport debounce ignores hidden background and unfetched messages", viewed_messages_only);
     test_run("Slack screen thread sends hidden cancellation and late completion", cancellation_and_thread_send);
     test_run("Slack admin and catalog gates preserve old servers", permissions);

@@ -639,11 +639,22 @@ static void send_message(SlackScreen *s) {
     if (!str_empty(d->thread)) json_set_str(args, "threadTs", d->thread);
     call(s, TAG_SEND, "slack_send", args); composer_set(s); changed(s);
 }
-bool slack_inbox_recover(SlackScreen *s, uint64_t generation, const char *workspace, const char *channel, const char *thread) {
-    if (!sync_access(s) || !slack_state_current(&s->state, generation) || !str_eq(s->workspace, workspace) ||
-        !str_eq(s->channel, channel) || !str_eq(s->thread, thread)) return false;
-    SlackDraft *d = draft(s); if (!d || !d->uncertain) return false;
-    d->uncertain = false; set_string(&s->error, NULL); return true;
+void slack_inbox_recover_confirmed(SlackScreen *s, const Json *destination, uint64_t generation) {
+    // A modal confirmation dispatches completions which can clear drafts or destroy the screen.
+    SlackScreen *live = screens; while (live && live != s) live = live->next;
+    if (!live) return;
+    if (!ready(s, "slack_send") || !slack_state_current(&s->state, generation)
+        || !str_eq(s->workspace, json_str(json_get(destination, "id")))
+        || !str_eq(s->channel, json_str(json_get(destination, "channel")))
+        || !str_eq(s->thread, json_str(json_get(destination, "threadTs")))) { changed(s); return; }
+    // Look up an existing draft; never create a replacement after account/access invalidation.
+    for (size_t i = 0; i < s->state.draft_count; i++) {
+        SlackDraft *d = &s->state.drafts[i];
+        if (str_eq(d->workspace, s->workspace) && str_eq(d->channel, s->channel) && str_eq(d->thread, s->thread ? s->thread : "")) {
+            if (d->uncertain && !d->sending) { d->uncertain = false; set_string(&s->error, NULL); changed(s); }
+            return;
+        }
+    }
 }
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
@@ -687,15 +698,12 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     case ACT_REFRESH: refresh(base); break;
     case ACT_SEND: send_message(s); break;
     case ACT_RECOVER: {
-        SlackDraft *d = draft(s);
-        if (d && d->uncertain) {
-            uint64_t generation = s->state.generation;
-            char *workspace = xstrdup(s->workspace), *channel = xstrdup(s->channel), *thread = xstrdup(s->thread);
-            bool confirmed = app_confirm("Allow another Slack send?", "Check Slack history at this destination first. Sending the retained draft again can create a duplicate.", "Allow send", false);
-            // The modal loop can dispatch revocation/removal or ready reconciliation and free every draft.
-            if (confirmed) slack_inbox_recover(s, generation, workspace, channel, thread);
-            free(workspace); free(channel); free(thread); changed(s);
-        }
+        if (!s->workspace || !s->channel || !draft(s)->uncertain) break;
+        Json *destination = arguments(s); if (s->thread) json_set_str(destination, "threadTs", s->thread);
+        uint64_t generation = s->state.generation;
+        if (app_confirm("Allow another Slack send?", "Check Slack history at this destination first. Sending the retained draft again can create a duplicate.", "Allow send", false))
+            slack_inbox_recover_confirmed(s, destination, generation);
+        json_free(destination);
         break;
     }
     }
