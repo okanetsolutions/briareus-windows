@@ -198,6 +198,59 @@ static void readable_accounts(void) {
         cleanup(s, &doc, client, &stub);
     }
 }
+static void pruned_pages(void) {
+    const char *pages[] = {
+        "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200}],\"nextCursor\":\"older/+=\"}",
+        "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200}],\"nextCursor\":null}"
+    };
+    for (size_t i = 0; i < sizeof pages / sizeof *pages; i++) {
+        InboxStub stub = {0}; stub.page = pages[i];
+        stub.accounts = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.com\",\"provider\":\"gmail\",\"status\":\"connected\"},{\"id\":8,\"email\":\"two@example.com\",\"provider\":\"outlook\",\"status\":\"reauth\"}],\"providers\":[\"gmail\",\"outlook\"]}";
+        ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+        s->vt->visible(s, true); pump(2); draw(s, &doc);
+        CHECK(find_text(&doc, "Second account") == -1); CHECK_INT(stub.list_calls, 1);
+        CHECK((find_text(&doc, "No synced messages match these filters.") >= 0) == (i == 1));
+        CHECK((find_text(&doc, "No readable messages on the loaded pages. Load older messages to keep looking.") >= 0) == (i == 0));
+        CHECK((find_text(&doc, "Load older messages") >= 0) == (i == 0));
+        if (i == 0) {
+            click(s, &doc, "Load older messages"); pump(1); draw(s, &doc);
+            CHECK(strstr(stub.last_list, "cursor=older%2F%2B%3D") != NULL);
+            CHECK(find_text(&doc, "Older") >= 0); CHECK(find_text(&doc, "Load older messages") == -1);
+            CHECK(find_text(&doc, "No readable messages on the loaded pages. Load older messages to keep looking.") == -1);
+        }
+        cleanup(s, &doc, client, &stub);
+    }
+}
+static void account_backoff(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
+    stub.account_status = 503;
+    for (int i = 1; i <= 2; i++) {
+        g_store.mail_retry_until = GetTickCount64(); s->vt->timer(s, 1910); pump(1);
+        CHECK_INT(g_store.mail_failures, i);
+    }
+    stub.account_status = 0; g_store.mail_retry_until = GetTickCount64(); ULONGLONG until = g_store.mail_retry_until;
+    s->vt->timer(s, 1910); pump(1);
+    CHECK_INT(stub.list_calls, 1); CHECK_INT(g_store.mail_failures, 0); CHECK(g_store.mail_retry_until == until);
+    stub.account_status = 503; s->vt->timer(s, 1910); pump(1);
+    CHECK_INT(g_store.mail_failures, 1);
+    CHECK(g_store.mail_retry_until > GetTickCount64()); CHECK(g_store.mail_retry_until <= GetTickCount64() + 10000);
+    cleanup(s, &doc, client, &stub);
+}
+static void body_backoff(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
+    stub.body_status = 503; select_subject(s, &doc, "First account"); pump(1); CHECK_INT(g_store.mail_failures, 1);
+    g_store.mail_retry_until = GetTickCount64(); click(s, &doc, "Retry message"); pump(1); CHECK_INT(g_store.mail_failures, 2);
+    stub.body_status = 0; g_store.mail_retry_until = GetTickCount64(); ULONGLONG until = g_store.mail_retry_until;
+    click(s, &doc, "Retry message"); pump(1); draw(s, &doc);
+    CHECK(find_text(&doc, "First body") >= 0); CHECK_INT(stub.list_calls, 1); CHECK_INT(stub.calls, 5);
+    CHECK_INT(g_store.mail_failures, 0); CHECK(g_store.mail_retry_until == until);
+    stub.body_status = 503; select_subject(s, &doc, "Second account"); pump(1);
+    CHECK_INT(g_store.mail_failures, 1);
+    CHECK(g_store.mail_retry_until > GetTickCount64()); CHECK(g_store.mail_retry_until <= GetTickCount64() + 10000);
+    cleanup(s, &doc, client, &stub);
+}
 static void stale_body(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.block_body = true;
     stub.entered = CreateEventW(NULL, TRUE, FALSE, NULL); stub.resume = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -250,6 +303,9 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
     test_run("mail missing messages recover and cooldown survives screen changes", failures);
     test_run("mail inbox reloads loaded pages when accounts reconnect or are added", readable_accounts);
+    test_run("mail inbox distinguishes pruned pages with older mail from exhausted empty results", pruned_pages);
+    test_run("mail account reads reset backoff without reloading messages", account_backoff);
+    test_run("mail body reads reset backoff without an account or list read", body_backoff);
     test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
     test_run("mail missing list routes recover and unavailable lists respect Retry-After", list_failures);
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);

@@ -105,7 +105,7 @@ static void body_done(void *owner, Request *r) {
         else {
             if (fresh.account_id != s->selected_account || !str_eq(fresh.id, s->selected_id)) {
                 text_set(&s->body_error, "The server returned a different message; refresh the list."); mail_message_free(&fresh);
-            } else { mail_message_free(&s->body); s->body = fresh; text_set(&s->body_error, NULL); }
+            } else { mail_message_free(&s->body); s->body = fresh; text_set(&s->body_error, NULL); g_store.mail_failures = 0; }
         }
     }
     repaint(s);
@@ -170,6 +170,7 @@ static void accounts_done(void *owner, Request *r) {
             }
             if (changed) reset_list(s); // Reload skipped rows as well as clearing removed/revoked accounts.
             mail_accounts_free(&s->accounts); s->accounts = fresh; s->accounts_loaded = true;
+            g_store.mail_failures = 0;
             if (s->filter.account && !mail_account_readable(&fresh, s->filter.account)) { s->filter.account = 0; reset_list(s); }
             text_set(&s->account_error, NULL);
             if (!s->loaded) load_list(s);
@@ -286,7 +287,9 @@ static void layout(Screen *base, Doc *doc) {
     }
     if (s->list_error) { doc_notice(doc, x, w, s->list_error); doc_button(doc, x, 0, "Retry list", BUTTON_PLAIN, ACT_RETRY_LIST, 0, available && !s->list_read); }
     if (s->list_read) doc_loading(doc, x, w, "Loading messages...");
-    if (s->loaded && !s->messages.count) doc_text(doc, x, w, "No synced messages match these filters.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    if (s->loaded && !s->messages.count) doc_text(doc, x, w, s->messages.next_cursor
+        ? "No readable messages on the loaded pages. Load older messages to keep looking."
+        : "No synced messages match these filters.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->messages.count; i++) {
         MailMessage *m = &s->messages.messages[i]; int box = doc_box_begin(doc, x, w, px(10), theme.surface, theme.border, px(6));
         message_heading(doc, x + px(10), w - px(20), m, &s->accounts);
