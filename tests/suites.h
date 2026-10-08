@@ -24,5 +24,6 @@ void app_format_tests(void);
 void app_common_tests(void);
 void app_store_tests(void);
 void app_sql_tests(void);
+void app_pulls_tests(void);
 
 #endif
