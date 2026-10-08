@@ -7,6 +7,7 @@
 #include "test.h"
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static Route ROUTES[] = {
     {"GET", "/settings/mail/accounts", "admin"}, {"GET", "/mail/messages", "admin"},
@@ -527,6 +528,120 @@ static void reader_stays_visible(void) {
     release_attached(&doc, client, &stub);
     free(rows);
 }
+static bool menu_on(Doc *doc, const char *text, bool *on) {
+    int i = find_text(doc, text);
+    if (i < 0 || !doc->items[i].data) {
+        printf("  missing menu row %s\n", text);
+        return false;
+    }
+    // The row's data starts with the check flag.
+    *on = *(const bool *)doc->items[i].data;
+    return true;
+}
+static void grouping_checks_follow_group(void) {
+    InboxStub stub = {0};
+    stub.accounts = ACCOUNTS;
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"a\",\"threadId\":\"t1\",\"subject\":\"Thread head\",\"receivedAt\":300,\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"b\",\"threadId\":\"t1\",\"subject\":\"Thread reply\",\"receivedAt\":200,\"from\":{\"name\":\"Bea\",\"address\":\"bea@example.com\"}}"
+        "],\"nextCursor\":null}";
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2);
+    // The filter dialog is not linked into app_tests. The id stays set while grouping changes.
+    mail_inbox_set_thread_filter(s, "t1");
+    click(s, &doc, "Grouping"); draw(s, &doc);
+    bool grouped = false, separate = true, exact = false;
+    CHECK(menu_on(&doc, "Group threads and duplicates", &grouped)); CHECK(grouped);
+    CHECK(menu_on(&doc, "Separate messages", &separate)); CHECK(!separate);
+    CHECK(menu_on(&doc, "Exact thread...", &exact)); CHECK(exact);
+    CHECK(find_text(&doc, "2 in thread") >= 0);
+    click(s, &doc, "Separate messages"); draw(s, &doc);
+    CHECK(find_text(&doc, "Thread head") >= 0); CHECK(find_text(&doc, "Thread reply") >= 0);
+    CHECK(find_text(&doc, "2 in thread") < 0);
+    click(s, &doc, "Grouping"); draw(s, &doc);
+    grouped = true; separate = false; exact = false;
+    CHECK(menu_on(&doc, "Group threads and duplicates", &grouped)); CHECK(!grouped);
+    CHECK(menu_on(&doc, "Separate messages", &separate)); CHECK(separate);
+    CHECK(menu_on(&doc, "Exact thread...", &exact)); CHECK(exact);
+    cleanup(s, &doc, client, &stub);
+}
+static void far_received_at_lays_out(void) {
+    InboxStub stub = {0};
+    stub.accounts = ACCOUNTS;
+    // 1e14 ms is past year 3000, which Windows localtime rejects, and still fits the relative-age year cast.
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"far\",\"subject\":\"Far future\",\"receivedAt\":1e14,\"isRead\":true,"
+        "\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}}"
+        "],\"nextCursor\":null}";
+    time_t when = (time_t)(1e14 / 1000.0);
+    bool undated = localtime(&when) == NULL;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Far future") >= 0);
+    CHECK((find_text(&doc, "UNDATED") >= 0) == undated);
+    cleanup(s, &doc, client, &stub);
+}
+static char *thread_page(void) {
+    Str page; str_init(&page);
+    str_appendf(&page, "{\"messages\":[");
+    str_appendf(&page, "{\"accountId\":7,\"id\":\"same/+=\",\"threadId\":\"t1\",\"subject\":\"Newest note\","
+        "\"snippet\":\"Newest snippet\",\"receivedAt\":20000,\"isRead\":true,"
+        "\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}}");
+    for (int i = 1; i <= 12; i++) {
+        const char *snip = i == 12 ? "Oldest preview" : "Older preview";
+        str_appendf(&page, ",{\"accountId\":7,\"id\":\"m%d\",\"threadId\":\"t1\",\"subject\":\"Older %d\","
+            "\"snippet\":\"%s\",\"receivedAt\":%d,\"isRead\":true,"
+            "\"from\":{\"name\":\"Bea\",\"address\":\"bea@example.com\"}}",
+            i, i, snip, 20000 - i * 100);
+    }
+    str_appendf(&page, "],\"nextCursor\":null}");
+    return page.data;
+}
+static bool in_reader_window(Doc *doc, const char *text) {
+    int i = find_text(doc, text);
+    if (i < doc->sticky_first || i >= doc->sticky_last) return false;
+    const RECT *rc = &doc->items[i].rc;
+    return rc->top >= doc->sticky_view.top && rc->bottom <= doc->sticky_view.bottom;
+}
+static void opened_thread_shows_selected(void) {
+    CHECK(mail_pane != NULL);
+    if (!mail_pane) return;
+    char *rows = thread_page();
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.page = rows;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    // Wide: the reader scrolls on its own. Paint the loading card before the body, which used to consume the reveal.
+    place_pane(1280, 900);
+    pane_set_root(mail_pane, s); pump(2);
+    select_subject(s, &doc, "Newest note"); paint_pane(); pump(1); paint_pane();
+    Doc *live = pane_doc(mail_pane);
+    CHECK(live != NULL);
+    if (live) {
+        int body = find_text(live, "First body"), oldest = find_text(live, "Oldest preview");
+        bool body_in = in_reader_window(live, "First body"), oldest_in = in_reader_window(live, "Oldest preview");
+        if (!(live->sticky_scroll > 0 && body >= 0 && oldest >= 0 && body_in && !oldest_in))
+            printf("  wide thread scroll=%d body=%d oldest=%d body_in=%d oldest_in=%d\n",
+                live->sticky_scroll, body, oldest, body_in, oldest_in);
+        CHECK(live->sticky_scroll > 0);
+        CHECK(body >= 0); CHECK(oldest >= 0);
+        CHECK(body_in); CHECK(!oldest_in);
+    }
+    // Narrow: the page scrolls to the selected block, not the card top.
+    place_pane(480, 640);
+    select_subject(s, &doc, "Newest note"); paint_pane(); pump(1); paint_pane();
+    int scroll = pane_scroll_y(mail_pane);
+    RECT view = pane_content_rect(mail_pane);
+    int view_h = view.bottom - view.top;
+    layout_attached(s, &doc);
+    int oldest = find_text(&doc, "Oldest preview");
+    CHECK(oldest >= 0);
+    if (oldest >= 0 && !(doc.items[oldest].rc.top < scroll && fully_in_view(&doc, "First body", scroll, view_h)))
+        printf("  stacked thread oldest=%ld scroll=%d view=%d\n", oldest >= 0 ? (long)doc.items[oldest].rc.top : -1, scroll, view_h);
+    if (oldest >= 0) CHECK(doc.items[oldest].rc.top < scroll);
+    CHECK(fully_in_view(&doc, "First body", scroll, view_h));
+    place_pane(360, 160);
+    release_attached(&doc, client, &stub);
+    free(rows);
+}
 static void focus_reveal_skips_open_row(void) {
     CHECK(mail_pane != NULL);
     if (!mail_pane) return;
@@ -600,6 +715,9 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox day header counts every shown conversation on that day", day_header_skips_hidden);
     test_run("mail inbox filter chips stay inside a narrow pane", filter_chips_fit_narrow_pane);
     test_run("mail inbox keeps an opened message in view", reader_stays_visible);
+    test_run("mail inbox opens a grouped thread on the selected message", opened_thread_shows_selected);
+    test_run("mail inbox lays out a receivedAt localtime cannot represent", far_received_at_lays_out);
+    test_run("mail inbox grouping checks follow the active group while a thread filter is set", grouping_checks_follow_group);
     if (mail_pane) pane_destroy(mail_pane);
     if (mail_parent) DestroyWindow(mail_parent);
     mail_pane = NULL; mail_parent = NULL;

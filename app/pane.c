@@ -180,6 +180,7 @@ RECT pane_content_rect(Pane *p) {
 }
 int pane_content_width(Pane *p) { RECT rc = client(p); return rc.right - rc.left - 2 * margin(p); }
 int pane_scroll_y(Pane *p) { return p->scroll_y; }
+Doc *pane_doc(Pane *p) { return p ? &p->doc : NULL; }
 int pane_scroll_x(Pane *p) { return p->scroll_x; }
 
 static int max_scroll(Pane *p) {

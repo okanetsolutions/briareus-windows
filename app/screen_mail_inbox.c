@@ -26,8 +26,8 @@ typedef struct {
     MailFilter filter;
     Request *account_read, *list_read, *body_read;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
-    int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y;
-    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, in_scroll, stacked;
+    int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y, reader_block_y, reader_blocks;
+    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, reveal_block, reader_block_first, in_scroll, stacked;
 } Inbox;
 
 bool mail_inbox_offered(void) {
@@ -50,6 +50,7 @@ static void cancel(Inbox *s) {
 static void clear_selection(Inbox *s) {
     request_cancel(&s->body_read); mail_message_free(&s->body);
     text_set(&s->selected_id, NULL); text_set(&s->body_error, NULL); s->selected_account = 0;
+    s->reveal_open = false; s->reveal_block = false;
 }
 static void reset_list(Inbox *s) {
     request_cancel(&s->list_read); clear_selection(s); mail_messages_free(&s->messages);
@@ -191,6 +192,11 @@ static void load_accounts(Inbox *s) {
 }
 static void reload(Inbox *s) { reset_list(s); load_accounts(s); repaint(s); }
 static void release(Inbox *s) { clear_private(s); text_set(&s->list_error, NULL); text_set(&s->body_error, NULL); screen_release(&s->base); }
+void mail_inbox_set_thread_filter(Screen *base, const char *thread) {
+    Inbox *s = (Inbox *)base;
+    free(s->filter.thread);
+    s->filter.thread = xstrdup(thread && *thread ? thread : NULL);
+}
 static void edit_filter(Inbox *s, int act) {
     if (!window(s)) return;
     char **slot = act == ACT_Q ? &s->filter.q : act == ACT_LABEL ? &s->filter.label : &s->filter.thread;
@@ -219,8 +225,10 @@ typedef struct { RECT mailbox, folder, group; } Anchors;
 static int day_key(double ms) {
     if (ms <= 0) return 0;
     time_t when = (time_t)(ms / 1000);
-    struct tm t = *localtime(&when);
-    return (t.tm_year + 1900) * 10000 + (t.tm_mon + 1) * 100 + t.tm_mday;
+    // A finite receivedAt past year 3000 still parses. localtime returns NULL for it, and copying that used to fault every layout.
+    struct tm *t = localtime(&when);
+    if (!t) return 0;
+    return (t->tm_year + 1900) * 10000 + (t->tm_mon + 1) * 100 + t->tm_mday;
 }
 static char *day_title(int key) {
     if (!key) return xstrdup("UNDATED");
@@ -476,7 +484,7 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         if (!mail_account_readable(&s->accounts, m->account_id)) return;
         int primary = convo_primary_for(s, (int)arg);
         clear_selection(s); s->selected_id = xstrdup(m->id); s->selected_account = m->account_id;
-        s->focus_message = primary; s->reveal_open = true; s->reveal_focus = false;
+        s->focus_message = primary; s->reveal_open = true; s->reveal_focus = false; s->reveal_block = true;
         text_set(&s->limit_note, NULL);
         load_body(s); repaint(s);
     }
@@ -785,8 +793,9 @@ static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
         y += menu_row(doc, x + px(4), y, mw - px(8), "Outside inbox", s->filter.inbox == 0 && str_empty(s->filter.label), ACT_INBOX, 0);
         y += menu_row(doc, x + px(4), y, mw - px(8), "Exact label...", !str_empty(s->filter.label), ACT_LABEL, 0);
     } else {
-        y += menu_row(doc, x + px(4), y, mw - px(8), "Group threads and duplicates", s->group == GROUP_THREADS && str_empty(s->filter.thread), ACT_GROUP, GROUP_THREADS);
-        y += menu_row(doc, x + px(4), y, mw - px(8), "Separate messages", s->group == GROUP_EACH && str_empty(s->filter.thread), ACT_GROUP, GROUP_EACH);
+        // The thread id is a server filter and does not change group. Check the group the rows actually use.
+        y += menu_row(doc, x + px(4), y, mw - px(8), "Group threads and duplicates", s->group == GROUP_THREADS, ACT_GROUP, GROUP_THREADS);
+        y += menu_row(doc, x + px(4), y, mw - px(8), "Separate messages", s->group == GROUP_EACH, ACT_GROUP, GROUP_EACH);
         y += menu_row(doc, x + px(4), y, mw - px(8), "Exact thread...", !str_empty(s->filter.thread), ACT_THREAD, 0);
     }
     y += px(6);
@@ -896,6 +905,8 @@ static void layout_list(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, 
 static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
     const MailMessage *m = &s->messages.messages[index];
     bool selected = row_open(s, m);
+    if (selected) { s->reader_block_y = doc->y; s->reader_block_first = s->reader_blocks == 0; }
+    s->reader_blocks++;
     const MailMessage *full = selected && s->body.id ? &s->body : m;
     char *name, *email; sender_parts(full->sender && *full->sender ? full->sender : m->sender, &name, &email);
     const MailAccount *account = mail_account_find(&s->accounts, m->account_id);
@@ -1050,7 +1061,7 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
 static void layout(Screen *base, Doc *doc) {
     Inbox *s = (Inbox *)base; int x = px(16), w = doc->width - x * 2;
     if (w < px(120)) w = px(120);
-    s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->stacked = false;
+    s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->reader_block_y = -1; s->reader_blocks = 0; s->reader_block_first = false; s->stacked = false;
     doc_space(doc, px(12));
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
@@ -1105,7 +1116,17 @@ static void layout(Screen *base, Doc *doc) {
             int page = top + shown;
             if (page < list_bottom) page = list_bottom;
             doc->y = page;
-            if (s->reveal_open) doc->sticky_scroll = 0;
+            // Members are oldest-first, so the message just opened is below older previews. Scroll to that block, and
+            // keep the top when it is already first. The loading paint has no block yet; this stays set until the body
+            // is laid out, and a later paint leaves the reader's own scroll where the reader moved it.
+            if (s->reveal_block) {
+                int offset = 0;
+                if (s->reader_block_y >= 0 && !s->reader_block_first) {
+                    offset = s->reader_block_y - s->reader_y;
+                    if (offset < 0) offset = 0;
+                }
+                doc->sticky_scroll = offset;
+            }
             doc_sticky(doc, reader_first, (int)doc->count, doc->y);
         } else if (list_bottom > doc->y) doc->y = list_bottom;
     }
@@ -1152,12 +1173,16 @@ static void scrolled(Screen *base, bool at_bottom) {
     (void)at_bottom; Inbox *s = (Inbox *)base;
     if (s->in_scroll) return;
     s->in_scroll = true;
-    if (s->reveal_focus || s->reveal_open) {
-        // j/k keeps the focused list row under the chrome. A stacked reader sits below the whole list, so opening
-        // one scrolls to the reader; beside the list the reader follows the scroll and keeps its own.
-        int row = s->reveal_focus ? s->focus_y : s->stacked ? s->reader_y : s->open_y;
+    if (s->reveal_focus || s->reveal_open || s->reveal_block) {
+        // j/k keeps the focused list row under the chrome. Beside the list the reader scrolls to the opened block on
+        // its own. A stacked reader has no sticky scroll, so opening one scrolls the page to that block, or to the
+        // card top while the body is loading and when the block is already first.
+        bool to_block = s->reveal_block && s->reader_block_y >= 0 && !s->reader_block_first;
+        int row = s->reveal_focus ? s->focus_y : s->stacked ? (to_block ? s->reader_block_y : s->reader_y) : s->open_y;
+        bool move = s->reveal_focus || s->reveal_open || (s->stacked && to_block);
         s->reveal_focus = false; s->reveal_open = false;
-        if (s->base.pane && row >= 0) {
+        if (s->reveal_block && (s->reader_block_y >= 0 || !s->body_read)) s->reveal_block = false;
+        if (move && s->base.pane && row >= 0) {
             int target = row - s->chrome_bottom;
             if (target < 0) target = 0;
             pane_scroll_to(s->base.pane, target);

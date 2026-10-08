@@ -126,6 +126,8 @@ int pane_content_width(Pane *pane);
 RECT pane_content_rect(Pane *pane);
 /// Content y of the top of the visible area.
 int pane_scroll_y(Pane *pane);
+/// The document laid out in the pane, so a regression can read item positions after paint.
+Doc *pane_doc(Pane *pane);
 /// Content x of the left of the visible area.
 int pane_scroll_x(Pane *pane);
 /// Scrolls so a content y is visible near the top.
