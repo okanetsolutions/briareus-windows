@@ -1005,8 +1005,8 @@ static void test_slack_json_contract_and_no_retry(void) {
 
 static void test_slack_stream_route_and_cancellation(void) {
     Stub stub = {0}; ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
-    const ApiRoute *route = api_route("slack_events"); CHECK(route != NULL); CHECK_STR(route->method, "GET");
-    CHECK_STR(route->path, "slack/workspaces/{id}/events");
+    const ApiRoute *route = api_route("slack_events"); CHECK(route != NULL); CHECK_STR(route ? route->method : NULL, "GET");
+    CHECK_STR(route ? route->path : NULL, "slack/workspaces/{id}/events");
     ApiStreamCancel cancel; api_stream_cancel_init(&cancel); api_stream_cancel(&cancel);
     Json *args = json_parsez("{\"id\":\"1727000000002\"}");
     CHECK(!api_stream(c, "slack_events", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
