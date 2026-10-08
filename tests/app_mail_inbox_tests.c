@@ -160,6 +160,7 @@ static void failures(void) {
     Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
     stub.body_status = 404; select_subject(s, &doc, "Second account"); pump(3); draw(s, &doc);
     CHECK(find_text(&doc, "Close message") == -1); CHECK(find_text(&doc, "First account") >= 0);
+    CHECK(find_text(&doc, "This message or account was removed from the synced copy. Refresh the list.") >= 0);
     stub.body_status = 429; stub.retry_after = 90; select_subject(s, &doc, "Second account"); pump(1); draw(s, &doc);
     CHECK(find_text(&doc, "Mail cooldown is active. Retry buttons become available when it ends.") >= 0);
     int i = find_text(&doc, "Retry message"); CHECK(i >= 0); if (i >= 0) CHECK_INT(doc.items[i].action, 0);
@@ -184,6 +185,19 @@ static void stale_body(void) {
     CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "First body") == -1);
     cleanup(s, &doc, client, &stub);
 }
+static void list_failures(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.list_status = 404;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Retry account status") >= 0); CHECK(find_text(&doc, "First account") == -1);
+    stub.list_status = 0; click(s, &doc, "Retry account status"); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "First account") >= 0);
+    stub.list_status = 503; stub.retry_after = 90; s->vt->refresh(s); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Mail is unavailable on the server. Retry after the cooldown.") >= 0);
+    int i = find_text(&doc, "Retry list"); CHECK(i >= 0); if (i >= 0) CHECK_INT(doc.items[i].action, 0);
+    CHECK(find_text(&doc, "private provider error") == -1);
+    cleanup(s, &doc, client, &stub);
+}
 static void permissions(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
     const char *permission[] = { "read", "manage", "unknown", "admin" };
@@ -206,5 +220,6 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
     test_run("mail missing messages recover and cooldown survives screen changes", failures);
     test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
+    test_run("mail missing list routes recover and unavailable lists respect Retry-After", list_failures);
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
 }

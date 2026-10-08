@@ -21,7 +21,7 @@ typedef struct {
     MailMessage body;
     MailFilter filter;
     Request *account_read, *list_read, *body_read;
-    char *selected_id, *account_error, *list_error, *body_error;
+    char *selected_id, *account_error, *list_error, *body_error, *notice;
     int selected_account, generation, failures;
     bool shown, accounts_loaded, loaded, modal, retired;
     ULONGLONG retry_until;
@@ -50,7 +50,7 @@ static void clear_selection(Inbox *s) {
 }
 static void reset_list(Inbox *s) {
     request_cancel(&s->list_read); clear_selection(s); mail_messages_free(&s->messages);
-    text_set(&s->list_error, NULL); s->loaded = false;
+    text_set(&s->list_error, NULL); text_set(&s->notice, NULL); s->loaded = false;
     // Old account responses must also be discarded across a filter generation.
     request_cancel(&s->account_read);
     s->generation = s->generation == INT_MAX ? 1 : s->generation + 1;
@@ -97,7 +97,7 @@ static void body_done(void *owner, Request *r) {
         || !str_eq(json_str(json_get(r->args, "id")), s->selected_id)) return;
     if (!r->ok) {
         if (r->error.status == 404) {
-            reset_list(s); text_set(&s->list_error, mail_read_error(404, true));
+            reset_list(s); text_set(&s->notice, mail_read_error(404, true));
             load_accounts(s); // The next account snapshot validates removals before a fresh first page.
         } else failure(s, r, &s->body_error, true);
     } else {
@@ -120,7 +120,9 @@ static void list_done(void *owner, Request *r) {
     Inbox *s = owner; if (!current(s, r)) return;
     if (!r->ok) {
         failure(s, r, &s->list_error, false);
-        if (r->error.status == 404) { reset_list(s); s->accounts_loaded = false; text_set(&s->list_error, mail_read_error(404, false)); }
+        if (r->error.status == 404) {
+            clear_private(s); text_set(&s->account_error, mail_read_error(404, false));
+        }
     } else {
         MailMessages page;
         if (!mail_messages_parse(r->result, &page)) text_set(&s->list_error, "The server returned an unexpected message list.");
@@ -233,6 +235,7 @@ static void layout(Screen *base, Doc *doc) {
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
     bool available = ready(s);
+    if (s->notice) doc_notice(doc, x, w, s->notice);
     if (s->retry_until > GetTickCount64()) doc_notice(doc, x, w, "Mail cooldown is active. Retry buttons become available when it ends.");
     ButtonSpec controls[] = {
         {0, "Search", BUTTON_PLAIN, ACT_Q, 0, true}, {0, "Label/folder", BUTTON_PLAIN, ACT_LABEL, 0, true},
