@@ -548,7 +548,6 @@ static LRESULT CALLBACK composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 static void visible(Screen *base, bool shown) {
     SlackScreen *s = (SlackScreen *)base; s->shown = shown;
     if (!shown) { cancel(s); ShowWindow(s->composer, SW_HIDE); return; }
-    if (!sync_access(s)) return;
     if (!s->composer) {
         s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             0, 0, 0, 0, pane_hwnd(base->pane), (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
@@ -556,6 +555,7 @@ static void visible(Screen *base, bool shown) {
         SendMessageW(s->composer, EM_SETLIMITTEXT, 32000, 0); // Allow an over-limit draft; validation blocks sending it.
         SetWindowSubclass(s->composer, composer_proc, 1, (DWORD_PTR)s);
     }
+    if (!sync_access(s)) return;
     composer_set(s); refresh(base);
 }
 static void activated(Screen *base, bool active) {
