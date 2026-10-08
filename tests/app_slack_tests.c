@@ -4,6 +4,7 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -107,6 +108,55 @@ static void recovery_revalidates_draft(void) {
     slack_inbox_recover_confirmed(s, destination, generation); CHECK_INT(s->state.draft_count, 0);
     teardown(s); slack_inbox_recover_confirmed(s, destination, generation); json_free(destination);
 }
+static void find_revalidates_screen(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); choose(s, ACT_PEOPLE, 0);
+    char *workspace = xstrdup(s->workspace); uint64_t generation = s->state.generation;
+    slack_inbox_find_confirmed(s, workspace, generation, "Alice"); CHECK_STR(s->search, "Alice");
+    slack_inbox_find_confirmed(s, workspace, generation, NULL); CHECK_STR(s->search, "Alice");
+    slack_inbox_find_confirmed(s, "another workspace", generation, "Bob"); CHECK_STR(s->search, "Alice");
+    choose(s, ACT_PEOPLE, 0);
+    slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK_STR(s->search, "Alice");
+    choose(s, ACT_PEOPLE, 0); choose(s, ACT_REFRESH, 0);
+    slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK_STR(s->search, "Alice");
+    generation = s->state.generation;
+    slack_inbox_find_confirmed(s, workspace, generation, ""); CHECK_STR(s->search, "");
+    const int statuses[] = {403, 404, 409};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        generation = s->state.generation;
+        apply(s, TAG_PEOPLE, "slack_people", NULL, generation, statuses[i]);
+        slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK(!s->search); CHECK(!s->workspace);
+        load_navigation(s); choose(s, ACT_PEOPLE, 0);
+        slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK(!s->search);
+    }
+    generation = s->state.generation; g_store.device.id = "admin-2";
+    slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK(!s->search); CHECK(!s->workspace);
+    load_navigation(s); choose(s, ACT_PEOPLE, 0);
+    generation = s->state.generation; g_store.device.permission = "manage";
+    slack_inbox_find_confirmed(s, workspace, generation, "Bob"); CHECK(!s->search); CHECK(!s->workspace);
+    // Credential invalidation can clear private state and then destroy the screen during the dialog.
+    g_store.has_device = false; slack_inbox_store_changed();
+    teardown(s); slack_inbox_find_confirmed(s, workspace, generation, "Bob"); free(workspace);
+}
+static void rate_limit(SlackScreen *s, int tag, double delay) {
+    Request req = {0}; req.tag = tag; req.operation = tag == TAG_PEOPLE ? "slack_people" : "slack_conversations";
+    req.client = g_store.client; req.arg = (intptr_t)s->state.generation;
+    api_error_init(&req.error); api_error_set(&req.error, API_HTTP, 429, "Rate limited", delay);
+    slack_inbox_done(s, &req); api_error_clear(&req.error);
+}
+static void cooldown_keeps_longest_wait(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    rate_limit(s, TAG_CONVERSATIONS, 60); uint64_t deadline = s->cooldown;
+    CHECK(deadline > GetTickCount64()); CHECK(strstr(s->error, "60 seconds") != NULL);
+    rate_limit(s, TAG_PEOPLE, 5); CHECK(s->cooldown == deadline);
+    unsigned wait = 0;
+    CHECK_INT(sscanf(s->error, "Slack is rate limiting this workspace. Wait %u seconds", &wait), 1);
+    CHECK(wait > 5); CHECK(wait <= 60);
+    uint64_t generation = s->state.generation; choose(s, ACT_REFRESH, 0); CHECK_INT(s->state.generation, generation);
+    rate_limit(s, TAG_PEOPLE, 120); CHECK(s->cooldown > deadline); CHECK(strstr(s->error, "120 seconds") != NULL);
+    s->cooldown = GetTickCount64() - 1;
+    rate_limit(s, TAG_CONVERSATIONS, 5); CHECK(s->cooldown > GetTickCount64()); CHECK(strstr(s->error, "5 seconds") != NULL);
+    teardown(s);
+}
 static void navigation_and_stale(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     uint64_t old = s->state.generation;
@@ -204,6 +254,8 @@ static void cancellation_and_thread_send(void) {
 }
 
 void app_slack_tests(void) {
+    test_run("Slack Find revalidates access destination generation and screen lifetime", find_revalidates_screen);
+    test_run("Slack concurrent rate limits retain the longest deadline and remaining wait", cooldown_keeps_longest_wait);
     test_run("Slack workspace labels use the provider team field", workspace_team_label);
     test_run("Slack recovery revalidates cleared relocated and replacement drafts", recovery_revalidates_draft);
     test_run("Slack viewport debounce ignores hidden background and unfetched messages", viewed_messages_only);

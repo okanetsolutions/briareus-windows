@@ -84,8 +84,10 @@ static void error_from(SlackScreen *s, const Request *req) {
         double delay = req->error.retry_after > 0 ? req->error.retry_after : 30;
         // Bound conversion while honoring a server cooldown longer than the default.
         if (delay > 86400 * 30) delay = 86400 * 30;
-        s->cooldown = GetTickCount64() + (uint64_t)(delay * 1000);
-        free(message); message = xstrfmt("Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", delay);
+        uint64_t now = GetTickCount64(), deadline = now + (uint64_t)(delay * 1000);
+        if (deadline > s->cooldown) s->cooldown = deadline;
+        double remaining = (double)((s->cooldown - now + 999) / 1000);
+        free(message); message = xstrfmt("Slack is rate limiting this workspace. Wait %.0f seconds, then retry the read or action yourself.", remaining);
     } else if (req->error.status == 403) {
         char *detail = xstrfmt("Slack access was denied. Check the Admin device token and deployed routes. %s", message);
         free(message); message = detail;
@@ -394,6 +396,14 @@ void slack_inbox_recover_confirmed(SlackScreen *s, const Json *destination, uint
         }
     }
 }
+void slack_inbox_find_confirmed(SlackScreen *s, const char *workspace, uint64_t generation, const char *query) {
+    // The text dialog's modal loop can invalidate access or destroy the inbox.
+    SlackScreen *live = screens; while (live && live != s) live = live->next;
+    if (!live || !query) return;
+    if (!sync_access(s) || !slack_state_current(&s->state, generation)
+        || !str_eq(s->workspace, workspace) || !s->directory) { changed(s); return; }
+    set_string(&s->search, query); changed(s);
+}
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
     if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
@@ -423,8 +433,11 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         changed(s); break;
     case ACT_PERSON:
         if (arg == -1) {
+            char *workspace = xstrdup(s->workspace);
+            uint64_t generation = s->state.generation;
             char *query = dialog_text(pane_hwnd(base->pane), "Find people", "Name or Slack user ID (searches loaded pages)", "Find", s->search);
-            if (query) { set_string(&s->search, query); free(query); changed(s); }
+            slack_inbox_find_confirmed(s, workspace, generation, query);
+            free(query); free(workspace);
         } else if (slack_inbox_supports("slack_open_dm")) {
             const char *id = json_str_nonempty(json_get(json_at(s->people, (size_t)arg), "id"));
             if (id) { Json *args = arguments(s); json_set_str(args, "userId", id); call(s, TAG_DM, "slack_open_dm", args); }

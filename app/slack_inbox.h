@@ -23,4 +23,5 @@ struct SlackScreen {
 };
 void slack_inbox_done(void *owner, Request *request);
 void slack_inbox_recover_confirmed(SlackScreen *screen, const Json *destination, uint64_t generation);
+void slack_inbox_find_confirmed(SlackScreen *screen, const char *workspace, uint64_t generation, const char *query);
 #endif
