@@ -6,16 +6,29 @@
 // issue or pull request in a side panel over the board, as GitHub's board does. An issue card lists the pull requests
 // that close it, from the host's `pulls` read; this project's open the same way, others on GitHub. A card dragged to
 // another column moves there at once and on GitHub through `project_board_move`, as dragging it on GitHub's board
-// does; a refusal puts the board back as GitHub has it.
+// does; a refusal puts the board back as GitHub has it, and a read that lags behind the move keeps it where it went.
 #include "screens.h"
 #include "str.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // The actions, from the host's `action_base` up.
 enum { A_CARD, A_OPEN_GITHUB, A_FILTER_ASSIGNEE, A_CLEAR_FILTER, A_CARD_PULL };
 enum { COL_W = 300, COL_MAX_W = 380, COL_GAP = 12, COL_MIN_H = 240 };
+// How long a card GitHub moved is put in its new column by hand when a board read still shows it in the old one.
+enum { SETTLE_SECONDS = 120 };
+
+/// A card GitHub moved on a repository's board, the column it came from and the one it went to (NULL for the
+/// "No <field>" column).
+// `from` holds every column the card was carried from while it settles (NULL for the "No <field>" column): a read
+// lagging behind more than one quick move shows it in any of them.
+typedef struct { char *repo, *id, **from, *column; size_t from_count; time_t until; } Settling;
+// The board's cards are read through its view's filter, a GitHub search that lags behind a move by seconds: a read
+// just after one shows the card where it was, and the server keeps that read for 45 seconds. The cards moved lately
+// outlive their tab, so a project closed and opened again still shows them where they went.
+static Settling *settling; static size_t settling_count;
 
 struct BoardTab {
     Project project;
@@ -37,6 +50,8 @@ struct BoardTab {
     Request *move_req;
     // The card the last move carried and where it was, until a board read shows it as GitHub has it.
     char *moved_id; size_t moved_from, moved_at;
+    char *moved_off;       // the column it was carried from; NULL for the "No <field>" column
+    char *moved_to;        // the column it was carried to; NULL for the "No <field>" column
 };
 
 bool board_tab_offered(const Project *project) { return project->has_board && store_supports("project_board"); }
@@ -62,10 +77,35 @@ static void filter_restore(BoardTab *p) {
     set_string(&p->assignee, json_str_nonempty(json_get(saved, "assignee")));
     json_free(saved);
 }
+static void settled(size_t i) {
+    Settling *m = &settling[i];
+    for (size_t k = 0; k < m->from_count; k++) free(m->from[k]);
+    free(m->repo); free(m->id); free(m->from); free(m->column);
+    settling[i] = settling[--settling_count];
+}
+/// Puts the cards GitHub moved lately in their new columns, on a read that has them in their old ones.
+static void settle(BoardTab *p, ProjectBoard *board) {
+    time_t now = time(NULL);
+    for (size_t i = 0; i < settling_count;) {
+        const Settling *m = &settling[i];
+        if (now > m->until) { settled(i); continue; }
+        if (!str_eq(m->repo, p->project.repo)) { i++; continue; }
+        size_t column, card;
+        bool found = project_board_find(board, m->id, &column, &card);
+        int to = project_board_column(board, m->column);
+        bool stale = false;
+        for (size_t k = 0; found && !stale && k < m->from_count; k++) stale = str_eq(board->columns[column].id, m->from[k]);
+        // Once a read shows it there or anywhere but where it came from (moved again since), the read is GitHub's own.
+        if (found && ((int)column == to || !stale)) { settled(i); continue; }
+        if (found && to >= 0) project_board_move(board, column, card, (size_t)to);
+        i++;
+    }
+}
 static void show(BoardTab *p, const Json *answer) {
     ProjectBoard board;
     if (!project_board_parse(answer, &board)) return;
     project_board_keep_repo(&board, p->project.repo);
+    settle(p, &board);
     project_board_free(&p->board);
     p->board = board; p->has_board = true;
 }
@@ -454,7 +494,27 @@ static int column_at(const BoardTab *p, POINT pt) {
 static void move_done(void *owner, Request *req) {
     BoardTab *p = owner;
     // Moved or not, the board is read again as GitHub has it now: the server has dropped its saved copy.
-    if (!req->ok) request_error_into(&p->move_error, req); else set_string(&p->moved_id, NULL);
+    if (!req->ok) request_error_into(&p->move_error, req);
+    else if (p->moved_id) {
+        // A card moved again before it settled keeps the columns it came from before, so a read behind both moves
+        // is still corrected.
+        char **from = NULL; size_t from_count = 0;
+        for (size_t i = 0; i < settling_count; i++) {
+            if (!str_eq(settling[i].repo, p->project.repo) || !str_eq(settling[i].id, p->moved_id)) continue;
+            from = settling[i].from; from_count = settling[i].from_count;
+            settling[i].from = NULL; settling[i].from_count = 0;
+            settled(i); break;
+        }
+        from = xrealloc(from, (from_count + 1) * sizeof *from);
+        from[from_count++] = p->moved_off; p->moved_off = NULL;
+        settling = xrealloc(settling, (settling_count + 1) * sizeof *settling);
+        Settling *m = &settling[settling_count++];
+        m->repo = xstrdup(p->project.repo);
+        m->id = p->moved_id; p->moved_id = NULL;
+        m->from = from; m->from_count = from_count;
+        m->column = p->moved_to; p->moved_to = NULL;
+        m->until = time(NULL) + SETTLE_SECONDS;
+    }
     load(p, !req->ok);
     relayout(p);
 }
@@ -468,6 +528,8 @@ static void move_card(BoardTab *p, size_t from, size_t card, size_t to) {
     if (column) json_set_str(args, "columnId", column); else json_object_set(args, "columnId", json_null());
     if (!project_board_move(&p->board, from, card, to)) { json_free(args); return; }
     set_string(&p->moved_id, json_str_nonempty(json_get(args, "itemId")));
+    set_string(&p->moved_off, p->board.columns[from].id);
+    set_string(&p->moved_to, column);
     p->moved_from = from; p->moved_at = card;
     set_string(&p->move_error, NULL);
     // A read on its way would show the card back where it was; the one after the move replaces it.
@@ -516,6 +578,6 @@ void board_tab_free(BoardTab *p) {
     // shown (a duplicate `app_show_detail` throws away) owns no panel.
     if (p->host->pane) app_set_overlay(NULL);
     project_board_free(&p->board);
-    project_free(&p->project); free(p->error); free(p->move_error); free(p->moved_id); free(p->assignee);
+    project_free(&p->project); free(p->error); free(p->move_error); free(p->moved_id); free(p->moved_off); free(p->moved_to); free(p->assignee);
     free(p);
 }

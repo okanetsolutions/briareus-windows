@@ -239,6 +239,10 @@ void project_board_free(ProjectBoard *board);
 /// Moves card `card` of column `from` to the end of column `to`, as a drop shows it before the server answers: both
 /// columns' counts and number fields' totals follow it. False when an index is out of range or the columns are one.
 bool project_board_move(ProjectBoard *board, size_t from, size_t card, size_t to);
+/// Where the card with node id `item_id` is: false when no column holds it.
+bool project_board_find(const ProjectBoard *board, const char *item_id, size_t *column, size_t *card);
+/// The column a move's `columnId` names (NULL for the "No <field>" column), or -1 when the board has none.
+int project_board_column(const ProjectBoard *board, const char *column_id);
 /// A card's field by name, or NULL.
 const ProjectField *project_card_field(const ProjectCard *card, const char *name);
 /// Whether a card passes the assignee filter: an empty pick passes every card, PROJECT_NO_ASSIGNEE the unassigned ones,

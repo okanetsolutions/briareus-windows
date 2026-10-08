@@ -13,7 +13,7 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK, ACT_MAIL };
 enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
@@ -97,6 +97,10 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
+    if (mail_settings_offered()) {
+        doc_space(doc, px(6));
+        doc_button(doc, 0, w, "Mail", BUTTON_PLAIN, ACT_MAIL, 0, true);
+    }
     doc_space(doc, px(14));
 }
 
@@ -244,6 +248,7 @@ static void sign_out(void) {
 /// The strip's own actions, the same on both screens. True when handled.
 static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
+    case ACT_MAIL: if (mail_settings_offered()) app_show_detail(mail_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
     case ACT_SLACK: app_show_detail(web_app_screen_new(WEB_APP_SLACK)); return true;

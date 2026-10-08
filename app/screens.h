@@ -75,6 +75,9 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
 Screen *settings_screen_new(void);
+/// Global mail navigation, gated by the deployed catalog and token permission.
+bool mail_settings_offered(void);
+Screen *mail_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
 /// and the two models compared over the meetings recorded on this computer.
 Screen *meeting_settings_screen_new(void);
@@ -372,6 +375,12 @@ void poller_finished(Poller *p, bool failed, double retry_after);
 /// True when this timer is the poller's and a read should go out now.
 bool poller_fired(Poller *p, UINT id);
 void poller_set_base(Poller *p, int base_ms);
+
+/// Pull-list cooldowns are shared across screens and persisted in the account's response cache.
+time_t pulls_retry_deadline(const char *repo);
+void pulls_note_failure(const char *repo, const ApiError *error, time_t now);
+void pulls_note_success(const char *repo);
+time_t pulls_sync_time(const Json *result, bool saved, time_t now);
 
 void set_string(char **slot, const char *value);
 /// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.

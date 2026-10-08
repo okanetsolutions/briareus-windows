@@ -872,6 +872,17 @@ bool project_board_move(ProjectBoard *board, size_t from, size_t card, size_t to
     project_column_add(target, &moved, 1);
     return true;
 }
+bool project_board_find(const ProjectBoard *board, const char *item_id, size_t *column, size_t *card) {
+    if (str_empty(item_id)) return false;
+    for (size_t k = 0; k < board->column_count; k++)
+        for (size_t i = 0; i < board->columns[k].card_count; i++)
+            if (str_eq(board->columns[k].cards[i].id, item_id)) { *column = k; *card = i; return true; }
+    return false;
+}
+int project_board_column(const ProjectBoard *board, const char *column_id) {
+    for (size_t k = 0; k < board->column_count; k++) if (str_eq(board->columns[k].id, column_id)) return (int)k;
+    return -1;
+}
 const ProjectField *project_card_field(const ProjectCard *card, const char *name) {
     for (size_t i = 0; i < card->field_count; i++) if (str_ieq(card->fields[i].name, name)) return &card->fields[i];
     return NULL;
