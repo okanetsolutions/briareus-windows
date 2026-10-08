@@ -1012,7 +1012,7 @@ typedef struct {
     // The log of the Run under way, from its session's transcript: `log_session` is the session followed (found in the
     // Sessions list while `serve_pull` prepares it).
     char *log_session; RunLog log; Request *req_log;
-    WebView *web; RECT web_rc; bool shown;
+    WebView *web; RECT web_rc; bool shown; RunAddress address;
     // The Cloudflare Access service token the browser sends to preview hosts, read once before it first opens; without
     // one (an older server, or none configured) the page asks for a sign-in instead.
     char *access_id, *access_secret, *access_suffix; bool access_read; Request *req_access;
@@ -1324,6 +1324,7 @@ static void pull_destroy(Screen *base) {
     pull_files_free(s->files);
     request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);
     run_log_clear(&s->log); free(s->log_session);
+    run_address_free(&s->address);
     webview_free(s->web);
     request_cancel(&s->req_access); free(s->access_id); free(s->access_secret); free(s->access_suffix);
     free(s->run_url); free(s->run_session); free(s->run_profile); free(s->run_want); free(s->run_asked); free(s->serve_error);
@@ -2350,7 +2351,7 @@ static void layout_run(PullScreen *s, Doc *doc, int w) {
     if (page && s->serve_error) { doc_text(doc, px(4), w - px(8), s->serve_error, FONT_FOOTNOTE, theme.danger, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(10)); }
     if (s->run_url && !s->run_busy) {
         static const int actions[4] = { ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_WEB_RELOAD, ACT_WEB_BROWSER };
-        run_browser_bar(doc, w, s->web, s->run_url, actions);
+        run_browser_bar(doc, w, s->web, s->run_url, actions, &s->address);
     }
     int area = doc->y, h = (view.bottom - view.top) - area - px(12);
     if (h < px(320)) h = px(320);
@@ -2548,12 +2549,14 @@ static void pull_place(Screen *base, const RECT *content, int scroll_y) {
     // that lets it past Cloudflare Access has been read.
     if (on && !s->web && !s->access_read && store_supports("preview_access")) {
         if (!s->req_access) store_call("preview_access", json_object(), 0, s, access_done, TAG_ACCESS, &s->req_access);
+        run_address_place(&s->address, base, &s->web, s->run_url, content, scroll_y, on);  // The address shows meanwhile.
         return;
     }
     if (on && !s->web) {
         WebViewAccess access = { s->access_id, s->access_secret, s->access_suffix };
         s->web = webview_new(pane_hwnd(base->pane), s->run_url, &access, web_changed, s);
     }
+    run_address_place(&s->address, base, &s->web, s->run_url, content, scroll_y, on);
     if (!s->web) return;
     if (on) {
         RECT rc; GetClientRect(pane_hwnd(base->pane), &rc);
@@ -2935,6 +2938,7 @@ static void profiles_load(PullScreen *s);
 static void pull_visible(Screen *base, bool shown) {
     PullScreen *s = (PullScreen *)base;
     s->shown = shown;
+    if (!shown) run_address_place(&s->address, base, &s->web, s->run_url, NULL, 0, false);
     if (s->web && !shown) webview_show(s->web, false);
     if (shown) profiles_load(s);
     if (shown && s->run_busy) SetTimer(pane_hwnd(base->pane), TIMER_RUN_LOG, 1500, NULL);
