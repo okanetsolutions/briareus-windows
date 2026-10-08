@@ -576,7 +576,7 @@ static void reconcile_preserves_composer_editing(void) {
         s->composer = CreateWindowExW(0, L"EDIT", L"typed draft", WS_CHILD | ES_MULTILINE,
             0, 0, 100, 100, inbox_hwnd, NULL, GetModuleHandleW(NULL), NULL);
         CHECK(s->composer != NULL);
-        SendMessageW(s->composer, EM_SETSEL, 2, 5);
+        SendMessageW(s->composer, EM_SETSEL, 11, 11);
         SendMessageW(s->composer, EM_REPLACESEL, TRUE, (LPARAM)L"xyz");
         s->base.pane = inbox_pane;
         s->base.vt->command(&s->base, ID_COMPOSER, EN_CHANGE, s->composer);
@@ -590,7 +590,7 @@ static void reconcile_preserves_composer_editing(void) {
         DWORD start = 0, end = 0;
         SendMessageW(s->composer, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
         CHECK_INT(start, 1); CHECK_INT(end, 4);
-        CHECK_STR(slack_draft(&s->state, s->workspace, s->channel, s->thread)->text, "tyxyz draft");
+        CHECK_STR(slack_draft(&s->state, s->workspace, s->channel, s->thread)->text, "typed draftxyz");
         CHECK(SendMessageW(s->composer, EM_CANUNDO, 0, 0));
         CHECK(SendMessageW(s->composer, EM_UNDO, 0, 0));
         wchar_t text[32]; GetWindowTextW(s->composer, text, 32);

@@ -435,8 +435,10 @@ static void reconcile_finish(SlackScreen *s) {
     slack_state_prune(&s->state, s->workspace, s->conversations);
     snapshot_clear(s); s->stream_failures = 0;
     set_string(&s->live_status, "Slack live updates connected"); set_string(&s->error, NULL);
-    SlackDraft *d = draft(s);
-    if (s->composer) EnableWindow(s->composer, d && !d->sending && slack_inbox_supports("slack_send"));
+    if (s->composer) {
+        SlackDraft *d = draft(s);
+        EnableWindow(s->composer, d && !d->sending && slack_inbox_supports("slack_send"));
+    }
 }
 static void stream_start(SlackScreen *s) {
     if (!s->shown || !s->base.pane || !s->workspace || s->feed || s->stream_disabled || !sync_access(s)) return;
