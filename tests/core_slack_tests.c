@@ -232,7 +232,81 @@ static void reads(void) {
     slack_read(&s, "2", "C1"); CHECK_INT(s.read_count, 2); CHECK(slack_read_due(slack_read(&s, "2", "C1"), 3000) == NULL);
     CHECK_STR(slack_read(&s, "1", "C1")->viewed, "1.2"); slack_state_clear(&s);
 }
+static SlackEventResult event(SlackState *s, const char *name, const char *source) {
+    Json *data = json_parsez(source); SlackEventResult result = slack_event_apply(s, "1", name, data); json_free(data); return result;
+}
+static void live_identity(void) {
+    SlackState s = {0};
+    CHECK(event(&s, "ready", "{\"workspaceId\":1,\"userId\":\"U1\",\"refresh\":true}") == SLACK_EVENT_READY);
+    CHECK(event(&s, "ready", "{\"workspaceId\":2}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "message", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"ts\":\"1.1\",\"text\":\"original\",\"bot_id\":\"B1\"}}") == SLACK_EVENT_APPLIED);
+    event(&s, "message", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"ts\":\"1.1\",\"text\":\"original\"}}");
+    CHECK_INT(s.message_count, 1);
+    event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"message\":{\"ts\":\"1.1\",\"text\":\"edited\",\"reply_count\":2}}}");
+    Json *receipt = json_parsez("{\"ts\":\"1.1\",\"text\":\"original\"}");
+    CHECK(slack_message_receipt(&s, "1", "C1", receipt));
+    CHECK_STR(json_str(json_get(s.messages[0].raw, "text")), "edited"); CHECK_STR(json_str(json_get(s.messages[0].raw, "bot_id")), "B1");
+    CHECK_INT(json_int_or(json_get(s.messages[0].raw, "reply_count"), -1), 2);
+    event(&s, "message.deleted", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"deleted_ts\":\"1.1\"}}");
+    CHECK_INT(s.message_count, 0); CHECK(!slack_message_receipt(&s, "1", "C1", receipt)); CHECK(!slack_message_merge(&s, "1", "C1", receipt));
+    CHECK(slack_message_merge(&s, "2", "C1", receipt)); CHECK(slack_message_merge(&s, "1", "G1", receipt));
+    event(&s, "message.deleted", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"deleted_ts\":\"1.1\"}}"); CHECK_INT(json_count(s.deleted), 1);
+    event(&s, "conversation.read", "{\"workspaceId\":1,\"channel\":\"C1\",\"ts\":\"9.1\"}");
+    SlackRead *r = slack_read(&s, "1", "C1"); slack_read_viewed(r, "8.1", 0); CHECK(slack_read_due(r, 2000) == NULL);
+    event(&s, "conversation.read", "{\"workspaceId\":1,\"channel\":\"C1\",\"ts\":\"7.1\"}"); CHECK_STR(r->marked, "9.1");
+    CHECK(event(&s, "workspace.changed", "{\"workspaceId\":1}") == SLACK_EVENT_CHANGED);
+    CHECK(event(&s, "workspace.removed", "{\"workspaceId\":1}") == SLACK_EVENT_REMOVED);
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\"}}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "message.deleted", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"deleted_ts\":\"bad\"}}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "conversation.read", "{\"workspaceId\":1,\"channel\":\"C1\",\"ts\":7}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "unknown", "{\"workspaceId\":1}") == SLACK_EVENT_IGNORED);
+    json_free(receipt); slack_state_clear(&s);
+}
+static void bounded_events(void) {
+    SlackEvents q = {0};
+    CHECK(slack_events_push(&q, "message", "first", 5)); CHECK(slack_events_push(&q, "message.changed", "second", 6));
+    CHECK_STR(q.items[0].data, "first"); CHECK_STR(q.items[1].data, "second");
+    for (size_t i = 2; i < SLACK_EVENTS_MAX; i++) CHECK(slack_events_push(&q, "message", "{}", 2));
+    CHECK(!slack_events_push(&q, "message.deleted", "{}", 2)); CHECK(q.overflow); CHECK_INT(q.count, 0);
+    CHECK(!slack_events_push(&q, "ready", "{}", 2)); slack_events_clear(&q);
+    CHECK(!slack_events_push(&q, "message", "", SLACK_EVENTS_BYTES)); CHECK(q.overflow); slack_events_clear(&q);
+    CHECK(slack_events_push(&q, "ready", "{}", 2)); slack_events_clear(&q);
+    CHECK_INT(slack_reconnect_delay(1, -1), 1000); CHECK_INT(slack_reconnect_delay(4, -1), 8000);
+    CHECK_INT(slack_reconnect_delay(99, -1), 60000); CHECK_INT(slack_reconnect_delay(1, 120), 120000);
+    CHECK_INT(slack_reconnect_delay(1, 1e99), 2592000000ULL);
+}
+static void edits_only_loaded_messages(void) {
+    SlackState s = {0};
+    CHECK(merge(&s, "1", "C1", "{\"ts\":\"9.1\",\"text\":\"loaded\"}"));
+    CHECK(merge(&s, "2", "C1", "{\"ts\":\"1.1\"}"));
+    CHECK(merge(&s, "1", "G1", "{\"ts\":\"1.1\"}"));
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"message\":{\"ts\":\"1.1\",\"text\":\"unloaded edit\"}}}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"subtype\":\"message_replied\",\"message\":{\"ts\":\"2.1\",\"reply_count\":3}}}") == SLACK_EVENT_IGNORED);
+    CHECK_INT(s.message_count, 3);
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"message\":{\"ts\":\"9.1\",\"text\":\"edited\",\"reply_count\":2}}}") == SLACK_EVENT_APPLIED);
+    CHECK_STR(json_str(json_get(s.messages[2].raw, "text")), "edited");
+    CHECK_INT(json_int_or(json_get(s.messages[2].raw, "reply_count"), -1), 2);
+    CHECK(event(&s, "message", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"ts\":\"10.1\",\"text\":\"new message\"}}") == SLACK_EVENT_APPLIED);
+    CHECK_INT(s.message_count, 4); slack_state_clear(&s);
+}
+static void prune_revoked_conversations(void) {
+    SlackState s = {0}; Json *message = json_parsez("{\"ts\":\"1.1\"}");
+    slack_message_merge(&s, "1", "G1", message); slack_message_merge(&s, "2", "G1", message); slack_message_merge(&s, "1", "C1", message);
+    slack_draft(&s, "1", "G1", "1.1"); slack_draft(&s, "2", "G1", NULL); slack_draft(&s, "1", "C1", NULL);
+    slack_read(&s, "1", "G1"); slack_read(&s, "2", "G1"); slack_read(&s, "1", "C1");
+    event(&s, "message.deleted", "{\"workspaceId\":1,\"event\":{\"channel\":\"G1\",\"deleted_ts\":\"1.1\"}}");
+    CHECK_INT(json_count(s.deleted), 1);
+    Json *rows = json_parsez("[{\"id\":\"C1\"}]"); slack_state_prune(&s, "1", rows);
+    CHECK_INT(s.message_count, 2); CHECK_INT(s.draft_count, 2); CHECK_INT(s.read_count, 2); CHECK_INT(json_count(s.deleted), 0);
+    CHECK_STR(s.drafts[0].workspace, "2"); CHECK_STR(s.drafts[1].channel, "C1");
+    slack_messages_clear(&s, "1", "C1"); CHECK_INT(s.message_count, 1);
+    json_free(message); json_free(rows); slack_state_clear(&s);
+}
 void slack_tests(void) {
+    test_run("Slack edits and reply metadata update only loaded destination identities", edits_only_loaded_messages);
+    test_run("Slack live edits bots own receipt overlap deletes and read synchronization", live_identity);
+    test_run("Slack event buffers restart on count or byte overflow and reconnect backoff", bounded_events);
+    test_run("Slack revoked channel snapshots prune private messages drafts and reads", prune_revoked_conversations);
     test_run("Slack timestamp strings and exclusive bounds", timestamps);
     test_run("Slack message identity edits deletion and stale generations", identity);
     test_run("Slack empty cursors history and replies pagination", pagination);

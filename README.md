@@ -34,9 +34,9 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 **Slack inbox**
 
 - With an Admin token and a server that offers the Slack inbox API, the sidebar's Slack button opens workspaces, public/private channels, DMs and group DMs without a project session; People lists and searches loaded directory pages and opens a DM.
-- Reads conversation history and threads with paging, author names, string timestamps, readable Slack mrkdwn and file metadata/browser links; Refresh reads updates (live SSE is separate work).
+- Reads conversation history and threads with paging, author names, string timestamps, readable Slack mrkdwn and file metadata/browser links; Live events reconcile fresh snapshots on every connection, with ordered edits/deletes, own-message deduplication, reconnect backoff and manual Refresh.
 - Sends human messages and thread replies to the destination named above the composer (Ctrl+Enter sends), with scoped in-memory drafts and an 8000-character limit; an uncertain send keeps its draft and asks you to inspect history before explicitly allowing another send.
-- Marks only messages viewed in the active window as read after a debounce and explains rate limits, missing scopes and refused workspace tokens; attachment bytes are accessed in Slack, with no native download.
+- Synchronizes read positions across clients and marks only channel messages viewed in an active visible window as read after a debounce and explains rate limits, missing scopes and refused workspace tokens; attachment bytes are accessed in Slack, with no native download.
 - Settings → Slack workspaces supports inbox-only connections with every project unticked (`projects: []`), including the inbox scopes and `message.mpim` event guidance; the Slack button always opens the native inbox, which explains unavailable routes or missing Admin access instead of embedding Slack web.
 - The inbox’s Slack web button opens Slack in your default browser; file and message links also remain available.
 - See [the pinned core contract and outstanding release checks](docs/slack-inbox-contract.md).

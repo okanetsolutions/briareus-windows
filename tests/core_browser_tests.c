@@ -213,7 +213,18 @@ static void test_typed_addresses_become_web_urls(void) {
     CHECK(browser_address("two words") == NULL); CHECK(browser_address("https://") == NULL);
 }
 
+static void test_bounded_stream_overflow_is_observable(void) {
+    SseParser p; sse_init(&p); p.limit = 32; Seen seen = {0};
+    const char *large = "data: 0123456789012345678901234567890123456789\n\ndata: ok\n\n";
+    sse_feed(&p, large, strlen(large), seen_emit, &seen);
+    CHECK(p.dropped); CHECK_INT(seen.count, 1); CHECK_STR(seen.datas[0], "ok"); CHECK(p.line.len <= p.limit);
+    seen_free(&seen); sse_free(&p); sse_init(&p); p.limit = 32;
+    const char *many = "data: 01234567890123456789\ndata: 01234567890123456789\n\n";
+    sse_feed(&p, many, strlen(many), seen_emit, &seen); CHECK(p.dropped); CHECK_INT(seen.count, 0);
+    seen_free(&seen); sse_free(&p);
+}
 void browser_tests(void) {
+    test_run("SSE byte and multiline overflow remain observable after reset", test_bounded_stream_overflow_is_observable);
     test_run("events carry their name and data", test_events_carry_their_name_and_data);
     test_run("events survive being fed a byte at a time with any line end", test_events_survive_being_fed_a_byte_at_a_time_with_any_line_end);
     test_run("pings and unknown fields are skipped and data lines join", test_pings_and_unknown_fields_are_skipped_and_data_lines_join);

@@ -1,16 +1,16 @@
 # Slack JSON inbox contract and release checks
 
-This client implements issue #125 under epic #120 against **nadinyamaui/briareus PR #121 at `9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89`**, inspected on 2026-10-07; that PR was still open at inspection.
+This client implements issue #125 under epic #120 against **nadinyamaui/briareus PR #121 at `54ba5c987e7fae8685766b38459632879ff577fd`**, merged and rechecked on 2026-10-08.
 The fixtures in `tests/slack_fixtures.h` are synthetic examples derived from the actual handlers, not a live provider capture.
 
 Inspected sources at that exact SHA:
 
-- [API reference](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/docs/api-v1-reference.md).
-- [Catalog registrations](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/lib/api-v1-catalog.js).
-- [Inbox handler](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/lib/slack-inbox.js).
-- [JSON status/error mapping](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/lib/slack-routes.js).
-- [Workspace shapes, scopes and provider errors](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/lib/slack.js).
-- [Core provider simulations](https://github.com/nadinyamaui/briareus/blob/9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89/test/slack-inbox.test.js).
+- [API reference](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/docs/api-v1-reference.md).
+- [Catalog registrations](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/lib/api-v1-catalog.js).
+- [Inbox handler](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/lib/slack-inbox.js).
+- [JSON status/error mapping](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/lib/slack-routes.js).
+- [Workspace shapes, scopes and provider errors](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/lib/slack.js).
+- [Core provider simulations](https://github.com/nadinyamaui/briareus/blob/54ba5c987e7fae8685766b38459632879ff577fd/test/slack-inbox.test.js).
 
 All nine JSON operations require `admin`; paths below are relative to `/api/v1`.
 The inbox checks the deployed catalog before loading private data and each request, and independently requires an Admin device token even if a catalog entry is weaker.
@@ -55,12 +55,10 @@ Inbox contents and drafts never enter the disk response cache or an agent sessio
 
 Slack mrkdwn renders user/channel mentions, labeled HTTPS links, emphasis, quotes and code through the existing Markdown renderer, with block/attachment text and file name/type/size/permalink fallbacks.
 File bytes and `url_private_download` are never fetched; browser links may require a Slack login.
-Live SSE, reconnect recovery and cross-client read synchronization belong to dependent issue #126.
+Live SSE, reconnect recovery and cross-client read synchronization are described in [slack-live-contract.md](slack-live-contract.md).
 
-## Required release gates
+## Verification scope
 
-- Recheck PR #121 after merge, compare the final handlers/catalog/reference to this SHA, update the pinned fixtures as needed, and verify all nine deployed method/path/permission entries.
-- Complete native Windows QA against that deployed core: workspace/public/private/DM/group-DM navigation, people paging/Open DM, history/thread paging, scoped drafts and destination-correct sends, read positions, mrkdwn, file metadata and recovery from 429/missing scopes/refused tokens.
-- Complete real Slack validation with the workspace's installed user token, including confirmed credential rotation during send and private-access/revocation checks; simulated transports do not satisfy this gate.
-- Pass Windows GCC/MSVC warnings as errors, core/app suites, coverage at the repository floor, ASan, leaks, UBSan/fortify, lint and editorconfig.
-- Leave armed dashboard review/QA and held findings for user triage; this PR does not waive or merge them.
+- The final merged core handlers, catalog and documentation are pinned above; synthetic tests do not establish deployed-provider behavior.
+- Required Windows GCC/MSVC Werror, core/app suites, coverage, ASan, leaks, UBSan/fortify, lint and editorconfig must pass.
+- Per user instruction for #126, do not run QA sessions, native UI QA or live human/provider sends; retain code review and required CI.

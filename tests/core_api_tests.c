@@ -325,6 +325,7 @@ static const Expected ROUTE_TABLE[] = {
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_events", "GET", "slack/workspaces/{id}/events" },
     { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
     { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
     { "slack_people", "GET", "slack/workspaces/{id}/people" },
@@ -1018,6 +1019,19 @@ static void test_slack_json_contract_and_no_retry(void) {
     json_free(result); json_free(args); api_client_release(c); api_error_clear(&error); stub_reset(&stub);
 }
 
+static void test_slack_stream_route_and_cancellation(void) {
+    Stub stub = {0}; ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    const ApiRoute *route = api_route("slack_events"); CHECK(route != NULL); CHECK_STR(route ? route->method : NULL, "GET");
+    CHECK_STR(route ? route->path : NULL, "slack/workspaces/{id}/events");
+    ApiStreamCancel cancel; api_stream_cancel_init(&cancel); api_stream_cancel(&cancel);
+    Json *args = json_parsez("{\"id\":\"1727000000002\"}");
+    CHECK(!api_stream(c, "slack_events", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
+    api_stream_cancel_free(&cancel); api_stream_cancel_init(&cancel);
+    CHECK(!api_stream(c, "slack_events", NULL, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    CHECK(!api_stream(c, "slack_send", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_stream_cancel_free(&cancel); json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
 static void test_final_catalog_transport_and_session_requests(void) {
     Str fixture; str_init(&fixture);
     for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
@@ -1147,6 +1161,7 @@ static void test_mail_transport_contract(void) {
 }
 
 void api_tests(void) {
+    test_run("Slack SSE route cancellable before start with required workspace ID", test_slack_stream_route_and_cancellation);
     test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);

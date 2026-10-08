@@ -74,6 +74,7 @@ bool slack_inbox_offered(void);
 bool slack_inbox_supports(const char *operation);
 /// Clear private state in every open/detached inbox on account or access changes.
 void slack_inbox_store_changed(void);
+void slack_inbox_settings_changed(void);
 /// WhatsApp Web in the detail pane; the screen's id is "whatsapp".
 typedef enum { WEB_APP_WHATSAPP, WEB_APP_COUNT } WebApp;
 /// WhatsApp Web, from the sidebar strip's button.

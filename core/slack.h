@@ -1,4 +1,4 @@
-// Operator inbox state, pinned to core PR #121 at 9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89.
+// Operator inbox state, pinned to core PR #121 at 54ba5c987e7fae8685766b38459632879ff577fd.
 #ifndef BRIAREUS_SLACK_H
 #define BRIAREUS_SLACK_H
 #include "json.h"
@@ -16,6 +16,7 @@ typedef struct {
     SlackMessage *messages; size_t message_count;
     SlackDraft *drafts; size_t draft_count;
     SlackRead *reads; size_t read_count;
+    Json *deleted; // Event tombstones keep late history/send receipts from resurrecting a deletion.
     uint64_t generation;
 } SlackState;
 typedef struct { char *cursor, *oldest, *latest; bool more, stalled; } SlackPage;
@@ -31,6 +32,8 @@ int slack_ts_compare(const char *a, const char *b);
 bool slack_ts_between(const char *ts, const char *oldest, const char *latest);
 /// Merge partial updates by (workspace, channel, ts); usable by history, sends and future SSE.
 bool slack_message_merge(SlackState *s, const char *workspace, const char *channel, const Json *message);
+/// A receipt fills a missing identity only; an earlier own event/edit remains authoritative.
+bool slack_message_receipt(SlackState *s, const char *workspace, const char *channel, const Json *message);
 void slack_message_delete(SlackState *s, const char *workspace, const char *channel, const char *ts);
 bool slack_message_in_thread(const SlackMessage *m, const char *workspace, const char *channel, const char *thread);
 void slack_page_clear(SlackPage *p);
@@ -54,4 +57,20 @@ SlackRead *slack_read(SlackState *s, const char *workspace, const char *channel)
 void slack_read_viewed(SlackRead *r, const char *ts, uint64_t now);
 const char *slack_read_due(const SlackRead *r, uint64_t now);
 void slack_read_confirm(SlackRead *r, const char *ts);
+// Both the transport mailbox and ready/snapshot buffer use these hard limits.
+#define SLACK_EVENTS_MAX 256u
+#define SLACK_EVENTS_BYTES (2u * 1024 * 1024)
+typedef struct { char *name, *data; size_t length; } SlackEvent;
+typedef struct { SlackEvent *items; size_t count, bytes; bool overflow; } SlackEvents;
+void slack_events_clear(SlackEvents *q);
+/// False means reconciliation must restart; no subsequent event is accepted until clear.
+bool slack_events_push(SlackEvents *q, const char *name, const char *data, size_t length);
+typedef enum { SLACK_EVENT_IGNORED, SLACK_EVENT_APPLIED, SLACK_EVENT_READY,
+               SLACK_EVENT_CHANGED, SLACK_EVENT_REMOVED } SlackEventResult;
+SlackEventResult slack_event_apply(SlackState *s, const char *workspace, const char *name, const Json *data);
+/// Removes cached messages at this destination before authoritative snapshot replacement.
+void slack_state_prune(SlackState *s, const char *workspace, const Json *conversations);
+void slack_messages_clear(SlackState *s, const char *workspace, const char *channel);
+/// Exponential reconnect delay; reset failures only after snapshots finish, not merely ready.
+uint64_t slack_reconnect_delay(unsigned failures, double retry_after);
 #endif
