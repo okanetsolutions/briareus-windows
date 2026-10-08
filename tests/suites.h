@@ -26,5 +26,6 @@ void app_common_tests(void);
 void app_store_tests(void);
 void app_sql_tests(void);
 void app_mcp_settings_tests(void);
+void app_pulls_tests(void);
 
 #endif

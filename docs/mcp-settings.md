@@ -22,7 +22,7 @@ Reads are cancelled/discarded on screen changes and before writes. A retained co
 
 ## Pinned contract and release gates
 
-Implementation and fixtures use **nadinyamaui/briareus PR #124 head `8585d12e20e57097bae291659765f9cfe9e14691`**, rechecked through `gh api`; base SHA was `f0ccdf6fda9c06be41db0b5a2ff7eab018306edf`. Sources inspected at that exact head: `docs/api-v1-reference.md` (six routes and McpServer), `lib/api-v1-catalog.js` (admin catalog entries), `lib/mcp-routes.js` (request/response wrappers), and `lib/mcp-servers.js` (validation, secret replacement, millisecond IDs, OAuth lifetime and single-use handling). The Windows starting SHA was `447993765584f7e1d292ca2b9f9f0d2136fbca0d`.
+Implementation and fixtures use **nadinyamaui/briareus PR #124 head `8585d12e20e57097bae291659765f9cfe9e14691`**, now merged at **`6799e24683a617d42abf90bd36642212a72a8d77`**, rechecked through `gh api`; the original base SHA was `f0ccdf6fda9c06be41db0b5a2ff7eab018306edf`. Sources inspected at that exact head: `docs/api-v1-reference.md` (six routes and McpServer), `lib/api-v1-catalog.js` (admin catalog entries), `lib/mcp-routes.js` (request/response wrappers), and `lib/mcp-servers.js` (validation, secret replacement, millisecond IDs, OAuth lifetime and single-use handling). The Windows starting SHA was `447993765584f7e1d292ca2b9f9f0d2136fbca0d`.
 
 | Call | Method and path under `/api/v1` |
 | --- | --- |
@@ -33,4 +33,8 @@ Implementation and fixtures use **nadinyamaui/briareus PR #124 head `8585d12e20e
 | connect_mcp_server | POST /settings/mcp/servers/{id}/connect (`signIn: true` starts a fresh attempt) |
 | finish_mcp_sign_in | POST /settings/mcp/servers/{id}/finish-sign-in (`url` is the full callback URL) |
 
-Core PR #124 was **open**, not merged, when inspected. No upstream core changes or merges were made. **Final merged-contract verification, deployed catalog/provider verification, native Windows UI QA, real ordinary and paste-back MCP OAuth sign-in/token exchange, and Claude/Codex mounting verification remain pending** for release. Automated fixtures and cross-compilation are not evidence of provider or deployed validation. Coordination scope: this change adds only MCP routes, helpers, form and a Settings list; mail and other epic features remain separate work.
+On 2026-10-08, merged-contract source verification confirmed that `lib/mcp-routes.js` (blob `b3147f0d07c7858a9014d0691e8390e7d0b2823e`) and `lib/mcp-servers.js` (blob `05e544f74860bbd03b343295792d1829c4bffa00`) are identical at the inspected head and merged SHA; all six MCP route documentation sections, the McpServer object documentation, and the MCP catalog entries are also identical, although the full docs/catalog files include other merged features. No upstream core changes or merges were made by this client task.
+
+The user reports that all APIs are deployed; runtime catalog/token checks remain in place. **Independent deployed catalog/provider verification, native Windows UI QA, real ordinary and paste-back MCP OAuth sign-in/token exchange, and Claude/Codex mounting verification remain pending** for release; no live provider validation is claimed. QA remains **OFF** for this integration update, and the changed Windows head must pass the armed code review again before merge.
+
+Integration base: Windows main `26a86552983c6fa81d87f60f7714a195d55500f2`, including #132's pull-list cooldown/freshness changes and atomic coverage counters. The merge preserves both MCP and pull-list app test suites and all previously reviewed MCP behavior. Coordination scope: this change adds only MCP routes, helpers, form and a Settings list; mail #133 and other epic features remain separate work.
