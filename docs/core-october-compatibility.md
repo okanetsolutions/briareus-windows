@@ -94,12 +94,23 @@ completion/warnings remain unverified.
 
 - Base refreshed through main `12b79cd` after #133 (`803fd96`) and #134
   (`0924d5c`) merged; main #132 CI passed (`37738279304`) and main #133 CI
-  passed (`37738805214`); main #134 CI (`37739338679`) is monitored separately.
+  passed (`37738805214`); main #134 CI passed (`37739338679`).
 - Required supporting-PR CI: MinGW/MSVC warnings as errors, core/app tests,
   coverage at the existing 90% floor, ASan, leaks, UBSan/fortify, lint and
   editorconfig; results must be recorded for the final PR head.
-- #124 mail inbox and #126 Slack events remain separate implementation workers;
-  final #129 sign-off depends on those and all other implementation issues.
+- Remaining Windows integration: #135 Slack JSON; #137 mail inbox (issue #124,
+  worker `3946c0d6`); #138 Slack SSE (issue #126, worker `bdabc363`, stacked on
+  #135), plus #139 legacy Slack retirement. These are independent feature owners.
+- `tests/app_contract_tests.c` checks the two mail and ten Slack inbox/SSE named
+  calls against the final catalog. Before registration it verifies they stay
+  unavailable despite deployed server routes; after registration the same test
+  enforces method/path, Admin permission and individual route omission. This
+  conditionally activates compatibility checks in subsequent combined-main CI,
+  without adding feature routes or editing pending feature branches.
+- Passing this test before registration does not certify the pending features:
+  refresh onto combined main as these land, record the exact resulting Windows
+  SHA and its required CI, and recheck feature-specific automated evidence before
+  final #129 sign-off. Stacked-branch CI does not establish integrated-main results.
 - Strict gzip safety is unresolved; do not enable archives or add dependencies.
 - Native UI/provider validation: **NOT RUN — user opted out** (Gmail/Outlook,
   Slack, MCP OAuth, updated provider CLIs, Claude lifecycle, Codex deployment
