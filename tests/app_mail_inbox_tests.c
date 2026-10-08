@@ -119,21 +119,19 @@ static void screen_reads(void) {
     CHECK(find_text(&doc, "Older") >= 0); CHECK(find_text(&doc, "Load older messages") == -1);
     int duplicates = 0; for (size_t k = 0; k < doc.count; k++) if (str_eq(doc.items[k].text, "First account")) duplicates++;
     CHECK_INT(duplicates, 1);
-    // Tri-state segmented controls reset pagination, including explicit false.
-    for (int segment = 0; segment < 3; segment++) {
-        draw(s, &doc); int n = 0, action_id = 0;
-        for (size_t k = 0; k < doc.count; k++) if (doc.items[k].action && !doc.items[k].text && doc.items[k].arg == -1) {
-            if (n++ == segment) { action_id = doc.items[k].action; break; }
-        }
-        CHECK(action_id != 0); s->vt->action(s, action_id, 0, (POINT){0}); pump(2);
-        const char *key[] = { "unread=0", "inbox=0", "starred=0" }; CHECK(strstr(stub.last_list, key[segment]) != NULL);
-        CHECK(strstr(stub.last_list, "cursor=") == NULL);
-    }
+    // Unread and starred are toggles. Folder false is the Outside inbox item. Each change drops the cursor.
+    click(s, &doc, "Unread only"); pump(2);
+    CHECK(strstr(stub.last_list, "unread=1") != NULL); CHECK(strstr(stub.last_list, "cursor=") == NULL);
+    click(s, &doc, "Unread only"); pump(2); CHECK(strstr(stub.last_list, "unread=") == NULL);
+    click(s, &doc, "Starred"); pump(2);
+    CHECK(strstr(stub.last_list, "starred=1") != NULL); CHECK(strstr(stub.last_list, "cursor=") == NULL);
+    click(s, &doc, "Folder"); click(s, &doc, "Outside inbox"); pump(2);
+    CHECK(strstr(stub.last_list, "inbox=0") != NULL); CHECK(strstr(stub.last_list, "cursor=") == NULL);
     click(s, &doc, "Reset filters"); pump(2); CHECK(strstr(stub.last_list, "unread=") == NULL);
-    click(s, &doc, "one@example.com"); pump(2); draw(s, &doc);
+    click(s, &doc, "Mailbox"); click(s, &doc, "one@example.com"); pump(2); draw(s, &doc);
     CHECK(strstr(stub.last_list, "account=7") != NULL); CHECK(strstr(stub.last_list, "cursor=") == NULL);
     CHECK(find_text(&doc, "First account") >= 0); CHECK(find_text(&doc, "Second account") == -1);
-    click(s, &doc, "All mailboxes"); pump(2); CHECK(strstr(stub.last_list, "account=") == NULL);
+    click(s, &doc, "Mailbox"); click(s, &doc, "All mailboxes"); pump(2); CHECK(strstr(stub.last_list, "account=") == NULL);
     s->vt->visible(s, false); draw(s, &doc); CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "Older") == -1);
     cleanup(s, &doc, client, &stub);
 }
@@ -302,6 +300,51 @@ static void list_failures(void) {
     CHECK(find_text(&doc, "private provider error") == -1);
     cleanup(s, &doc, client, &stub);
 }
+static void people_and_notifications(void) {
+    InboxStub stub = {0};
+    stub.accounts = ACCOUNTS;
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"p\",\"subject\":\"From a person\",\"receivedAt\":300,\"sender\":\"Ada <ada@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"n\",\"subject\":\"From a bot\",\"receivedAt\":200,\"sender\":\"Bot <noreply@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"c\",\"subject\":\"From a list\",\"receivedAt\":100,\"sender\":\"News <news@example.com>\",\"labels\":[\"CATEGORY_PROMOTIONS\"]},"
+        "{\"accountId\":7,\"id\":\"e\",\"subject\":\"No sender\",\"receivedAt\":50}"
+        "],\"nextCursor\":null}";
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "From a person") >= 0); CHECK(find_text(&doc, "No sender") >= 0);
+    CHECK(find_text(&doc, "From a bot") == -1); CHECK(find_text(&doc, "From a list") == -1);
+    click(s, &doc, "Notifications"); draw(s, &doc);
+    CHECK(find_text(&doc, "From a person") == -1); CHECK(find_text(&doc, "No sender") == -1);
+    CHECK(find_text(&doc, "From a bot") >= 0); CHECK(find_text(&doc, "From a list") >= 0);
+    s->vt->refresh(s); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "From a bot") >= 0); CHECK(find_text(&doc, "From a person") == -1);
+    click(s, &doc, "All"); draw(s, &doc);
+    CHECK(find_text(&doc, "From a person") >= 0); CHECK(find_text(&doc, "From a bot") >= 0); CHECK(find_text(&doc, "From a list") >= 0);
+    click(s, &doc, "People"); draw(s, &doc);
+    CHECK(find_text(&doc, "From a bot") == -1); CHECK(find_text(&doc, "From a person") >= 0);
+    cleanup(s, &doc, client, &stub);
+}
+static void thread_grouping(void) {
+    InboxStub stub = {0};
+    stub.accounts = ACCOUNTS;
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"a\",\"threadId\":\"t1\",\"subject\":\"Thread head\",\"receivedAt\":300,\"sender\":\"Ada <ada@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"b\",\"threadId\":\"t1\",\"subject\":\"Thread reply\",\"receivedAt\":200,\"sender\":\"Bea <bea@example.com>\"},"
+        "{\"accountId\":8,\"id\":\"c\",\"threadId\":\"t1\",\"subject\":\"Other mailbox\",\"receivedAt\":100,\"sender\":\"Cy <cy@example.com>\"}"
+        "],\"nextCursor\":null}";
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Thread head") >= 0); CHECK(find_text(&doc, "Thread reply") == -1);
+    CHECK(find_text(&doc, "Other mailbox") >= 0); CHECK(find_text(&doc, "2 in thread") >= 0);
+    s->vt->refresh(s); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Thread reply") == -1); CHECK(find_text(&doc, "2 in thread") >= 0);
+    click(s, &doc, "Grouping"); click(s, &doc, "Separate messages"); draw(s, &doc);
+    CHECK(find_text(&doc, "Thread head") >= 0); CHECK(find_text(&doc, "Thread reply") >= 0);
+    CHECK(find_text(&doc, "Other mailbox") >= 0); CHECK(find_text(&doc, "2 in thread") == -1);
+    click(s, &doc, "Reset filters"); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Thread reply") == -1); CHECK(find_text(&doc, "2 in thread") >= 0);
+    cleanup(s, &doc, client, &stub);
+}
 static void permissions(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
     const char *permission[] = { "read", "manage", "unknown", "admin" };
@@ -321,6 +364,8 @@ static void permissions(void) {
 void app_mail_inbox_tests(void) {
     if (!theme.canvas) theme_init();
     test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
+    test_run("mail inbox splits people from notifications without refetching", people_and_notifications);
+    test_run("mail inbox groups one thread per mailbox until messages are separated", thread_grouping);
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
     test_run("mail missing messages recover and cooldown survives screen changes", failures);
     test_run("mail inbox reloads loaded pages when accounts reconnect or are added", readable_accounts);
