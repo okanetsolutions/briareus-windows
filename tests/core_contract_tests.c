@@ -104,16 +104,19 @@ static void test_claude_turn_costs_and_future_events_round_trip(void) {
     Json *j = json_parsez(CLAUDE_EVENTS); Transcript t; transcript_init(&t);
     transcript_append(&t, j); transcript_append(&t, j);
     CHECK_INT(t.count, 7); CHECK_INT(t.cursor, 7);
-    for (size_t i = 0; i < 5; i++) {
-        CHECK(t.events[i].has_cost); CHECK(fabs(t.events[i].cost_usd - costs[i]) < 1e-12);
-        CHECK(event_visible(&t.events[i]));
+    if (t.count == 7) {
+        for (size_t i = 0; i < 5; i++) {
+            CHECK(t.events[i].has_cost); CHECK(fabs(t.events[i].cost_usd - costs[i]) < 1e-12);
+            CHECK(event_visible(&t.events[i]));
+        }
+        CHECK_STR(t.events[3].kind, "btw_answer"); CHECK_STR(event_detail(&t.events[3]), "ok");
+        CHECK(!t.events[5].has_cost); CHECK_INT(t.events[5].is_error, 1);
+        CHECK(event_visible(&t.events[6]));
     }
-    CHECK_STR(t.events[3].kind, "btw_answer"); CHECK_STR(event_detail(&t.events[3]), "ok");
-    CHECK(!t.events[5].has_cost); CHECK_INT(t.events[5].is_error, 1);
-    CHECK(event_visible(&t.events[6]));
     Json *saved = transcript_json(&t); CHECK(json_equal(saved, j));
     Transcript back; transcript_init(&back); transcript_append(&back, saved);
-    CHECK_INT(back.cursor, 7); CHECK(!back.events[5].has_cost);
+    CHECK_INT(back.count, 7); CHECK_INT(back.cursor, 7);
+    if (back.count == 7) CHECK(!back.events[5].has_cost);
     json_free(saved); transcript_free(&back); transcript_free(&t); json_free(j);
 }
 
@@ -148,9 +151,12 @@ static void test_provider_choices_survive_catalog_round_trip(void) {
     CHECK(runtime_catalog_parse(j, &c)); CHECK_INT(c.provider_count, 2);
     RuntimeChoice choice = {0}; CHECK(runtime_catalog_choice(&c, 2, "gpt-5.6-sol", &choice));
     CHECK_INT(choice.provider_id, 2); CHECK_STR(choice.model, "gpt-5.6-sol"); CHECK_STR(choice.effort, "high");
+    // Preserve an offered effort that differs from the model's default.
+    free(choice.effort); choice.effort = xstrdup("low");
     Json *saved = runtime_catalog_json(&c); RuntimeCatalog back; CHECK(runtime_catalog_parse(saved, &back));
     RuntimeChoice offered = {0}; CHECK(runtime_catalog_offered(&back, &choice, &offered));
-    CHECK_INT(offered.provider_id, 2); runtime_choice_free(&offered);
+    CHECK_INT(offered.provider_id, 2); CHECK_STR(offered.model, "gpt-5.6-sol"); CHECK_STR(offered.effort, "low");
+    runtime_choice_free(&offered);
     // A provider removed/disabled by a refreshed server is no longer startable.
     back.providers[1].available = 0; CHECK(!runtime_catalog_offered(&back, &choice, &offered));
     runtime_choice_free(&choice); runtime_catalog_free(&back); json_free(saved); runtime_catalog_free(&c); json_free(j);

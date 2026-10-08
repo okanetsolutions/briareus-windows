@@ -107,7 +107,7 @@ $(BUILD)/app/%.o: app/%.c app/*.h core/*.h | $(BUILD)/app
 $(BUILD)/app/%.o: app/%.cpp app/*.h core/*.h | $(BUILD)/app
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BUILD)/tests/%.o: tests/%.c tests/*.h app/*.h core/*.h | $(BUILD)/tests
+$(BUILD)/tests/%.o: tests/%.c tests/*.h tests/fixtures/*/*.h app/*.h core/*.h | $(BUILD)/tests
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(RES): res/briareus.rc res/briareus.manifest res/briareus.ico app/resource.h | $(BUILD)
