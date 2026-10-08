@@ -331,6 +331,14 @@ SlackEventResult slack_event_apply(SlackState *s, const char *workspace, const c
     }
     if (str_eq(name, "message") || str_eq(name, "message.changed")) {
         const Json *message = str_eq(name, "message.changed") ? json_get(event, "message") : event;
+        if (str_eq(name, "message.changed")) {
+            const char *ts = json_str(json_get(message, "ts")); bool loaded = false;
+            for (size_t i = 0; i < s->message_count; i++) {
+                const SlackMessage *m = &s->messages[i];
+                if (destination(m->workspace, m->channel, workspace, channel) && str_eq(m->ts, ts)) { loaded = true; break; }
+            }
+            if (!loaded) return SLACK_EVENT_IGNORED;
+        }
         return slack_message_merge(s, workspace, channel, message) ? SLACK_EVENT_APPLIED : SLACK_EVENT_IGNORED;
     }
     return SLACK_EVENT_IGNORED;

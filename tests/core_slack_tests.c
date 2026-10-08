@@ -175,6 +175,20 @@ static void bounded_events(void) {
     CHECK_INT(slack_reconnect_delay(99, -1), 60000); CHECK_INT(slack_reconnect_delay(1, 120), 120000);
     CHECK_INT(slack_reconnect_delay(1, 1e99), 2592000000ULL);
 }
+static void edits_only_loaded_messages(void) {
+    SlackState s = {0};
+    CHECK(merge(&s, "1", "C1", "{\"ts\":\"9.1\",\"text\":\"loaded\"}"));
+    CHECK(merge(&s, "2", "C1", "{\"ts\":\"1.1\"}"));
+    CHECK(merge(&s, "1", "G1", "{\"ts\":\"1.1\"}"));
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"message\":{\"ts\":\"1.1\",\"text\":\"unloaded edit\"}}}") == SLACK_EVENT_IGNORED);
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"subtype\":\"message_replied\",\"message\":{\"ts\":\"2.1\",\"reply_count\":3}}}") == SLACK_EVENT_IGNORED);
+    CHECK_INT(s.message_count, 3);
+    CHECK(event(&s, "message.changed", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"message\":{\"ts\":\"9.1\",\"text\":\"edited\",\"reply_count\":2}}}") == SLACK_EVENT_APPLIED);
+    CHECK_STR(json_str(json_get(s.messages[2].raw, "text")), "edited");
+    CHECK_INT(json_int_or(json_get(s.messages[2].raw, "reply_count"), -1), 2);
+    CHECK(event(&s, "message", "{\"workspaceId\":1,\"event\":{\"channel\":\"C1\",\"ts\":\"10.1\",\"text\":\"new message\"}}") == SLACK_EVENT_APPLIED);
+    CHECK_INT(s.message_count, 4); slack_state_clear(&s);
+}
 static void prune_revoked_conversations(void) {
     SlackState s = {0}; Json *message = json_parsez("{\"ts\":\"1.1\"}");
     slack_message_merge(&s, "1", "G1", message); slack_message_merge(&s, "2", "G1", message); slack_message_merge(&s, "1", "C1", message);
@@ -189,6 +203,7 @@ static void prune_revoked_conversations(void) {
     json_free(message); json_free(rows); slack_state_clear(&s);
 }
 void slack_tests(void) {
+    test_run("Slack edits and reply metadata update only loaded destination identities", edits_only_loaded_messages);
     test_run("Slack live edits bots own receipt overlap deletes and read synchronization", live_identity);
     test_run("Slack event buffers restart on count or byte overflow and reconnect backoff", bounded_events);
     test_run("Slack revoked channel snapshots prune private messages drafts and reads", prune_revoked_conversations);
