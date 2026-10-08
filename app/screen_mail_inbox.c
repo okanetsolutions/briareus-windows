@@ -26,8 +26,8 @@ typedef struct {
     MailFilter filter;
     Request *account_read, *list_read, *body_read;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
-    int selected_account, generation, kind, group, menu, focus_message, focus_y, chrome_bottom, scroll_seen;
-    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, in_scroll;
+    int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen;
+    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, in_scroll;
 } Inbox;
 
 bool mail_inbox_offered(void) {
@@ -200,8 +200,12 @@ static void edit_filter(Inbox *s, int act) {
     s->modal = false;
     if (s->retired) { free(value); release(s); return; }
     if (!s->shown || !mail_inbox_offered()) { free(value); clear_private(s); repaint(s); return; }
-    if (value) { free(*slot); *slot = value; reload(s); }
-    else { if (!s->accounts_loaded || !s->loaded) load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); arm(s); }
+    if (value) {
+        free(*slot); *slot = value;
+        // Any, Inbox, and Outside already drop the label. Applying a label is the other alternative.
+        if (act == ACT_LABEL) s->filter.inbox = -1;
+        reload(s);
+    } else { if (!s->accounts_loaded || !s->loaded) load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); arm(s); }
 }
 static const char *LIMIT_NOTE = "Replies, archives and stars stay at the provider. This screen only reads the synced copy.";
 
@@ -432,7 +436,7 @@ static void move_focus(Inbox *s, int delta) {
     if (at < 0) at = delta > 0 ? 0 : sn - 1;
     else { at += delta; if (at < 0) at = 0; if (at >= sn) at = sn - 1; }
     s->focus_message = shown[at];
-    s->reveal_focus = true;
+    s->reveal_focus = true; s->reveal_open = false;
     free(shown);
     repaint(s);
 }
@@ -472,7 +476,8 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         if (!mail_account_readable(&s->accounts, m->account_id)) return;
         int primary = convo_primary_for(s, (int)arg);
         clear_selection(s); s->selected_id = xstrdup(m->id); s->selected_account = m->account_id;
-        s->focus_message = primary; text_set(&s->limit_note, NULL);
+        s->focus_message = primary; s->reveal_open = true; s->reveal_focus = false;
+        text_set(&s->limit_note, NULL);
         load_body(s); repaint(s);
     }
 }
@@ -728,7 +733,11 @@ static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
     int mw = px(280), x = anchor->left;
     if (x + mw > doc->width - px(8)) x = doc->width - px(8) - mw;
     if (x < px(8)) x = px(8);
-    int top = s->chrome_bottom, y = top + px(6);
+    // Menu rows are scrolling items, after the pin. Their document y has to include the scroll offset or they
+    // paint and hit above the pinned chrome. The page keeps the unshifted height; a scroll change dismisses the menu.
+    int scroll = 0;
+    if (s->base.pane) { scroll = pane_scroll_y(s->base.pane); if (scroll < 0) scroll = 0; }
+    int top = s->chrome_bottom + scroll, y = top + px(6);
     doc->y = top;
     int box = doc_box_begin(doc, x, mw, 0, theme.raise, theme.line, px(8));
     if (s->menu == MENU_MAILBOX) {
@@ -754,7 +763,8 @@ static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
     y += px(6);
     doc->y = y;
     doc_box_end(doc, box, 0);
-    return y;
+    doc->y = y - scroll;
+    return doc->y;
 }
 static void layout_day(Doc *doc, int x, int w, int day, int convos, int messages) {
     char *title = day_title(day);
@@ -814,7 +824,8 @@ static void layout_row(Inbox *s, Doc *doc, int x, int w, const Convo *c) {
         RECT sn = { ix + bw + px(6), sy, ix + iw, sy + snip_h };
         doc_text_at(doc, &sn, m->snippet, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
-    if (s->focus_message == c->primary || open) s->focus_y = top;
+    if (s->focus_message == c->primary) s->focus_y = top;
+    if (open) s->open_y = top;
     doc->y = top + row_h;
     doc_box_end(doc, box, 0);
     if (store_supports("mail_message")) doc_box_action(doc, box, ACT_SELECT, c->primary);
@@ -1005,6 +1016,7 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
 static void layout(Screen *base, Doc *doc) {
     Inbox *s = (Inbox *)base; int x = px(16), w = doc->width - x * 2;
     if (w < px(120)) w = px(120);
+    s->focus_y = -1; s->open_y = -1;
     doc_space(doc, px(12));
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
@@ -1087,10 +1099,11 @@ static void scrolled(Screen *base, bool at_bottom) {
     (void)at_bottom; Inbox *s = (Inbox *)base;
     if (s->in_scroll) return;
     s->in_scroll = true;
-    if (s->reveal_focus) {
-        s->reveal_focus = false;
-        if (s->base.pane && s->focus_y >= 0) {
-            int target = s->focus_y - s->chrome_bottom;
+    if (s->reveal_focus || s->reveal_open) {
+        int row = s->reveal_focus ? s->focus_y : s->open_y;
+        s->reveal_focus = false; s->reveal_open = false;
+        if (s->base.pane && row >= 0) {
+            int target = row - s->chrome_bottom;
             if (target < 0) target = 0;
             pane_scroll_to(s->base.pane, target);
         }
@@ -1143,5 +1156,5 @@ static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header =
     .footer_height = footer_height, .footer_paint = footer_paint };
 Screen *mail_screen_new(void) {
     Inbox *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail");
-    mail_filter_init(&s->filter); s->focus_message = -1; return &s->base;
+    mail_filter_init(&s->filter); s->focus_message = -1; s->focus_y = s->open_y = -1; return &s->base;
 }

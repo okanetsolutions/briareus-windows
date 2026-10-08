@@ -345,6 +345,82 @@ static void thread_grouping(void) {
     CHECK(find_text(&doc, "Thread reply") == -1); CHECK(find_text(&doc, "2 in thread") >= 0);
     cleanup(s, &doc, client, &stub);
 }
+static HWND mail_parent;
+static Pane *mail_pane;
+
+static void paint_pane(void) {
+    HWND hwnd = pane_hwnd(mail_pane);
+    ShowWindow(mail_parent, SW_SHOWNA);
+    ShowWindow(hwnd, SW_SHOWNA);
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+}
+static void release_attached(Doc *doc, ApiClient *client, InboxStub *stub) {
+    pane_set_root(mail_pane, NULL);
+    doc_free(doc); api_client_release(client); free(stub->last_list); free(stub->last_body);
+    if (stub->entered) CloseHandle(stub->entered);
+    if (stub->resume) CloseHandle(stub->resume);
+    DestroyWindow(g_store.hwnd); memset(&g_store, 0, sizeof g_store);
+}
+// A dirty pane's scroll-to-bottom stores a pending offset until the next pane layout. Menu rows have to track it.
+static void check_menu_row(Screen *s, Doc *doc, const char *chip, const char *row) {
+    click(s, doc, chip); draw(s, doc);
+    int i = find_text(doc, row), scroll = pane_scroll_y(s->pane), height = doc_height(doc);
+    CHECK(i >= 0);
+    if (i < 0) return;
+    int top = doc->items[i].rc.top;
+    if (!(top >= scroll && top < scroll + 2000 && height < 100000))
+        printf("  menu %s top=%d scroll=%d height=%d\n", row, top, scroll, height);
+    CHECK(top >= scroll); CHECK(top < scroll + 2000); CHECK(height < 100000);
+    doc_set_view(doc, scroll, 400);
+    CHECK_INT(doc->items[i].rc.top, top);
+    CHECK_INT(doc_hit(doc, doc->items[i].rc.left + 2, doc->items[i].rc.top + 2), i);
+}
+static void menus_follow_scroll(void) {
+    CHECK(mail_pane != NULL);
+    if (!mail_pane) return;
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    pane_set_root(mail_pane, s); pump(2);
+    pane_scroll_to_bottom(mail_pane);
+    CHECK(pane_scroll_y(mail_pane) > 100000);
+    check_menu_row(s, &doc, "Mailbox", "All mailboxes");
+    check_menu_row(s, &doc, "Folder", "Inbox");
+    check_menu_row(s, &doc, "Grouping", "Group threads and duplicates");
+    pane_scroll_to(mail_pane, 0); draw(s, &doc);
+    CHECK(find_text(&doc, "All mailboxes") < 0);
+    CHECK(find_text(&doc, "Inbox") < 0);
+    CHECK(find_text(&doc, "Group threads and duplicates") < 0);
+    release_attached(&doc, client, &stub);
+}
+static void focus_reveal_skips_open_row(void) {
+    CHECK(mail_pane != NULL);
+    if (!mail_pane) return;
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS;
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"a\",\"subject\":\"Alpha\",\"receivedAt\":300,\"sender\":\"Ada <ada@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"b\",\"subject\":\"Beta\",\"receivedAt\":200,\"sender\":\"Bea <bea@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"c\",\"subject\":\"Gamma\",\"receivedAt\":100,\"sender\":\"Cy <cy@example.com>\"}"
+        "],\"nextCursor\":null}";
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    RECT bounds = {0, 0, 360, 160}; pane_set_bounds(mail_pane, &bounds);
+    pane_set_root(mail_pane, s); pump(2);
+    select_subject(s, &doc, "Gamma"); pump(1); paint_pane();
+    int gamma = pane_scroll_y(mail_pane);
+    CHECK(s->vt->key(s, 'K', false, false)); paint_pane();
+    int beta = pane_scroll_y(mail_pane);
+    CHECK(s->vt->key(s, 'K', false, false)); paint_pane();
+    int alpha = pane_scroll_y(mail_pane);
+    if (!(gamma > 0 && beta < gamma && alpha <= beta && alpha < gamma))
+        printf("  focus reveal scroll gamma=%d beta=%d alpha=%d\n", gamma, beta, alpha);
+    CHECK(gamma > 0); CHECK(beta < gamma); CHECK(alpha <= beta); CHECK(alpha < gamma);
+    draw(s, &doc);
+    CHECK(find_text(&doc, "First body") >= 0);
+    int ai = find_text(&doc, "Alpha"), gi = find_text(&doc, "Gamma");
+    CHECK(ai > 0 && gi > 0);
+    if (ai > 0) CHECK(doc.items[ai - 1].border == theme.accent_dim);
+    if (gi > 0) CHECK(doc.items[gi - 1].border == theme.line_strong);
+    release_attached(&doc, client, &stub);
+}
 static void permissions(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
     const char *permission[] = { "read", "manage", "unknown", "admin" };
@@ -363,6 +439,14 @@ static void permissions(void) {
 }
 void app_mail_inbox_tests(void) {
     if (!theme.canvas) theme_init();
+    mail_parent = CreateWindowExW(0, L"STATIC", L"Mail pane", 0, 0, 0, 400, 240, NULL, NULL, GetModuleHandleW(NULL), NULL);
+    if (mail_parent) {
+        mail_pane = pane_create(mail_parent, false);
+        RECT bounds = {0, 0, 360, 160};
+        pane_set_bounds(mail_pane, &bounds);
+        ShowWindow(mail_parent, SW_SHOWNA);
+        RedrawWindow(pane_hwnd(mail_pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    }
     test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
     test_run("mail inbox splits people from notifications without refetching", people_and_notifications);
     test_run("mail inbox groups one thread per mailbox until messages are separated", thread_grouping);
@@ -376,4 +460,9 @@ void app_mail_inbox_tests(void) {
     test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
     test_run("mail missing list routes recover and unavailable lists respect Retry-After", list_failures);
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
+    test_run("mail inbox menus open under the pinned chrome after the list scrolls", menus_follow_scroll);
+    test_run("mail inbox keyboard focus scrolls to the focused row while a lower conversation stays open", focus_reveal_skips_open_row);
+    if (mail_pane) pane_destroy(mail_pane);
+    if (mail_parent) DestroyWindow(mail_parent);
+    mail_pane = NULL; mail_parent = NULL;
 }
