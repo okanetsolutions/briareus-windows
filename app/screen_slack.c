@@ -762,7 +762,8 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
 }
 static void refresh(Screen *base) {
     SlackScreen *s = (SlackScreen *)base;
-    if (!sync_access(s) || GetTickCount64() < s->cooldown) { changed(s); return; }
+    if (!sync_access(s)) { changed(s); return; }
+    if (GetTickCount64() < s->cooldown) { stream_start(s); changed(s); return; }
     // Keep a pending send attached to its destination; a history refresh must not lose its receipt.
     if (s->requests[TAG_SEND]) return;
     cancel(s); slack_page_clear(&s->page); set_string(&s->error, NULL); s->read_failed = false;

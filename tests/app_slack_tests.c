@@ -660,6 +660,36 @@ static void interrupted_workspace_reload_rearms_timer(void) {
         second->base.vt->destroy(&second->base); teardown(first);
     }
 }
+static void shown_during_cooldown_rearms_timer(void) {
+    for (int other_owner = 0; other_owner < 2; other_owner++) {
+        setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); request_pane(s);
+        s->feed = slack_feed_new(g_store.client, s->workspace, s->stream_generation);
+        SetTimer(pane_hwnd(inbox_pane), TIMER_LIVE, 100, NULL);
+        apply(s, TAG_HISTORY, "slack_history", NULL, s->state.generation, 429);
+        uint64_t cooldown = s->cooldown; CHECK(cooldown > GetTickCount64());
+        s->base.vt->visible(&s->base, false); CHECK(!s->feed);
+        CHECK(!KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE));
+        SlackScreen *second = NULL;
+        if (other_owner) {
+            second = (SlackScreen *)slack_screen_new(); load_navigation(second);
+            second->feed = slack_feed_new(g_store.client, second->workspace, second->stream_generation);
+        }
+        s->base.vt->visible(&s->base, true);
+        CHECK_INT(s->cooldown, cooldown); CHECK(!s->feed);
+        if (other_owner) {
+            CHECK(!KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE)); CHECK(second->feed != NULL);
+            CHECK(strstr(s->live_status, "active Slack inbox") != NULL);
+        } else {
+            CHECK(KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE));
+            s->base.vt->timer(&s->base, TIMER_LIVE);
+            CHECK(!s->feed); CHECK(KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE));
+        }
+        for (int tag = 0; tag < TAG_COUNT; tag++) CHECK(!s->requests[tag]);
+        s->base.pane = NULL;
+        if (second) second->base.vt->destroy(&second->base);
+        teardown(s);
+    }
+}
 static void removed_conversation_rejects_pending_receipt(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); live(s, "ready", LIVE_READY);
     SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
@@ -703,6 +733,7 @@ void app_slack_tests(void) {
     test_run("Slack ownership loss during workspace reload restores list and active inbox status", ownership_loss_during_workspace_reload);
     test_run("Slack completed channel and thread reconciliation preserves composer selection and undo", reconcile_preserves_composer_editing);
     test_run("Slack hidden or de-owned workspace reload resumes its timer and respects retry deadlines", interrupted_workspace_reload_rearms_timer);
+    test_run("Slack showing an inbox during cooldown restores its retry timer without stealing ownership", shown_during_cooldown_rearms_timer);
     pane_destroy(inbox_pane); DestroyWindow(inbox_hwnd); inbox_pane = NULL; inbox_hwnd = NULL;
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);
