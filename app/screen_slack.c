@@ -366,7 +366,7 @@ static void header(Screen *base, HeaderInfo *info) {
     snprintf(info->title, sizeof info->title, "Slack inbox");
     snprintf(info->subtitle, sizeof info->subtitle, "Admin · Human replies · Refresh for updates");
     info->buttons[info->button_count++] = (HeaderButton){ 0xE72C, ACT_REFRESH, slack_inbox_offered(), "Refresh Slack inbox", "Refresh" };
-    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack web", "Slack web" };
+    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack in your browser", "Slack web" };
     if (s->workspace) snprintf(info->subtitle, sizeof info->subtitle, "Workspace %s%s", s->workspace, s->directory ? " · People" : "");
 }
 static void send_message(SlackScreen *s) {
@@ -406,7 +406,7 @@ void slack_inbox_find_confirmed(SlackScreen *s, const char *workspace, uint64_t 
 }
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
-    if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
+    if (act == ACT_WEB) { open_web_url("https://app.slack.com/client"); return; }
     if (!sync_access(s)) { changed(s); return; }
     if (GetTickCount64() < s->cooldown) { changed(s); return; }
     switch (act) {
