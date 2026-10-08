@@ -1,4 +1,4 @@
-// Exercise actual inbox completions and navigation without network threads or a native window.
+// Exercise actual inbox completions and navigation without provider calls or interactive windows.
 #include "slack_inbox.h"
 #include "slack_fixtures.h"
 #include "str.h"
@@ -237,6 +237,31 @@ static Request *pending(SlackScreen *s, int tag, const char *operation, const ch
     req->slot = &s->requests[tag]; s->requests[tag] = req; return req;
 }
 static void complete(Request *req) { store_handle_message(WM_APP_REQUEST_DONE, 0, (LPARAM)req); }
+static bool inbox_transport(void *ctx, const char *method, const char *url, const char *const *headers, const void *body, size_t body_len,
+                            int timeout_ms, int *status, char **content_type, char **retry_after, char **response, size_t *response_len,
+                            char **error_message) {
+    const char *answer = strstr(url, "/people") ? SLACK_PEOPLE : strstr(url, "/threads/") ? SLACK_THREAD : strstr(url, "/messages") ? SLACK_HISTORY :
+        strstr(url, "/conversations/C1") ? "{\"conversation\":{\"id\":\"C1\"}}" : SLACK_CONVERSATIONS;
+    *status = 200; *content_type = xstrdup("application/json"); *response = xstrdup(answer); *response_len = strlen(answer);
+    return true;
+}
+static HWND inbox_hwnd;
+static Pane *inbox_pane;
+static void request_pane(SlackScreen *s) {
+    g_store.hwnd = inbox_hwnd;
+    api_client_set_transport(g_store.client, inbox_transport, NULL);
+    s->base.pane = inbox_pane; s->shown = true;
+}
+static void deliver_inbox_requests(int expected) {
+    int count = 0; uint64_t deadline = GetTickCount64() + 5000;
+    while (count < expected && GetTickCount64() < deadline) {
+        MSG msg;
+        if (PeekMessageW(&msg, g_store.hwnd, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
+            store_handle_message(msg.message, msg.wParam, msg.lParam); count++;
+        } else Sleep(1);
+    }
+    CHECK_INT(count, expected);
+}
 static void ready_preserves_pending_receipts(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     for (int receipt_first = 0; receipt_first < 2; receipt_first++) {
@@ -498,6 +523,51 @@ static void one_owner_even_during_backoff(void) {
     CHECK(find_message(first, "1712345678.000003") == NULL);
     api_error_clear(&error); second->base.vt->destroy(&second->base); teardown(first);
 }
+static void ownership_loss_during_snapshot(void) {
+    for (int thread = 0; thread < 2; thread++) {
+        setup(); SlackScreen *first = (SlackScreen *)slack_screen_new(); load_navigation(first);
+        if (thread) set_string(&first->thread, "1712345678.000001");
+        SlackScreen *second = (SlackScreen *)slack_screen_new(); load_navigation(second); slack_inbox_focus(first);
+        request_pane(first);
+        live(first, "ready", LIVE_READY); CHECK(first->reconciling);
+        uint64_t generation = first->state.generation, stream_generation = first->stream_generation;
+        Request *snapshot = first->requests[TAG_CONVERSATIONS]; CHECK(snapshot != NULL);
+        SlackDraft *d = slack_draft(&first->state, first->workspace, first->channel, first->thread);
+        set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
+        Request *send = pending(first, TAG_SEND, "slack_send", SLACK_RECEIPT);
+        if (thread) json_set_str(send->args, "threadTs", first->thread);
+        slack_inbox_focus(second);
+        CHECK(!first->reconciling); if (snapshot) CHECK(snapshot->cancelled); CHECK(!first->feed);
+        CHECK_INT(first->state.generation, generation); CHECK(!send->cancelled); CHECK(d->sending); CHECK(!d->uncertain);
+        CHECK(first->requests[TAG_CONVERSATIONS] != NULL); CHECK(first->requests[TAG_CONVERSATIONS] != snapshot);
+        CHECK(first->requests[TAG_DETAIL] != NULL); CHECK(first->requests[TAG_HISTORY] != NULL);
+        if (first->requests[TAG_HISTORY]) CHECK_STR(first->requests[TAG_HISTORY]->operation, thread ? "slack_thread" : "slack_history");
+        CHECK(strstr(first->live_status, "active Slack inbox") != NULL);
+        slack_inbox_event(first, stream_generation, "message", LIVE_MESSAGE, strlen(LIVE_MESSAGE));
+        CHECK_INT(first->state.message_count, 0);
+        deliver_inbox_requests(thread ? 7 : 6);
+        CHECK_INT(json_count(first->conversations), 4); CHECK(first->detail != NULL); CHECK(first->history_loaded);
+        CHECK_INT(first->state.message_count, 2); complete(send); CHECK_STR(d->text, ""); CHECK(!d->uncertain);
+        first->base.pane = NULL;
+        second->base.vt->destroy(&second->base); teardown(first);
+    }
+}
+static void ownership_loss_during_workspace_reload(void) {
+    setup(); SlackScreen *first = (SlackScreen *)slack_screen_new(); load_navigation(first);
+    live(first, "workspace.changed", "{\"workspaceId\":1727000000002}"); CHECK(first->workspace_reload);
+    SlackScreen *second = (SlackScreen *)slack_screen_new(); load_navigation(second);
+    second->feed = slack_feed_new(g_store.client, second->workspace, second->stream_generation);
+    SlackFeed *feed = second->feed; uint64_t generation = second->stream_generation;
+    request_pane(first);
+    apply(first, TAG_WORKSPACES, "slack_workspaces", SLACK_WORKSPACES, first->state.generation, 0);
+    CHECK(!first->workspace_reload); CHECK(!first->feed);
+    CHECK(strstr(first->live_status, "active Slack inbox") != NULL);
+    CHECK(first->requests[TAG_CONVERSATIONS] != NULL); CHECK(first->requests[TAG_PEOPLE] != NULL);
+    CHECK(second->feed == feed); CHECK_INT(second->stream_generation, generation);
+    deliver_inbox_requests(2); CHECK_INT(json_count(first->conversations), 4); CHECK(json_count(first->people) > 0);
+    first->base.pane = NULL;
+    second->base.vt->destroy(&second->base); teardown(first);
+}
 static void removed_conversation_rejects_pending_receipt(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); live(s, "ready", LIVE_READY);
     SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
@@ -533,6 +603,13 @@ void app_slack_tests(void) {
     test_run("Slack stale rendered indices cannot select another thread after live deletion", stale_rendered_thread_selection);
     test_run("Slack removed conversation snapshot invalidates pending receipt and private state", removed_conversation_rejects_pending_receipt);
     test_run("Slack active stream ownership preserves prior inbox receipts and loads during backoff", one_owner_even_during_backoff);
+    // A shared message-only pane fixture supports real request slots without visible UI. Create it outside
+    // per-test leak checkpoints because pane_create also initializes the process-lifetime pane registry.
+    inbox_hwnd = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+    CHECK(inbox_hwnd != NULL); inbox_pane = pane_create(inbox_hwnd, false);
+    test_run("Slack ownership loss during channel or thread sync resumes ordinary loads and preserves receipts", ownership_loss_during_snapshot);
+    test_run("Slack ownership loss during workspace reload restores list and active inbox status", ownership_loss_during_workspace_reload);
+    pane_destroy(inbox_pane); DestroyWindow(inbox_hwnd); inbox_pane = NULL; inbox_hwnd = NULL;
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);
     test_run("Slack every ready snapshots ordered events edits deletes parent and cross-client reads", ready_snapshot_ordering);

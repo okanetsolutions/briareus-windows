@@ -74,7 +74,11 @@ static void cancel(SlackScreen *s) {
 void slack_inbox_focus(SlackScreen *s) {
     if (!s->workspace) return;
     if (stream_owner && stream_owner != s) {
-        SlackScreen *previous = stream_owner; stream_stop(previous);
+        SlackScreen *previous = stream_owner; bool reconciling = previous->reconciling; stream_stop(previous);
+        if (reconciling) {
+            load(previous, TAG_CONVERSATIONS);
+            if (previous->channel) { load(previous, TAG_DETAIL); load(previous, TAG_HISTORY); }
+        }
         set_string(&previous->live_status, "Live updates follow the active Slack inbox. Use Refresh here to reconnect."); changed(previous);
     }
     stream_owner = s;
@@ -439,7 +443,11 @@ static void stream_start(SlackScreen *s) {
         (!str_empty(s->thread) && !slack_inbox_supports("slack_thread"))) {
         set_string(&s->live_status, "Live Slack events are unavailable on this server/token. Use Refresh for updates."); return;
     }
-    if (stream_owner && stream_owner != s) return;
+    if (stream_owner && stream_owner != s) {
+        KillTimer(pane_hwnd(s->base.pane), TIMER_LIVE);
+        set_string(&s->live_status, "Live updates follow the active Slack inbox. Use Refresh here to reconnect.");
+        load(s, TAG_CONVERSATIONS); load(s, TAG_PEOPLE); return;
+    }
     stream_owner = s;
     SetTimer(pane_hwnd(s->base.pane), TIMER_LIVE, 100, NULL);
     if (GetTickCount64() < s->reconnect_at || GetTickCount64() < s->cooldown) return;
