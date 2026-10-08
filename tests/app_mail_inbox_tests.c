@@ -57,6 +57,10 @@ static bool transport(void *ctx, const char *method, const char *url, const char
 static ApiClient *setup(InboxStub *stub) {
     memset(&g_store, 0, sizeof g_store); g_store.has_device = true; g_store.device.permission = "admin";
     g_store.routes = ROUTES; g_store.route_count = 3; g_store.active = true;
+    // Successful worker replies need a UI-thread window; NULL posts onto the worker's own queue.
+    g_store.hwnd = CreateWindowExW(0, L"STATIC", L"Mail regression dispatcher", 0, 0, 0, 0, 0,
+        HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+    CHECK(g_store.hwnd != NULL);
     ServerAddress address; ApiError e; api_error_init(&e);
     CHECK(server_address_parse("https://example.com", &address));
     g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &e);
@@ -68,7 +72,7 @@ static void pump(int expected) {
     ULONGLONG end = GetTickCount64() + 10000; int delivered = 0;
     while (delivered < expected && GetTickCount64() < end) {
         MSG msg;
-        while (PeekMessageW(&msg, (HWND)-1, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
+        while (PeekMessageW(&msg, g_store.hwnd, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
             store_handle_message(msg.message, msg.wParam, msg.lParam); delivered++;
         }
         if (delivered < expected) Sleep(1);
@@ -94,7 +98,7 @@ static void cleanup(Screen *s, Doc *doc, ApiClient *client, InboxStub *stub) {
     s->vt->destroy(s); doc_free(doc); api_client_release(client); free(stub->last_list); free(stub->last_body);
     if (stub->entered) CloseHandle(stub->entered);
     if (stub->resume) CloseHandle(stub->resume);
-    memset(&g_store, 0, sizeof g_store);
+    DestroyWindow(g_store.hwnd); memset(&g_store, 0, sizeof g_store);
 }
 static void screen_reads(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
