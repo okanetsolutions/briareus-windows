@@ -1,4 +1,4 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp and Slack and the 📊 and ⚑ switches, the projects with their
+// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp, Mail, Slack and the 📊 and ⚑ switches, the projects with their
 // session counts, and inside a project its conversations; what Spotify plays, ☑ Select, ⚙ Settings and the ⎋ Sign out button along the foot.
 #include "dialogs.h"
 #include "media.h"
@@ -14,11 +14,11 @@
 // MARK: - What both sidebar screens draw
 
 enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK, ACT_MAIL };
-enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };   // WhatsApp, Slack, dashboard, findings; Mail joins them when the server offers it
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
-typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_SLACK } StripMark;
+typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_SLACK, MARK_MAIL } StripMark;
 typedef struct { char text[40]; int badge; bool active, wide; StripMark mark; } StripData;
 /// WhatsApp's mark, which no font has: a green chat bubble with its tail at the lower left, and a white handset.
 static void paint_whatsapp_mark(Canvas *cv, const RECT *rc) {
@@ -47,6 +47,16 @@ static void paint_slack_mark(Canvas *cv, const RECT *rc) {
         }
     }
 }
+/// An envelope, which the icon font draws too thinly at this size: a blue body and a white flap.
+static void paint_mail_mark(Canvas *cv, const RECT *rc) {
+    const COLORREF blue = RGB(0x3D, 0x8B, 0xF2), paper = RGB(0xFF, 0xFF, 0xFF);
+    int w = px(16), h = px(12), cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
+    RECT body = { cx - w / 2, cy - h / 2, cx - w / 2 + w, cy - h / 2 + h };
+    fill_round_rect(cv, &body, px(2), blue, blue);
+    int flap = body.top + h * 58 / 100, stroke = px(1) + 1;
+    draw_thick_line(cv, body.left + px(2), body.top + px(2), cx, flap, paper, stroke);
+    draw_thick_line(cv, body.right - px(3), body.top + px(2), cx, flap, paper, stroke);
+}
 static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     StripData *d = it->data;
     bool hovered = doc_item_hovered(doc, it);
@@ -56,6 +66,8 @@ static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
         paint_whatsapp_mark(cv, rc);
     } else if (d->mark == MARK_SLACK) {
         paint_slack_mark(cv, rc);
+    } else if (d->mark == MARK_MAIL) {
+        paint_mail_mark(cv, rc);
     } else if (d->wide) {
         RECT t = { rc->left + px(6), rc->top, rc->right - px(6), rc->bottom };
         draw_text(cv, d->text, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -81,26 +93,31 @@ static StripData *strip_button(Doc *doc, const RECT *rc, const char *text, bool 
     it->data = d; it->free_data = free; it->action = action; it->hand = true;
     return d;
 }
-/// The strip; `selected` is the detail pane's root id, for the WhatsApp, Slack, 📊 and ⚑ switches' accent.
+/// The strip; `selected` is the detail pane's root id, for the WhatsApp, Mail, Slack, 📊 and ⚑ switches' accent.
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
-    int icons_w = iw * STRIP_ICONS + gap * (STRIP_ICONS - 1);
+    bool mail = mail_inbox_offered() || mail_settings_offered();
+    int icons = STRIP_ICONS + (mail ? 1 : 0);
+    int icons_w = iw * icons + gap * (icons - 1);
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
     RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->mark = MARK_WHATSAPP;
     x += iw + gap;
+    if (mail) {
+        RECT mr = { x, y, x + iw, y + h };
+        bool on = str_eq(selected, "mail") || str_eq(selected, "mail-settings") || str_has_prefix(selected, "mail-settings:");
+        strip_button(doc, &mr, "", false, 0, on, ACT_MAIL)->mark = MARK_MAIL;
+        doc_item(doc, (int)doc->count - 1)->tip = xstrdup("Mail");
+        x += iw + gap;
+    }
     RECT kr = { x, y, x + iw, y + h }; strip_button(doc, &kr, "", false, 0, str_eq(selected, "slack-inbox"), ACT_SLACK)->mark = MARK_SLACK;
     x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
-    if (mail_inbox_offered() || mail_settings_offered()) {
-        doc_space(doc, px(6));
-        doc_button(doc, 0, w, "Mail", BUTTON_PLAIN, ACT_MAIL, 0, true);
-    }
     doc_space(doc, px(14));
 }
 
