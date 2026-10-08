@@ -10,7 +10,7 @@
 
 static const char *const OPERATIONS[] = { "slack_workspaces", "slack_conversations", "slack_people", "slack_conversation",
     "slack_history", "slack_open_dm", "slack_send", "slack_read", "slack_thread", "slack_events" };
-static SlackScreen *screens;
+static SlackScreen *screens, *stream_owner;
 static void load(SlackScreen *s, int tag);
 static void refresh(Screen *base);
 static void stream_start(SlackScreen *s);
@@ -62,7 +62,18 @@ static void cancel_requests(SlackScreen *s) {
     slack_state_advance(&s->state); s->empty_pages = 0;
     if (s->base.pane) { KillTimer(pane_hwnd(s->base.pane), TIMER_EMPTY); KillTimer(pane_hwnd(s->base.pane), TIMER_READ); }
 }
-static void cancel(SlackScreen *s) { stream_stop(s); cancel_requests(s); }
+static void cancel(SlackScreen *s) {
+    stream_stop(s); cancel_requests(s);
+    if (stream_owner == s) stream_owner = NULL;
+}
+void slack_inbox_focus(SlackScreen *s) {
+    if (!s->workspace) return;
+    if (stream_owner && stream_owner != s) {
+        SlackScreen *previous = stream_owner; cancel(previous);
+        set_string(&previous->live_status, "Live updates follow the active Slack inbox. Use Refresh here to reconnect."); changed(previous);
+    }
+    stream_owner = s;
+}
 static void private_clear(SlackScreen *s) {
     cancel(s); slack_state_clear(&s->state); slack_page_clear(&s->page); view_clear(s);
     json_free(s->workspaces); s->workspaces = json_array();
@@ -141,7 +152,7 @@ static void navigate(SlackScreen *s, const char *workspace, const char *channel,
     if (s->base.pane) pane_scroll_to_top(s->base.pane);
     if (workspace_changed) { load(s, TAG_CONVERSATIONS); load(s, TAG_PEOPLE); }
     if (s->channel) { load(s, TAG_DETAIL); load(s, TAG_HISTORY); }
-    stream_start(s); changed(s);
+    slack_inbox_focus(s); stream_start(s); changed(s);
 }
 static bool directory_page(SlackScreen *s, Request *req, bool people) {
     const char *key = people ? "people" : "conversations";
@@ -408,12 +419,10 @@ static void stream_start(SlackScreen *s) {
         (!str_empty(s->thread) && !slack_inbox_supports("slack_thread"))) {
         set_string(&s->live_status, "Live Slack events are unavailable on this server/token. Use Refresh for updates."); return;
     }
+    if (stream_owner && stream_owner != s) return;
+    stream_owner = s;
     SetTimer(pane_hwnd(s->base.pane), TIMER_LIVE, 100, NULL);
     if (GetTickCount64() < s->reconnect_at || GetTickCount64() < s->cooldown) return;
-    // A moved/detached screen must not leave a second stream alive in another inbox.
-    for (SlackScreen *other = screens; other; other = other->next) if (other != s && other->feed) {
-        stream_stop(other); set_string(&other->live_status, "Live updates follow the active Slack inbox. Use Refresh here to reconnect."); changed(other);
-    }
     s->stream_generation++;
     s->feed = slack_feed_new(s->account, s->workspace, s->stream_generation);
     set_string(&s->live_status, "Connecting to Slack live updates…");
@@ -726,7 +735,7 @@ static void refresh(Screen *base) {
     if (!s->workspace) load(s, TAG_WORKSPACES);
     else if (s->channel && !s->directory) { load(s, TAG_DETAIL); load(s, TAG_HISTORY); }
     else { load(s, TAG_CONVERSATIONS); load(s, TAG_PEOPLE); }
-    stream_start(s); changed(s);
+    slack_inbox_focus(s); stream_start(s); changed(s);
 }
 static bool viewport_visible(SlackScreen *s) {
     if (!s->shown) return false;

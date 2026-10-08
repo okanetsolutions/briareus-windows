@@ -381,7 +381,22 @@ static void initial_empty_snapshot_and_signout(void) {
     apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, old_request, 0); CHECK_INT(s->state.message_count, 0);
     api_client_release(client); teardown(s);
 }
+static void one_owner_even_during_backoff(void) {
+    setup(); SlackScreen *first = (SlackScreen *)slack_screen_new(); load_navigation(first);
+    first->feed = slack_feed_new(g_store.client, first->workspace, first->stream_generation);
+    ApiError error; api_error_init(&error); api_error_set(&error, API_NETWORK, 0, "disconnected", -1);
+    slack_inbox_stream_end(first, first->stream_generation, &error); CHECK(first->reconnect_at > GetTickCount64());
+    uint64_t generation = first->state.generation, stream_generation = first->stream_generation;
+    SlackScreen *second = (SlackScreen *)slack_screen_new(); load_navigation(second);
+    CHECK(first->state.generation > generation); CHECK(first->stream_generation > stream_generation);
+    CHECK(!first->feed); CHECK(strstr(first->live_status, "active Slack inbox") != NULL);
+    second->feed = slack_feed_new(g_store.client, second->workspace, second->stream_generation);
+    slack_inbox_focus(first); CHECK(!second->feed); CHECK(strstr(second->live_status, "active Slack inbox") != NULL);
+    slack_inbox_event(first, stream_generation, "message", LIVE_MESSAGE, strlen(LIVE_MESSAGE)); CHECK_INT(first->state.message_count, 0);
+    api_error_clear(&error); second->base.vt->destroy(&second->base); teardown(first);
+}
 void app_slack_tests(void) {
+    test_run("Slack active stream ownership cancels prior inbox even during backoff", one_owner_even_during_backoff);
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);
     test_run("Slack every ready snapshots ordered events edits deletes parent and cross-client reads", ready_snapshot_ordering);

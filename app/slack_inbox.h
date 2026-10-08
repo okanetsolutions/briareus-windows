@@ -31,6 +31,7 @@ struct SlackScreen {
     uint64_t cooldown; unsigned empty_pages;
     struct { RECT rc; char *ts; } *view; size_t view_count;
 };
+void slack_inbox_focus(SlackScreen *s);
 void slack_inbox_event(SlackScreen *s, uint64_t generation, const char *name, const char *data, size_t length);
 void slack_inbox_stream_end(SlackScreen *s, uint64_t generation, const ApiError *error);
 void slack_inbox_pump(SlackScreen *s);
