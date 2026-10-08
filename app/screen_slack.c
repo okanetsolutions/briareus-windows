@@ -276,7 +276,7 @@ static void layout(Screen *base, Doc *doc) {
         doc_section(doc, x, w, "Workspaces");
         for (size_t i = 0; i < json_count(s->workspaces); i++) {
             const Json *row = json_at(s->workspaces, i); char *id = slack_workspace_id(row);
-            char *title = xstrfmt("%s · %s", json_str_or(json_get(row, "label"), "Workspace"), json_str_or(json_get(row, "teamName"), id ? id : ""));
+            char *title = xstrfmt("%s · %s", json_str_or(json_get(row, "label"), "Workspace"), json_str_or(json_get(row, "team"), id ? id : ""));
             doc_button(doc, x, w, title, BUTTON_BORDERED, ACT_WORKSPACE, (intptr_t)i, id != NULL && slack_inbox_supports("slack_conversations"));
             free(title); free(id); doc_space(doc, px(6));
         }
@@ -375,6 +375,23 @@ static void send_message(SlackScreen *s) {
     if (!str_empty(d->thread)) json_set_str(args, "threadTs", d->thread);
     call(s, TAG_SEND, "slack_send", args); composer_set(s); changed(s);
 }
+void slack_inbox_recover_confirmed(SlackScreen *s, const Json *destination, uint64_t generation) {
+    // A modal confirmation dispatches completions which can clear drafts or destroy the screen.
+    SlackScreen *live = screens; while (live && live != s) live = live->next;
+    if (!live) return;
+    if (!ready(s, "slack_send") || !slack_state_current(&s->state, generation)
+        || !str_eq(s->workspace, json_str(json_get(destination, "id")))
+        || !str_eq(s->channel, json_str(json_get(destination, "channel")))
+        || !str_eq(s->thread, json_str(json_get(destination, "threadTs")))) { changed(s); return; }
+    // Look up an existing draft; never create a replacement after account/access invalidation.
+    for (size_t i = 0; i < s->state.draft_count; i++) {
+        SlackDraft *d = &s->state.drafts[i];
+        if (str_eq(d->workspace, s->workspace) && str_eq(d->channel, s->channel) && str_eq(d->thread, s->thread)) {
+            if (d->uncertain && !d->sending) { d->uncertain = false; set_string(&s->error, NULL); changed(s); }
+            return;
+        }
+    }
+}
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
     if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
@@ -417,10 +434,12 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     case ACT_REFRESH: refresh(base); break;
     case ACT_SEND: send_message(s); break;
     case ACT_RECOVER: {
-        SlackDraft *d = draft(s);
-        if (d && d->uncertain && app_confirm("Allow another Slack send?", "Check Slack history at this destination first. Sending the retained draft again can create a duplicate.", "Allow send", false)) {
-            d->uncertain = false; set_string(&s->error, NULL); changed(s);
-        }
+        if (!s->workspace || !s->channel || !draft(s)->uncertain) break;
+        Json *destination = arguments(s); if (s->thread) json_set_str(destination, "threadTs", s->thread);
+        uint64_t generation = s->state.generation;
+        if (app_confirm("Allow another Slack send?", "Check Slack history at this destination first. Sending the retained draft again can create a duplicate.", "Allow send", false))
+            slack_inbox_recover_confirmed(s, destination, generation);
+        json_free(destination);
         break;
     }
     }

@@ -22,4 +22,5 @@ struct SlackScreen {
     struct { RECT rc; char *ts; } *view; size_t view_count;
 };
 void slack_inbox_done(void *owner, Request *request);
+void slack_inbox_recover_confirmed(SlackScreen *screen, const Json *destination, uint64_t generation);
 #endif

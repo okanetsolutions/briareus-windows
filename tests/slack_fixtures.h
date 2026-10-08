@@ -4,7 +4,7 @@
 #ifndef BRIAREUS_SLACK_FIXTURES_H
 #define BRIAREUS_SLACK_FIXTURES_H
 #define SLACK_CONTRACT_SHA "9aabe649bb1835dd4ea50ebf3c9b3a997bde0e89"
-#define SLACK_WORKSPACES "{\"workspaces\":[{\"id\":1727000000002,\"label\":\"Business\",\"teamName\":\"Example\",\"userId\":\"U1\",\"hasToken\":true,\"projects\":[]}]}"
+#define SLACK_WORKSPACES "{\"workspaces\":[{\"id\":1727000000002,\"label\":\"Business\",\"team\":\"Example\",\"userId\":\"U1\",\"hasToken\":true,\"projects\":[]}]}"
 #define SLACK_CONVERSATIONS "{\"conversations\":[{\"id\":\"C1\",\"name\":\"general\"},{\"id\":\"G1\",\"name\":\"private\",\"is_private\":true},{\"id\":\"D1\",\"user\":\"U1\",\"is_im\":true},{\"id\":\"G2\",\"name\":\"mpdm-team\",\"is_mpim\":true}],\"nextCursor\":\"\"}"
 #define SLACK_PEOPLE "{\"people\":[{\"id\":\"U1\",\"name\":\"ana\",\"real_name\":\"Ana\",\"profile\":{\"display_name\":\"Ana Ops\"}}],\"nextCursor\":\"people-next\"}"
 #define SLACK_EMPTY_PAGE "{\"messages\":[],\"nextCursor\":\"next\",\"hasMore\":true}"
