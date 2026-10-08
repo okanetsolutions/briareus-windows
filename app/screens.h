@@ -248,7 +248,7 @@ bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
 /// The address bar over a Run tab's browser: back, forward and reload, the page's address (`url` until the browser
 /// reports one), and open in the browser; `actions` holds the four actions in that order. Advances.
 struct WebView;
-typedef struct { HWND edit; RECT rc; struct WebView **web; char *url; } RunAddress;
+typedef struct { HWND edit; RECT rc; struct WebView **web; char *url; bool clipped; } RunAddress;
 void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4], RunAddress *address);
 /// Places the editable address in the host pane, or hides it when the Run tab is not shown.
 void run_address_place(RunAddress *address, Screen *host, struct WebView **web, const char *url, const RECT *content, int scroll_y, bool shown);

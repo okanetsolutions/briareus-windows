@@ -2549,6 +2549,7 @@ static void pull_place(Screen *base, const RECT *content, int scroll_y) {
     // that lets it past Cloudflare Access has been read.
     if (on && !s->web && !s->access_read && store_supports("preview_access")) {
         if (!s->req_access) store_call("preview_access", json_object(), 0, s, access_done, TAG_ACCESS, &s->req_access);
+        run_address_place(&s->address, base, &s->web, s->run_url, content, scroll_y, on);  // The address shows meanwhile.
         return;
     }
     if (on && !s->web) {

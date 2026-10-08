@@ -259,6 +259,8 @@ static void address_sync(RunAddress *a) {
 static LRESULT CALLBACK run_address_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     RunAddress *a = (RunAddress *)ref;
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
+        // Read-only until the browser is up: the address can be copied, not opened.
+        if (!a->web || !*a->web || !webview_ready(*a->web)) return 0;
         int n = GetWindowTextLengthW(hwnd);
         wchar_t *text = xmalloc(((size_t)n + 1) * sizeof *text);
         GetWindowTextW(hwnd, text, n + 1);
@@ -276,7 +278,7 @@ static LRESULT CALLBACK run_address_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         return 0;
     }
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); address_sync(a); return 0; }
-    if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) < 0) && (wp == 'A' || wp == 'L')) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
+    if (msg == WM_KEYDOWN && GetKeyState(VK_CONTROL) < 0 && !(GetKeyState(VK_MENU) & 0x8000) && (wp == 'A' || wp == 'L')) { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
     if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_ESCAPE || wp == 1 || wp == 12)) return 0;
     if (msg == WM_LBUTTONDOWN && GetFocus() != hwnd) { SetFocus(hwnd); SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
     if (msg == WM_KILLFOCUS) { LRESULT r = DefSubclassProc(hwnd, msg, wp, lp); address_sync(a); return r; }
@@ -302,15 +304,22 @@ void run_address_place(RunAddress *a, Screen *host, WebView **web, const char *u
         int m = (rc.right - rc.left - pane_content_width(host->pane)) / 2;
         RECT r = a->rc;
         OffsetRect(&r, content->left + m, content->top - scroll_y);
-        // Keep the native edit out of the header when the bar scrolls above the content.
-        on = r.top >= content->top && r.bottom <= content->bottom && r.right > r.left;
+        // Keep the native edit out of the header when the bar scrolls above the content: clipped, not hidden, so a
+        // partly scrolled bar keeps the address being typed.
+        RECT visible;
+        on = r.right > r.left && IntersectRect(&visible, &r, content);
         if (on) {
             SendMessageW(a->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), FALSE);
             MoveWindow(a->edit, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
+            bool clipped = !EqualRect(&visible, &r);
+            if (clipped) SetWindowRgn(a->edit, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
+            else if (a->clipped) SetWindowRgn(a->edit, NULL, TRUE);
+            a->clipped = clipped;
         }
     }
     if (!on && GetFocus() == a->edit) SetFocus(GetParent(a->edit));
-    EnableWindow(a->edit, *web && webview_ready(*web));
+    // Read-only rather than disabled while the browser starts or has failed, so the address can still be copied.
+    SendMessageW(a->edit, EM_SETREADONLY, !(*web && webview_ready(*web)), 0);
     ShowWindow(a->edit, on ? SW_SHOWNA : SW_HIDE);
 }
 void run_address_free(RunAddress *a) {
@@ -435,6 +444,7 @@ void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool sh
     // that lets it past Cloudflare Access has been read.
     if (on && !p->web && !p->access_read && store_supports("preview_access")) {
         if (!p->req_access) store_call("preview_access", json_object(), 0, p, access_done, 0, &p->req_access);
+        run_address_place(&p->address, p->host, &p->web, p->url, content, scroll_y, on);  // The address shows meanwhile.
         return;
     }
     if (on && !p->web && p->host->pane) {
