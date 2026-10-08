@@ -1,0 +1,3983 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Briareus API",
+        "version": "1.0.0"
+    },
+    "x-core-commit": "8079fcd341e87dba7ede9b8a9a6a534c5f8338cb",
+    "paths": {
+        "/runtimes": {
+            "get": {
+                "operationId": "runtimesList",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "default": {
+                                            "type": [
+                                                "object",
+                                                "null"
+                                            ]
+                                        },
+                                        "providers": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/pulls": {
+            "get": {
+                "operationId": "pullsList",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "fresh",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "0",
+                                "1"
+                            ]
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "repo": {
+                                            "type": "string"
+                                        },
+                                        "pulls": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "issues": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "stacks": {
+                                            "type": "object"
+                                        },
+                                        "syncedAt": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/pulls/{number}/description": {
+            "get": {
+                "operationId": "pullsDescription",
+                "parameters": [
+                    {
+                        "name": "number",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "headSha",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "baseSha",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "pr": {
+                                            "$ref": "#/components/schemas/PullRequest"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/pulls/{number}/findings": {
+            "get": {
+                "operationId": "pullsFindings",
+                "parameters": [
+                    {
+                        "name": "number",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "findings": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/Finding"
+                                            }
+                                        },
+                                        "fixesUrl": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/repo/tree": {
+            "get": {
+                "operationId": "repoTree",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "ref",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ref": {
+                                            "type": "string"
+                                        },
+                                        "sha": {
+                                            "type": "string"
+                                        },
+                                        "truncated": {
+                                            "type": "boolean"
+                                        },
+                                        "entries": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/TreeEntry"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/repo/file": {
+            "get": {
+                "operationId": "repoFile",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "ref",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "path",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RepoFile"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/repo/archive": {
+            "get": {
+                "operationId": "repoArchive",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "ref",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "type": "string",
+                                    "format": "binary"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/sessions": {
+            "get": {
+                "operationId": "sessionsList",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "sessions": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/Session"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "any"
+            },
+            "post": {
+                "operationId": "sessionsCreate",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "repo": {
+                                        "type": "string"
+                                    },
+                                    "prompt": {
+                                        "type": "string"
+                                    },
+                                    "provider": {
+                                        "type": "integer"
+                                    },
+                                    "model": {
+                                        "type": "string"
+                                    },
+                                    "effort": {
+                                        "type": "string"
+                                    },
+                                    "branch": {
+                                        "type": "string"
+                                    },
+                                    "prNumber": {
+                                        "type": "integer"
+                                    },
+                                    "attachments": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "review": {
+                                        "type": "boolean"
+                                    },
+                                    "qa": {
+                                        "type": "boolean"
+                                    },
+                                    "reviewLoop": {
+                                        "type": "boolean"
+                                    },
+                                    "qaLoop": {
+                                        "type": "boolean"
+                                    },
+                                    "local": {
+                                        "type": "boolean"
+                                    },
+                                    "orchestrator": {
+                                        "type": "boolean"
+                                    },
+                                    "workerRuntime": {
+                                        "type": "object"
+                                    },
+                                    "activity": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "repo"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "repo"
+            }
+        },
+        "/sessions/{id}": {
+            "get": {
+                "operationId": "sessionsGet",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "since",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "all",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "0",
+                                "1"
+                            ]
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        },
+                                        "events": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/TranscriptEvent"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "session"
+            },
+            "patch": {
+                "operationId": "sessionsUpdate",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {
+                                        "type": "string"
+                                    },
+                                    "autoCompact": {
+                                        "type": "boolean"
+                                    },
+                                    "compactInstructions": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            },
+            "delete": {
+                "operationId": "sessionsDelete",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/sessions/{id}/events": {
+            "get": {
+                "operationId": "sessionsEvents",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "since",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "text/event-stream": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "read",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/sessions/{id}/messages": {
+            "post": {
+                "operationId": "sessionsMessage",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string"
+                                    },
+                                    "attachments": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/sessions/{id}/cancel": {
+            "post": {
+                "operationId": "sessionsCancel",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/sessions/{id}/compact": {
+            "post": {
+                "operationId": "sessionsCompact",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/sessions/{id}/btw": {
+            "post": {
+                "operationId": "sessionsBtw",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "text"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "session": {
+                                            "$ref": "#/components/schemas/Session"
+                                        },
+                                        "id": {
+                                            "type": "string"
+                                        },
+                                        "text": {
+                                            "type": "string"
+                                        },
+                                        "isError": {
+                                            "type": "boolean"
+                                        },
+                                        "costUsd": {
+                                            "type": [
+                                                "number",
+                                                "null"
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "manage",
+                "x-briareus-scope": "session"
+            }
+        },
+        "/usage/all": {
+            "get": {
+                "operationId": "usageOverall",
+                "parameters": [
+                    {
+                        "name": "period",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "today",
+                                "7d",
+                                "30d",
+                                "month",
+                                "prev",
+                                "all",
+                                "custom"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "from",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "to",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "project",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "model",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "provider",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "activity",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "account",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "session",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces": {
+            "get": {
+                "operationId": "slackWorkspaces",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "workspaces": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/SlackWorkspace"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/conversations": {
+            "get": {
+                "operationId": "slackConversations",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "types",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "conversations": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "nextCursor": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/conversations/{channel}": {
+            "get": {
+                "operationId": "slackConversation",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "channel",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "conversation": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/people": {
+            "get": {
+                "operationId": "slackPeople",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "people": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "nextCursor": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/direct-messages": {
+            "post": {
+                "operationId": "slackOpenDm",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "userId": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "userId"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "conversation": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/conversations/{channel}/messages": {
+            "get": {
+                "operationId": "slackMessages",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "channel",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "oldest",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "latest",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "messages": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "nextCursor": {
+                                            "type": "string"
+                                        },
+                                        "hasMore": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "post": {
+                "operationId": "slackSend",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "channel",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string"
+                                    },
+                                    "threadTs": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "text"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "channel": {
+                                            "type": "string"
+                                        },
+                                        "ts": {
+                                            "type": "string"
+                                        },
+                                        "message": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/conversations/{channel}/threads/{ts}": {
+            "get": {
+                "operationId": "slackThread",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "channel",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "ts",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "oldest",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "latest",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "messages": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "nextCursor": {
+                                            "type": "string"
+                                        },
+                                        "hasMore": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/conversations/{channel}/read": {
+            "post": {
+                "operationId": "slackRead",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "channel",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "ts": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "ts"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/slack/workspaces/{id}/events": {
+            "get": {
+                "operationId": "slackEvents",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "text/event-stream": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/mail/messages": {
+            "get": {
+                "operationId": "mailMessages",
+                "parameters": [
+                    {
+                        "name": "account",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    },
+                    {
+                        "name": "q",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "unread",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "0",
+                                "1"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "inbox",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "0",
+                                "1"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "starred",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "0",
+                                "1"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "label",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "thread",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "cursor",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "limit",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "messages": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/MailMessageSummary"
+                                            }
+                                        },
+                                        "nextCursor": {
+                                            "type": [
+                                                "string",
+                                                "null"
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/mail/accounts/{account}/messages/{id}": {
+            "get": {
+                "operationId": "mailMessage",
+                "parameters": [
+                    {
+                        "name": "account",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "message": {
+                                            "$ref": "#/components/schemas/MailMessage"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mcp/servers": {
+            "get": {
+                "operationId": "settingsMcpServersList",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "servers": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/McpServer"
+                                            }
+                                        },
+                                        "defaults": {
+                                            "$ref": "#/components/schemas/McpServer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "post": {
+                "operationId": "settingsMcpServersCreate",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/McpServer"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "server": {
+                                            "$ref": "#/components/schemas/McpServer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mcp/servers/{id}": {
+            "put": {
+                "operationId": "settingsMcpServersUpdate",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/McpServer"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "server": {
+                                            "$ref": "#/components/schemas/McpServer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "delete": {
+                "operationId": "settingsMcpServersDelete",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mcp/servers/{id}/connect": {
+            "post": {
+                "operationId": "settingsMcpServersConnect",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "signIn": {
+                                        "type": "boolean"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "server": {
+                                            "$ref": "#/components/schemas/McpServer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mcp/servers/{id}/finish-sign-in": {
+            "post": {
+                "operationId": "settingsMcpServersFinishSignIn",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "url"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "server": {
+                                            "$ref": "#/components/schemas/McpServer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/slack/workspaces": {
+            "get": {
+                "operationId": "settingsSlackWorkspacesList",
+                "parameters": [
+                    {
+                        "name": "repo",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "workspaces": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/SlackWorkspace"
+                                            }
+                                        },
+                                        "defaults": {
+                                            "$ref": "#/components/schemas/SlackWorkspace"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "post": {
+                "operationId": "settingsSlackWorkspacesCreate",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SlackWorkspace"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "workspace": {
+                                            "$ref": "#/components/schemas/SlackWorkspace"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/slack/workspaces/{id}": {
+            "put": {
+                "operationId": "settingsSlackWorkspacesUpdate",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SlackWorkspace"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "workspace": {
+                                            "$ref": "#/components/schemas/SlackWorkspace"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "delete": {
+                "operationId": "settingsSlackWorkspacesDelete",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mail/accounts": {
+            "get": {
+                "operationId": "settingsMailAccountsList",
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "accounts": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/MailAccount"
+                                            }
+                                        },
+                                        "providers": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "callbackUrl": {
+                                            "type": "string"
+                                        },
+                                        "defaults": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mail/accounts/connect": {
+            "post": {
+                "operationId": "settingsMailAccountsConnect",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "provider": {
+                                        "type": "string",
+                                        "enum": [
+                                            "gmail",
+                                            "outlook"
+                                        ]
+                                    },
+                                    "accountId": {
+                                        "type": "integer"
+                                    },
+                                    "label": {
+                                        "type": "string"
+                                    },
+                                    "enabled": {
+                                        "type": "boolean"
+                                    },
+                                    "syncDays": {
+                                        "type": "integer"
+                                    }
+                                },
+                                "required": [
+                                    "provider"
+                                ]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "url": {
+                                            "type": "string"
+                                        },
+                                        "state": {
+                                            "type": "string"
+                                        },
+                                        "redirectUri": {
+                                            "type": "string"
+                                        },
+                                        "finishesOnServer": {
+                                            "type": "boolean"
+                                        },
+                                        "expiresAt": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mail/accounts/connect/finish": {
+            "post": {
+                "operationId": "settingsMailAccountsFinish",
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "url": {
+                                        "type": "string"
+                                    },
+                                    "state": {
+                                        "type": "string"
+                                    },
+                                    "code": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "account": {
+                                            "$ref": "#/components/schemas/MailAccount"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mail/accounts/{id}": {
+            "put": {
+                "operationId": "settingsMailAccountsUpdate",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {
+                                        "type": "string"
+                                    },
+                                    "enabled": {
+                                        "type": "boolean"
+                                    },
+                                    "syncDays": {
+                                        "type": "integer"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "account": {
+                                            "$ref": "#/components/schemas/MailAccount"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            },
+            "delete": {
+                "operationId": "settingsMailAccountsDelete",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ok": {
+                                            "type": "boolean"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        },
+        "/settings/mail/accounts/{id}/sync": {
+            "post": {
+                "operationId": "settingsMailAccountsSync",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "account": {
+                                            "$ref": "#/components/schemas/MailAccount"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": [
+                                        "error"
+                                    ],
+                                    "properties": {
+                                        "error": {
+                                            "type": "string"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "x-briareus-access": "admin",
+                "x-briareus-scope": "any"
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "PullRequest": {
+                "type": "object",
+                "properties": {
+                    "number": {
+                        "type": "integer"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "body": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string"
+                    },
+                    "author": {
+                        "type": "string"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": [
+                            "open",
+                            "draft",
+                            "closed",
+                            "merged"
+                        ]
+                    },
+                    "headRef": {
+                        "type": "string"
+                    },
+                    "baseRef": {
+                        "type": "string"
+                    },
+                    "headSha": {
+                        "type": "string"
+                    },
+                    "baseSha": {
+                        "type": "string"
+                    },
+                    "additions": {
+                        "type": "integer"
+                    },
+                    "deletions": {
+                        "type": "integer"
+                    },
+                    "changedFiles": {
+                        "type": "integer"
+                    },
+                    "updatedAt": {
+                        "type": "string"
+                    },
+                    "mergeable": {
+                        "type": [
+                            "boolean",
+                            "null"
+                        ]
+                    },
+                    "mergeableState": {
+                        "type": "string"
+                    },
+                    "mergeMethods": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "additionalProperties": true
+            },
+            "Finding": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": [
+                            "critical",
+                            "high",
+                            "medium",
+                            "low"
+                        ]
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "file": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "line": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "url": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "decision": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "enum": [
+                            "fix",
+                            "optional",
+                            "dismissed",
+                            null
+                        ]
+                    },
+                    "fixed": {
+                        "type": "boolean"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "TreeEntry": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "blob",
+                            "tree"
+                        ]
+                    },
+                    "size": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    }
+                },
+                "additionalProperties": true
+            },
+            "RepoFile": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "ref": {
+                        "type": "string"
+                    },
+                    "size": {
+                        "type": "integer"
+                    },
+                    "content": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "binary": {
+                        "type": "boolean"
+                    },
+                    "tooLarge": {
+                        "type": "boolean"
+                    },
+                    "url": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                },
+                "additionalProperties": true
+            },
+            "Session": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "repo": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "queued",
+                            "preparing",
+                            "running",
+                            "idle",
+                            "closed",
+                            "failed",
+                            "interrupted"
+                        ]
+                    },
+                    "error": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "activity": {
+                        "type": "string"
+                    },
+                    "provider": {
+                        "type": "string"
+                    },
+                    "providerId": {
+                        "type": "integer"
+                    },
+                    "model": {
+                        "type": "string"
+                    },
+                    "effort": {
+                        "type": "string"
+                    },
+                    "branch": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "baseBranch": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "startBranch": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "local": {
+                        "type": "boolean"
+                    },
+                    "createdAt": {
+                        "type": "string"
+                    },
+                    "startedAt": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "endedAt": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "turns": {
+                        "type": "integer"
+                    },
+                    "costUsd": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "inputTokens": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "outputTokens": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "contextTokens": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "contextWindow": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "usage": {
+                        "type": "object"
+                    },
+                    "awaitingAnswer": {
+                        "type": "boolean"
+                    },
+                    "queued": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "liveInput": {
+                        "type": "boolean"
+                    },
+                    "lastText": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "lastTool": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "subagents": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "prStatus": {
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    },
+                    "serveLinks": {
+                        "type": [
+                            "array",
+                            "null"
+                        ],
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "browser": {
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    },
+                    "reviewLoop": {
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    },
+                    "qaLoop": {
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    },
+                    "reviewTriage": {
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    },
+                    "orchestrator": {
+                        "type": "boolean"
+                    },
+                    "parentId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "canCompact": {
+                        "type": "boolean"
+                    },
+                    "compacting": {
+                        "type": "boolean"
+                    },
+                    "autoCompactAt": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "hiddenLines": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "TranscriptEvent": {
+                "type": "object",
+                "properties": {
+                    "seq": {
+                        "type": "integer"
+                    },
+                    "t": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "text": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "via": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "links": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "hidden": {
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "isError": {
+                        "type": "boolean"
+                    },
+                    "costUsd": {
+                        "type": [
+                            "number",
+                            "null"
+                        ]
+                    },
+                    "durationMs": {
+                        "type": "integer"
+                    },
+                    "inputTokens": {
+                        "type": "integer"
+                    },
+                    "outputTokens": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "SlackWorkspace": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "token": {
+                        "type": "string"
+                    },
+                    "signingSecret": {
+                        "type": "string"
+                    },
+                    "projects": {
+                        "type": "array",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "team": {
+                        "type": "string"
+                    },
+                    "teamId": {
+                        "type": "string"
+                    },
+                    "user": {
+                        "type": "string"
+                    },
+                    "userId": {
+                        "type": "string"
+                    },
+                    "url": {
+                        "type": "string"
+                    },
+                    "hasToken": {
+                        "type": "boolean"
+                    },
+                    "hasSigningSecret": {
+                        "type": "boolean"
+                    },
+                    "eventsUrl": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailMessageSummary": {
+                "type": "object",
+                "properties": {
+                    "accountId": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "threadId": {
+                        "type": "string"
+                    },
+                    "receivedAt": {
+                        "type": "integer"
+                    },
+                    "from": {
+                        "$ref": "#/components/schemas/MailAddress"
+                    },
+                    "to": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "cc": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "replyTo": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "snippet": {
+                        "type": "string"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "inInbox": {
+                        "type": "boolean"
+                    },
+                    "isRead": {
+                        "type": "boolean"
+                    },
+                    "isStarred": {
+                        "type": "boolean"
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAttachment"
+                        }
+                    },
+                    "webUrl": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailAddress": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "address": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailAttachment": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "mimeType": {
+                        "type": "string"
+                    },
+                    "size": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailMessage": {
+                "type": "object",
+                "properties": {
+                    "accountId": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "threadId": {
+                        "type": "string"
+                    },
+                    "receivedAt": {
+                        "type": "integer"
+                    },
+                    "from": {
+                        "$ref": "#/components/schemas/MailAddress"
+                    },
+                    "to": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "cc": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "replyTo": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAddress"
+                        }
+                    },
+                    "subject": {
+                        "type": "string"
+                    },
+                    "snippet": {
+                        "type": "string"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "inInbox": {
+                        "type": "boolean"
+                    },
+                    "isRead": {
+                        "type": "boolean"
+                    },
+                    "isStarred": {
+                        "type": "boolean"
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MailAttachment"
+                        }
+                    },
+                    "webUrl": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "messageId": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "body": {
+                        "$ref": "#/components/schemas/MailBody"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailBody": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "html": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "truncated": {
+                        "type": "boolean"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "McpServer": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "transport": {
+                        "type": "string",
+                        "enum": [
+                            "http",
+                            "stdio"
+                        ]
+                    },
+                    "url": {
+                        "type": "string"
+                    },
+                    "command": {
+                        "type": "string"
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "repos": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "headers": {
+                        "type": "object"
+                    },
+                    "env": {
+                        "type": "object"
+                    },
+                    "oauthClientId": {
+                        "type": "string"
+                    },
+                    "oauthClientSecret": {
+                        "type": "string"
+                    },
+                    "oauthScope": {
+                        "type": "string"
+                    },
+                    "oauthClientName": {
+                        "type": "string"
+                    },
+                    "oauthRedirect": {
+                        "type": "string",
+                        "enum": [
+                            "callback",
+                            "loopback"
+                        ]
+                    },
+                    "auth": {
+                        "type": "string",
+                        "enum": [
+                            "none",
+                            "oauth"
+                        ]
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "unchecked",
+                            "ready",
+                            "needs-sign-in",
+                            "error"
+                        ]
+                    },
+                    "error": {
+                        "type": "string"
+                    },
+                    "checkedAt": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "signedInAt": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "signedIn": {
+                        "type": "boolean"
+                    },
+                    "signInUrl": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "signInNeedsPaste": {
+                        "type": "boolean"
+                    },
+                    "headerNames": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "envNames": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "hasOAuthClientSecret": {
+                        "type": "boolean"
+                    }
+                },
+                "additionalProperties": true
+            },
+            "MailAccount": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "integer"
+                    },
+                    "provider": {
+                        "type": "string",
+                        "enum": [
+                            "gmail",
+                            "outlook"
+                        ]
+                    },
+                    "email": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "syncDays": {
+                        "type": "integer"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "connected",
+                            "reauth"
+                        ]
+                    },
+                    "syncing": {
+                        "type": "boolean"
+                    },
+                    "lastSyncAt": {
+                        "type": [
+                            "integer",
+                            "null"
+                        ]
+                    },
+                    "lastSyncError": {
+                        "type": [
+                            "string",
+                            "null"
+                        ]
+                    },
+                    "messages": {
+                        "type": "integer"
+                    },
+                    "unread": {
+                        "type": "integer"
+                    },
+                    "createdAt": {
+                        "type": "integer"
+                    },
+                    "updatedAt": {
+                        "type": "integer"
+                    }
+                },
+                "additionalProperties": true
+            }
+        }
+    }
+}

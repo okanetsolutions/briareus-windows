@@ -6,6 +6,7 @@ int main(void) {
     app_format_tests();
     app_common_tests();
     app_store_tests();
+    app_contract_tests();
     app_sql_tests();
     app_mcp_settings_tests();
     app_mail_tests();

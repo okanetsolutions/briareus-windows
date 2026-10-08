@@ -1,4 +1,4 @@
-// Fixtures pinned to nadinyamaui/briareus PR #124, 8585d12e20e57097bae291659765f9cfe9e14691.
+// Synthetic MCP fixtures reviewed against final core #124 merge 6799e24683a617d42abf90bd36642212a72a8d77; see the shared October catalog.
 #include "mcp.h"
 #include "str.h"
 #include "suites.h"

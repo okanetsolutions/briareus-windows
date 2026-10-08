@@ -895,6 +895,7 @@ int main(void) {
     models_tests();
     board_tests();
     api_tests();
+    contract_tests();
     cache_tests();
     vt_tests();
     sftp_tests();

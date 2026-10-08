@@ -5,6 +5,7 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include "fixtures/october-2026/catalog.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -981,6 +982,62 @@ static void test_retry_after_http_dates(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { if (api_retry_after(bad[i], 0) >= 0) printf("  read %s\n", bad[i]); CHECK(api_retry_after(bad[i], 0) < 0); }
 }
 
+static void test_final_catalog_transport_and_session_requests(void) {
+    Str fixture; str_init(&fixture);
+    for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
+    Stub stub = {0}; ApiClient *c = client(&stub); ApiError e; api_error_init(&e);
+    stub_json(&stub, 200, fixture.data);
+    Route *routes = NULL; size_t n = 0;
+    CHECK(api_catalog(c, &routes, &n, &e));
+    CHECK(routes_allow(routes, n, "POST", "sessions/7/messages", "manage"));
+    CHECK(!routes_allow(routes, n, "POST", "sessions/7/messages", "read"));
+    routes_free(routes, n); str_free(&fixture);
+    const char *operations[] = { "start_session", "message", "cancel", "compact" };
+    for (size_t i = 0; i < sizeof operations / sizeof *operations; i++) {
+        Json *args = json_object();
+        if (i == 0) {
+            json_set_str(args, "repo", "o/r"); json_set_str(args, "prompt", "continue");
+            json_set_num(args, "provider", 2); json_set_str(args, "model", "gpt-5.6-sol"); json_set_str(args, "effort", "high");
+        } else {
+            json_set_str(args, "sessionId", "s/7");
+            if (i == 1) json_set_str(args, "text", "continue");
+        }
+        stub_json(&stub, i == 0 ? 201 : 200, "{\"session\":{\"id\":\"s/7\",\"status\":\"running\"}}");
+        Json *result = api_call(c, operations[i], args, 0, &e); CHECK(result != NULL); json_free(result);
+        CHECK_STR(stub.last_method, "POST");
+        CHECK_STR(stub.last_url, i == 0 ? BASE "sessions" : i == 1 ? BASE "sessions/s%2F7/messages" :
+            i == 2 ? BASE "sessions/s%2F7/cancel" : BASE "sessions/s%2F7/compact");
+        Json *body = json_parsez(stub.last_body);
+        if (i == 0) {
+            CHECK_INT(json_int_or(json_get(body, "provider"), 0), 2);
+            CHECK_STR(json_str(json_get(body, "model")), "gpt-5.6-sol"); CHECK_STR(json_str(json_get(body, "effort")), "high");
+            CHECK_STR(json_str(json_get(body, "repo")), "o/r"); CHECK_STR(json_str(json_get(body, "prompt")), "continue");
+            CHECK_INT(json_count(body), 5);
+        } else if (i == 1) {
+            CHECK_STR(json_str(json_get(body, "text")), "continue"); CHECK_INT(json_count(body), 1);
+        } else CHECK_INT(json_count(body), 0);
+        CHECK(json_is_null(json_get(body, "sessionId"))); json_free(body);
+        const int failures[] = { 401, 403, 404, 409, 429, 503 };
+        for (size_t k = 0; k < sizeof failures / sizeof *failures; k++) {
+            stub_json(&stub, failures[k], "{\"error\":\"Final contract refusal\"}");
+            stub.retry_after = failures[k] == 429 ? "120" : NULL;
+            int before = stub.calls;
+            result = api_call(c, operations[i], args, 0, &e);
+            CHECK(result == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(e.status, failures[k]);
+            CHECK(e.kind == API_HTTP); CHECK_STR(e.message, "Final contract refusal");
+            CHECK(api_error_unauthorized(&e) == (failures[k] == 401));
+            CHECK(api_error_is_refusal(&e) == (failures[k] < 500));
+            CHECK(e.retry_after == (failures[k] == 429 ? 120 : -1));
+            json_free(result);
+        }
+        stub.fail = true; stub.fail_message = "connection lost after write"; int before = stub.calls;
+        result = api_call(c, operations[i], args, 0, &e);
+        CHECK(result == NULL); CHECK(e.kind == API_NETWORK); CHECK_INT(stub.calls, before + 1);
+        json_free(result); json_free(args);
+    }
+    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+
 static void test_mcp_contract_and_errors(void) {
     Stub stub = {0}; stub.status = 201; stub.content_type = "application/json";
     stub.body = "{\"server\":{\"id\":1791403200000,\"status\":\"needs-sign-in\",\"signInUrl\":\"https://auth.example/?state=s\",\"signInNeedsPaste\":true,\"headerNames\":[\"Authorization\"],\"envNames\":[],\"hasOAuthClientSecret\":true}}";
@@ -1031,6 +1088,7 @@ static void test_mail_transport_contract(void) {
 }
 
 void api_tests(void) {
+    test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
     test_run("mail six routes preserve accountId 202 failures and never retry exchanges", test_mail_transport_contract);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
