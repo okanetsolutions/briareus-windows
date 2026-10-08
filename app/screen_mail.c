@@ -1,4 +1,4 @@
-// Global mailbox settings. Message lists and bodies belong to issue #124.
+// Global mailbox settings. The read-only inbox has its own screen.
 #include "screens.h"
 #include "dialogs.h"
 #include "mail.h"
@@ -333,4 +333,4 @@ static void activated(Screen *base, bool active) {
     else if (s->shown && !s->modal) { s->next_read = 0; timer(base, TIMER_MAIL); }
 }
 static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh, .visible = visible, .activated = activated };
-Screen *mail_screen_new(void) { MailScreen *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail"); return &s->base; }
+Screen *mail_settings_screen_new(void) { MailScreen *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail-settings"); return &s->base; }

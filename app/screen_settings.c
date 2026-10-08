@@ -32,7 +32,7 @@ static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:")
-                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-meeting") || str_eq(id, "mail"));
+                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -750,7 +750,7 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
             if (mcp_server_id(row)) app_show_detail(mcp_settings_screen_new(row, NULL));
         }
         break;
-    case ACT_OPEN_MAIL: if (mail_settings_offered()) app_show_detail(mail_screen_new()); break;
+    case ACT_OPEN_MAIL: if (mail_settings_offered()) app_show_detail(mail_settings_screen_new()); break;
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: settings_move(s, (size_t)arg, 1); break;

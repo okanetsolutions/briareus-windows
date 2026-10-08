@@ -174,3 +174,150 @@ const char *mail_error_message(int status, bool finishing, const char *detail) {
     default: return "The request did not complete. Refresh account status before trying a write again.";
     }
 }
+
+bool mail_message_web_url_safe(const char *url) {
+    if (!safe_web_url(url)) return false;
+    const char *host = url + 8;
+    size_t authority = strcspn(host, "/?#");
+    for (size_t i = 0; i < authority; i++) {
+        unsigned char c = (unsigned char)host[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '.' || c == '-' || c == ':' || c == '[' || c == ']')) return false;
+    }
+    for (const unsigned char *p = (const unsigned char *)url; *p; p++)
+        if (*p <= 32 || *p == 127 || *p == '\\') return false;
+    return true;
+}
+static char *address_text(const Json *j) {
+    const char *name = json_str_nonempty(json_get(j, "name")), *email = json_str_or(json_get(j, "address"), "");
+    return name ? xstrfmt("%s <%s>", name, email) : xstrdup(email);
+}
+static char *addresses_text(const Json *rows) {
+    Str text; str_init(&text);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        char *a = address_text(json_at(rows, i));
+        if (i) str_appendz(&text, ", ");
+        str_appendz(&text, a); free(a);
+    }
+    return text.data ? str_detach(&text) : xstrdup("");
+}
+void mail_message_free(MailMessage *m) {
+    free(m->id); free(m->thread_id); free(m->sender); free(m->to); free(m->cc); free(m->reply_to);
+    free(m->subject); free(m->snippet); free(m->web_url); free(m->text);
+    for (size_t i = 0; i < m->label_count; i++) free(m->labels[i]);
+    free(m->labels);
+    for (size_t i = 0; i < m->attachment_count; i++) {
+        free(m->attachments[i].id); free(m->attachments[i].name); free(m->attachments[i].mime_type);
+    }
+    free(m->attachments); memset(m, 0, sizeof *m);
+}
+bool mail_message_parse(const Json *j, bool body, MailMessage *m) {
+    memset(m, 0, sizeof *m);
+    int account = json_int_or(json_get(j, "accountId"), 0);
+    const char *id = json_str_nonempty(json_get(j, "id"));
+    if (!json_is_object(j) || account <= 0 || !id || (body && !json_is_object(json_get(j, "body")))) return false;
+    m->account_id = account; m->id = xstrdup(id); m->thread_id = json_dup_str(json_get(j, "threadId"));
+    m->sender = address_text(json_get(j, "from")); m->to = addresses_text(json_get(j, "to"));
+    m->cc = addresses_text(json_get(j, "cc")); m->reply_to = addresses_text(json_get(j, "replyTo"));
+    m->subject = json_dup_str(json_get(j, "subject")); m->snippet = json_dup_str(json_get(j, "snippet"));
+    m->received_at = timestamp(json_get(j, "receivedAt"));
+    m->is_read = json_bool_is(json_get(j, "isRead"), true); m->in_inbox = json_bool_is(json_get(j, "inInbox"), true);
+    m->is_starred = json_bool_is(json_get(j, "isStarred"), true);
+    m->labels = json_dup_strings(json_get(j, "labels"), &m->label_count);
+    const char *url = json_str(json_get(j, "webUrl"));
+    if (mail_message_web_url_safe(url)) m->web_url = xstrdup(url);
+    const Json *attachments = json_get(j, "attachments");
+    if (json_is_array(attachments)) {
+        m->attachment_count = json_count(attachments); m->attachments = xcalloc(m->attachment_count, sizeof *m->attachments);
+        for (size_t i = 0; i < m->attachment_count; i++) {
+            const Json *a = json_at(attachments, i); MailAttachment *v = &m->attachments[i];
+            v->id = json_dup_str(json_get(a, "id")); v->name = json_dup_str(json_get(a, "name"));
+            v->mime_type = json_dup_str(json_get(a, "mimeType")); v->size = timestamp(json_get(a, "size"));
+        }
+    }
+    if (body) {
+        const Json *b = json_get(j, "body"); m->text = json_dup_str(json_get(b, "text"));
+        m->truncated = json_bool_is(json_get(b, "truncated"), true);
+    }
+    return true;
+}
+void mail_messages_free(MailMessages *m) {
+    for (size_t i = 0; i < m->count; i++) mail_message_free(&m->messages[i]);
+    free(m->messages); free(m->next_cursor); memset(m, 0, sizeof *m);
+}
+bool mail_messages_parse(const Json *j, MailMessages *m) {
+    memset(m, 0, sizeof *m);
+    const Json *rows = json_get(j, "messages"), *cursor = json_get(j, "nextCursor");
+    if (!json_is_array(rows) || (!json_is_null(cursor) && !json_str_nonempty(cursor))) return false;
+    m->messages = xcalloc(json_count(rows), sizeof *m->messages);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        if (!mail_message_parse(json_at(rows, i), false, &m->messages[m->count])) { mail_messages_free(m); return false; }
+        m->count++;
+    }
+    m->next_cursor = json_dup_str(cursor); return true;
+}
+const MailMessage *mail_message_find(const MailMessages *m, int account, const char *id) {
+    for (size_t i = 0; i < m->count; i++)
+        if (m->messages[i].account_id == account && str_eq(m->messages[i].id, id)) return &m->messages[i];
+    return NULL;
+}
+static int message_order(const void *left, const void *right) {
+    const MailMessage *a = left, *b = right;
+    if (a->received_at != b->received_at) return a->received_at > b->received_at ? -1 : 1;
+    if (a->account_id != b->account_id) return a->account_id > b->account_id ? -1 : 1;
+    return strcmp(b->id, a->id);
+}
+void mail_messages_append(MailMessages *m, MailMessages *page) {
+    m->messages = xrealloc(m->messages, (m->count + page->count) * sizeof *m->messages);
+    for (size_t i = 0; i < page->count; i++) {
+        MailMessage *row = &page->messages[i];
+        if (mail_message_find(m, row->account_id, row->id)) mail_message_free(row);
+        else { m->messages[m->count++] = *row; memset(row, 0, sizeof *row); }
+    }
+    if (m->count > 1) qsort(m->messages, m->count, sizeof *m->messages, message_order);
+    free(m->next_cursor); m->next_cursor = page->next_cursor; page->next_cursor = NULL;
+    mail_messages_free(page);
+}
+bool mail_account_readable(const MailAccounts *a, int id) {
+    const MailAccount *account = mail_account_find(a, id);
+    return account && str_eq(account->status, "connected");
+}
+bool mail_messages_prune(MailMessages *m, const MailAccounts *a) {
+    size_t n = 0; bool changed = false;
+    for (size_t i = 0; i < m->count; i++) {
+        if (!mail_account_readable(a, m->messages[i].account_id)) { mail_message_free(&m->messages[i]); changed = true; }
+        else {
+            if (n != i) { m->messages[n] = m->messages[i]; memset(&m->messages[i], 0, sizeof *m->messages); }
+            n++;
+        }
+    }
+    m->count = n;
+    if (changed) { free(m->next_cursor); m->next_cursor = NULL; }
+    return changed;
+}
+void mail_filter_init(MailFilter *f) { memset(f, 0, sizeof *f); f->unread = f->inbox = f->starred = -1; }
+void mail_filter_free(MailFilter *f) { free(f->q); free(f->label); free(f->thread); mail_filter_init(f); }
+Json *mail_filter_args(const MailFilter *f, const char *cursor) {
+    Json *args = json_object();
+    if (f->account > 0) json_set_num(args, "account", f->account);
+    if (!str_empty(f->q)) json_set_str(args, "q", f->q);
+    if (!str_empty(f->label)) json_set_str(args, "label", f->label);
+    if (!str_empty(f->thread)) json_set_str(args, "thread", f->thread);
+    if (f->unread >= 0) json_set_num(args, "unread", f->unread);
+    if (f->inbox >= 0) json_set_num(args, "inbox", f->inbox);
+    if (f->starred >= 0) json_set_num(args, "starred", f->starred);
+    if (!str_empty(cursor)) json_set_str(args, "cursor", cursor);
+    json_set_num(args, "limit", 50); return args;
+}
+const char *mail_read_error(int status, bool detail) {
+    switch (status) {
+    case 400: return "The server refused these filters or cursor. Reset filters or refresh the list (search is limited to 200 characters).";
+    case 401: return "This token expired or was revoked. Reconnect to the server.";
+    case 403: return "Mail requires an Admin token. Reconnect with an authorized token.";
+    case 404: return detail ? "This message or account was removed from the synced copy. Refresh the list." : "Mail is no longer available. Refresh account status or reconnect to the server.";
+    case 409: return "This mailbox needs sign-in again. Check Mail account settings.";
+    case 429: return "The server is rate limiting mail requests. Retry after the cooldown.";
+    case 503: return "Mail is unavailable on the server. Retry after the cooldown.";
+    default: return "Mail could not be loaded. Retry after the cooldown.";
+    }
+}

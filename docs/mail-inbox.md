@@ -1,0 +1,21 @@
+# Read-only Mail inbox
+
+Global **Mail** opens the synced inbox for Admin tokens when the server catalog advertises both `GET /settings/mail/accounts` and `GET /mail/messages`; a settings-only server retains the account-settings navigation. Selecting messages additionally requires `GET /mail/accounts/{account}/messages/{id}`. **Account settings** opens the existing connection/settings screen; closing it reloads the inbox from a fresh account snapshot.
+
+All mailboxes or a selected connected account can be read newest first in pages of 50. **Load older messages** sends the opaque `nextCursor` unchanged; rows deduplicate by `(accountId, id)`. Search, exact label/folder and exact thread ID are editable text filters; read state, inbox and star state each offer any/false/true. Changing any filter/account or resetting filters cancels outstanding reads, clears selection and starts from the newest page. Search is limited by the server to 200 characters. Refresh revalidates accounts before rereading the first page.
+
+Only selecting a row fetches the full body. Sender, subject, snippet, relative received date, account, unread and star state describe the synced copy. Bodies render as literal, selectable text, including the server's HTML-to-text fallback; there is no HTML or Markdown renderer, preview WebView, active link or remote-image loading. Raw `body.html` is discarded. Truncation and attachment names, MIME types and byte sizes are shown. **Open at provider** appears only for a validated HTTPS `webUrl` and requires an explicit click; the provider's website controls its own read-state behavior.
+
+The inbox calls only the account-list and two message GET routes. Opening a message here does not mark it read or change its star. Sending/replying, attachment bytes/downloads, writes and live-mail events are outside the core contract.
+
+Accounts, filters, rows and the selected body stay in screen memory, with no DiskCache writes. Hiding/destroying the screen, signing out or changing the connection clears private state and cancels request delivery. Account status is reread every 30 seconds while foregrounded; account removal or provider `reauth` clears rows, bodies, cursors and outstanding reads before restarting. Server-side changes become known on this refresh or F5, since the contract has no mail events. Callbacks validate the connection, screen/filter generation, deployed route and selected account+id. Already running transport work may finish after cancellation; its response is discarded without reaching the retired screen.
+
+Deleted/missing-message 404 clears selection and reloads from a validated account snapshot. Filters/cursor failures offer reset/refresh; permission failures clear private content. Network/503/429 failures show safe errors and a bounded exponential cooldown, respecting longer `Retry-After` values. Explicit retry/refresh buttons and periodic account reads obey the cooldown even after leaving/reopening the screen; an account refresh may restart an unloaded first page, while older-page/body failures offer explicit retry.
+
+## Contract and evidence
+
+Source pinned to **nadinyamaui/briareus** merged mail SHA `4eba29400a1bd0a7072a9991395332fbd710f6bf`: `docs/api-v1-reference.md` (both routes, MailMessageSummary, MailMessage, MailBody, MailAddress, MailAttachment), `lib/api-v1-catalog.js`, `lib/mail-routes.js`, `lib/mail.js` and `lib/mail-parse.js`. Core main was observed at `8079fcd341e87dba7ede9b8a9a6a534c5f8338cb`; deployment was reported by the user, with no live-provider calls made for this implementation.
+
+Automated regressions cover URL encoding (`/+=%?`), every filter argument, tri-state false values, identity collisions across accounts, overlapping pages, newest-first order, HTML-only fallback/literal rendering, truncation, attachment metadata, absent/partial catalogs and read/manage/admin permissions, cancellations/filter generations, account revocation/removal, HTTP failures, deleted-message recovery and cooldown preservation. Required CI remains GCC/MSVC Werror, core/app tests, coverage, ASan, debug CRT leaks, UBSan/fortify, cppcheck and editorconfig; no check is weakened.
+
+Native/provider QA, provider sign-ins and mailbox mutations were **not performed at user direction**; automated fixtures are implementation regressions, not provider/native QA evidence.
