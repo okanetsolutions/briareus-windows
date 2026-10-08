@@ -14,7 +14,7 @@ execFileSync('git', ['-C', root, 'diff', '--exit-code', 'HEAD', '--',
     'lib/api-v1-catalog.js', 'lib/api-v1-docs.js'], { stdio: 'pipe' });
 const { apiV1OpenApi } = await import(pathToFileURL(resolve(root, 'lib/api-v1-docs.js')));
 const document = apiV1OpenApi();
-const keep = path => /^\/(settings\/(mail\/accounts|mcp\/servers)|mail|slack\/workspaces)(\/|$)/.test(path)
+const keep = path => /^\/(settings\/(mail\/accounts|mcp\/servers|slack\/workspaces)|mail|slack\/workspaces)(\/|$)/.test(path)
     || ['/pulls', '/runtimes', '/sessions', '/sessions/{id}', '/sessions/{id}/messages',
         '/sessions/{id}/cancel', '/sessions/{id}/compact', '/sessions/{id}/btw',
         '/sessions/{id}/events', '/usage/all', '/repo/archive', '/repo/tree', '/repo/file',

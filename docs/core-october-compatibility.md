@@ -54,7 +54,7 @@ Its shape follows the final catalog and `lib/jobs.js`, `lib/usage.js` and
 | Mail settings | Six operations, all admin; list includes accounts/providers/callbackUrl/defaults; connect includes finishesOnServer/expiresAt; finish 201; sync 202 | Pinned catalog assertions; #133 owns models, OAuth state, cancellation/account changes and feature-specific failures |
 | Mail reading | Two GET operations, both admin; no send/read/star mutation route | Catalog permission/omission tests; #124 implementation and its regression evidence still required |
 | MCP | Six operations, all admin; connect/finish wrap `server`, with signInNeedsPaste/headerNames metadata | Pinned shape/permission assertions; #134 owns model, assignment, browser/paste-back and cancellation tests |
-| Slack | Ten operations, all admin; paginated messages/threads include nextCursor/hasMore; SSE content type | Pinned permissions/JSON/stream type; #135 owns JSON implementation and #126 still owns ordered events/reconnect/read synchronization |
+| Slack | Ten inbox operations plus four settings operations, all admin; paginated messages/threads include nextCursor/hasMore; SSE content type | Pinned permissions/JSON/stream type; #135 owns JSON implementation and #126 still owns ordered events/reconnect/read synchronization |
 | Session/provider | GETs read, writes manage; `/runtimes` repo-scoped | Provider/model/effort preservation, disabled-provider refresh; stubbed start/message/cancel/compact path/body checks and single-attempt 401/403/404/409/429/503/network failures |
 | Cost responses | Nullable result `costUsd`; `usage.costUsd` includes estimates/absorbed descendants | Fresh/resumed/compact/fork synthetic result values and zero/null survive transcript cache/dedup; session rollup refresh and null/older-server values round-trip without client arithmetic |
 | Review prose | Not fixed remains ordinary Markdown; rejected/unverified claims are prose only, confirmed optional retains worthFixing:false | Heading/link preservation through the Markdown parser; held triage/count remains the separate supplied finding array; this does not verify core's finding extraction or a native UI layout |
@@ -92,8 +92,9 @@ completion/warnings remain unverified.
 
 ## Integration and remaining release gates
 
-- Main #132 CI passed (run `37738279304`); #133/#134 base refresh and their main CI
-  results are recorded with this supporting PR's final evidence.
+- Base refreshed through main `12b79cd` after #133 (`803fd96`) and #134
+  (`0924d5c`) merged; main #132 CI passed (`37738279304`) and main #133 CI
+  passed (`37738805214`); main #134 CI (`37739338679`) is monitored separately.
 - Required supporting-PR CI: MinGW/MSVC warnings as errors, core/app tests,
   coverage at the existing 90% floor, ASan, leaks, UBSan/fortify, lint and
   editorconfig; results must be recorded for the final PR head.

@@ -1,4 +1,4 @@
-// Contract fixtures pinned to nadinyamaui/briareus PR #120, f189a4228858c8edb9af2566f38e12c1a77708f2.
+// Synthetic mail fixtures reviewed against final core #120 merge 4eba29400a1bd0a7072a9991395332fbd710f6bf; see the shared October catalog.
 #include "mail.h"
 #include "str.h"
 #include "suites.h"
