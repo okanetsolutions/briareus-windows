@@ -6,6 +6,7 @@
 #include "test.h"
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 static Route routes[] = {
     { "GET", "/slack/workspaces", "admin" },
@@ -240,7 +241,7 @@ static void complete(Request *req) { store_handle_message(WM_APP_REQUEST_DONE, 0
 static bool inbox_transport(void *ctx, const char *method, const char *url, const char *const *headers, const void *body, size_t body_len,
                             int timeout_ms, int *status, char **content_type, char **retry_after, char **response, size_t *response_len,
                             char **error_message) {
-    const char *answer = strstr(url, "/people") ? SLACK_PEOPLE : strstr(url, "/threads/") ? SLACK_THREAD : strstr(url, "/messages") ? SLACK_HISTORY :
+    const char *answer = !strstr(url, "/workspaces/") ? SLACK_WORKSPACES : strstr(url, "/people") ? SLACK_PEOPLE : strstr(url, "/threads/") ? SLACK_THREAD : strstr(url, "/messages") ? SLACK_HISTORY :
         strstr(url, "/conversations/C1") ? "{\"conversation\":{\"id\":\"C1\"}}" : SLACK_CONVERSATIONS;
     *status = 200; *content_type = xstrdup("application/json"); *response = xstrdup(answer); *response_len = strlen(answer);
     return true;
@@ -568,6 +569,76 @@ static void ownership_loss_during_workspace_reload(void) {
     first->base.pane = NULL;
     second->base.vt->destroy(&second->base); teardown(first);
 }
+static void reconcile_preserves_composer_editing(void) {
+    for (int thread = 0; thread < 2; thread++) {
+        setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+        if (thread) set_string(&s->thread, "1712345678.000001");
+        s->composer = CreateWindowExW(0, L"EDIT", L"typed draft", WS_CHILD | ES_MULTILINE,
+            0, 0, 100, 100, inbox_hwnd, NULL, GetModuleHandleW(NULL), NULL);
+        CHECK(s->composer != NULL);
+        SendMessageW(s->composer, EM_SETSEL, 2, 5);
+        SendMessageW(s->composer, EM_REPLACESEL, TRUE, (LPARAM)L"xyz");
+        s->base.pane = inbox_pane;
+        s->base.vt->command(&s->base, ID_COMPOSER, EN_CHANGE, s->composer);
+        s->base.pane = NULL;
+        SendMessageW(s->composer, EM_SETSEL, 1, 4);
+        CHECK(SendMessageW(s->composer, EM_CANUNDO, 0, 0));
+        EnableWindow(s->composer, FALSE);
+        live(s, "ready", LIVE_READY); snapshots(s, SLACK_HISTORY);
+        if (thread) apply(s, TAG_SNAPSHOT_THREAD, "slack_thread", SLACK_THREAD, s->state.generation, 0);
+        CHECK(!s->reconciling); CHECK(IsWindowEnabled(s->composer));
+        DWORD start = 0, end = 0;
+        SendMessageW(s->composer, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+        CHECK_INT(start, 1); CHECK_INT(end, 4);
+        CHECK_STR(slack_draft(&s->state, s->workspace, s->channel, s->thread)->text, "tyxyz draft");
+        CHECK(SendMessageW(s->composer, EM_CANUNDO, 0, 0));
+        CHECK(SendMessageW(s->composer, EM_UNDO, 0, 0));
+        wchar_t text[32]; GetWindowTextW(s->composer, text, 32);
+        CHECK(wcscmp(text, L"typed draft") == 0);
+        // Revoked destinations must still clear and disable their composer.
+        live(s, "ready", LIVE_READY);
+        apply(s, TAG_CONVERSATIONS, "slack_conversations", "{\"conversations\":[],\"nextCursor\":\"\"}", s->state.generation, 0);
+        apply(s, TAG_DETAIL, "slack_conversation", "{\"conversation\":{\"id\":\"C1\"}}", s->state.generation, 0);
+        apply(s, TAG_SNAPSHOT_CHANNEL, "slack_history", SLACK_HISTORY, s->state.generation, 0);
+        if (thread) apply(s, TAG_SNAPSHOT_THREAD, "slack_thread", SLACK_THREAD, s->state.generation, 0);
+        CHECK(!s->channel); CHECK_INT(s->state.draft_count, 0);
+        CHECK_INT(GetWindowTextLengthW(s->composer), 0); CHECK(!IsWindowEnabled(s->composer));
+        teardown(s);
+    }
+}
+static void interrupted_workspace_reload_rearms_timer(void) {
+    for (int hidden = 0; hidden < 2; hidden++) {
+        setup(); SlackScreen *first = (SlackScreen *)slack_screen_new(); load_navigation(first);
+        SlackScreen *second = (SlackScreen *)slack_screen_new(); load_navigation(second); slack_inbox_focus(first);
+        request_pane(first);
+        live(first, "workspace.changed", "{\"workspaceId\":1727000000002}"); CHECK(first->requests[TAG_WORKSPACES] != NULL);
+        if (hidden) first->base.vt->visible(&first->base, false);
+        else {
+            request_cancel(&first->requests[TAG_WORKSPACES]);
+            slack_inbox_focus(first); slack_inbox_focus(second);
+        }
+        CHECK(first->workspace_reload); CHECK(!first->requests[TAG_WORKSPACES]);
+        CHECK(!KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE));
+        deliver_inbox_requests(1);
+        apply(first, TAG_WORKSPACES, "slack_workspaces", NULL, first->state.generation, 503);
+        if (hidden) first->base.vt->visible(&first->base, true);
+        else first->base.vt->refresh(&first->base);
+        CHECK(KillTimer(pane_hwnd(inbox_pane), TIMER_LIVE));
+        first->base.vt->timer(&first->base, TIMER_LIVE); CHECK(!first->requests[TAG_WORKSPACES]);
+        deliver_inbox_requests(2);
+        first->reconnect_at = 0; first->cooldown = GetTickCount64() + 60000;
+        first->base.vt->timer(&first->base, TIMER_LIVE); CHECK(!first->requests[TAG_WORKSPACES]);
+        first->cooldown = 0;
+        first->base.vt->timer(&first->base, TIMER_LIVE); CHECK(first->requests[TAG_WORKSPACES] != NULL);
+        // Another active inbox prevents a real event reader from starting in this fixture.
+        slack_inbox_focus(second);
+        deliver_inbox_requests(1); CHECK(!first->workspace_reload);
+        deliver_inbox_requests(2); CHECK_INT(json_count(first->conversations), 4);
+        CHECK(strstr(first->live_status, "active Slack inbox") != NULL);
+        first->base.pane = NULL;
+        second->base.vt->destroy(&second->base); teardown(first);
+    }
+}
 static void removed_conversation_rejects_pending_receipt(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); live(s, "ready", LIVE_READY);
     SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
@@ -609,6 +680,8 @@ void app_slack_tests(void) {
     CHECK(inbox_hwnd != NULL); inbox_pane = pane_create(inbox_hwnd, false);
     test_run("Slack ownership loss during channel or thread sync resumes ordinary loads and preserves receipts", ownership_loss_during_snapshot);
     test_run("Slack ownership loss during workspace reload restores list and active inbox status", ownership_loss_during_workspace_reload);
+    test_run("Slack completed channel and thread reconciliation preserves composer selection and undo", reconcile_preserves_composer_editing);
+    test_run("Slack hidden or de-owned workspace reload resumes its timer and respects retry deadlines", interrupted_workspace_reload_rearms_timer);
     pane_destroy(inbox_pane); DestroyWindow(inbox_hwnd); inbox_pane = NULL; inbox_hwnd = NULL;
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);

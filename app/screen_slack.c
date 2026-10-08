@@ -430,14 +430,19 @@ static void reconcile_finish(SlackScreen *s) {
         // A receipt for a destination removed by this snapshot must not recreate private state.
         cancel_requests(s);
         set_string(&s->channel, NULL); set_string(&s->thread, NULL); json_free(s->detail); s->detail = NULL; view_clear(s);
+        composer_set(s);
     }
     slack_state_prune(&s->state, s->workspace, s->conversations);
     snapshot_clear(s); s->stream_failures = 0;
     set_string(&s->live_status, "Slack live updates connected"); set_string(&s->error, NULL);
-    composer_set(s);
+    SlackDraft *d = draft(s);
+    if (s->composer) EnableWindow(s->composer, d && !d->sending && slack_inbox_supports("slack_send"));
 }
 static void stream_start(SlackScreen *s) {
-    if (!s->shown || !s->base.pane || !s->workspace || s->feed || s->workspace_reload || s->stream_disabled || !sync_access(s)) return;
+    if (!s->shown || !s->base.pane || !s->workspace || s->feed || s->stream_disabled || !sync_access(s)) return;
+    if (s->workspace_reload) {
+        SetTimer(pane_hwnd(s->base.pane), TIMER_LIVE, 100, NULL); return;
+    }
     if (!slack_inbox_supports("slack_events") || !slack_inbox_supports("slack_conversations") ||
         (s->channel && (!slack_inbox_supports("slack_history") || !slack_inbox_supports("slack_conversation"))) ||
         (!str_empty(s->thread) && !slack_inbox_supports("slack_thread"))) {
