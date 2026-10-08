@@ -103,3 +103,5 @@ A revoked or expired token returns the app to pairing. Forgetting the connection
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Every pull request is built and tested with GCC and MSVC by the CI workflow, and every pull request merged into `main` is published as a release with the next minor version. Licensed under the [MIT License](LICENSE).
 
 MCP server registry settings (Admin tokens on compatible servers): see [MCP settings and release gates](docs/mcp-settings.md).
+
+Mail account settings for configured Gmail/Outlook providers are available to Admin tokens on servers advertising the mail API; see [connection flows, compatibility and pending release checks](docs/mail-account-settings.md).

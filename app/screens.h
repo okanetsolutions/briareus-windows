@@ -78,6 +78,9 @@ Screen *settings_screen_new(void);
 Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
 void settings_mcp_changed(void);
 bool mcp_settings_supported(const char *operation);
+/// Global mail navigation, gated by the deployed catalog and token permission.
+bool mail_settings_offered(void);
+Screen *mail_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
 /// and the two models compared over the meetings recorded on this computer.
 Screen *meeting_settings_screen_new(void);

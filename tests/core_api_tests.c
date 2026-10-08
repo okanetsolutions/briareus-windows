@@ -323,6 +323,12 @@ static const Expected ROUTE_TABLE[] = {
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    { "settings_mail_accounts", "GET", "settings/mail/accounts" },
+    { "connect_mail_account", "POST", "settings/mail/accounts/connect" },
+    { "finish_mail_account", "POST", "settings/mail/accounts/connect/finish" },
+    { "update_mail_account", "PUT", "settings/mail/accounts/{id}" },
+    { "delete_mail_account", "DELETE", "settings/mail/accounts/{id}" },
+    { "sync_mail_account", "POST", "settings/mail/accounts/{id}/sync" },
     { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
     { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
     { "settings_mcp_servers", "GET", "settings/mcp/servers" },
@@ -1003,8 +1009,30 @@ static void test_mcp_contract_and_errors(void) {
     json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_mail_transport_contract(void) {
+    Stub s = {0}; ApiClient *c = client(&s); ApiError e; api_error_init(&e);
+    const char *ops[] = { "settings_mail_accounts", "connect_mail_account", "finish_mail_account", "update_mail_account", "delete_mail_account", "sync_mail_account" };
+    Json *args = json_object(); json_set_num(args, "id", 7); json_set_num(args, "accountId", 7);
+    json_set_str(args, "provider", "gmail"); json_set_str(args, "state", "pending"); json_set_str(args, "code", "single-use");
+    for (size_t i = 0; i < sizeof ops / sizeof *ops; i++) {
+        stub_json(&s, i == 5 ? 202 : i == 2 ? 201 : 200, "{}");
+        Json *result = api_call(c, ops[i], args, 1000, &e); CHECK(result != NULL); json_free(result);
+        if (i == 1) { Json *b = json_parsez(s.last_body); CHECK_INT(json_int_or(json_get(b, "accountId"), 0), 7); json_free(b); }
+        if (i == 3) { CHECK_STR(s.last_url, BASE "settings/mail/accounts/7"); Json *b = json_parsez(s.last_body); CHECK(json_is_null(json_get(b, "id"))); json_free(b); }
+        if (i == 5) CHECK(str_has_prefix(s.last_url, BASE "settings/mail/accounts/7/sync"));
+    }
+    const int errors[] = { 400, 401, 403, 404, 409, 429, 503 };
+    for (size_t i = 0; i < sizeof errors / sizeof *errors; i++) {
+        stub_json(&s, errors[i], "{\"error\":\"refused\"}"); s.retry_after = "30";
+        int calls = s.calls; CHECK(api_call(c, "finish_mail_account", args, 1000, &e) == NULL);
+        CHECK_INT(s.calls, calls + 1); CHECK_INT(e.status, errors[i]); CHECK(e.retry_after == 30);
+    }
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&s);
+}
+
 void api_tests(void) {
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
+    test_run("mail six routes preserve accountId 202 failures and never retry exchanges", test_mail_transport_contract);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);

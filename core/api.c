@@ -393,6 +393,13 @@ static const ApiRoute ROUTES[] = {
     { "delete_mcp_server", "DELETE", "settings/mcp/servers/{id}" },
     { "connect_mcp_server", "POST", "settings/mcp/servers/{id}/connect" },
     { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
+    // Global mailbox settings; all six routes require an Admin token in the deployed catalog.
+    { "settings_mail_accounts", "GET", "settings/mail/accounts" },
+    { "connect_mail_account", "POST", "settings/mail/accounts/connect" },
+    { "finish_mail_account", "POST", "settings/mail/accounts/connect/finish" },
+    { "update_mail_account", "PUT", "settings/mail/accounts/{id}" },
+    { "delete_mail_account", "DELETE", "settings/mail/accounts/{id}" },
+    { "sync_mail_account", "POST", "settings/mail/accounts/{id}/sync" },
     // Laravel Forge itself, read by the server with an account's token: its servers and their sites, 100 to a page.
     { "forge_servers", "GET", "forge/accounts/{account}/servers" },
     { "forge_sites", "GET", "forge/accounts/{account}/servers/{server}/sites" },
