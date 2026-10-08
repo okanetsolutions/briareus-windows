@@ -273,6 +273,17 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
 // with each parameter named after the argument that fills it. A route without a `{}` sends every argument in the query
 // (GET, DELETE) or the body (the rest).
 static const ApiRoute ROUTES[] = {
+    // Operator Slack inbox.
+    { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_events", "GET", "slack/workspaces/{id}/events" },
+    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
+    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
+    { "slack_people", "GET", "slack/workspaces/{id}/people" },
+    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
+    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
+    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
+    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     // Projects
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },
@@ -526,6 +537,7 @@ static bool stream_cancelled(ApiStreamCancel *c) {
 }
 
 bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStreamCancel *cancel, SseEmit emit, void *ctx, ApiError *error) {
+    if (stream_cancelled(cancel)) { api_error_set(error, API_CANCELLED, 0, NULL, -1); return false; }
     const ApiRoute *route = api_route(name);
     if (!route || !str_eq(route->method, "GET")) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return false; }
     Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
@@ -539,6 +551,7 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
     bool ended = false;
     HINTERNET connection = NULL, req = NULL;
     SseParser parser; sse_init(&parser);
+    if (str_eq(name, "slack_events")) parser.limit = 2u * 1024 * 1024;
     wchar_t *wurl = utf8_to_wide(url);
     URL_COMPONENTS parts; memset(&parts, 0, sizeof parts); parts.dwStructSize = sizeof parts;
     wchar_t host[256] = L"", wpath[4096] = L"";
@@ -592,6 +605,9 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
         if (!WinHttpReadData(req, buffer, available < sizeof buffer ? available : (DWORD)sizeof buffer, &got)) goto failed;
         if (!got) { ended = true; break; }
         sse_feed(&parser, buffer, got, emit, ctx);
+        if (parser.dropped && str_eq(name, "slack_events")) {
+            api_error_set(error, API_NETWORK, 0, "Slack event exceeded the buffer limit; reconnect to reconcile", -1); goto done;
+        }
     }
     goto done;
 failed:

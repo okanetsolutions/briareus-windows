@@ -1,6 +1,6 @@
-// WhatsApp Web and Slack in the detail pane, from the sidebar strip's buttons. One browser per app serves every visit:
+// WhatsApp Web in the detail pane, from the sidebar strip. One browser serves every visit:
 // leaving the screen hides it instead of closing it, so the chats stay loaded and coming back is instant. The WebView2
-// profile is kept on disk, so the QR code is scanned, or the workspace signed in to, once. Either moves into a window of
+// profile is kept on disk, so the QR code is scanned once. It moves into a window of
 // its own, and its browser goes with it.
 #include "screens.h"
 #include "str.h"
@@ -13,7 +13,6 @@ enum { ACT_RELOAD = 1000, ACT_BROWSER };
 typedef struct { const char *id, *name, *host, *url, *reload_tip; } WebAppInfo;
 static const WebAppInfo APPS[WEB_APP_COUNT] = {
     [WEB_APP_WHATSAPP] = { "whatsapp", "WhatsApp", "web.whatsapp.com", "https://web.whatsapp.com/", "Reload WhatsApp" },
-    [WEB_APP_SLACK] = { "slack", "Slack", "app.slack.com", "https://app.slack.com/client", "Reload Slack" },
 };
 
 typedef struct { Screen base; WebApp app; bool shown; } WebAppScreen;
