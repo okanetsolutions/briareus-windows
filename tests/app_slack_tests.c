@@ -195,7 +195,7 @@ static void ready_snapshot_ordering(void) {
     apply(s, TAG_DETAIL, "slack_conversation", "{\"conversation\":{\"id\":\"C1\",\"last_read\":\"1712345678.000001\"}}", s->state.generation, 0);
     CHECK(!s->reconciling); CHECK_INT(s->state.message_count, 2); CHECK(!find_message(s, "1712345678.000002"));
     const SlackMessage *own = find_message(s, "1712345678.000003"); CHECK(own != NULL);
-    CHECK_STR(json_str(json_get(own->raw, "text")), "edited own");
+    CHECK_STR(json_str(json_get(own ? own->raw : NULL, "text")), "edited own");
     CHECK_INT(json_int_or(json_get(find_message(s, "1712345678.000001")->raw, "reply_count"), 0), 9);
     CHECK_STR(slack_read(&s->state, s->workspace, s->channel)->marked, "1712345678.000003");
     // Another ready is always a new reconciliation, even without disconnect or a durable cursor.
