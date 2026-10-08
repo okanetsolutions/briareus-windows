@@ -42,6 +42,7 @@ static bool g_connected_layout;
 static bool g_narrow_detail;   // in one column, whether the detail is the visible pane
 static int g_modal;            // dialogs open
 static bool g_modal_disabled;  // whether the first of them disabled the main window
+static HWND g_focus;           // what had the keyboard when the main window lost the foreground
 
 HWND app_window(void) { return g_main; }
 HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
@@ -399,6 +400,13 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         // A conversation in a window of its own keeps going while the main window is minimized.
         if (wp == SIZE_MINIMIZED) set_active(detached_any_shown());
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }
+        return 0;
+    case WM_ACTIVATE:
+        // Keys go back to where they went before the window lost the foreground, so Ctrl+F still reaches a pane.
+        if (LOWORD(wp) == WA_INACTIVE) { g_focus = GetFocus(); return 0; }
+        if (g_focus && IsChild(hwnd, g_focus) && IsWindowVisible(g_focus)) SetFocus(g_focus);
+        else if (g_detail && IsWindowVisible(pane_hwnd(g_detail))) SetFocus(pane_hwnd(g_detail));
+        else break;
         return 0;
     case WM_ACTIVATEAPP: set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
     case WM_PAINT: {
