@@ -72,6 +72,9 @@ Pane *pane_create(HWND parent, bool sidebar) {
     register_class();
     Pane *p = xcalloc(1, sizeof *p);
     p->sidebar = sidebar; p->hover_button = -1; p->pressed_button = -1; p->tip_item = -1; p->dragging_region = -1;
+    // The screen stack belongs to the pane. Eight slots cover a normal drill-in, and the first push must not be
+    // the allocation a leak check attributes to whichever screen arrives first.
+    p->cap = 8; p->stack = xcalloc(p->cap, sizeof *p->stack);
     doc_init(&p->doc);
     // WS_CLIPSIBLINGS: a side panel's pane lies over the detail's, which must not paint through it.
     p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
