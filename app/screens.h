@@ -75,6 +75,9 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
 Screen *settings_screen_new(void);
+/// Global mail navigation, gated by the deployed catalog and token permission.
+bool mail_settings_offered(void);
+Screen *mail_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,
 /// and the two models compared over the meetings recorded on this computer.
 Screen *meeting_settings_screen_new(void);
