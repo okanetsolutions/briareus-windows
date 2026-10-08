@@ -180,8 +180,10 @@ static void prune_revoked_conversations(void) {
     slack_message_merge(&s, "1", "G1", message); slack_message_merge(&s, "2", "G1", message); slack_message_merge(&s, "1", "C1", message);
     slack_draft(&s, "1", "G1", "1.1"); slack_draft(&s, "2", "G1", NULL); slack_draft(&s, "1", "C1", NULL);
     slack_read(&s, "1", "G1"); slack_read(&s, "2", "G1"); slack_read(&s, "1", "C1");
+    event(&s, "message.deleted", "{\"workspaceId\":1,\"event\":{\"channel\":\"G1\",\"deleted_ts\":\"1.1\"}}");
+    CHECK_INT(json_count(s.deleted), 1);
     Json *rows = json_parsez("[{\"id\":\"C1\"}]"); slack_state_prune(&s, "1", rows);
-    CHECK_INT(s.message_count, 2); CHECK_INT(s.draft_count, 2); CHECK_INT(s.read_count, 2);
+    CHECK_INT(s.message_count, 2); CHECK_INT(s.draft_count, 2); CHECK_INT(s.read_count, 2); CHECK_INT(json_count(s.deleted), 0);
     CHECK_STR(s.drafts[0].workspace, "2"); CHECK_STR(s.drafts[1].channel, "C1");
     slack_messages_clear(&s, "1", "C1"); CHECK_INT(s.message_count, 1);
     json_free(message); json_free(rows); slack_state_clear(&s);

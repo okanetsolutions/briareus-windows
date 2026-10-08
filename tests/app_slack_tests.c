@@ -395,7 +395,23 @@ static void one_owner_even_during_backoff(void) {
     slack_inbox_event(first, stream_generation, "message", LIVE_MESSAGE, strlen(LIVE_MESSAGE)); CHECK_INT(first->state.message_count, 0);
     api_error_clear(&error); second->base.vt->destroy(&second->base); teardown(first);
 }
+static void removed_conversation_rejects_pending_receipt(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s); live(s, "ready", LIVE_READY);
+    SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL); set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
+    Request *req = xcalloc(1, sizeof *req); api_error_init(&req->error);
+    req->owner = s; req->done = slack_inbox_done; req->operation = xstrdup("slack_send");
+    req->client = api_client_retain(g_store.client); req->slot = &s->requests[TAG_SEND]; s->requests[TAG_SEND] = req;
+    uint64_t generation = s->state.generation;
+    apply(s, TAG_CONVERSATIONS, "slack_conversations", "{\"conversations\":[{\"id\":\"G1\"}],\"nextCursor\":\"\"}", generation, 0);
+    apply(s, TAG_DETAIL, "slack_conversation", "{\"conversation\":{\"id\":\"C1\"}}", generation, 0);
+    apply(s, TAG_SNAPSHOT_CHANNEL, "slack_history", SLACK_HISTORY, generation, 0);
+    CHECK(!s->channel); CHECK(!s->reconciling); CHECK(req->cancelled); CHECK(s->requests[TAG_SEND] == NULL);
+    CHECK_INT(s->state.message_count, 0); CHECK_INT(s->state.draft_count, 0);
+    apply(s, TAG_SEND, "slack_send", SLACK_RECEIPT, generation, 0); CHECK_INT(s->state.message_count, 0); CHECK_INT(s->state.draft_count, 0);
+    teardown(s); store_handle_message(WM_APP_REQUEST_DONE, 0, (LPARAM)req);
+}
 void app_slack_tests(void) {
+    test_run("Slack removed conversation snapshot invalidates pending receipt and private state", removed_conversation_rejects_pending_receipt);
     test_run("Slack active stream ownership cancels prior inbox even during backoff", one_owner_even_during_backoff);
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);
     test_run("Slack modal send recovery rejects removed or reconciled destinations", recovery_revalidates_after_modal_events);

@@ -356,6 +356,15 @@ void slack_state_prune(SlackState *s, const char *workspace, const Json *convers
         const SlackMessage *m = &s->messages[i - 1];
         if (str_eq(m->workspace, workspace) && !channel_present(conversations, m->channel)) slack_message_delete(s, m->workspace, m->channel, m->ts);
     }
+    if (s->deleted) {
+        Json *kept = json_array();
+        for (size_t i = 0; i < json_count(s->deleted); i++) {
+            const Json *row = json_at(s->deleted, i);
+            if (!str_eq(workspace, json_str(json_get(row, "workspace"))) || channel_present(conversations, json_str(json_get(row, "channel"))))
+                json_array_push(kept, json_clone(row));
+        }
+        json_free(s->deleted); s->deleted = kept;
+    }
     for (size_t i = s->draft_count; i > 0; i--) {
         SlackDraft *d = &s->drafts[i - 1];
         if (!str_eq(d->workspace, workspace) || channel_present(conversations, d->channel)) continue;

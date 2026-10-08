@@ -401,13 +401,15 @@ static void reconcile_finish(SlackScreen *s) {
         const SlackEvent *event = &s->buffered.items[i]; Json *data = json_parse(event->data, event->length);
         slack_event_apply(&s->state, s->workspace, event->name, data); json_free(data);
     }
-    slack_state_prune(&s->state, s->workspace, s->conversations);
     bool present = false;
     for (size_t i = 0; i < json_count(s->conversations); i++)
         present |= str_eq(s->channel, json_str(json_get(json_at(s->conversations, i), "id")));
     if (s->channel && !present) {
+        // A receipt for a destination removed by this snapshot must not recreate private state.
+        cancel_requests(s);
         set_string(&s->channel, NULL); set_string(&s->thread, NULL); json_free(s->detail); s->detail = NULL; view_clear(s);
     }
+    slack_state_prune(&s->state, s->workspace, s->conversations);
     snapshot_clear(s); s->stream_failures = 0;
     set_string(&s->live_status, "Slack live updates connected"); set_string(&s->error, NULL);
     composer_set(s);
