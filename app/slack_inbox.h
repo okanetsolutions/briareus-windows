@@ -28,7 +28,7 @@ struct SlackScreen {
     Request *requests[TAG_COUNT];
     HWND composer; RECT send_rc, edit_rc;
     bool shown, filling, directory, loaded, history_loaded, read_failed;
-    uint64_t cooldown; unsigned empty_pages;
+    uint64_t cooldown, display_revision, layout_revision; unsigned empty_pages; bool laid_out;
     struct { RECT rc; char *ts; } *view; size_t view_count;
 };
 void slack_inbox_focus(SlackScreen *s);

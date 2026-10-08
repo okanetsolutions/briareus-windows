@@ -410,7 +410,20 @@ static void removed_conversation_rejects_pending_receipt(void) {
     apply(s, TAG_SEND, "slack_send", SLACK_RECEIPT, generation, 0); CHECK_INT(s->state.message_count, 0); CHECK_INT(s->state.draft_count, 0);
     teardown(s); store_handle_message(WM_APP_REQUEST_DONE, 0, (LPARAM)req);
 }
+static void stale_rendered_thread_selection(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, s->state.generation, 0);
+    if (!theme.canvas) theme_init();
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600); s->base.vt->layout(&s->base, &doc); doc_end(&doc);
+    live(s, "message.deleted", "{\"workspaceId\":1727000000002,\"event\":{\"channel\":\"C1\",\"deleted_ts\":\"1712345678.000001\"}}");
+    // The displayed first thread button belongs to the deleted parent, not the new state.messages[0].
+    choose(s, ACT_THREAD, 0); CHECK(s->thread == NULL); CHECK_INT(s->state.message_count, 1);
+    doc_begin(&doc, NULL, 600); s->base.vt->layout(&s->base, &doc); doc_end(&doc);
+    choose(s, ACT_THREAD, 0); CHECK_STR(s->thread, "1712345678.000002");
+    doc_free(&doc); teardown(s);
+}
 void app_slack_tests(void) {
+    test_run("Slack stale rendered indices cannot select another thread after live deletion", stale_rendered_thread_selection);
     test_run("Slack removed conversation snapshot invalidates pending receipt and private state", removed_conversation_rejects_pending_receipt);
     test_run("Slack active stream ownership cancels prior inbox even during backoff", one_owner_even_during_backoff);
     test_run("Slack initial empty snapshot follows cursor and signout rejects old completions", initial_empty_snapshot_and_signout);

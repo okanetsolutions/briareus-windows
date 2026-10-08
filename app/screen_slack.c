@@ -30,6 +30,7 @@ static void stream_stop(SlackScreen *s) {
 }
 
 static void changed(SlackScreen *s) {
+    s->display_revision++;
     if (!s->base.pane) return;
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane); pane_footer_changed(s->base.pane);
 }
@@ -541,6 +542,7 @@ static char *destination_name(SlackScreen *s) {
 }
 static void layout(Screen *base, Doc *doc) {
     SlackScreen *s = (SlackScreen *)base; view_clear(s);
+    s->layout_revision = s->display_revision; s->laid_out = true;
     int x = px(12), w = doc->width - px(24); doc_space(doc, px(12));
     if (!sync_access(s)) {
         doc_empty_state(doc, x, w, 0xE8F2, "Slack inbox unavailable", "An Admin token and a server with the Slack inbox routes are required."); return;
@@ -672,6 +674,11 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
     if (!sync_access(s)) { changed(s); return; }
     if (GetTickCount64() < s->cooldown) { changed(s); return; }
+    // A queued click can arrive before WM_PAINT rebuilds indices after a live edit/delete/snapshot.
+    if (s->laid_out && s->layout_revision != s->display_revision &&
+        (act == ACT_THREAD || act == ACT_CHANNEL || act == ACT_WORKSPACE || (act == ACT_PERSON && arg >= 0))) {
+        changed(s); return;
+    }
     switch (act) {
     case ACT_WORKSPACE: {
         char *id = slack_workspace_id(json_at(s->workspaces, (size_t)arg));
