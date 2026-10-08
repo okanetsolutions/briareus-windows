@@ -73,7 +73,7 @@ typedef enum { WEB_APP_WHATSAPP, WEB_APP_SLACK, WEB_APP_COUNT } WebApp;
 /// WhatsApp Web or Slack, from the sidebar strip's buttons.
 Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
-/// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
+/// servers, the Forge accounts, the Slack workspaces and the mail accounts, each with ＋ New.
 Screen *settings_screen_new(void);
 Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
 void settings_mcp_changed(void);
@@ -81,6 +81,10 @@ bool mcp_settings_supported(const char *operation);
 /// Global mail navigation, gated by the deployed catalog and token permission.
 bool mail_settings_offered(void);
 Screen *mail_settings_screen_new(void);
+/// One mailbox from the Settings menu. `account_id` is the server's id.
+Screen *mail_settings_screen_open(int account_id);
+/// The Settings menu's mail rows, from a list the detail screen just read. NULL asks the menu to read again.
+void settings_mail_changed(const Json *list);
 bool mail_inbox_offered(void);
 Screen *mail_screen_new(void);
 /// ⚙ Settings → Meeting assistant: the OpenAI API key, how the assistant speaks for the user, the virtual microphone,

@@ -19,7 +19,7 @@ typedef struct {
     MailSignIn sign_in;
     Request *read, *write;
     char *error, *notice, *starting_provider;
-    int starting_id, failures;
+    int starting_id, failures, focus;
     bool shown, loaded, blocked, modal, retired, read_error;
     ULONGLONG next_read, retry_until;
 } MailScreen;
@@ -85,6 +85,7 @@ static void read_done(void *owner, Request *r) {
             stop_waiting(s); set_text(&s->notice, "The account list now reflects a connected mailbox.");
         }
         mail_accounts_free(&s->accounts); s->accounts = fresh;
+        settings_mail_changed(r->result);
         if (s->sign_in.state || syncing(s)) arm(s, 10000);
     }
     repaint(s);
@@ -237,7 +238,19 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     Json *body = json_object(); json_set_num(body, "id", id);
     store_call(op, body, 0, s, write_done, id, &s->write); repaint(s);
 }
-static void header(Screen *base, HeaderInfo *info) { (void)base; snprintf(info->title, sizeof info->title, "Mail accounts"); snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only."); }
+static void header(Screen *base, HeaderInfo *info) {
+    MailScreen *s = (MailScreen *)base;
+    const MailAccount *a = s->focus > 0 ? mail_account_find(&s->accounts, s->focus) : NULL;
+    if (a) {
+        const char *title = str_empty(a->label) ? a->email : a->label;
+        snprintf(info->title, sizeof info->title, "%s", title ? title : "Mailbox");
+        if (!str_empty(a->label) && a->email) snprintf(info->subtitle, sizeof info->subtitle, "%s", a->email);
+        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+        return;
+    }
+    snprintf(info->title, sizeof info->title, "Mail accounts");
+    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+}
 static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccount *a) {
     int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(8));
     int ix = x + pad, iw = w - pad * 2;
@@ -300,6 +313,12 @@ static void layout(Screen *base, Doc *doc) {
         doc_box_end(doc, box, pad);
         doc_space(doc, px(16));
     }
+    if (s->focus > 0) {
+        const MailAccount *a = mail_account_find(&s->accounts, s->focus);
+        if (!a) { doc_text(doc, x, w, "This mailbox is no longer connected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); return; }
+        account_card(s, doc, x, w, a);
+        return;
+    }
     doc_text(doc, x, w, "Add a mailbox", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
     doc_space(doc, px(4));
     doc_text(doc, x, w, "Sign-in opens in the browser. Tokens stay on the server.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
@@ -312,11 +331,7 @@ static void layout(Screen *base, Doc *doc) {
     if (s->accounts.outlook && store_supports("connect_mail_account")) connect[connect_count++] = outlook;
     if (connect_count) doc_button_row(doc, x, w, connect, connect_count);
     if (!s->accounts.gmail && !s->accounts.outlook) doc_text(doc, x, w, "No mail providers are configured on this server.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-    doc_space(doc, px(20));
-    if (s->accounts.count) doc_text(doc, x, w, "Connected", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
-    doc_space(doc, px(8));
-    for (size_t i = 0; i < s->accounts.count; i++) account_card(s, doc, x, w, &s->accounts.accounts[i]);
-    if (!s->accounts.count) doc_text(doc, x, w, "No connected mailboxes yet.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (!s->accounts.count) { doc_space(doc, px(16)); doc_text(doc, x, w, "No connected mailboxes yet.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); }
 }
 static void timer(Screen *base, UINT id) {
     if (id != TIMER_MAIL) return;
@@ -364,4 +379,12 @@ static void activated(Screen *base, bool active) {
     else if (s->shown && !s->modal) { s->next_read = 0; timer(base, TIMER_MAIL); }
 }
 static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh, .visible = visible, .activated = activated };
-Screen *mail_settings_screen_new(void) { MailScreen *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail-settings"); return &s->base; }
+static Screen *open_mail_settings(int account_id) {
+    MailScreen *s = xcalloc(1, sizeof *s);
+    s->base.vt = &vt;
+    s->focus = account_id > 0 ? account_id : 0;
+    s->base.id = s->focus ? xstrfmt("mail-settings:%d", s->focus) : xstrdup("mail-settings");
+    return &s->base;
+}
+Screen *mail_settings_screen_new(void) { return open_mail_settings(0); }
+Screen *mail_settings_screen_open(int account_id) { return open_mail_settings(account_id); }

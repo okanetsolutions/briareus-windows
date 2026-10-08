@@ -107,7 +107,7 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     x += iw + gap;
     if (mail) {
         RECT mr = { x, y, x + iw, y + h };
-        bool on = str_eq(selected, "mail") || str_eq(selected, "mail-settings");
+        bool on = str_eq(selected, "mail") || str_eq(selected, "mail-settings") || str_has_prefix(selected, "mail-settings:");
         strip_button(doc, &mr, "", false, 0, on, ACT_MAIL)->mark = MARK_MAIL;
         doc_item(doc, (int)doc->count - 1)->tip = xstrdup("Mail");
         x += iw + gap;

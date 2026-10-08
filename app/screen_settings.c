@@ -1,5 +1,5 @@
-// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the projects, the providers, the
-// database pool, the SSH servers, the Forge accounts and the Slack workspaces, each with ＋ New) and a project's form, its
+// Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the mail accounts, the projects, the
+// providers, the database pool, the SSH servers, the Forge accounts and the Slack workspaces, each with ＋ New) and a project's form, its
 // sections as tabs, or an SSH server's, a Forge account's or a Slack workspace's on one tab, saved through
 // /settings/projects, /settings/ssh/servers, /settings/forge/accounts and /settings/slack/workspaces. The provider form is screen_provider_settings.c and a
 // database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
@@ -32,7 +32,7 @@ static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:")
-                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings"));
+                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -51,7 +51,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_OPEN_MAIL };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_NEW_MAIL, ACT_OPEN_MAIL };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -82,6 +82,7 @@ typedef struct {
     char *slack_error;
     Request *req_slack;
     Json *mcp; Request *req_mcp; ApiClient *mcp_account; char *mcp_error; bool mcp_loaded;
+    Json *mail; Request *req_mail; ApiClient *mail_client; char *mail_error; bool mail_loaded;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -195,6 +196,49 @@ static void mcp_load(SettingsScreen *s) {
 void settings_mcp_changed(void) {
     if (!g_settings) return;
     request_cancel(&g_settings->req_mcp); mcp_load(g_settings);
+}
+static void mail_prepare(SettingsScreen *s) {
+    if (s->mail_client == g_store.client) return;
+    request_cancel(&s->req_mail);
+    api_client_release(s->mail_client);
+    s->mail_client = api_client_retain(g_store.client);
+    json_free(s->mail); s->mail = json_object();
+    s->mail_loaded = false;
+    set_string(&s->mail_error, NULL);
+}
+static void mail_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    if (req->client != s->mail_client || req->client != g_store.client || !mail_settings_offered()) return;
+    s->mail_loaded = true;
+    if (!req->ok || !json_is_array(json_get(req->result, "accounts"))) {
+        set_string(&s->mail_error, "Mail accounts could not be loaded. Refresh Settings or reconnect.");
+        json_free(s->mail); s->mail = json_object();
+    } else {
+        set_string(&s->mail_error, NULL);
+        json_free(s->mail); s->mail = json_clone(req->result);
+    }
+    pane_relayout(s->base.pane);
+}
+static void mail_load(SettingsScreen *s) {
+    if (!mail_settings_offered()) return;
+    mail_prepare(s);
+    if (s->req_mail || s->mail_loaded) return;
+    store_call("settings_mail_accounts", json_object(), 0, s, mail_done, 0, &s->req_mail);
+}
+void settings_mail_changed(const Json *list) {
+    if (!g_settings || !mail_settings_offered()) return;
+    if (list && json_is_array(json_get(list, "accounts")) && g_settings->mail_client == g_store.client) {
+        request_cancel(&g_settings->req_mail);
+        json_free(g_settings->mail);
+        g_settings->mail = json_clone(list);
+        g_settings->mail_loaded = true;
+        set_string(&g_settings->mail_error, NULL);
+        pane_relayout(g_settings->base.pane);
+        return;
+    }
+    request_cancel(&g_settings->req_mail);
+    g_settings->mail_loaded = false;
+    mail_load(g_settings);
 }
 static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     doc_space(doc, px(18));
@@ -353,7 +397,7 @@ size_t settings_pool_capacity(void) {
     for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
     return n;
 }
-static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); slack_load(s); mcp_load(s); }
+static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); slack_load(s); mcp_load(s); mail_load(s); }
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
@@ -432,6 +476,7 @@ static void settings_destroy(Screen *base) {
     json_free(s->forge); free(s->forge_error);
     json_free(s->slack); free(s->slack_error);
     request_cancel(&s->req_mcp); json_free(s->mcp); free(s->mcp_error); api_client_release(s->mcp_account);
+    request_cancel(&s->req_mail); json_free(s->mail); free(s->mail_error); api_client_release(s->mail_client);
     screen_release(base);
 }
 /// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
@@ -545,6 +590,49 @@ static void layout_slack(SettingsScreen *s, Doc *doc, int w, const char *selecte
     if (s->slack_loaded && !json_count(rows) && !s->slack_error) doc_text(doc, px(8), w - px(16), "No Slack workspaces yet. \xEF\xBC\x8B New lets a project's sessions send Slack messages as you and hear the replies.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (!s->slack_loaded) doc_loading(doc, 0, w, "Loading Slack workspaces\xE2\x80\xA6");
 }
+/// Mail under This computer: each mailbox is a row, the way a project is, and ＋ New starts a sign-in.
+static void layout_mail(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    bool can_new = s->mail_loaded && !s->mail_error && store_supports("connect_mail_account");
+    if (can_new) {
+        bool provider = false;
+        const Json *providers = json_get(s->mail, "providers");
+        for (size_t i = 0; i < json_count(providers); i++) {
+            const char *p = json_str(json_at(providers, i));
+            if (str_eq(p, "gmail") || str_eq(p, "outlook")) provider = true;
+        }
+        can_new = provider;
+    }
+    section_title(doc, w, "Mail", NULL, can_new ? ACT_NEW_MAIL : 0);
+    if (s->mail_error) { doc_notice(doc, px(8), w - px(16), s->mail_error); doc_space(doc, px(8)); }
+    if (!s->mail_loaded) { doc_loading(doc, 0, w, "Loading mail accounts\xE2\x80\xA6"); return; }
+    const Json *rows = json_get(s->mail, "accounts");
+    int row_h = px(6) + px(22) + px(18) + px(6);
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i);
+        int id = json_int_or(json_get(row, "id"), 0);
+        if (id <= 0) continue;
+        const char *email = json_str_nonempty(json_get(row, "email"));
+        const char *label = json_str_nonempty(json_get(row, "label"));
+        const char *provider = json_str_nonempty(json_get(row, "provider"));
+        const char *status = json_str_nonempty(json_get(row, "status"));
+        bool enabled = json_bool_is(json_get(row, "enabled"), true);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup(label ? label : email ? email : "Mailbox");
+        d->repo = label && email ? xstrfmt("%s \xC2\xB7 %s", provider ? provider : "mail", email)
+                                 : xstrfmt("%s \xC2\xB7 %s", provider ? provider : "mail", status ? status : "unknown");
+        d->enabled = enabled && str_eq(status, "connected");
+        char *sid = xstrfmt("mail-settings:%d", id);
+        d->selected = str_eq(selected, sid);
+        free(sid);
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, ACT_OPEN_MAIL, (intptr_t)i);
+    }
+    if (str_eq(selected, "mail-settings")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New mailbox"); d->repo = xstrdup("not connected yet"); d->selected = true;
+        doc_custom(doc, 0, w, row_h, paint_project_row, d, project_row_free, 0, 0);
+    }
+    if (!json_count(rows) && !s->mail_error) doc_text(doc, px(8), w - px(16), "No connected mailboxes yet. \xEF\xBC\x8B New signs in to Gmail or Outlook.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+}
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
@@ -564,16 +652,7 @@ static void settings_layout(Screen *base, Doc *doc) {
     meeting->selected = str_eq(selected, "settings-meeting");
     doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
     doc_space(doc, px(16));
-    if (mail_settings_offered()) {
-        section_title(doc, w, "Mail", NULL, 0);
-        ProjectRowData *mail = xcalloc(1, sizeof *mail);
-        mail->label = xstrdup("Mail accounts");
-        mail->repo = xstrdup("Gmail and Outlook sign-in, labels and sync");
-        mail->enabled = true;
-        mail->selected = str_eq(selected, "mail-settings");
-        doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, mail, project_row_free, ACT_OPEN_MAIL, 0);
-        doc_space(doc, px(16));
-    }
+    if (mail_settings_offered()) { layout_mail(s, doc, w, selected); doc_space(doc, px(16)); }
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected); doc_space(doc, px(8)); return; }
@@ -756,7 +835,16 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
             if (mcp_server_id(row)) app_show_detail(mcp_settings_screen_new(row, NULL));
         }
         break;
-    case ACT_OPEN_MAIL: if (mail_settings_offered()) app_show_detail(mail_settings_screen_new()); break;
+    case ACT_NEW_MAIL:
+        if (mail_settings_offered() && store_supports("connect_mail_account")) app_show_detail(mail_settings_screen_new());
+        break;
+    case ACT_OPEN_MAIL: {
+        if (!mail_settings_offered()) break;
+        const Json *row = json_at(json_get(s->mail, "accounts"), (size_t)arg);
+        int id = json_int_or(json_get(row, "id"), 0);
+        if (id > 0) app_show_detail(mail_settings_screen_open(id));
+        break;
+    }
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: settings_move(s, (size_t)arg, 1); break;
@@ -784,10 +872,12 @@ static void settings_visible(Screen *base, bool shown) {
     if (!s->forge_loaded && !s->req_forge) forge_load(s);
     if (!s->slack_loaded && !s->req_slack) slack_load(s);
     if (!s->mcp_loaded || s->mcp_account != g_store.client) mcp_load(s);
+    if (mail_settings_offered() && (!s->mail_loaded || s->mail_client != g_store.client)) mail_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack); request_cancel(&s->req_mcp); settings_load(s);
+    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack); request_cancel(&s->req_mcp);
+    request_cancel(&s->req_mail); s->mail_loaded = false; settings_load(s);
     request_cancel(&s->req_providers); providers_load(s);
     request_cancel(&s->req_servers); servers_load(s);
 }
@@ -810,6 +900,7 @@ Screen *settings_screen_new(void) {
     s->providers = json_object();
     s->servers = json_object();
     s->mcp = json_object();
+    s->mail = json_object();
     g_settings = s;
     return &s->base;
 }
