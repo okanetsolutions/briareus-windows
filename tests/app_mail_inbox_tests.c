@@ -399,7 +399,7 @@ static void focus_reveal_skips_open_row(void) {
     stub.page = "{\"messages\":["
         "{\"accountId\":7,\"id\":\"a\",\"subject\":\"Alpha\",\"receivedAt\":300,\"sender\":\"Ada <ada@example.com>\"},"
         "{\"accountId\":7,\"id\":\"b\",\"subject\":\"Beta\",\"receivedAt\":200,\"sender\":\"Bea <bea@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"c\",\"subject\":\"Gamma\",\"receivedAt\":100,\"sender\":\"Cy <cy@example.com>\"}"
+        "{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"Gamma\",\"receivedAt\":100,\"sender\":\"Cy <cy@example.com>\"}"
         "],\"nextCursor\":null}";
     ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
     RECT bounds = {0, 0, 360, 160}; pane_set_bounds(mail_pane, &bounds);
