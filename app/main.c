@@ -264,6 +264,9 @@ void app_show_detail(Screen *screen) {
     pane_set_selected_id(g_sidebar, pane_root(g_detail) ? pane_root(g_detail)->id : NULL);
     g_narrow_detail = true;
     layout();
+    // Opened from the sidebar, keys follow to what opened, so Ctrl+F reaches the detail pane.
+    HWND focus = GetFocus(), detail = pane_hwnd(g_detail);
+    if (focus && g_sidebar && (focus == pane_hwnd(g_sidebar) || IsChild(pane_hwnd(g_sidebar), focus)) && IsWindowVisible(detail)) SetFocus(detail);
     InvalidateRect(g_main, NULL, TRUE);
 }
 // From the side panel, what an item links to opens in the panel, as GitHub's does.
