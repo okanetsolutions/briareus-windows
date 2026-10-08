@@ -16,6 +16,7 @@ static void set_error_from(const ApiError *e) { char *t = api_error_description(
 
 static void drop_client(void) {
     if (g_store.client) { api_client_release(g_store.client); g_store.client = NULL; }
+    g_store.mail_retry_until = 0; g_store.mail_failures = 0;
     if (g_store.has_device) { device_free(&g_store.device); g_store.has_device = false; }
     routes_free(g_store.routes, g_store.route_count); g_store.routes = NULL; g_store.route_count = 0;
     g_store.transcribes = -1;

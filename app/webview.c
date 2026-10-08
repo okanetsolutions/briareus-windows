@@ -253,6 +253,13 @@ void webview_show(WebView *wv, bool shown) {
     wv->shown = shown;
     if (wv->controller) COM(wv->controller, CTRL_PUT_IS_VISIBLE, HRESULT (WINAPI *)(void *, BOOL))(wv->controller, shown);
 }
+bool webview_navigate(WebView *wv, const char *url) {
+    if (!wv || !webview_ready(wv) || !url) return false;
+    wchar_t *address = utf8_to_wide(url);
+    HRESULT hr = COM(wv->core, CORE_NAVIGATE, HRESULT (WINAPI *)(void *, LPCWSTR))(wv->core, address);
+    free(address);
+    return SUCCEEDED(hr);
+}
 void webview_reload(WebView *wv) { if (wv->core) COM(wv->core, CORE_RELOAD, HRESULT (WINAPI *)(void *))(wv->core); }
 void webview_back(WebView *wv) { if (wv->core && wv->can_back) COM(wv->core, CORE_GO_BACK, HRESULT (WINAPI *)(void *))(wv->core); }
 void webview_forward(WebView *wv) { if (wv->core && wv->can_forward) COM(wv->core, CORE_GO_FORWARD, HRESULT (WINAPI *)(void *))(wv->core); }

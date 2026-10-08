@@ -895,13 +895,17 @@ int main(void) {
     models_tests();
     board_tests();
     api_tests();
+    contract_tests();
     cache_tests();
     vt_tests();
     sftp_tests();
     browser_tests();
     meet_tests();
+    mcp_tests();
     update_tests();
     repo_tests();
+    mail_tests();
+    mail_inbox_tests();
     repo_index_tests();
     slack_tests();
     return test_summary();

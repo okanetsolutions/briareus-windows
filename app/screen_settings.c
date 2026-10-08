@@ -4,6 +4,7 @@
 // /settings/projects, /settings/ssh/servers, /settings/forge/accounts and /settings/slack/workspaces. The provider form is screen_provider_settings.c and a
 // database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
 #include "meeting.h"
+#include "mcp.h"
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -31,7 +32,7 @@ static char *slack_form_id(double id) { return id > 0 ? xstrfmt("settings-slack:
 static bool is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:") || str_has_prefix(id, "settings-slack:")
-                  || str_eq(id, "settings-meeting"));
+                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -50,7 +51,7 @@ static char *ssh_unavailable(void) { return unavailable("settings_ssh_servers", 
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_MOVE_UP, ACT_MOVE_DOWN };
+       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_SLACK, ACT_OPEN_SLACK, ACT_OPEN_MEETING, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_OPEN_MAIL };
 enum { MENU_UP = 1, MENU_DOWN };
 
 typedef struct {
@@ -80,6 +81,7 @@ typedef struct {
     bool slack_loaded;
     char *slack_error;
     Request *req_slack;
+    Json *mcp; Request *req_mcp; ApiClient *mcp_account; char *mcp_error; bool mcp_loaded;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -169,6 +171,49 @@ static void settings_open_provider(SettingsScreen *s, size_t index) {
     if (json_is_object(row)) app_show_detail(provider_settings_screen_new(row, json_get(s->providers, "defaults")));
 }
 
+static void section_title(Doc *doc, int w, const char *title, const char *count, int action);
+static void mcp_done(void *owner, Request *req) {
+    SettingsScreen *s = owner;
+    if (req->client != s->mcp_account || req->client != g_store.client || !mcp_settings_supported("settings_mcp_servers")) return;
+    s->mcp_loaded = true;
+    if (!req->ok || !json_is_array(json_get(req->result, "servers"))) {
+        set_string(&s->mcp_error, "MCP servers could not be loaded. Refresh Settings or reconnect.");
+        json_free(s->mcp); s->mcp = json_object();
+    } else {
+        set_string(&s->mcp_error, NULL); json_free(s->mcp); s->mcp = json_clone(req->result);
+    }
+    pane_relayout(s->base.pane);
+}
+static void mcp_load(SettingsScreen *s) {
+    if (s->mcp_account != g_store.client) {
+        request_cancel(&s->req_mcp); api_client_release(s->mcp_account); s->mcp_account = api_client_retain(g_store.client);
+        json_free(s->mcp); s->mcp = json_object(); s->mcp_loaded = false; set_string(&s->mcp_error, NULL);
+    }
+    if (s->req_mcp || !mcp_settings_supported("settings_mcp_servers")) return;
+    store_call("settings_mcp_servers", json_object(), 0, s, mcp_done, 0, &s->req_mcp);
+}
+void settings_mcp_changed(void) {
+    if (!g_settings) return;
+    request_cancel(&g_settings->req_mcp); mcp_load(g_settings);
+}
+static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+    doc_space(doc, px(18));
+    section_title(doc, w, "MCP servers", NULL, mcp_settings_supported("create_mcp_server") && s->mcp_account == g_store.client && s->mcp_loaded && !s->mcp_error ? ACT_NEW_MCP : 0);
+    if (s->mcp_error) doc_notice(doc, px(8), w - px(16), s->mcp_error);
+    if (s->mcp_account != g_store.client || !s->mcp_loaded) { doc_loading(doc, 0, w, "Loading MCP servers…"); return; }
+    const Json *rows = json_get(s->mcp, "servers");
+    for (size_t i = 0; i < json_count(rows); i++) {
+        const Json *row = json_at(rows, i); double id = mcp_server_id(row); if (!id) continue;
+        char *label = xstrfmt("%s · %s%s", json_str_or(json_get(row, "transport"), "http"), json_str_or(json_get(row, "status"), "unchecked"), json_bool_is(json_get(row, "enabled"), false) ? " · disabled" : "");
+        char *screen_id = xstrfmt("settings-mcp:%.0f", id);
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup(json_str_or(json_get(row, "label"), "MCP server")); d->repo = label;
+        d->enabled = !json_bool_is(json_get(row, "enabled"), false) && str_eq(json_str(json_get(row, "status")), "ready"); d->selected = str_eq(selected, screen_id);
+        doc_custom(doc, 0, w, px(52), paint_project_row, d, project_row_free, ACT_OPEN_MCP, (intptr_t)i);
+        free(screen_id);
+    }
+    if (!json_count(rows) && !s->mcp_error) doc_text(doc, px(8), w - px(16), "No MCP servers yet.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+}
 static void settings_load(SettingsScreen *s);
 static void settings_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
@@ -308,7 +353,7 @@ size_t settings_pool_capacity(void) {
     for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
     return n;
 }
-static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); slack_load(s); }
+static void settings_load(SettingsScreen *s) { projects_load(s); ssh_load(s); forge_load(s); slack_load(s); mcp_load(s); }
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights
     if (!g_settings) return;
@@ -386,6 +431,7 @@ static void settings_destroy(Screen *base) {
     json_free(s->ssh); free(s->ssh_error);
     json_free(s->forge); free(s->forge_error);
     json_free(s->slack); free(s->slack_error);
+    request_cancel(&s->req_mcp); json_free(s->mcp); free(s->mcp_error); api_client_release(s->mcp_account);
     screen_release(base);
 }
 /// A section's summary: its title, a muted note after it when `note` is set, and its ＋ New when `new_action` is set.
@@ -518,9 +564,13 @@ static void settings_layout(Screen *base, Doc *doc) {
     meeting->selected = str_eq(selected, "settings-meeting");
     doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), paint_project_row, meeting, project_row_free, ACT_OPEN_MEETING, 0);
     doc_space(doc, px(16));
+    if (mail_settings_offered()) {
+        doc_button(doc, px(8), w - px(16), "Mail account settings", BUTTON_PLAIN, ACT_OPEN_MAIL, 0, true);
+        doc_space(doc, px(16));
+    }
     char *why = settings_unavailable();
     section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
-    if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); doc_space(doc, px(8)); return; }
+    if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected); doc_space(doc, px(8)); return; }
     layout_projects(s, doc, w, selected);
     // The providers sessions start on, then the database pool, below the projects as on the dashboard; a server without
     // the routes shows neither.
@@ -543,6 +593,7 @@ static void settings_layout(Screen *base, Doc *doc) {
     layout_ssh(s, doc, w, selected);
     if (store_supports("settings_forge_accounts")) layout_forge(s, doc, w, selected);
     if (store_supports("settings_slack_workspaces")) layout_slack(s, doc, w, selected);
+    if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected);
 }
 /// The database pool: each server with its dot and host:port.
 static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
@@ -690,6 +741,16 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_FORGE: forge_open_row(s, (size_t)arg); break;
     case ACT_NEW_SLACK: app_show_detail(slack_settings_screen_new(NULL, json_get(s->slack, "defaults"))); break;
     case ACT_OPEN_SLACK: slack_open_row(s, (size_t)arg); break;
+    case ACT_NEW_MCP:
+        if (mcp_settings_supported("create_mcp_server") && s->mcp_account == g_store.client && s->mcp_loaded && !s->mcp_error) app_show_detail(mcp_settings_screen_new(NULL, json_get(s->mcp, "defaults")));
+        break;
+    case ACT_OPEN_MCP:
+        if (mcp_settings_supported("settings_mcp_servers") && s->mcp_account == g_store.client) {
+            const Json *row = json_at(json_get(s->mcp, "servers"), (size_t)arg);
+            if (mcp_server_id(row)) app_show_detail(mcp_settings_screen_new(row, NULL));
+        }
+        break;
+    case ACT_OPEN_MAIL: if (mail_settings_offered()) app_show_detail(mail_settings_screen_new()); break;
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: settings_move(s, (size_t)arg, 1); break;
@@ -716,10 +777,11 @@ static void settings_visible(Screen *base, bool shown) {
     if (!s->ssh_loaded && !s->req_ssh) ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) forge_load(s);
     if (!s->slack_loaded && !s->req_slack) slack_load(s);
+    if (!s->mcp_loaded || s->mcp_account != g_store.client) mcp_load(s);
 }
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
-    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack); settings_load(s);
+    request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_slack); request_cancel(&s->req_mcp); settings_load(s);
     request_cancel(&s->req_providers); providers_load(s);
     request_cancel(&s->req_servers); servers_load(s);
 }
@@ -741,6 +803,7 @@ Screen *settings_screen_new(void) {
     s->projects = json_object(); s->ssh = json_object(); s->forge = json_object(); s->slack = json_object();
     s->providers = json_object();
     s->servers = json_object();
+    s->mcp = json_object();
     g_settings = s;
     return &s->base;
 }

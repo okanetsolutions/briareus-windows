@@ -26,6 +26,80 @@ bool poller_fired(Poller *p, UINT id) {
 }
 void poller_set_base(Poller *p, int base_ms) { p->base_ms = base_ms; }
 
+// Keep this separate from the screen poller: sessions/actions still poll during a list cooldown.
+static char *pulls_retry_key(const char *repo) {
+    return xstrfmt("pulls-retry:%s:%s:%s", g_store.server ? g_store.server : "",
+                   g_store.device.id ? g_store.device.id : "", repo);
+}
+// Keep active deadlines live even when successful cache writes are later invalidated.
+typedef struct PullsRetry {
+    struct PullsRetry *next;
+    time_t until;
+    int failures;
+    char *key;
+} PullsRetry;
+static PullsRetry *pulls_retries;
+static PullsRetry *pulls_retry_live(const char *key) {
+    PullsRetry *found = NULL;
+    time_t now = time(NULL);
+    for (PullsRetry **slot = &pulls_retries; *slot;) {
+        PullsRetry *entry = *slot;
+        if (entry->until <= now && !entry->failures) { *slot = entry->next; xfree_kept(entry); }
+        else { if (str_eq(entry->key, key)) found = entry; slot = &entry->next; }
+    }
+    return found;
+}
+time_t pulls_retry_deadline(const char *repo) {
+    char *key = pulls_retry_key(repo);
+    PullsRetry *live = pulls_retry_live(key);
+    Json *saved = g_store.cache ? cache_value(g_store.cache, key) : NULL;
+    double until = 0;
+    json_num(json_get(saved, "until"), &until);
+    json_free(saved); free(key);
+    return live && live->until > time(NULL) && live->until > (time_t)until ? live->until : (time_t)until;
+}
+void pulls_note_failure(const char *repo, const ApiError *error, time_t now) {
+    if (error->kind == API_CANCELLED) return;
+    time_t previous = pulls_retry_deadline(repo);
+    char *key = pulls_retry_key(repo);
+    PullsRetry *live = pulls_retry_live(key);
+    if (!live) {
+        live = xmalloc_kept(sizeof *live + strlen(key) + 1);
+        live->key = (char *)(live + 1); strcpy(live->key, key);
+        live->until = previous; live->failures = 0;
+        live->next = pulls_retries; pulls_retries = live;
+    }
+    // The failure streak must survive deadline expiry, navigation and cache invalidation.
+    if (live->failures < 6) live->failures++;
+    double seconds = error->retry_after;
+    if (seconds < 0) seconds = error->kind == API_HTTP && error->status == 429 ? 60 :
+        (double)poll_delay_ms(0, live->failures, -1) / 1000;
+    // Round upwards so fractional Retry-After values cannot allow an early read.
+    if (seconds > 2147483647.0) seconds = 2147483647.0;
+    time_t duration = (time_t)seconds;
+    if ((double)duration < seconds) duration++;
+    time_t until = now + duration;
+    if (until < previous) until = previous;
+    Json *saved = json_object(); json_set_num(saved, "until", (double)until);
+    if (g_store.cache) cache_store(g_store.cache, saved, key);
+    live->until = until;
+    json_free(saved); free(key);
+}
+void pulls_note_success(const char *repo) {
+    char *key = pulls_retry_key(repo);
+    PullsRetry *live = pulls_retry_live(key);
+    // An overlapping success resets backoff without shortening another read's cooldown.
+    if (live) live->failures = 0;
+    free(key);
+}
+time_t pulls_sync_time(const Json *result, bool saved, time_t now) {
+    time_t synced;
+    if (board_date_parse(json_str(json_get(result, "syncedAt")), &synced)) return synced;
+    double received;
+    if (saved) return json_num(json_get(result, "_receivedAt"), &received) ? (time_t)received : 0;
+    return now;
+}
+
 void set_string(char **slot, const char *value) { free(*slot); *slot = xstrdup(value); }
 
 const char *finding_severity_label(const char *severity, COLORREF *color) {

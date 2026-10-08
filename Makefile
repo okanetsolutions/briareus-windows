@@ -60,7 +60,8 @@ GCOVR ?= gcovr
 COVERAGE_MIN ?= 90
 coverage:
 	rm -rf build-cov/coverage && find build-cov -name '*.gcda' -delete 2>/dev/null; true
-	$(MAKE) BUILD=build-cov OPT="-O0 --coverage" test
+	# Screen request tests parse replies concurrently; keep gcov counters consistent across worker threads.
+	$(MAKE) BUILD=build-cov OPT="-O0 --coverage -fprofile-update=atomic" test
 	mkdir -p build-cov/coverage
 	$(GCOVR) --root . --object-directory build-cov --filter core/ --txt-summary --html-details build-cov/coverage/index.html 		--fail-under-line $(COVERAGE_MIN)
 
@@ -106,7 +107,7 @@ $(BUILD)/app/%.o: app/%.c app/*.h core/*.h | $(BUILD)/app
 $(BUILD)/app/%.o: app/%.cpp app/*.h core/*.h | $(BUILD)/app
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BUILD)/tests/%.o: tests/%.c tests/*.h app/*.h core/*.h | $(BUILD)/tests
+$(BUILD)/tests/%.o: tests/%.c tests/*.h tests/fixtures/*/*.h app/*.h core/*.h | $(BUILD)/tests
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(RES): res/briareus.rc res/briareus.manifest res/briareus.ico app/resource.h | $(BUILD)
