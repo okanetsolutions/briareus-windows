@@ -339,6 +339,7 @@ static void forge_open_row(SettingsScreen *s, size_t index) {
     if (json_is_object(row)) app_show_detail(forge_settings_screen_new(row, json_get(s->forge, "defaults")));
 }
 static void settings_slack_changed(void) {
+    slack_inbox_settings_changed();
     if (!g_settings) return;
     request_cancel(&g_settings->req_slack);
     slack_load(g_settings);

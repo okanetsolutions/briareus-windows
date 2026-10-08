@@ -21,7 +21,7 @@ void slack_state_clear(SlackState *s) {
     for (size_t i = 0; i < s->read_count; i++) {
         SlackRead *r = &s->reads[i]; free(r->workspace); free(r->channel); free(r->viewed); free(r->marked);
     }
-    free(s->messages); free(s->drafts); free(s->reads);
+    free(s->messages); free(s->drafts); free(s->reads); json_free(s->deleted);
     uint64_t generation = s->generation + 1;
     memset(s, 0, sizeof *s); s->generation = generation;
 }
@@ -59,6 +59,11 @@ static int message_compare(const void *a, const void *b) {
 bool slack_message_merge(SlackState *s, const char *workspace, const char *channel, const Json *message) {
     const char *ts = json_str(json_get(message, "ts"));
     if (str_empty(workspace) || str_empty(channel) || !slack_ts_valid(ts)) return false;
+    for (size_t i = 0; i < json_count(s->deleted); i++) {
+        const Json *row = json_at(s->deleted, i);
+        if (str_eq(workspace, json_str(json_get(row, "workspace"))) && str_eq(channel, json_str(json_get(row, "channel"))) &&
+            str_eq(ts, json_str(json_get(row, "ts")))) return false;
+    }
     for (size_t i = 0; i < s->message_count; i++) {
         SlackMessage *m = &s->messages[i];
         if (destination(m->workspace, m->channel, workspace, channel) && str_eq(m->ts, ts)) {
@@ -71,6 +76,14 @@ bool slack_message_merge(SlackState *s, const char *workspace, const char *chann
     qsort(s->messages, s->message_count, sizeof *s->messages, message_compare);
     return true;
 }
+bool slack_message_receipt(SlackState *s, const char *workspace, const char *channel, const Json *message) {
+    const char *ts = json_str(json_get(message, "ts"));
+    for (size_t i = 0; i < s->message_count; i++) {
+        const SlackMessage *m = &s->messages[i];
+        if (destination(m->workspace, m->channel, workspace, channel) && str_eq(m->ts, ts)) return true;
+    }
+    return slack_message_merge(s, workspace, channel, message);
+}
 void slack_message_delete(SlackState *s, const char *workspace, const char *channel, const char *ts) {
     for (size_t i = 0; i < s->message_count; i++) {
         SlackMessage *m = &s->messages[i];
@@ -82,7 +95,7 @@ void slack_message_delete(SlackState *s, const char *workspace, const char *chan
 bool slack_message_in_thread(const SlackMessage *m, const char *workspace, const char *channel, const char *thread) {
     if (!destination(m->workspace, m->channel, workspace, channel)) return false;
     const char *parent = json_str(json_get(m->raw, "thread_ts"));
-    return str_empty(thread) ? str_empty(parent) || str_eq(parent, m->ts) : str_eq(m->ts, thread) || str_eq(parent, thread);
+    return str_empty(thread) ? str_empty(parent) || str_eq(parent, m->ts) || str_eq(json_str(json_get(m->raw, "subtype")), "thread_broadcast") : str_eq(m->ts, thread) || str_eq(parent, thread);
 }
 void slack_page_clear(SlackPage *p) { free(p->cursor); free(p->oldest); free(p->latest); memset(p, 0, sizeof *p); }
 bool slack_page_merge(SlackState *s, SlackPage *p, const char *workspace, const char *channel, bool thread, const Json *answer) {
@@ -262,4 +275,97 @@ const char *slack_read_due(const SlackRead *r, uint64_t now) {
 }
 void slack_read_confirm(SlackRead *r, const char *ts) {
     if (slack_ts_valid(ts) && (!r->marked || slack_ts_compare(ts, r->marked) > 0)) replace(&r->marked, ts);
+}
+
+void slack_messages_clear(SlackState *s, const char *workspace, const char *channel) {
+    for (size_t i = s->message_count; i > 0; i--) {
+        SlackMessage *m = &s->messages[i - 1];
+        if (destination(m->workspace, m->channel, workspace, channel)) slack_message_delete(s, workspace, channel, m->ts);
+    }
+}
+void slack_events_clear(SlackEvents *q) {
+    for (size_t i = 0; i < q->count; i++) { free(q->items[i].name); free(q->items[i].data); }
+    free(q->items); memset(q, 0, sizeof *q);
+}
+bool slack_events_push(SlackEvents *q, const char *name, const char *data, size_t length) {
+    if (q->overflow) return false;
+    size_t name_length = strlen(name);
+    if (q->count >= SLACK_EVENTS_MAX || name_length > SLACK_EVENTS_BYTES - q->bytes || length > SLACK_EVENTS_BYTES - q->bytes - name_length) {
+        slack_events_clear(q); q->overflow = true; return false;
+    }
+    q->items = xrealloc(q->items, (q->count + 1) * sizeof *q->items);
+    q->items[q->count++] = (SlackEvent){xstrdup(name), xstrndup(data, length), length};
+    q->bytes += length + name_length; return true;
+}
+SlackEventResult slack_event_apply(SlackState *s, const char *workspace, const char *name, const Json *data) {
+    char *id = NULL;
+    double number;
+    if (json_num(json_get(data, "workspaceId"), &number) && number >= 1 && number <= 9007199254740991.0 && floor(number) == number)
+        id = xstrfmt("%.0f", number);
+    bool matches = str_eq(id, workspace); free(id);
+    if (!matches) return SLACK_EVENT_IGNORED;
+    if (str_eq(name, "ready")) return SLACK_EVENT_READY;
+    if (str_eq(name, "workspace.changed")) return SLACK_EVENT_CHANGED;
+    if (str_eq(name, "workspace.removed")) return SLACK_EVENT_REMOVED;
+    if (str_eq(name, "conversation.read")) {
+        const char *channel = json_str_nonempty(json_get(data, "channel")), *ts = json_str(json_get(data, "ts"));
+        if (!channel || !slack_ts_valid(ts)) return SLACK_EVENT_IGNORED;
+        slack_read_confirm(slack_read(s, workspace, channel), ts); return SLACK_EVENT_APPLIED;
+    }
+    const Json *event = json_get(data, "event");
+    const char *channel = json_str_nonempty(json_get(event, "channel"));
+    if (!channel) return SLACK_EVENT_IGNORED;
+    if (str_eq(name, "message.deleted")) {
+        const char *ts = json_str(json_get(event, "deleted_ts"));
+        if (!slack_ts_valid(ts)) return SLACK_EVENT_IGNORED;
+        if (!s->deleted) s->deleted = json_array();
+        Json *row = json_object(); json_set_str(row, "workspace", workspace); json_set_str(row, "channel", channel); json_set_str(row, "ts", ts);
+        bool found = false;
+        for (size_t i = 0; i < json_count(s->deleted); i++) {
+            const Json *old = json_at(s->deleted, i);
+            if (str_eq(workspace, json_str(json_get(old, "workspace"))) && str_eq(channel, json_str(json_get(old, "channel"))) &&
+                str_eq(ts, json_str(json_get(old, "ts")))) { found = true; break; }
+        }
+        if (!found) json_array_push(s->deleted, row); else json_free(row);
+        slack_message_delete(s, workspace, channel, ts); return SLACK_EVENT_APPLIED;
+    }
+    if (str_eq(name, "message") || str_eq(name, "message.changed")) {
+        const Json *message = str_eq(name, "message.changed") ? json_get(event, "message") : event;
+        return slack_message_merge(s, workspace, channel, message) ? SLACK_EVENT_APPLIED : SLACK_EVENT_IGNORED;
+    }
+    return SLACK_EVENT_IGNORED;
+}
+uint64_t slack_reconnect_delay(unsigned failures, double retry_after) {
+    uint64_t delay = 1000;
+    for (unsigned i = 1; i < failures && delay < 60000; i++) delay *= 2;
+    if (delay > 60000) delay = 60000;
+    if (retry_after > 0) {
+        if (retry_after > 86400 * 30) retry_after = 86400 * 30;
+        uint64_t retry = (uint64_t)(retry_after * 1000);
+        if (retry > delay) delay = retry;
+    }
+    return delay;
+}
+
+static bool channel_present(const Json *rows, const char *channel) {
+    for (size_t i = 0; i < json_count(rows); i++) if (str_eq(channel, json_str(json_get(json_at(rows, i), "id")))) return true;
+    return false;
+}
+void slack_state_prune(SlackState *s, const char *workspace, const Json *conversations) {
+    for (size_t i = s->message_count; i > 0; i--) {
+        const SlackMessage *m = &s->messages[i - 1];
+        if (str_eq(m->workspace, workspace) && !channel_present(conversations, m->channel)) slack_message_delete(s, m->workspace, m->channel, m->ts);
+    }
+    for (size_t i = s->draft_count; i > 0; i--) {
+        SlackDraft *d = &s->drafts[i - 1];
+        if (!str_eq(d->workspace, workspace) || channel_present(conversations, d->channel)) continue;
+        free(d->workspace); free(d->channel); free(d->thread); free(d->text); free(d->sent_text);
+        memmove(d, d + 1, (s->draft_count - i) * sizeof *d); s->draft_count--;
+    }
+    for (size_t i = s->read_count; i > 0; i--) {
+        SlackRead *r = &s->reads[i - 1];
+        if (!str_eq(r->workspace, workspace) || channel_present(conversations, r->channel)) continue;
+        free(r->workspace); free(r->channel); free(r->viewed); free(r->marked);
+        memmove(r, r + 1, (s->read_count - i) * sizeof *r); s->read_count--;
+    }
 }

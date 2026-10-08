@@ -6,7 +6,7 @@
 
 // MARK: - Server-sent events
 
-void sse_init(SseParser *p) { memset(p, 0, sizeof *p); str_init(&p->line); str_init(&p->data); }
+void sse_init(SseParser *p) { memset(p, 0, sizeof *p); str_init(&p->line); str_init(&p->data); p->limit = SSE_MAX_EVENT; }
 void sse_free(SseParser *p) { str_free(&p->line); str_free(&p->data); free(p->event); memset(p, 0, sizeof *p); }
 
 static void sse_reset_event(SseParser *p) {
@@ -32,7 +32,7 @@ static void sse_line(SseParser *p, SseEmit emit, void *ctx) {
         if (p->has_data) str_appendc(&p->data, '\n');
         str_append(&p->data, value, value_len);
         p->has_data = true;
-        if (p->data.len > SSE_MAX_EVENT) { p->overflow = true; str_free(&p->data); str_init(&p->data); }
+        if (p->data.len > p->limit) { p->overflow = true; p->dropped = true; str_free(&p->data); str_init(&p->data); }
     } else if (name_len == 5 && memcmp(line, "event", 5) == 0) {
         free(p->event); p->event = xstrndup(value, value_len);
     }
@@ -49,11 +49,13 @@ void sse_feed(SseParser *p, const char *bytes, size_t len, SseEmit emit, void *c
             str_free(&p->line); str_init(&p->line);
             continue;
         }
-        if (p->line.len >= SSE_MAX_EVENT) { p->overflow = true; continue; }
+        if (p->line.len >= p->limit) { p->overflow = true; p->dropped = true; continue; }
         // Runs of ordinary bytes go in at once: a frame's line is hundreds of kilobytes.
         size_t run = 1;
         while (i + run < len && bytes[i + run] != '\r' && bytes[i + run] != '\n') run++;
-        str_append(&p->line, bytes + i, run);
+        size_t keep = run < p->limit - p->line.len ? run : p->limit - p->line.len;
+        str_append(&p->line, bytes + i, keep);
+        if (keep < run) { p->overflow = true; p->dropped = true; }
         i += run - 1;
     }
 }

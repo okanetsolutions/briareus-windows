@@ -14,7 +14,7 @@
 typedef void (*SseEmit)(void *ctx, const char *event, const char *data, size_t len);
 /// Reads an event stream fed in pieces of any size, as text/event-stream lays it out: lines ending in CR, LF or CRLF,
 /// `field: value`, comments starting with a colon, and a blank line ending each event.
-typedef struct { Str line, data; char *event; bool after_cr, has_data, overflow; } SseParser;
+typedef struct { Str line, data; char *event; bool after_cr, has_data, overflow, dropped; size_t limit; } SseParser;
 /// The longest line or event kept; past it, the event is dropped (a frame is a few hundred kilobytes).
 #define SSE_MAX_EVENT (32u * 1024 * 1024)
 void sse_init(SseParser *p);

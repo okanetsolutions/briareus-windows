@@ -324,6 +324,7 @@ static const Expected ROUTE_TABLE[] = {
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "slack_workspaces", "GET", "slack/workspaces" },
+    { "slack_events", "GET", "slack/workspaces/{id}/events" },
     { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
     { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
     { "slack_people", "GET", "slack/workspaces/{id}/people" },
@@ -1002,7 +1003,21 @@ static void test_slack_json_contract_and_no_retry(void) {
     json_free(result); json_free(args); api_client_release(c); api_error_clear(&error); stub_reset(&stub);
 }
 
+static void test_slack_stream_route_and_cancellation(void) {
+    Stub stub = {0}; ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    const ApiRoute *route = api_route("slack_events"); CHECK(route != NULL); CHECK_STR(route->method, "GET");
+    CHECK_STR(route->path, "slack/workspaces/{id}/events");
+    ApiStreamCancel cancel; api_stream_cancel_init(&cancel); api_stream_cancel(&cancel);
+    Json *args = json_parsez("{\"id\":\"1727000000002\"}");
+    CHECK(!api_stream(c, "slack_events", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
+    api_stream_cancel_free(&cancel); api_stream_cancel_init(&cancel);
+    CHECK(!api_stream(c, "slack_events", NULL, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    CHECK(!api_stream(c, "slack_send", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_stream_cancel_free(&cancel); json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
 void api_tests(void) {
+    test_run("Slack SSE route cancellable before start with required workspace ID", test_slack_stream_route_and_cancellation);
     test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
     test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
