@@ -904,6 +904,7 @@ int main(void) {
     update_tests();
     repo_tests();
     mail_tests();
+    mail_inbox_tests();
     repo_index_tests();
     return test_summary();
 }

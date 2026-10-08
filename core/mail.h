@@ -1,4 +1,4 @@
-// Mail account settings only; message reading builds on these public, credential-free models.
+// Credential-free mail settings and memory-only message models.
 #ifndef BRIAREUS_MAIL_H
 #define BRIAREUS_MAIL_H
 #include "json.h"
@@ -42,4 +42,33 @@ Json *mail_sign_in_finish(const MailSignIn *sign_in, const char *url, double now
 bool mail_sign_in_completed(const MailSignIn *sign_in, const MailAccounts *current);
 /// Safe user-facing errors; only recognized validation details affect the message.
 const char *mail_error_message(int status, bool finishing, const char *detail);
+
+typedef struct { char *id, *name, *mime_type; double size; } MailAttachment;
+typedef struct {
+    int account_id;
+    char *id, *thread_id, *sender, *to, *cc, *reply_to, *subject, *snippet, *web_url, *text;
+    char **labels; size_t label_count;
+    MailAttachment *attachments; size_t attachment_count;
+    double received_at;
+    bool is_read, in_inbox, is_starred, truncated;
+} MailMessage;
+typedef struct { MailMessage *messages; size_t count; char *next_cursor; } MailMessages;
+void mail_message_free(MailMessage *message);
+/// Never retains body.html; summaries never retain any body.
+bool mail_message_parse(const Json *value, bool body, MailMessage *out);
+void mail_messages_free(MailMessages *messages);
+bool mail_messages_parse(const Json *value, MailMessages *out);
+const MailMessage *mail_message_find(const MailMessages *messages, int account, const char *id);
+/// Transfers a page, deduplicating by account+id and sorting newest first.
+void mail_messages_append(MailMessages *messages, MailMessages *page);
+bool mail_account_readable(const MailAccounts *accounts, int id);
+/// Purges removed/revoked accounts; true if private state changed.
+bool mail_messages_prune(MailMessages *messages, const MailAccounts *accounts);
+bool mail_message_web_url_safe(const char *url);
+typedef struct { int account, unread, inbox, starred; char *q, *label, *thread; } MailFilter;
+void mail_filter_init(MailFilter *filter);
+void mail_filter_free(MailFilter *filter);
+/// Flags: -1 any, 0 false, 1 true; omit empty filters and first-page cursor.
+Json *mail_filter_args(const MailFilter *filter, const char *cursor);
+const char *mail_read_error(int status, bool detail);
 #endif

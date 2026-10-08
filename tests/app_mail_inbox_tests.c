@@ -1,0 +1,178 @@
+// Automated screen/transport regressions; no provider calls, sign-in or mailbox mutations.
+#include "screens.h"
+#include "mail_inbox.h"
+#include "mail.h"
+#include "str.h"
+#include "suites.h"
+#include "test.h"
+#include <stdlib.h>
+#include <string.h>
+
+static Route ROUTES[] = {
+    {"GET", "/settings/mail/accounts", "admin"}, {"GET", "/mail/messages", "admin"},
+    {"GET", "/mail/accounts/{account}/messages/{id}", "admin"}
+};
+static const char *ACCOUNTS = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.com\",\"provider\":\"gmail\",\"status\":\"connected\"},{\"id\":8,\"email\":\"two@example.com\",\"provider\":\"outlook\",\"status\":\"connected\"}],\"providers\":[\"gmail\",\"outlook\"]}";
+static const char *PAGE = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200,\"isRead\":false},{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100,\"isRead\":false}],\"nextCursor\":\"older/+=\"}";
+static const char *OLDER = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100},{\"accountId\":7,\"id\":\"old\",\"subject\":\"Older\",\"receivedAt\":50}],\"nextCursor\":null}";
+typedef struct {
+    const char *accounts;
+    int body_status, list_status;
+    double retry_after;
+    volatile LONG calls, list_calls, body_calls;
+    char *last_list, *last_body;
+    HANDLE entered, resume;
+    bool block_first;
+} InboxStub;
+static bool transport(void *ctx, const char *method, const char *url, const char *const *headers, const void *body, size_t bytes,
+    int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
+    (void)headers; (void)body; (void)timeout;
+    InboxStub *s = ctx;
+    // Capture on the worker; assert only after completion has been delivered on the UI thread.
+    bool read = str_eq(method, "GET") && bytes == 0;
+    const char *answer = "{}"; *status = read ? 200 : 500; *error = NULL;
+    if (strstr(url, "settings/mail/accounts")) answer = s->accounts;
+    else if (strstr(url, "/mail/messages")) {
+        LONG n = InterlockedIncrement(&s->list_calls);
+        free(s->last_list); s->last_list = xstrdup(url);
+        if (s->block_first && n == 1) { SetEvent(s->entered); WaitForSingleObject(s->resume, 5000); }
+        answer = strstr(url, "cursor=") ? OLDER : PAGE;
+        if (s->list_status) { *status = s->list_status; answer = "{\"error\":\"private provider error\"}"; }
+    } else {
+        InterlockedIncrement(&s->body_calls); free(s->last_body); s->last_body = xstrdup(url);
+        bool second = strstr(url, "/8/") != NULL;
+        answer = second ? "{\"message\":{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"isRead\":false,\"body\":{\"text\":\"<script>literal</script> [link](https://remote)\",\"html\":\"<script>active</script>\",\"truncated\":true},\"attachments\":[{\"name\":\"report.pdf\",\"size\":123,\"mimeType\":\"application/pdf\"}]}}"
+            : "{\"message\":{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"isRead\":false,\"body\":{\"text\":\"First body\"}}}";
+        if (s->body_status) { *status = s->body_status; answer = "{\"error\":\"private provider error\"}"; }
+    }
+    *type = xstrdup("application/json"); *retry = s->retry_after > 0 ? xstrfmt("%.0f", s->retry_after) : NULL;
+    *response = xstrdup(answer); *len = strlen(*response); InterlockedIncrement(&s->calls); return true;
+}
+static ApiClient *setup(InboxStub *stub) {
+    memset(&g_store, 0, sizeof g_store); g_store.has_device = true; g_store.device.permission = "admin";
+    g_store.routes = ROUTES; g_store.route_count = 3; g_store.active = true;
+    ServerAddress address; ApiError e; api_error_init(&e);
+    CHECK(server_address_parse("https://example.com", &address));
+    g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &e);
+    CHECK(g_store.client != NULL); server_address_free(&address); api_error_clear(&e);
+    api_client_set_transport(g_store.client, transport, stub);
+    return g_store.client;
+}
+static void pump(int expected) {
+    ULONGLONG end = GetTickCount64() + 10000; int delivered = 0;
+    while (delivered < expected && GetTickCount64() < end) {
+        MSG msg;
+        while (PeekMessageW(&msg, (HWND)-1, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
+            store_handle_message(msg.message, msg.wParam, msg.lParam); delivered++;
+        }
+        if (delivered < expected) Sleep(1);
+    }
+    CHECK_INT(delivered, expected);
+}
+static void draw(Screen *s, Doc *doc) {
+    doc_begin(doc, NULL, 800); s->vt->layout(s, doc); doc_end(doc);
+}
+static int find_text(Doc *doc, const char *text) {
+    for (size_t i = 0; i < doc->count; i++) if (str_eq(doc->items[i].text, text)) return (int)i;
+    return -1;
+}
+static void click(Screen *s, Doc *doc, const char *text) {
+    draw(s, doc); int i = find_text(doc, text); CHECK(i >= 0);
+    if (i >= 0) { CHECK(doc->items[i].action != 0); s->vt->action(s, doc->items[i].action, doc->items[i].arg, (POINT){0}); }
+}
+static void select_subject(Screen *s, Doc *doc, const char *subject) {
+    draw(s, doc); int i = find_text(doc, subject); CHECK(i > 0);
+    if (i > 0) { Item *box = &doc->items[i - 1]; CHECK(box->action != 0); s->vt->action(s, box->action, box->arg, (POINT){0}); }
+}
+static void cleanup(Screen *s, Doc *doc, ApiClient *client, InboxStub *stub) {
+    s->vt->destroy(s); doc_free(doc); api_client_release(client); free(stub->last_list); free(stub->last_body);
+    if (stub->entered) CloseHandle(stub->entered);
+    if (stub->resume) CloseHandle(stub->resume);
+    memset(&g_store, 0, sizeof g_store);
+}
+static void screen_reads(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
+    CHECK_INT(stub.body_calls, 0); draw(s, &doc);
+    CHECK(find_text(&doc, "Second account") < find_text(&doc, "First account"));
+    select_subject(s, &doc, "Second account"); pump(1);
+    CHECK_STR(stub.last_body, "https://example.com/api/v1/mail/accounts/8/messages/same%2F%2B%3D");
+    draw(s, &doc); int i = find_text(&doc, "<script>literal</script> [link](https://remote)"); CHECK(i >= 0);
+    if (i >= 0) CHECK_INT(doc.items[i].action, 0);
+    CHECK(find_text(&doc, "<script>active</script>") == -1);
+    CHECK(find_text(&doc, "report.pdf | application/pdf | 123 bytes") >= 0);
+    CHECK(find_text(&doc, "The server truncated this body. Open at the provider to read the complete message.") >= 0);
+    click(s, &doc, "Close message"); select_subject(s, &doc, "First account"); pump(1);
+    CHECK_STR(stub.last_body, "https://example.com/api/v1/mail/accounts/7/messages/same%2F%2B%3D");
+    click(s, &doc, "Close message"); click(s, &doc, "Load older messages"); pump(1);
+    CHECK(strstr(stub.last_list, "cursor=older%2F%2B%3D") != NULL); draw(s, &doc);
+    CHECK(find_text(&doc, "Older") >= 0); CHECK(find_text(&doc, "Load older messages") == -1);
+    int duplicates = 0; for (size_t k = 0; k < doc.count; k++) if (str_eq(doc.items[k].text, "First account")) duplicates++;
+    CHECK_INT(duplicates, 1);
+    // Tri-state segmented controls reset pagination, including explicit false.
+    for (int segment = 0; segment < 3; segment++) {
+        draw(s, &doc); int n = 0, action_id = 0;
+        for (size_t k = 0; k < doc.count; k++) if (doc.items[k].action && !doc.items[k].text && doc.items[k].arg == -1) {
+            if (n++ == segment) { action_id = doc.items[k].action; break; }
+        }
+        CHECK(action_id != 0); s->vt->action(s, action_id, 0, (POINT){0}); pump(2);
+        const char *key[] = { "unread=0", "inbox=0", "starred=0" }; CHECK(strstr(stub.last_list, key[segment]) != NULL);
+        CHECK(strstr(stub.last_list, "cursor=") == NULL);
+    }
+    click(s, &doc, "Reset filters"); pump(2); CHECK(strstr(stub.last_list, "unread=") == NULL);
+    s->vt->visible(s, false); draw(s, &doc); CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "Older") == -1);
+    cleanup(s, &doc, client, &stub);
+}
+static void stale_page(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.block_first = true;
+    stub.entered = CreateEventW(NULL, TRUE, FALSE, NULL); stub.resume = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(1); CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
+    // A new filter generation cancels the first page while it is in flight.
+    click(s, &doc, "Reset filters"); pump(2); SetEvent(stub.resume); pump(1);
+    draw(s, &doc); int titles = 0;
+    for (size_t i = 0; i < doc.count; i++) if (str_eq(doc.items[i].text, "First account")) titles++;
+    CHECK_INT(titles, 1); CHECK_INT(stub.list_calls, 2);
+    // Account removal/revocation purges the old messages and selected body before reloading.
+    select_subject(s, &doc, "Second account"); pump(1);
+    stub.accounts = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.com\",\"provider\":\"gmail\",\"status\":\"reauth\"}],\"providers\":[\"gmail\"]}";
+    s->vt->timer(s, 1910); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Second account") == -1); CHECK(find_text(&doc, "First account") == -1);
+    CHECK(find_text(&doc, "<script>literal</script> [link](https://remote)") == -1);
+    cleanup(s, &doc, client, &stub);
+}
+static void failures(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
+    stub.body_status = 404; select_subject(s, &doc, "Second account"); pump(3); draw(s, &doc);
+    CHECK(find_text(&doc, "Close message") == -1); CHECK(find_text(&doc, "First account") >= 0);
+    stub.body_status = 429; stub.retry_after = 90; select_subject(s, &doc, "Second account"); pump(1); draw(s, &doc);
+    CHECK(find_text(&doc, "Mail cooldown is active. Retry buttons become available when it ends.") >= 0);
+    int i = find_text(&doc, "Retry message"); CHECK(i >= 0); if (i >= 0) CHECK_INT(doc.items[i].action, 0);
+    int calls = (int)stub.calls; s->vt->refresh(s); s->vt->timer(s, 1910); CHECK_INT(stub.calls, calls);
+    s->vt->visible(s, false); s->vt->visible(s, true); CHECK_INT(stub.calls, calls); // Screen changes cannot bypass Retry-After.
+    cleanup(s, &doc, client, &stub);
+}
+static void permissions(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    const char *permission[] = { "read", "manage", "unknown", "admin" };
+    for (size_t i = 0; i < sizeof permission / sizeof *permission; i++) {
+        g_store.device.permission = (char *)permission[i]; CHECK(mail_inbox_offered() == (i == 3));
+    }
+    Request r = {0}; r.client = client; r.tag = 4; r.operation = "mail_messages";
+    CHECK(mail_inbox_result_current(true, 4, &r)); CHECK(!mail_inbox_result_current(true, 5, &r));
+    CHECK(!mail_inbox_result_current(false, 4, &r)); r.cancelled = true; CHECK(!mail_inbox_result_current(true, 4, &r)); r.cancelled = false;
+    g_store.client = NULL; CHECK(!mail_inbox_result_current(true, 4, &r)); g_store.client = client;
+    g_store.route_count = 0; CHECK(!mail_inbox_offered()); g_store.route_count = 1; CHECK(!mail_inbox_offered());
+    g_store.route_count = 2; CHECK(mail_inbox_offered()); CHECK(!store_supports("mail_message"));
+    g_store.route_count = 3; Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
+    g_store.device.permission = "manage"; draw(s, &doc); CHECK(find_text(&doc, "First account") == -1);
+    cleanup(s, &doc, client, &stub);
+}
+void app_mail_inbox_tests(void) {
+    if (!theme.canvas) theme_init();
+    test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
+    test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
+    test_run("mail missing messages recover and cooldown survives screen changes", failures);
+    test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
+}

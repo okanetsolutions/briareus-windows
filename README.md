@@ -104,4 +104,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and send a change,
 
 MCP server registry settings (Admin tokens on compatible servers): see [MCP settings and release gates](docs/mcp-settings.md).
 
+The global read-only [Mail inbox](docs/mail-inbox.md) supports unified/per-account lists, cursor pagination, search, all mail filters and selectable plain-text bodies on compatible servers.
+
 Mail account settings for configured Gmail/Outlook providers are available to Admin tokens on servers advertising the mail API; see [connection flows, compatibility and pending release checks](docs/mail-account-settings.md).

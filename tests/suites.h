@@ -19,6 +19,8 @@ void mcp_tests(void);
 void update_tests(void);
 void repo_tests(void);
 void mail_tests(void);
+void mail_inbox_tests(void);
+void app_mail_inbox_tests(void);
 void repo_index_tests(void);
 
 // app_tests.exe
