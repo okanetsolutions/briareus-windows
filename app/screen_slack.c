@@ -366,7 +366,7 @@ static void header(Screen *base, HeaderInfo *info) {
     snprintf(info->title, sizeof info->title, "Slack inbox");
     snprintf(info->subtitle, sizeof info->subtitle, "Admin · Human replies · Refresh for updates");
     info->buttons[info->button_count++] = (HeaderButton){ 0xE72C, ACT_REFRESH, slack_inbox_offered(), "Refresh Slack inbox", "Refresh" };
-    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack web", "Slack web" };
+    info->buttons[info->button_count++] = (HeaderButton){ 0xE774, ACT_WEB, true, "Open Slack in your browser", "Slack web" };
     if (s->workspace) snprintf(info->subtitle, sizeof info->subtitle, "Workspace %s%s", s->workspace, s->directory ? " · People" : "");
 }
 static void send_message(SlackScreen *s) {
@@ -406,7 +406,7 @@ void slack_inbox_find_confirmed(SlackScreen *s, const char *workspace, uint64_t 
 }
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     SlackScreen *s = (SlackScreen *)base;
-    if (act == ACT_WEB) { app_push_from(base, web_app_screen_new(WEB_APP_SLACK)); return; }
+    if (act == ACT_WEB) { open_web_url("https://app.slack.com/client"); return; }
     if (!sync_access(s)) { changed(s); return; }
     if (GetTickCount64() < s->cooldown) { changed(s); return; }
     switch (act) {
@@ -548,7 +548,6 @@ static LRESULT CALLBACK composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 static void visible(Screen *base, bool shown) {
     SlackScreen *s = (SlackScreen *)base; s->shown = shown;
     if (!shown) { cancel(s); ShowWindow(s->composer, SW_HIDE); return; }
-    if (!sync_access(s)) return;
     if (!s->composer) {
         s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             0, 0, 0, 0, pane_hwnd(base->pane), (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
@@ -556,6 +555,7 @@ static void visible(Screen *base, bool shown) {
         SendMessageW(s->composer, EM_SETLIMITTEXT, 32000, 0); // Allow an over-limit draft; validation blocks sending it.
         SetWindowSubclass(s->composer, composer_proc, 1, (DWORD_PTR)s);
     }
+    if (!sync_access(s)) return;
     composer_set(s); refresh(base);
 }
 static void activated(Screen *base, bool active) {
