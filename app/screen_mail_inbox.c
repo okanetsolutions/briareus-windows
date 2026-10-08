@@ -75,7 +75,8 @@ static void load_list(Inbox *s);
 static void load_body(Inbox *s);
 static void failure(Inbox *s, Request *r, char **error, bool detail) {
     text_set(error, mail_read_error(r->error.status, detail));
-    if (r->error.status == 401 || r->error.status == 403) {
+    if (r->error.status == 401 || r->error.status == 403
+        || (r->error.status == 404 && str_eq(r->operation, "settings_mail_accounts"))) {
         clear_private(s); text_set(&s->account_error, mail_read_error(r->error.status, false)); return;
     }
     if (r->error.status == 409) {

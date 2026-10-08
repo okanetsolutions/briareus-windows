@@ -17,12 +17,12 @@ static const char *PAGE = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"
 static const char *OLDER = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100},{\"accountId\":7,\"id\":\"old\",\"subject\":\"Older\",\"receivedAt\":50}],\"nextCursor\":null}";
 typedef struct {
     const char *accounts;
-    int body_status, list_status;
+    int body_status, list_status, account_status;
     double retry_after;
     volatile LONG calls, list_calls, body_calls;
     char *last_list, *last_body;
     HANDLE entered, resume;
-    bool block_first;
+    bool block_first, block_body;
 } InboxStub;
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers, const void *body, size_t bytes,
     int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
@@ -31,15 +31,21 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     // Capture on the worker; assert only after completion has been delivered on the UI thread.
     bool read = str_eq(method, "GET") && bytes == 0;
     const char *answer = "{}"; *status = read ? 200 : 500; *error = NULL;
-    if (strstr(url, "settings/mail/accounts")) answer = s->accounts;
+    if (strstr(url, "settings/mail/accounts")) {
+        answer = s->accounts;
+        if (s->account_status) { *status = s->account_status; answer = "{}"; }
+    }
     else if (strstr(url, "/mail/messages")) {
         LONG n = InterlockedIncrement(&s->list_calls);
         free(s->last_list); s->last_list = xstrdup(url);
         if (s->block_first && n == 1) { SetEvent(s->entered); WaitForSingleObject(s->resume, 5000); }
         answer = strstr(url, "cursor=") ? OLDER : PAGE;
+        if (strstr(url, "account=7")) answer = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100}],\"nextCursor\":null}";
+        if (strstr(url, "account=8")) answer = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200}],\"nextCursor\":null}";
         if (s->list_status) { *status = s->list_status; answer = "{\"error\":\"private provider error\"}"; }
     } else {
-        InterlockedIncrement(&s->body_calls); free(s->last_body); s->last_body = xstrdup(url);
+        LONG n = InterlockedIncrement(&s->body_calls); free(s->last_body); s->last_body = xstrdup(url);
+        if (s->block_body && n == 1) { SetEvent(s->entered); WaitForSingleObject(s->resume, 5000); }
         bool second = strstr(url, "/8/") != NULL;
         answer = second ? "{\"message\":{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"isRead\":false,\"body\":{\"text\":\"<script>literal</script> [link](https://remote)\",\"html\":\"<script>active</script>\",\"truncated\":true},\"attachments\":[{\"name\":\"report.pdf\",\"size\":123,\"mimeType\":\"application/pdf\"}]}}"
             : "{\"message\":{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"isRead\":false,\"body\":{\"text\":\"First body\"}}}";
@@ -120,6 +126,10 @@ static void screen_reads(void) {
         CHECK(strstr(stub.last_list, "cursor=") == NULL);
     }
     click(s, &doc, "Reset filters"); pump(2); CHECK(strstr(stub.last_list, "unread=") == NULL);
+    click(s, &doc, "one@example.com"); pump(2); draw(s, &doc);
+    CHECK(strstr(stub.last_list, "account=7") != NULL); CHECK(strstr(stub.last_list, "cursor=") == NULL);
+    CHECK(find_text(&doc, "First account") >= 0); CHECK(find_text(&doc, "Second account") == -1);
+    click(s, &doc, "All mailboxes"); pump(2); CHECK(strstr(stub.last_list, "account=") == NULL);
     s->vt->visible(s, false); draw(s, &doc); CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "Older") == -1);
     cleanup(s, &doc, client, &stub);
 }
@@ -153,6 +163,23 @@ static void failures(void) {
     s->vt->visible(s, false); s->vt->visible(s, true); CHECK_INT(stub.calls, calls); // Screen changes cannot bypass Retry-After.
     cleanup(s, &doc, client, &stub);
 }
+static void stale_body(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.block_body = true;
+    stub.entered = CreateEventW(NULL, TRUE, FALSE, NULL); stub.resume = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); select_subject(s, &doc, "Second account");
+    CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
+    select_subject(s, &doc, "First account"); pump(1); SetEvent(stub.resume); pump(1); draw(s, &doc);
+    CHECK(find_text(&doc, "First body") >= 0); CHECK(find_text(&doc, "<script>literal</script> [link](https://remote)") == -1);
+    // A route disappearing at the account status refresh also clears private content.
+    stub.account_status = 404; s->vt->timer(s, 1910); pump(1); draw(s, &doc);
+    CHECK(find_text(&doc, "First body") == -1); CHECK(find_text(&doc, "First account") == -1);
+    stub.account_status = 0; click(s, &doc, "Retry account status"); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "First account") >= 0);
+    stub.body_status = 403; select_subject(s, &doc, "First account"); pump(1); draw(s, &doc);
+    CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "First body") == -1);
+    cleanup(s, &doc, client, &stub);
+}
 static void permissions(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
     const char *permission[] = { "read", "manage", "unknown", "admin" };
@@ -174,5 +201,6 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
     test_run("mail missing messages recover and cooldown survives screen changes", failures);
+    test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
 }
