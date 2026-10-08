@@ -75,6 +75,9 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers, the Forge accounts and the Slack workspaces, each with ＋ New.
 Screen *settings_screen_new(void);
+Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
+void settings_mcp_changed(void);
+bool mcp_settings_supported(const char *operation);
 /// Global mail navigation, gated by the deployed catalog and token permission.
 bool mail_settings_offered(void);
 Screen *mail_screen_new(void);

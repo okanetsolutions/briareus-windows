@@ -386,6 +386,13 @@ static const ApiRoute ROUTES[] = {
     { "create_slack_workspace", "POST", "settings/slack/workspaces" },
     { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" },
     { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
+    // Operator MCP registry; availability and admin access come from the deployed catalog.
+    { "settings_mcp_servers", "GET", "settings/mcp/servers" },
+    { "create_mcp_server", "POST", "settings/mcp/servers" },
+    { "update_mcp_server", "PUT", "settings/mcp/servers/{id}" },
+    { "delete_mcp_server", "DELETE", "settings/mcp/servers/{id}" },
+    { "connect_mcp_server", "POST", "settings/mcp/servers/{id}/connect" },
+    { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
     // Global mailbox settings; all six routes require an Admin token in the deployed catalog.
     { "settings_mail_accounts", "GET", "settings/mail/accounts" },
     { "connect_mail_account", "POST", "settings/mail/accounts/connect" },

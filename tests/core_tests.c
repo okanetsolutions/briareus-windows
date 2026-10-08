@@ -900,6 +900,7 @@ int main(void) {
     sftp_tests();
     browser_tests();
     meet_tests();
+    mcp_tests();
     update_tests();
     repo_tests();
     mail_tests();
