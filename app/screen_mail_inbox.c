@@ -22,9 +22,8 @@ typedef struct {
     MailFilter filter;
     Request *account_read, *list_read, *body_read;
     char *selected_id, *account_error, *list_error, *body_error, *notice;
-    int selected_account, generation, failures;
+    int selected_account, generation;
     bool shown, accounts_loaded, loaded, modal, retired;
-    ULONGLONG retry_until;
 } Inbox;
 
 bool mail_inbox_offered(void) {
@@ -64,10 +63,10 @@ static bool current(Inbox *s, Request *r) {
     if (!mail_inbox_offered() || r->client != g_store.client) { clear_private(s); repaint(s); }
     return false;
 }
-static bool ready(Inbox *s) { return s->shown && !s->modal && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= s->retry_until; }
+static bool ready(Inbox *s) { return s->shown && !s->modal && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
 static void arm(Inbox *s) {
     if (!s->shown || s->modal || !g_store.active || !mail_inbox_offered() || !window(s)) return;
-    ULONGLONG tick = GetTickCount64(), delay = tick < s->retry_until ? s->retry_until - tick : 30000;
+    ULONGLONG tick = GetTickCount64(), delay = tick < g_store.mail_retry_until ? g_store.mail_retry_until - tick : 30000;
     SetTimer(window(s), TIMER_INBOX, (UINT)(delay > INT_MAX ? INT_MAX : delay), NULL);
 }
 static void load_accounts(Inbox *s);
@@ -84,9 +83,9 @@ static void failure(Inbox *s, Request *r, char **error, bool detail) {
         text_set(&s->account_error, mail_read_error(409, false));
     }
     if (r->error.status == 429 || r->error.status == 503 || r->error.status == 0 || r->error.status >= 500) {
-        if (s->failures < 4) s->failures++;
-        ULONGLONG until = GetTickCount64() + (ULONGLONG)mail_settings_retry_ms(s->failures, r->error.retry_after);
-        if (until > s->retry_until) s->retry_until = until;
+        if (g_store.mail_failures < 4) g_store.mail_failures++;
+        ULONGLONG until = GetTickCount64() + (ULONGLONG)mail_settings_retry_ms(g_store.mail_failures, r->error.retry_after);
+        if (until > g_store.mail_retry_until) g_store.mail_retry_until = until;
     }
     arm(s);
 }
@@ -139,7 +138,7 @@ static void list_done(void *owner, Request *r) {
                 // Revoked accounts may still occur in the server's synced copy; skip them without losing older pages.
                 char *next = page.next_cursor; page.next_cursor = NULL;
                 mail_messages_prune(&page, &s->accounts); page.next_cursor = next;
-                mail_messages_append(&s->messages, &page); s->loaded = true; s->failures = 0;
+                mail_messages_append(&s->messages, &page); s->loaded = true; g_store.mail_failures = 0;
                 text_set(&s->list_error, NULL);
             }
         }
@@ -160,12 +159,16 @@ static void accounts_done(void *owner, Request *r) {
         if (!mail_accounts_parse(r->result, &fresh)) {
             clear_private(s); text_set(&s->account_error, "The server returned an unexpected account list. Retry account status.");
         } else {
-            bool removed = false;
+            bool changed = false;
             for (size_t i = 0; i < s->accounts.count; i++) {
                 const MailAccount *a = &s->accounts.accounts[i];
-                if (mail_account_readable(&s->accounts, a->id) && !mail_account_readable(&fresh, a->id)) removed = true;
+                if (mail_account_readable(&s->accounts, a->id) && !mail_account_readable(&fresh, a->id)) changed = true;
             }
-            if (removed) reset_list(s); // Includes bodies, pending requests and pagination of removed/revoked accounts.
+            for (size_t i = 0; i < fresh.count; i++) {
+                const MailAccount *a = &fresh.accounts[i];
+                if (mail_account_readable(&fresh, a->id) && !mail_account_readable(&s->accounts, a->id)) changed = true;
+            }
+            if (changed) reset_list(s); // Reload skipped rows as well as clearing removed/revoked accounts.
             mail_accounts_free(&s->accounts); s->accounts = fresh; s->accounts_loaded = true;
             if (s->filter.account && !mail_account_readable(&fresh, s->filter.account)) { s->filter.account = 0; reset_list(s); }
             text_set(&s->account_error, NULL);
@@ -236,7 +239,7 @@ static void layout(Screen *base, Doc *doc) {
     if (!store_supports("mail_message")) clear_selection(s);
     bool available = ready(s);
     if (s->notice) doc_notice(doc, x, w, s->notice);
-    if (s->retry_until > GetTickCount64()) doc_notice(doc, x, w, "Mail cooldown is active. Retry buttons become available when it ends.");
+    if (g_store.mail_retry_until > GetTickCount64()) doc_notice(doc, x, w, "Mail cooldown is active. Retry buttons become available when it ends.");
     ButtonSpec controls[] = {
         {0, "Search", BUTTON_PLAIN, ACT_Q, 0, true}, {0, "Label/folder", BUTTON_PLAIN, ACT_LABEL, 0, true},
         {0, "Thread", BUTTON_PLAIN, ACT_THREAD, 0, true}, {0, "Reset filters", BUTTON_PLAIN, ACT_RESET, 0, true},

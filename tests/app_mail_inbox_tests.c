@@ -16,7 +16,7 @@ static const char *ACCOUNTS = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.
 static const char *PAGE = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200,\"isRead\":false},{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100,\"isRead\":false}],\"nextCursor\":\"older/+=\"}";
 static const char *OLDER = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100},{\"accountId\":7,\"id\":\"old\",\"subject\":\"Older\",\"receivedAt\":50}],\"nextCursor\":null}";
 typedef struct {
-    const char *accounts;
+    const char *accounts, *page;
     int body_status, list_status, account_status;
     double retry_after;
     volatile LONG calls, list_calls, body_calls;
@@ -39,7 +39,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         LONG n = InterlockedIncrement(&s->list_calls);
         free(s->last_list); s->last_list = xstrdup(url);
         if (s->block_first && n == 1) { SetEvent(s->entered); WaitForSingleObject(s->resume, 5000); }
-        answer = strstr(url, "cursor=") ? OLDER : PAGE;
+        answer = strstr(url, "cursor=") ? OLDER : s->page ? s->page : PAGE;
         if (strstr(url, "account=7")) answer = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100}],\"nextCursor\":null}";
         if (strstr(url, "account=8")) answer = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200}],\"nextCursor\":null}";
         if (s->list_status) { *status = s->list_status; answer = "{\"error\":\"private provider error\"}"; }
@@ -166,7 +166,37 @@ static void failures(void) {
     int i = find_text(&doc, "Retry message"); CHECK(i >= 0); if (i >= 0) CHECK_INT(doc.items[i].action, 0);
     int calls = (int)stub.calls; s->vt->refresh(s); s->vt->timer(s, 1910); CHECK_INT(stub.calls, calls);
     s->vt->visible(s, false); s->vt->visible(s, true); CHECK_INT(stub.calls, calls); // Screen changes cannot bypass Retry-After.
+    ULONGLONG until = g_store.mail_retry_until;
+    s->vt->destroy(s); s = mail_screen_new(); s->vt->visible(s, true);
+    s->vt->refresh(s); s->vt->timer(s, 1910); draw(s, &doc);
+    CHECK_INT(stub.calls, calls); CHECK(g_store.mail_retry_until == until); CHECK_INT(g_store.mail_failures, 1);
+    CHECK(find_text(&doc, "Mail cooldown is active. Retry buttons become available when it ends.") >= 0);
+    // Simulate the deadline passing without waiting for the server's 90-second cooldown.
+    g_store.mail_retry_until = GetTickCount64(); s->vt->timer(s, 1910); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "First account") >= 0); CHECK_INT(g_store.mail_failures, 0);
     cleanup(s, &doc, client, &stub);
+}
+static void readable_accounts(void) {
+    const char *initial[] = {
+        "{\"accounts\":[{\"id\":7,\"email\":\"one@example.com\",\"provider\":\"gmail\",\"status\":\"connected\"},{\"id\":8,\"email\":\"two@example.com\",\"provider\":\"outlook\",\"status\":\"reauth\"}],\"providers\":[\"gmail\",\"outlook\"]}",
+        "{\"accounts\":[{\"id\":7,\"email\":\"one@example.com\",\"provider\":\"gmail\",\"status\":\"connected\"}],\"providers\":[\"gmail\"]}"
+    };
+    for (size_t i = 0; i < sizeof initial / sizeof *initial; i++) {
+        InboxStub stub = {0}; stub.accounts = initial[i];
+        if (i == 1) stub.page = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100}],\"nextCursor\":\"older/+=\"}";
+        ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+        s->vt->visible(s, true); pump(2); draw(s, &doc);
+        CHECK(find_text(&doc, "First account") >= 0); CHECK(find_text(&doc, "Second account") == -1);
+        click(s, &doc, "Load older messages"); pump(1); draw(s, &doc);
+        CHECK(find_text(&doc, "Older") >= 0); CHECK(find_text(&doc, "Load older messages") == -1);
+        s->vt->timer(s, 1910); pump(1); CHECK_INT(stub.list_calls, 2); // Unchanged accounts keep loaded pages.
+        stub.accounts = ACCOUNTS; stub.page = PAGE;
+        s->vt->timer(s, 1910); pump(2); draw(s, &doc);
+        CHECK_INT(stub.list_calls, 3); CHECK(strstr(stub.last_list, "cursor=") == NULL);
+        CHECK(find_text(&doc, "Second account") >= 0); CHECK(find_text(&doc, "First account") >= 0);
+        CHECK(find_text(&doc, "Older") == -1); CHECK(find_text(&doc, "Load older messages") >= 0);
+        cleanup(s, &doc, client, &stub);
+    }
 }
 static void stale_body(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.block_body = true;
@@ -219,6 +249,7 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);
     test_run("mail missing messages recover and cooldown survives screen changes", failures);
+    test_run("mail inbox reloads loaded pages when accounts reconnect or are added", readable_accounts);
     test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
     test_run("mail missing list routes recover and unavailable lists respect Retry-After", list_failures);
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
