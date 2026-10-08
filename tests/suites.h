@@ -10,6 +10,7 @@ void diff_tests(void);
 void models_tests(void);
 void board_tests(void);
 void api_tests(void);
+void contract_tests(void);
 void cache_tests(void);
 void vt_tests(void);
 void sftp_tests(void);
