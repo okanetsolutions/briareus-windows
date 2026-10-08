@@ -372,6 +372,12 @@ void poller_finished(Poller *p, bool failed, double retry_after);
 bool poller_fired(Poller *p, UINT id);
 void poller_set_base(Poller *p, int base_ms);
 
+/// Pull-list cooldowns are shared across screens and persisted in the account's response cache.
+time_t pulls_retry_deadline(const char *repo);
+void pulls_note_failure(const char *repo, const ApiError *error, time_t now);
+void pulls_note_success(const char *repo);
+time_t pulls_sync_time(const Json *result, bool saved, time_t now);
+
 void set_string(char **slot, const char *value);
 /// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.
 const char *finding_severity_label(const char *severity, COLORREF *color);
