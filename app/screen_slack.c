@@ -215,7 +215,7 @@ void slack_inbox_done(void *owner, Request *req) {
         changed(s); return;
     }
     if (!req->ok) {
-        if (req->error.status != 409 && s->reconciling && (s->snapshot_pending & (1u << req->tag))) {
+        if (req->error.status != 409 && req->error.status != 429 && s->reconciling && (s->snapshot_pending & (1u << req->tag))) {
             error_from(s, req); slack_inbox_stream_end(s, s->stream_generation, &req->error); changed(s); return;
         }
         error_from(s, req);

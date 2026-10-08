@@ -263,6 +263,54 @@ static void deliver_inbox_requests(int expected) {
     }
     CHECK_INT(count, expected);
 }
+static void snapshot_rate_limit_resumes_progress(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    apply(s, TAG_HISTORY, "slack_history", SLACK_HISTORY, s->state.generation, 0);
+    set_string(&s->thread, "1712345678.000001");
+    live(s, "ready", LIVE_READY);
+    apply(s, TAG_CONVERSATIONS, "slack_conversations", "{\"conversations\":[{\"id\":\"FIRST1\"}],\"nextCursor\":\"page2\"}", s->state.generation, 0);
+    apply(s, TAG_CONVERSATIONS, "slack_conversations", "{\"conversations\":[{\"id\":\"FIRST2\"}],\"nextCursor\":\"page3\"}", s->state.generation, 0);
+    apply(s, TAG_SNAPSHOT_CHANNEL, "slack_history", "{\"messages\":[{\"ts\":\"1712345680.1\",\"text\":\"missed bot\"}],\"nextCursor\":\"catchup\",\"hasMore\":true}", s->state.generation, 0);
+    apply(s, TAG_SNAPSHOT_THREAD, "slack_thread", SLACK_EMPTY_PAGE, s->state.generation, 0);
+    live(s, "message", LIVE_MESSAGE); live(s, "message.changed", LIVE_EDIT);
+    request_pane(s); s->feed = slack_feed_new(g_store.client, s->workspace, s->stream_generation);
+    SlackFeed *feed = s->feed; unsigned pending_reads = s->snapshot_pending;
+    uint64_t generation = s->state.generation, stream_generation = s->stream_generation;
+    const int tags[] = {TAG_CONVERSATIONS, TAG_DETAIL, TAG_SNAPSHOT_CHANNEL, TAG_SNAPSHOT_THREAD};
+    const char *operations[] = {"slack_conversations", "slack_conversation", "slack_history", "slack_thread"};
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) {
+        Request *req = pending(s, tags[i], operations[i], NULL); req->ok = false;
+        api_error_set(&req->error, API_HTTP, 429, "Rate limited", 60); complete(req);
+        CHECK(s->reconciling); CHECK(s->feed == feed); CHECK_INT(s->snapshot_pending, pending_reads);
+        CHECK_INT(s->state.generation, generation); CHECK_INT(s->stream_generation, stream_generation);
+        CHECK_INT(s->stream_failures, 0); CHECK_INT(s->reconnect_at, 0);
+        CHECK_STR(s->snapshot_cursor, "page3"); CHECK_INT(json_count(s->snapshot_conversations), 2);
+        CHECK_STR(s->snapshot_channel.cursor, "catchup"); CHECK_STR(s->snapshot_thread.cursor, "next");
+        CHECK_INT(s->snapshot.message_count, 1); CHECK_INT(s->buffered.count, 2);
+        CHECK(s->cooldown > GetTickCount64()); CHECK(strstr(s->error, "60 seconds") != NULL);
+        // The timer keeps accepting events but must not issue any read before Retry-After.
+        slack_inbox_pump(s);
+        for (size_t j = 0; j < sizeof tags / sizeof *tags; j++) CHECK(s->requests[tags[j]] == NULL);
+        if (!s->reconciling) { teardown(s); return; }
+    }
+    s->cooldown = 0; slack_inbox_pump(s);
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++) CHECK(s->requests[tags[i]] != NULL);
+    const Request *list = s->requests[TAG_CONVERSATIONS], *channel = s->requests[TAG_SNAPSHOT_CHANNEL], *thread = s->requests[TAG_SNAPSHOT_THREAD];
+    CHECK_STR(json_str(json_get(list ? list->args : NULL, "cursor")), "page3");
+    CHECK_STR(json_str(json_get(channel ? channel->args : NULL, "cursor")), "catchup");
+    CHECK_STR(json_str(json_get(thread ? thread->args : NULL, "cursor")), "next");
+    CHECK_STR(json_str(json_get(thread ? thread->args : NULL, "ts")), "1712345678.000001");
+    deliver_inbox_requests(4);
+    CHECK(!s->reconciling); CHECK_INT(s->snapshot_pending, 0); CHECK(s->feed == feed);
+    CHECK_INT(json_count(s->conversations), 6);
+    CHECK_STR(json_str(json_get(json_at(s->conversations, 0), "id")), "FIRST1");
+    CHECK_STR(json_str(json_get(json_at(s->conversations, 1), "id")), "FIRST2");
+    CHECK(find_message(s, "1712345680.1") != NULL);
+    const SlackMessage *edited = find_message(s, "1712345678.000003"); CHECK(edited != NULL);
+    CHECK_STR(json_str(json_get(edited ? edited->raw : NULL, "text")), "edited own");
+    CHECK_INT(s->buffered.count, 0); CHECK(s->history_loaded); CHECK(s->detail != NULL);
+    teardown(s);
+}
 static void ready_preserves_pending_receipts(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     for (int receipt_first = 0; receipt_first < 2; receipt_first++) {
@@ -729,6 +777,7 @@ void app_slack_tests(void) {
     // per-test leak checkpoints because pane_create also initializes the process-lifetime pane registry.
     inbox_hwnd = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
     CHECK(inbox_hwnd != NULL); inbox_pane = pane_create(inbox_hwnd, false);
+    test_run("Slack snapshot 429 preserves pages and events then resumes saved cursors after cooldown", snapshot_rate_limit_resumes_progress);
     test_run("Slack ownership loss during channel or thread sync resumes ordinary loads and preserves receipts", ownership_loss_during_snapshot);
     test_run("Slack ownership loss during workspace reload restores list and active inbox status", ownership_loss_during_workspace_reload);
     test_run("Slack completed channel and thread reconciliation preserves composer selection and undo", reconcile_preserves_composer_editing);
