@@ -398,10 +398,10 @@ static void day_header_skips_hidden(void) {
     stub.accounts = ACCOUNTS;
     // Newest first, one day, people and notifications interleaved. People must count Ada and Bea, not stop at noreply.
     stub.page = "{\"messages\":["
-        "{\"accountId\":7,\"id\":\"ada\",\"subject\":\"Ada note\",\"receivedAt\":4000,\"sender\":\"Ada <ada@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"bot\",\"subject\":\"Bot note\",\"receivedAt\":3000,\"sender\":\"Bot <noreply@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"bea\",\"subject\":\"Bea note\",\"receivedAt\":2000,\"sender\":\"Bea <bea@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"alert\",\"subject\":\"Alert note\",\"receivedAt\":1000,\"sender\":\"Alerts <notify@example.com>\"}"
+        "{\"accountId\":7,\"id\":\"ada\",\"subject\":\"Ada note\",\"receivedAt\":4000,\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"bot\",\"subject\":\"Bot note\",\"receivedAt\":3000,\"from\":{\"name\":\"Bot\",\"address\":\"noreply@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"bea\",\"subject\":\"Bea note\",\"receivedAt\":2000,\"from\":{\"name\":\"Bea\",\"address\":\"bea@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"alert\",\"subject\":\"Alert note\",\"receivedAt\":1000,\"from\":{\"name\":\"Alerts\",\"address\":\"notify@example.com\"}}"
         "],\"nextCursor\":null}";
     ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
     s->vt->visible(s, true); pump(2); draw(s, &doc);
@@ -466,9 +466,13 @@ static bool fully_in_view(Doc *doc, const char *text, int scroll, int view_h) {
 static char *many_rows(void) {
     Str page; str_init(&page); str_appendf(&page, "{\"messages\":[");
     for (int i = 0; i < 24; i++) {
-        str_appendf(&page, "%s{\"accountId\":7,\"id\":\"m%d\",\"subject\":\"Row %d\",\"snippet\":\"snippet\","
-            "\"receivedAt\":%d,\"sender\":\"Ada <ada@example.com>\",\"isRead\":true}",
-            i ? "," : "", i, i, 24000 - i * 100);
+        // The body stub answers with id same/+=. Row 23 is the one the wide case opens.
+        str_appendf(&page, "%s{\"accountId\":7,\"id\":\"", i ? "," : "");
+        if (i == 23) str_appendf(&page, "same/+=");
+        else str_appendf(&page, "m%d", i);
+        str_appendf(&page, "\",\"subject\":\"Row %d\",\"snippet\":\"snippet\","
+            "\"receivedAt\":%d,\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"},\"isRead\":true}",
+            i, 24000 - i * 100);
     }
     str_appendf(&page, "],\"nextCursor\":null}");
     return page.data;
@@ -492,15 +496,18 @@ static void reader_stays_visible(void) {
     RECT view = pane_content_rect(mail_pane);
     int view_h = view.bottom - view.top;
     layout_attached(s, &doc);
-    if (!(scroll > 0 && fully_in_view(&doc, "Close message", scroll, view_h) && fully_in_view(&doc, "Send", scroll, view_h)))
+    if (!(scroll > 0 && fully_in_view(&doc, "Close message", scroll, view_h)
+        && fully_in_view(&doc, "First body", scroll, view_h) && fully_in_view(&doc, "Send", scroll, view_h)))
         printf("  wide reader scroll=%d view=%d\n", scroll, view_h);
     CHECK(scroll > 0);
     CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
+    CHECK(fully_in_view(&doc, "First body", scroll, view_h));
     CHECK(fully_in_view(&doc, "Send", scroll, view_h));
     CHECK(s->vt->key(s, 'K', false, false)); paint_pane();
     scroll = pane_scroll_y(mail_pane);
     layout_attached(s, &doc);
     CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
+    CHECK(fully_in_view(&doc, "First body", scroll, view_h));
     CHECK(fully_in_view(&doc, "Send", scroll, view_h));
     // Narrow: the reader follows the list. Opening the first row has to scroll to the reader, not leave it below.
     place_pane(480, 640);
