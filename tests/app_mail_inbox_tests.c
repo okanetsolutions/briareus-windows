@@ -305,9 +305,9 @@ static void people_and_notifications(void) {
     InboxStub stub = {0};
     stub.accounts = ACCOUNTS;
     stub.page = "{\"messages\":["
-        "{\"accountId\":7,\"id\":\"p\",\"subject\":\"From a person\",\"receivedAt\":300,\"sender\":\"Ada <ada@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"n\",\"subject\":\"From a bot\",\"receivedAt\":200,\"sender\":\"Bot <noreply@example.com>\"},"
-        "{\"accountId\":7,\"id\":\"c\",\"subject\":\"From a list\",\"receivedAt\":100,\"sender\":\"News <news@example.com>\",\"labels\":[\"CATEGORY_PROMOTIONS\"]},"
+        "{\"accountId\":7,\"id\":\"p\",\"subject\":\"From a person\",\"receivedAt\":300,\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"n\",\"subject\":\"From a bot\",\"receivedAt\":200,\"from\":{\"name\":\"Bot\",\"address\":\"noreply@example.com\"}},"
+        "{\"accountId\":7,\"id\":\"c\",\"subject\":\"From a list\",\"receivedAt\":100,\"from\":{\"name\":\"News\",\"address\":\"news@example.com\"},\"labels\":[\"CATEGORY_PROMOTIONS\"]},"
         "{\"accountId\":7,\"id\":\"e\",\"subject\":\"No sender\",\"receivedAt\":50}"
         "],\"nextCursor\":null}";
     ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
