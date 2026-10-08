@@ -237,6 +237,27 @@ static void account_backoff(void) {
     CHECK(g_store.mail_retry_until > GetTickCount64()); CHECK(g_store.mail_retry_until <= GetTickCount64() + 10000);
     cleanup(s, &doc, client, &stub);
 }
+static void first_page_backoff(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.list_status = 503;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    const int delays[] = { 10000, 20000, 40000, 60000, 60000 };
+    for (int i = 0; i < 5; i++) {
+        // Expire the cooldown without waiting; each retry first reads accounts successfully.
+        g_store.mail_retry_until = GetTickCount64(); ULONGLONG before = GetTickCount64();
+        if (i == 0) s->vt->visible(s, true); else s->vt->timer(s, 1910);
+        pump(2);
+        CHECK_INT(stub.list_calls, i + 1); CHECK_INT(stub.calls, 2 * (i + 1));
+        CHECK_INT(g_store.mail_failures, i < 4 ? i + 1 : 4);
+        CHECK(g_store.mail_retry_until >= before + (ULONGLONG)delays[i]);
+        CHECK(g_store.mail_retry_until <= GetTickCount64() + (ULONGLONG)delays[i]);
+        s->vt->timer(s, 1910); CHECK_INT(stub.calls, 2 * (i + 1));
+    }
+    stub.list_status = 0; g_store.mail_retry_until = GetTickCount64(); ULONGLONG until = g_store.mail_retry_until;
+    s->vt->timer(s, 1910); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "First account") >= 0); CHECK_INT(stub.list_calls, 6);
+    CHECK_INT(g_store.mail_failures, 0); CHECK(g_store.mail_retry_until == until);
+    cleanup(s, &doc, client, &stub);
+}
 static void body_backoff(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
     Screen *s = mail_screen_new(); Doc doc; doc_init(&doc); s->vt->visible(s, true); pump(2);
@@ -305,6 +326,7 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox reloads loaded pages when accounts reconnect or are added", readable_accounts);
     test_run("mail inbox distinguishes pruned pages with older mail from exhausted empty results", pruned_pages);
     test_run("mail account reads reset backoff without reloading messages", account_backoff);
+    test_run("mail first-page failures escalate backoff despite successful account polls", first_page_backoff);
     test_run("mail body reads reset backoff without an account or list read", body_backoff);
     test_run("mail selection rejects stale bodies and clears private content on route or permission failures", stale_body);
     test_run("mail missing list routes recover and unavailable lists respect Retry-After", list_failures);

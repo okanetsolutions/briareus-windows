@@ -170,7 +170,8 @@ static void accounts_done(void *owner, Request *r) {
             }
             if (changed) reset_list(s); // Reload skipped rows as well as clearing removed/revoked accounts.
             mail_accounts_free(&s->accounts); s->accounts = fresh; s->accounts_loaded = true;
-            g_store.mail_failures = 0;
+            // Account polling must not reset backoff while the first message page is still failing.
+            if (s->loaded) g_store.mail_failures = 0;
             if (s->filter.account && !mail_account_readable(&fresh, s->filter.account)) { s->filter.account = 0; reset_list(s); }
             text_set(&s->account_error, NULL);
             if (!s->loaded) load_list(s);
