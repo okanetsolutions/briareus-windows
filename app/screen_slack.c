@@ -201,7 +201,7 @@ void slack_inbox_done(void *owner, Request *req) {
             if (!json_str_nonempty(json_get(m, "text"))) json_set_str(m, "text", json_str(json_get(req->args, "text")));
             if (!str_empty(d->thread)) json_set_str(m, "thread_ts", d->thread);
             slack_message_receipt(&s->state, d->workspace, d->channel, m);
-            if (s->reconciling) slack_message_merge(&s->snapshot, d->workspace, d->channel, m);
+            if (s->reconciling) slack_message_receipt(&s->snapshot, d->workspace, d->channel, m);
             json_free(m);
             set_string(&s->error, NULL); composer_set(s); if (s->base.pane) pane_scroll_to_bottom(s->base.pane);
         } else {

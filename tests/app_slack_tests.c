@@ -455,6 +455,27 @@ static void own_receipts_after_events(void) {
     apply(s, TAG_SEND, "slack_send", receipt, s->state.generation, 0); CHECK_INT(s->state.message_count, 0); CHECK_STR(d->text, "");
     teardown(s);
 }
+static void own_receipt_preserves_snapshot_edit(void) {
+    setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
+    SlackDraft *d = slack_draft(&s->state, s->workspace, s->channel, NULL);
+    set_string(&d->text, "human reply"); CHECK(slack_draft_begin(d));
+    Request *send = pending(s, TAG_SEND, "slack_send", "{\"channel\":\"C1\",\"ts\":\"1712345678.000003\",\"message\":{\"text\":\"human reply\"}}");
+    live(s, "ready", LIVE_READY);
+    // The edit predates ready, so only the history snapshot carries it; no edit event is buffered.
+    apply(s, TAG_SNAPSHOT_CHANNEL, "slack_history", "{\"messages\":[{\"ts\":\"1712345678.000003\",\"text\":\"edited own\",\"edited\":{\"ts\":\"1712345679.000001\"}}],\"nextCursor\":\"\",\"hasMore\":false}", s->state.generation, 0);
+    CHECK(s->reconciling); CHECK_INT(s->snapshot.message_count, 1); CHECK_INT(s->buffered.count, 0);
+    complete(send);
+    CHECK_STR(d->text, ""); CHECK(!d->sending); CHECK(!d->uncertain);
+    CHECK_INT(s->snapshot.message_count, 1);
+    CHECK_STR(json_str(json_get(s->snapshot.messages[0].raw, "text")), "edited own");
+    apply(s, TAG_CONVERSATIONS, "slack_conversations", SLACK_CONVERSATIONS, s->state.generation, 0);
+    apply(s, TAG_DETAIL, "slack_conversation", "{\"conversation\":{\"id\":\"C1\"}}", s->state.generation, 0);
+    CHECK(!s->reconciling); CHECK_INT(s->state.message_count, 1);
+    const SlackMessage *own = find_message(s, "1712345678.000003"); CHECK(own != NULL);
+    CHECK_STR(json_str(json_get(own ? own->raw : NULL, "text")), "edited own");
+    CHECK_STR(json_str(json_get(json_get(own ? own->raw : NULL, "edited"), "ts")), "1712345679.000001");
+    teardown(s);
+}
 static void snapshot_read_sync_and_private_access(void) {
     setup(); SlackScreen *s = (SlackScreen *)slack_screen_new(); load_navigation(s);
     live(s, "conversation.read", "{\"workspaceId\":1727000000002,\"channel\":\"C1\",\"ts\":\"1712345680.1\"}");
@@ -691,6 +712,7 @@ void app_slack_tests(void) {
     test_run("Slack stream 409 JSON fallback Retry-After backoff and stale generations", stream_setup_backoff_and_stale);
     test_run("Slack stream rotation removal account change settings and cancellation", workspace_rotation_removal_revocation);
     test_run("Slack delayed own receipts cannot overwrite live edits or resurrect deletes", own_receipts_after_events);
+    test_run("Slack delayed own receipt preserves an edit already in the reconciliation snapshot", own_receipt_preserves_snapshot_edit);
     test_run("Slack snapshot read synchronization private revocation and JSON 409", snapshot_read_sync_and_private_access);
     test_run("Slack workspace labels use the provider team field", workspace_team_label);
     test_run("Slack recovery revalidates cleared relocated and replacement drafts", recovery_revalidates_draft);
