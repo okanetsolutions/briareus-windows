@@ -79,9 +79,10 @@ static void pump(int expected) {
     }
     CHECK_INT(delivered, expected);
 }
-static void draw(Screen *s, Doc *doc) {
-    doc_begin(doc, NULL, 800); s->vt->layout(s, doc); doc_end(doc);
+static void draw_width(Screen *s, Doc *doc, int width) {
+    doc_begin(doc, NULL, width); s->vt->layout(s, doc); doc_end(doc);
 }
+static void draw(Screen *s, Doc *doc) { draw_width(s, doc, 800); }
 static int find_text(Doc *doc, const char *text) {
     for (size_t i = 0; i < doc->count; i++) if (str_eq(doc->items[i].text, text)) return (int)i;
     return -1;
@@ -392,6 +393,133 @@ static void menus_follow_scroll(void) {
     CHECK(find_text(&doc, "Group threads and duplicates") < 0);
     release_attached(&doc, client, &stub);
 }
+static void day_header_skips_hidden(void) {
+    InboxStub stub = {0};
+    stub.accounts = ACCOUNTS;
+    // Newest first, one day, people and notifications interleaved. People must count Ada and Bea, not stop at noreply.
+    stub.page = "{\"messages\":["
+        "{\"accountId\":7,\"id\":\"ada\",\"subject\":\"Ada note\",\"receivedAt\":4000,\"sender\":\"Ada <ada@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"bot\",\"subject\":\"Bot note\",\"receivedAt\":3000,\"sender\":\"Bot <noreply@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"bea\",\"subject\":\"Bea note\",\"receivedAt\":2000,\"sender\":\"Bea <bea@example.com>\"},"
+        "{\"accountId\":7,\"id\":\"alert\",\"subject\":\"Alert note\",\"receivedAt\":1000,\"sender\":\"Alerts <notify@example.com>\"}"
+        "],\"nextCursor\":null}";
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2); draw(s, &doc);
+    CHECK(find_text(&doc, "Ada note") >= 0); CHECK(find_text(&doc, "Bea note") >= 0);
+    CHECK(find_text(&doc, "Bot note") < 0); CHECK(find_text(&doc, "Alert note") < 0);
+    CHECK(find_text(&doc, "2 conversations, 2 messages") >= 0);
+    CHECK(find_text(&doc, "1 conversation, 1 message") < 0);
+    click(s, &doc, "Notifications"); draw(s, &doc);
+    CHECK(find_text(&doc, "Bot note") >= 0); CHECK(find_text(&doc, "Alert note") >= 0);
+    CHECK(find_text(&doc, "Ada note") < 0);
+    CHECK(find_text(&doc, "2 conversations, 2 messages") >= 0);
+    CHECK(find_text(&doc, "1 conversation, 1 message") < 0);
+    click(s, &doc, "All"); draw(s, &doc);
+    CHECK(find_text(&doc, "4 conversations, 4 messages") >= 0);
+    cleanup(s, &doc, client, &stub);
+}
+static bool chip_inside(Doc *doc, const char *text, int width, int *top) {
+    int i = find_text(doc, text);
+    if (i < 0) { printf("  missing chip %s\n", text); return false; }
+    const RECT *rc = &doc->items[i].rc;
+    if (rc->left < 0 || rc->right > width || rc->right <= rc->left) {
+        printf("  chip %s left=%ld right=%ld width=%d\n", text, (long)rc->left, (long)rc->right, width);
+        return false;
+    }
+    if (doc->items[i].action == 0) return false;
+    *top = rc->top;
+    return true;
+}
+static void filter_chips_fit_narrow_pane(void) {
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; ApiClient *client = setup(&stub);
+    Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    s->vt->visible(s, true); pump(2);
+    // 384 is the mail content width of the minimum window. The filter run is wider than that, so it has to wrap.
+    const int width = 384;
+    const char *chips[] = { "Unread only", "Starred", "Folder", "Grouping", "Reset filters" };
+    draw_width(s, &doc, width);
+    int top0 = 0, wrapped = 0;
+    for (size_t i = 0; i < sizeof chips / sizeof *chips; i++) {
+        int top = 0;
+        CHECK(chip_inside(&doc, chips[i], width, &top));
+        if (i == 0) top0 = top;
+        else if (top != top0) wrapped = 1;
+    }
+    CHECK(wrapped);
+    cleanup(s, &doc, client, &stub);
+}
+static void layout_attached(Screen *s, Doc *doc) {
+    RECT view = pane_content_rect(mail_pane);
+    draw_width(s, doc, pane_content_width(mail_pane));
+    doc_set_view(doc, pane_scroll_y(mail_pane), view.bottom - view.top);
+}
+static bool fully_in_view(Doc *doc, const char *text, int scroll, int view_h) {
+    int i = find_text(doc, text);
+    if (i < 0) { printf("  missing %s\n", text); return false; }
+    int top = doc->items[i].rc.top, bottom = doc->items[i].rc.bottom;
+    if (top < scroll || bottom > scroll + view_h) {
+        printf("  %s top=%d bottom=%d scroll=%d view=%d\n", text, top, bottom, scroll, view_h);
+        return false;
+    }
+    return true;
+}
+static char *many_rows(void) {
+    Str page; str_init(&page); str_appendf(&page, "{\"messages\":[");
+    for (int i = 0; i < 24; i++) {
+        str_appendf(&page, "%s{\"accountId\":7,\"id\":\"m%d\",\"subject\":\"Row %d\",\"snippet\":\"snippet\","
+            "\"receivedAt\":%d,\"sender\":\"Ada <ada@example.com>\",\"isRead\":true}",
+            i ? "," : "", i, i, 24000 - i * 100);
+    }
+    str_appendf(&page, "],\"nextCursor\":null}");
+    return page.data;
+}
+static void place_pane(int width, int height) {
+    MoveWindow(mail_parent, 0, 0, width + 40, height + 40, TRUE);
+    RECT bounds = { 0, 0, width, height };
+    pane_set_bounds(mail_pane, &bounds);
+}
+static void reader_stays_visible(void) {
+    CHECK(mail_pane != NULL);
+    if (!mail_pane) return;
+    char *rows = many_rows();
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.page = rows;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    // Wide: the reader sits beside the list. Opening the last row used to scroll that short reader away.
+    place_pane(1280, 900);
+    pane_set_root(mail_pane, s); pump(2);
+    select_subject(s, &doc, "Row 23"); pump(1); paint_pane();
+    int scroll = pane_scroll_y(mail_pane);
+    RECT view = pane_content_rect(mail_pane);
+    int view_h = view.bottom - view.top;
+    layout_attached(s, &doc);
+    if (!(scroll > 0 && fully_in_view(&doc, "Close message", scroll, view_h) && fully_in_view(&doc, "Send", scroll, view_h)))
+        printf("  wide reader scroll=%d view=%d\n", scroll, view_h);
+    CHECK(scroll > 0);
+    CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
+    CHECK(fully_in_view(&doc, "Send", scroll, view_h));
+    CHECK(s->vt->key(s, 'K', false, false)); paint_pane();
+    scroll = pane_scroll_y(mail_pane);
+    layout_attached(s, &doc);
+    CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
+    CHECK(fully_in_view(&doc, "Send", scroll, view_h));
+    // Narrow: the reader follows the list. Opening the first row has to scroll to the reader, not leave it below.
+    place_pane(480, 640);
+    select_subject(s, &doc, "Row 0"); pump(1); paint_pane();
+    scroll = pane_scroll_y(mail_pane);
+    view = pane_content_rect(mail_pane);
+    view_h = view.bottom - view.top;
+    layout_attached(s, &doc);
+    int row0 = find_text(&doc, "Row 0"), close = find_text(&doc, "Close message");
+    CHECK(row0 >= 0);
+    if (row0 >= 0 && !(doc.items[row0].rc.top < scroll && fully_in_view(&doc, "Close message", scroll, view_h)))
+        printf("  stacked reader row=%d scroll=%d view=%d close=%d\n", (int)doc.items[row0].rc.top, scroll, view_h,
+            close >= 0 ? (int)doc.items[close].rc.top : -1);
+    if (row0 >= 0) CHECK(doc.items[row0].rc.top < scroll);
+    CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
+    place_pane(360, 160);
+    release_attached(&doc, client, &stub);
+    free(rows);
+}
 static void focus_reveal_skips_open_row(void) {
     CHECK(mail_pane != NULL);
     if (!mail_pane) return;
@@ -462,6 +590,9 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox and bodies require catalog admin permission and current generations", permissions);
     test_run("mail inbox menus open under the pinned chrome after the list scrolls", menus_follow_scroll);
     test_run("mail inbox keyboard focus scrolls to the focused row while a lower conversation stays open", focus_reveal_skips_open_row);
+    test_run("mail inbox day header counts every shown conversation on that day", day_header_skips_hidden);
+    test_run("mail inbox filter chips stay inside a narrow pane", filter_chips_fit_narrow_pane);
+    test_run("mail inbox keeps an opened message in view", reader_stays_visible);
     if (mail_pane) pane_destroy(mail_pane);
     if (mail_parent) DestroyWindow(mail_parent);
     mail_pane = NULL; mail_parent = NULL;

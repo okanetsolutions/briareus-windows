@@ -26,8 +26,8 @@ typedef struct {
     MailFilter filter;
     Request *account_read, *list_read, *body_read;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
-    int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen;
-    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, in_scroll;
+    int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y;
+    bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, in_scroll, stacked;
 } Inbox;
 
 bool mail_inbox_offered(void) {
@@ -614,10 +614,16 @@ static void add_command(Doc *doc, const RECT *rc, wchar_t glyph, const char *tex
     if (action) { it->action = action; it->hand = true; }
     if (tip) it->tip = xstrdup(tip);
 }
-static int add_chip(Doc *doc, int x, int y, int h, const char *text, const char *shown, bool on, bool accent, bool caret, int action, intptr_t arg) {
+static int chip_span(Doc *doc, const char *shown, bool accent, bool caret) {
     int tw = text_width(doc->cv, shown, FONT_CAPTION) + px(24) + (caret ? px(14) : 0);
     if (caret && tw > px(280)) tw = px(280);
     if (!accent && tw < px(36)) tw = px(36);
+    return tw;
+}
+// `max_w` clamps a chip that would otherwise paint past the row; 0 leaves the measured width.
+static int add_chip(Doc *doc, int x, int y, int h, const char *text, const char *shown, bool on, bool accent, bool caret, int action, intptr_t arg, int max_w) {
+    int tw = chip_span(doc, shown, accent, caret);
+    if (max_w > 0 && tw > max_w) tw = max_w;
     RECT rc = { x, y, x + tw, y + h };
     ChipData *d = xcalloc(1, sizeof *d);
     d->shown = xstrdup(shown ? shown : ""); d->on = on; d->accent = accent; d->caret = caret;
@@ -633,6 +639,49 @@ static int menu_row(Doc *doc, int x, int y, int w, const char *text, bool on, in
     it->data = d; it->free_data = free; it->text = xstrdup(text ? text : "");
     if (action) { it->action = action; it->arg = arg; it->hand = true; }
     return px(28);
+}
+// Unread, Starred, Folder, Grouping and Reset. They share the kind-chip line when the run fits, and wrap inside `w` when it does not.
+static int layout_filters(Inbox *s, Doc *doc, int x, int w, int fy, int fh, int kind_w, Anchors *anchors) {
+    char *folder = folder_caption(s);
+    const char *group = group_caption(s);
+    struct {
+        const char *text, *shown;
+        bool on, accent, caret;
+        int action;
+        intptr_t arg;
+        RECT *anchor;
+        int max_w;
+    } specs[5] = {
+        { "Unread only", "Unread only", s->filter.unread == 1, false, false, ACT_UNREAD, 0, NULL, 0 },
+        { "Starred", "Starred", s->filter.starred == 1, false, false, ACT_STARRED, 0, NULL, 0 },
+        { "Folder", folder, s->menu == MENU_FOLDER || s->filter.inbox >= 0 || !str_empty(s->filter.label), false, true, ACT_MENU, MENU_FOLDER, &anchors->folder, px(220) },
+        { "Grouping", group, s->menu == MENU_GROUP, false, true, ACT_MENU, MENU_GROUP, &anchors->group, 0 },
+        { "Reset filters", "Reset", false, true, false, ACT_RESET, 0, NULL, 0 },
+    };
+    enum { N = 5 };
+    int gap = px(8), widths[N], filters = 0;
+    for (int i = 0; i < N; i++) {
+        int span = chip_span(doc, specs[i].shown, specs[i].accent, specs[i].caret);
+        if (specs[i].max_w > 0 && span > specs[i].max_w) span = specs[i].max_w;
+        if (span > w) span = w;
+        widths[i] = span;
+        filters += span;
+    }
+    filters += gap * (N - 1);
+    bool wrap = filters > w;
+    int fx = x + w - filters;
+    bool same = !wrap && fx >= x + kind_w + px(16);
+    int cy = same ? fy : fy + fh + gap;
+    int cx = wrap ? x : fx;
+    if (cx < x) cx = x;
+    for (int i = 0; i < N; i++) {
+        if (wrap && cx > x && cx + widths[i] > x + w) { cx = x; cy += fh + gap; }
+        int tw = add_chip(doc, cx, cy, fh, specs[i].text, specs[i].shown, specs[i].on, specs[i].accent, specs[i].caret, specs[i].action, specs[i].arg, widths[i]);
+        if (specs[i].anchor) *specs[i].anchor = (RECT){ cx, cy, cx + tw, cy + fh };
+        cx += tw + gap;
+    }
+    free(folder);
+    return cy;
 }
 
 typedef struct { char *name, *meta; } AttachRow;
@@ -704,28 +753,8 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
         sx += widths[i] + px(4);
     }
     free(pc); free(nc); free(ac);
-    char *folder = folder_caption(s);
-    const char *group = group_caption(s);
-    int unread_w = text_width(doc->cv, "Unread only", FONT_CAPTION) + px(24);
-    int star_w = text_width(doc->cv, "Starred", FONT_CAPTION) + px(24);
-    int folder_w = text_width(doc->cv, folder, FONT_CAPTION) + px(38); if (folder_w > px(220)) folder_w = px(220);
-    int group_w = text_width(doc->cv, group, FONT_CAPTION) + px(38); if (group_w > px(280)) group_w = px(280);
-    int reset_w = text_width(doc->cv, "Reset", FONT_CAPTION) + px(8);
-    int filters = unread_w + star_w + folder_w + group_w + reset_w + px(8) * 4;
-    int fx = x + w - filters, filter_y = fy;
-    if (fx < x + total + px(16)) { filter_y = fy + fh + px(8); fx = x + w - filters; if (fx < x) fx = x; }
-    int cx = fx;
-    cx += add_chip(doc, cx, filter_y, fh, "Unread only", "Unread only", s->filter.unread == 1, false, false, ACT_UNREAD, 0) + px(8);
-    cx += add_chip(doc, cx, filter_y, fh, "Starred", "Starred", s->filter.starred == 1, false, false, ACT_STARRED, 0) + px(8);
-    anchors->folder = (RECT){ cx, filter_y, cx + folder_w, filter_y + fh };
-    add_chip(doc, cx, filter_y, fh, "Folder", folder, s->menu == MENU_FOLDER || s->filter.inbox >= 0 || !str_empty(s->filter.label), false, true, ACT_MENU, MENU_FOLDER);
-    cx += folder_w + px(8);
-    anchors->group = (RECT){ cx, filter_y, cx + group_w, filter_y + fh };
-    add_chip(doc, cx, filter_y, fh, "Grouping", group, s->menu == MENU_GROUP, false, true, ACT_MENU, MENU_GROUP);
-    cx += group_w + px(8);
-    add_chip(doc, cx, filter_y, fh, "Reset filters", "Reset", false, true, false, ACT_RESET, 0);
-    free(folder);
-    doc->y = (filter_y > fy ? filter_y : fy) + fh + px(12);
+    int filter_y = layout_filters(s, doc, x, w, fy, fh, total, anchors);
+    doc->y = filter_y + fh + px(12);
 }
 static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
     if (!s->menu) return s->chrome_bottom;
@@ -845,7 +874,12 @@ static void layout_list(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, 
         if (!convo_shown(s, &rows[i])) continue;
         if (rows[i].day != last_day) {
             int convos = 0, messages = 0;
-            for (size_t k = i; k < n && convo_shown(s, &rows[k]) && rows[k].day == rows[i].day; k++) { convos++; messages += (int)rows[k].count; }
+            // A hidden conversation between two shown ones on this day is skipped. The tally stops only when the day changes.
+            for (size_t k = i; k < n && rows[k].day == rows[i].day; k++) {
+                if (!convo_shown(s, &rows[k])) continue;
+                convos++;
+                messages += (int)rows[k].count;
+            }
             layout_day(doc, x, w, rows[i].day, convos, messages);
             last_day = rows[i].day;
         }
@@ -1016,7 +1050,7 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
 static void layout(Screen *base, Doc *doc) {
     Inbox *s = (Inbox *)base; int x = px(16), w = doc->width - x * 2;
     if (w < px(120)) w = px(120);
-    s->focus_y = -1; s->open_y = -1;
+    s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->stacked = false;
     doc_space(doc, px(12));
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
@@ -1054,8 +1088,27 @@ static void layout(Screen *base, Doc *doc) {
     layout_list(s, doc, rows, nrow, x, list_w, available);
     int list_bottom = doc->y;
     if (!stack) doc->y = top;
+    s->stacked = stack;
+    s->reader_y = doc->y;
+    int reader_first = (int)doc->count;
     layout_reader(s, doc, rows, nrow, reader_x, reader_w, available);
-    if (!stack && list_bottom > doc->y) doc->y = list_bottom;
+    if (!stack) {
+        // The reader stays beside the list and, once it is taller than the view, scrolls on its own. Opening or
+        // moving in the list can no longer carry a short message above the viewport. The page is as long as the
+        // list, or as the reader's window when the reader needs that.
+        if (s->base.pane) {
+            RECT view = pane_content_rect(s->base.pane);
+            int room = (view.bottom - view.top) - top - px(12);
+            if (room < 0) room = 0;
+            int shown = doc->y - top;
+            if (shown > room) shown = room;
+            int page = top + shown;
+            if (page < list_bottom) page = list_bottom;
+            doc->y = page;
+            if (s->reveal_open) doc->sticky_scroll = 0;
+            doc_sticky(doc, reader_first, (int)doc->count, doc->y);
+        } else if (list_bottom > doc->y) doc->y = list_bottom;
+    }
     int content_bottom = doc->y;
     int menu_bottom = layout_menu(s, doc, &anchors);
     if (content_bottom > doc->y) doc->y = content_bottom;
@@ -1100,7 +1153,9 @@ static void scrolled(Screen *base, bool at_bottom) {
     if (s->in_scroll) return;
     s->in_scroll = true;
     if (s->reveal_focus || s->reveal_open) {
-        int row = s->reveal_focus ? s->focus_y : s->open_y;
+        // j/k keeps the focused list row under the chrome. A stacked reader sits below the whole list, so opening
+        // one scrolls to the reader; beside the list the reader follows the scroll and keeps its own.
+        int row = s->reveal_focus ? s->focus_y : s->stacked ? s->reader_y : s->open_y;
         s->reveal_focus = false; s->reveal_open = false;
         if (s->base.pane && row >= 0) {
             int target = row - s->chrome_bottom;
@@ -1156,5 +1211,5 @@ static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header =
     .footer_height = footer_height, .footer_paint = footer_paint };
 Screen *mail_screen_new(void) {
     Inbox *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("mail");
-    mail_filter_init(&s->filter); s->focus_message = -1; s->focus_y = s->open_y = -1; return &s->base;
+    mail_filter_init(&s->filter); s->focus_message = -1; s->focus_y = s->open_y = s->reader_y = -1; return &s->base;
 }
