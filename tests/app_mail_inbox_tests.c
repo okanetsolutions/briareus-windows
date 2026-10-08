@@ -17,7 +17,7 @@ static const char *ACCOUNTS = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.
 static const char *PAGE = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200,\"isRead\":false},{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100,\"isRead\":false}],\"nextCursor\":\"older/+=\"}";
 static const char *OLDER = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100},{\"accountId\":7,\"id\":\"old\",\"subject\":\"Older\",\"receivedAt\":50}],\"nextCursor\":null}";
 typedef struct {
-    const char *accounts, *page;
+    const char *accounts, *page, *older;
     int body_status, list_status, account_status;
     double retry_after;
     volatile LONG calls, list_calls, body_calls;
@@ -40,7 +40,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         LONG n = InterlockedIncrement(&s->list_calls);
         free(s->last_list); s->last_list = xstrdup(url);
         if (s->block_first && n == 1) { SetEvent(s->entered); WaitForSingleObject(s->resume, 5000); }
-        answer = strstr(url, "cursor=") ? OLDER : s->page ? s->page : PAGE;
+        answer = strstr(url, "cursor=") ? (s->older ? s->older : OLDER) : s->page ? s->page : PAGE;
         if (strstr(url, "account=7")) answer = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100}],\"nextCursor\":null}";
         if (strstr(url, "account=8")) answer = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200}],\"nextCursor\":null}";
         if (s->list_status) { *status = s->list_status; answer = "{\"error\":\"private provider error\"}"; }
@@ -642,6 +642,120 @@ static void opened_thread_shows_selected(void) {
     release_attached(&doc, client, &stub);
     free(rows);
 }
+static char *open_page(char **older_out) {
+    Str page; str_init(&page);
+    str_appendf(&page, "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"threadId\":\"t-open\",\"subject\":\"Opened note\","
+        "\"snippet\":\"Opened snippet\",\"receivedAt\":90000,\"isRead\":true,"
+        "\"from\":{\"name\":\"Ada\",\"address\":\"ada@example.com\"}}],\"nextCursor\":\"older/page\"}");
+    Str older; str_init(&older);
+    str_appendf(&older, "{\"messages\":[");
+    for (int i = 1; i <= 12; i++) {
+        const char *snip = i == 12 ? "Oldest preview" : "Older preview";
+        str_appendf(&older, "%s{\"accountId\":7,\"id\":\"old%d\",\"threadId\":\"t-open\",\"subject\":\"Older %d\","
+            "\"snippet\":\"%s\",\"receivedAt\":%d,\"isRead\":true,"
+            "\"from\":{\"name\":\"Bea\",\"address\":\"bea@example.com\"}}",
+            i == 1 ? "" : ",", i, i, snip, 90000 - i * 100);
+    }
+    for (int i = 0; i < 8; i++) {
+        str_appendf(&older, ",{\"accountId\":7,\"id\":\"x%d\",\"threadId\":\"tx%d\",\"subject\":\"Extra %d\","
+            "\"snippet\":\"extra\",\"receivedAt\":%d,\"isRead\":true,"
+            "\"from\":{\"name\":\"Cy\",\"address\":\"cy@example.com\"}}",
+            i, i, i, 1000 - i);
+    }
+    str_appendf(&older, "],\"nextCursor\":null}");
+    *older_out = older.data;
+    return page.data;
+}
+static void opened_message_follows_older_mail(void) {
+    CHECK(mail_pane != NULL);
+    if (!mail_pane) return;
+    char *older = NULL, *rows = open_page(&older);
+    InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.page = rows; stub.older = older;
+    ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+    // Wide: the only loaded block starts at the top. An older page of the same thread is drawn above it.
+    place_pane(1280, 900);
+    pane_set_root(mail_pane, s); pump(2);
+    select_subject(s, &doc, "Opened note"); paint_pane(); pump(1); paint_pane();
+    Doc *live = pane_doc(mail_pane);
+    CHECK(live != NULL);
+    if (live) {
+        CHECK(in_reader_window(live, "First body"));
+        CHECK_INT(live->sticky_scroll, 0);
+    }
+    click(s, &doc, "Load older messages"); pump(1); paint_pane();
+    live = pane_doc(mail_pane);
+    CHECK(live != NULL);
+    if (live) {
+        int parked = live->sticky_scroll;
+        bool body_in = in_reader_window(live, "First body"), oldest_in = in_reader_window(live, "Oldest preview");
+        if (!(parked > 0 && body_in && !oldest_in))
+            printf("  older wide scroll=%d body_in=%d oldest_in=%d\n", parked, body_in, oldest_in);
+        CHECK(parked > 0); CHECK(body_in); CHECK(!oldest_in);
+        paint_pane();
+        live = pane_doc(mail_pane);
+        CHECK(live != NULL);
+        if (live) {
+            CHECK_INT(live->sticky_scroll, parked);
+            int x = (live->sticky_view.left + live->sticky_view.right) / 2;
+            int y = (live->sticky_view.top + live->sticky_view.bottom) / 2;
+            bool wheeled = doc_sticky_wheel(live, x, y, -60);
+            if (!wheeled) printf("  wheel missed view %ld,%ld %ld,%ld scroll=%d\n",
+                (long)live->sticky_view.left, (long)live->sticky_view.top, (long)live->sticky_view.right, (long)live->sticky_view.bottom, parked);
+            CHECK(wheeled);
+            int moved = live->sticky_scroll;
+            CHECK(moved < parked);
+            paint_pane();
+            live = pane_doc(mail_pane);
+            CHECK(live != NULL);
+            if (live) CHECK_INT(live->sticky_scroll, moved);
+        }
+    }
+    // Crossing the stacked width drops the wide scroll. The page goes to the opened block, then wide restores it.
+    place_pane(480, 640); paint_pane();
+    int scroll = pane_scroll_y(mail_pane);
+    RECT view = pane_content_rect(mail_pane);
+    int view_h = view.bottom - view.top;
+    live = pane_doc(mail_pane);
+    int oldest = live ? find_text(live, "Oldest preview") : -1;
+    CHECK(oldest >= 0);
+    if (live && oldest >= 0 && !(live->items[oldest].rc.top < scroll && fully_in_view(live, "First body", scroll, view_h)))
+        printf("  stacked resize oldest=%ld scroll=%d view=%d body=%d\n", (long)live->items[oldest].rc.top, scroll, view_h,
+            find_text(live, "First body"));
+    if (oldest >= 0 && live) CHECK(live->items[oldest].rc.top < scroll);
+    CHECK(live != NULL);
+    if (live) CHECK(fully_in_view(live, "First body", scroll, view_h));
+    place_pane(1280, 900); paint_pane();
+    live = pane_doc(mail_pane);
+    if (live) {
+        bool body_in = in_reader_window(live, "First body"), oldest_in = in_reader_window(live, "Oldest preview");
+        if (!(live->sticky_scroll > 0 && body_in && !oldest_in))
+            printf("  wide again scroll=%d body_in=%d oldest_in=%d\n", live->sticky_scroll, body_in, oldest_in);
+        CHECK(live->sticky_scroll > 0); CHECK(body_in); CHECK(!oldest_in);
+    }
+    // Stacked from the open: other older rows sit above the reader, and the page scroll grows with the block.
+    click(s, &doc, "Reset filters"); pump(2);
+    place_pane(480, 640);
+    select_subject(s, &doc, "Opened note"); paint_pane(); pump(1); paint_pane();
+    int before = pane_scroll_y(mail_pane);
+    view = pane_content_rect(mail_pane);
+    view_h = view.bottom - view.top;
+    live = pane_doc(mail_pane);
+    CHECK(live != NULL);
+    if (live) CHECK(fully_in_view(live, "First body", before, view_h));
+    click(s, &doc, "Load older messages"); pump(1); paint_pane();
+    int after = pane_scroll_y(mail_pane);
+    live = pane_doc(mail_pane);
+    oldest = live ? find_text(live, "Oldest preview") : -1;
+    if (!(after > before && oldest >= 0 && live && live->items[oldest].rc.top < after && fully_in_view(live, "First body", after, view_h)))
+        printf("  stacked older before=%d after=%d oldest=%ld view=%d\n", before, after, oldest >= 0 ? (long)live->items[oldest].rc.top : -1, view_h);
+    CHECK(after > before);
+    CHECK(oldest >= 0);
+    if (oldest >= 0 && live) CHECK(live->items[oldest].rc.top < after);
+    if (live) CHECK(fully_in_view(live, "First body", after, view_h));
+    place_pane(360, 160);
+    release_attached(&doc, client, &stub);
+    free(rows); free(older);
+}
 static void focus_reveal_skips_open_row(void) {
     CHECK(mail_pane != NULL);
     if (!mail_pane) return;
@@ -716,6 +830,7 @@ void app_mail_inbox_tests(void) {
     test_run("mail inbox filter chips stay inside a narrow pane", filter_chips_fit_narrow_pane);
     test_run("mail inbox keeps an opened message in view", reader_stays_visible);
     test_run("mail inbox opens a grouped thread on the selected message", opened_thread_shows_selected);
+    test_run("mail inbox keeps an opened message in view when older mail loads or the width stacks", opened_message_follows_older_mail);
     test_run("mail inbox lays out a receivedAt localtime cannot represent", far_received_at_lays_out);
     test_run("mail inbox grouping checks follow the active group while a thread filter is set", grouping_checks_follow_group);
     if (mail_pane) pane_destroy(mail_pane);

@@ -27,7 +27,11 @@ typedef struct {
     Request *account_read, *list_read, *body_read;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
     int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y, reader_block_y, reader_blocks;
+    // The opened block's last layout, so a later page can add only the height inserted above it. page_follow is 1 to
+    // scroll to the block after a wide/stacked swap, and 2 to add page_delta, consumed by the next scrolled().
+    int block_offset, block_page, page_follow, page_delta;
     bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, reveal_block, reader_block_first, in_scroll, stacked;
+    bool block_held, block_stacked;
 } Inbox;
 
 bool mail_inbox_offered(void) {
@@ -50,7 +54,7 @@ static void cancel(Inbox *s) {
 static void clear_selection(Inbox *s) {
     request_cancel(&s->body_read); mail_message_free(&s->body);
     text_set(&s->selected_id, NULL); text_set(&s->body_error, NULL); s->selected_account = 0;
-    s->reveal_open = false; s->reveal_block = false;
+    s->reveal_open = false; s->reveal_block = false; s->block_held = false; s->page_follow = 0;
 }
 static void reset_list(Inbox *s) {
     request_cancel(&s->list_read); clear_selection(s); mail_messages_free(&s->messages);
@@ -1058,8 +1062,49 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
     doc_box_end(doc, box, pad);
     doc_space(doc, px(12));
 }
+// Distance from the reader card top to the opened block, or -1 when this layout drew no block.
+static int open_block_offset(const Inbox *s) {
+    if (s->reader_block_y < 0 || s->reader_y < 0 || s->reader_block_y < s->reader_y) return -1;
+    return s->reader_block_y - s->reader_y;
+}
+// A fresh open shows the block, and stays at the card top when that block is already first.
+static int open_block_target(const Inbox *s) {
+    int offset = open_block_offset(s);
+    if (offset < 0 || s->reader_block_first) return 0;
+    return offset;
+}
+// Older mail is laid out above the opened block, and a stacked list sits above the reader, so that block's y grows
+// after the one-shot reveal. Add only that inserted height. Swapping wide and stacked layouts has no common origin,
+// so the offset is taken from the block row_open matches. A throwaway layout must not record either: draw() lays
+// the screen out into another document. A later paint in the same layout adds nothing, so a scroll the reader
+// itself moved stays where the reader left it.
+static void track_open_block(Inbox *s, Doc *doc, bool stack) {
+    if (!s->base.pane || doc != pane_doc(s->base.pane)) return;
+    int offset = open_block_offset(s);
+    bool have = offset >= 0;
+    bool revealing = s->reveal_focus || s->reveal_open || s->reveal_block;
+    if (have && !revealing && s->block_held) {
+        if (s->block_stacked != stack) {
+            if (!stack) doc->sticky_scroll = open_block_target(s);
+            else s->page_follow = 1;
+        } else if (!stack) {
+            int inserted = offset - s->block_offset;
+            if (inserted > 0) doc->sticky_scroll += inserted;
+        } else if (s->reader_block_y > s->block_page) {
+            s->page_follow = 2;
+            s->page_delta = s->reader_block_y - s->block_page;
+        }
+    }
+    if (have) {
+        s->block_held = true;
+        s->block_offset = offset;
+        s->block_page = s->reader_block_y;
+        s->block_stacked = stack;
+    }
+}
 static void layout(Screen *base, Doc *doc) {
     Inbox *s = (Inbox *)base; int x = px(16), w = doc->width - x * 2;
+    s->page_follow = 0;
     if (w < px(120)) w = px(120);
     s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->reader_block_y = -1; s->reader_blocks = 0; s->reader_block_first = false; s->stacked = false;
     doc_space(doc, px(12));
@@ -1118,18 +1163,12 @@ static void layout(Screen *base, Doc *doc) {
             doc->y = page;
             // Members are oldest-first, so the message just opened is below older previews. Scroll to that block, and
             // keep the top when it is already first. The loading paint has no block yet; this stays set until the body
-            // is laid out, and a later paint leaves the reader's own scroll where the reader moved it.
-            if (s->reveal_block) {
-                int offset = 0;
-                if (s->reader_block_y >= 0 && !s->reader_block_first) {
-                    offset = s->reader_block_y - s->reader_y;
-                    if (offset < 0) offset = 0;
-                }
-                doc->sticky_scroll = offset;
-            }
+            // is laid out.
+            if (s->reveal_block) doc->sticky_scroll = open_block_target(s);
+            track_open_block(s, doc, false);
             doc_sticky(doc, reader_first, (int)doc->count, doc->y);
         } else if (list_bottom > doc->y) doc->y = list_bottom;
-    }
+    } else track_open_block(s, doc, true);
     int content_bottom = doc->y;
     int menu_bottom = layout_menu(s, doc, &anchors);
     if (content_bottom > doc->y) doc->y = content_bottom;
@@ -1187,6 +1226,19 @@ static void scrolled(Screen *base, bool at_bottom) {
             if (target < 0) target = 0;
             pane_scroll_to(s->base.pane, target);
         }
+    }
+    if (s->page_follow && s->base.pane) {
+        int follow = s->page_follow, delta = s->page_delta;
+        s->page_follow = 0;
+        if (follow == 1) {
+            bool to_block = s->reader_block_y >= 0 && !s->reader_block_first;
+            int row = to_block ? s->reader_block_y : s->reader_y;
+            if (row >= 0) {
+                int target = row - s->chrome_bottom;
+                if (target < 0) target = 0;
+                pane_scroll_to(s->base.pane, target);
+            }
+        } else if (follow == 2 && delta > 0) pane_scroll_to(s->base.pane, pane_scroll_y(s->base.pane) + delta + px(8));
     }
     if (s->base.pane && s->menu) {
         int y = pane_scroll_y(s->base.pane);
