@@ -336,6 +336,7 @@ static const Expected ROUTE_TABLE[] = {
     { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     { "mail_messages", "GET", "mail/messages" },
     { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
+    { "delete_mail_message", "DELETE", "mail/accounts/{account}/messages/{id}" },
     { "settings_mail_accounts", "GET", "settings/mail/accounts" },
     { "connect_mail_account", "POST", "settings/mail/accounts/connect" },
     { "finish_mail_account", "POST", "settings/mail/accounts/connect/finish" },

@@ -406,6 +406,7 @@ static const ApiRoute ROUTES[] = {
     { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
     { "mail_messages", "GET", "mail/messages" },
     { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
+    { "delete_mail_message", "DELETE", "mail/accounts/{account}/messages/{id}" },
     // Global mailbox settings; all six routes require an Admin token in the deployed catalog.
     { "settings_mail_accounts", "GET", "settings/mail/accounts" },
     { "connect_mail_account", "POST", "settings/mail/accounts/connect" },

@@ -17,7 +17,7 @@ static const char *ACCOUNTS = "{\"accounts\":[{\"id\":7,\"email\":\"one@example.
 static const char *PAGE = "{\"messages\":[{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"receivedAt\":200,\"isRead\":false},{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100,\"isRead\":false}],\"nextCursor\":\"older/+=\"}";
 static const char *OLDER = "{\"messages\":[{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"receivedAt\":100},{\"accountId\":7,\"id\":\"old\",\"subject\":\"Older\",\"receivedAt\":50}],\"nextCursor\":null}";
 typedef struct {
-    const char *accounts, *page, *older;
+    const char *accounts, *page, *older, *message;
     int body_status, list_status, account_status;
     double retry_after;
     volatile LONG calls, list_calls, body_calls;
@@ -50,6 +50,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         bool second = strstr(url, "/8/") != NULL;
         answer = second ? "{\"message\":{\"accountId\":8,\"id\":\"same/+=\",\"subject\":\"Second account\",\"isRead\":false,\"body\":{\"text\":\"<script>literal</script> [link](https://remote)\",\"html\":\"<script>active</script>\",\"truncated\":true},\"attachments\":[{\"name\":\"report.pdf\",\"size\":123,\"mimeType\":\"application/pdf\"}]}}"
             : "{\"message\":{\"accountId\":7,\"id\":\"same/+=\",\"subject\":\"First account\",\"isRead\":false,\"body\":{\"text\":\"First body\"}}}";
+        if (s->message) answer = s->message;
         if (s->body_status) { *status = s->body_status; answer = "{\"error\":\"private provider error\"}"; }
     }
     *type = xstrdup("application/json"); *retry = s->retry_after > 0 ? xstrfmt("%.0f", s->retry_after) : NULL;
@@ -136,6 +137,28 @@ static void screen_reads(void) {
     click(s, &doc, "Mailbox"); click(s, &doc, "All mailboxes"); pump(2); CHECK(strstr(stub.last_list, "account=") == NULL);
     s->vt->visible(s, false); draw(s, &doc); CHECK(find_text(&doc, "First account") == -1); CHECK(find_text(&doc, "Older") == -1);
     cleanup(s, &doc, client, &stub);
+}
+static void provider_actions(void) {
+    const char *urls[] = { "https://mail.google.com/mail/u/0/#inbox/abc", "javascript:alert(1)" };
+    for (size_t u = 0; u < sizeof urls / sizeof *urls; u++) {
+        char *body = xstrfmt("{\"message\":{\"accountId\":7,\"id\":\"same/+=\",\"webUrl\":\"%s\",\"body\":{\"text\":\"Hello\"}}}", urls[u]);
+        InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.message = body;
+        ApiClient *client = setup(&stub); Screen *s = mail_screen_new(); Doc doc; doc_init(&doc);
+        s->vt->visible(s, true); pump(2); select_subject(s, &doc, "First account"); pump(1);
+        draw_width(s, &doc, 384);
+        int del = find_text(&doc, "Delete at provider"), reply = find_text(&doc, "Reply at provider");
+        CHECK(reply >= 0);
+        if (reply >= 0) CHECK((doc.items[reply].action != 0) == (u == 0));
+        CHECK((del >= 0) == (u == 0));
+        if (del >= 0) {
+            CHECK(doc.items[del].action != 0);
+            CHECK(doc.items[del].rc.left >= 0); CHECK(doc.items[del].rc.right <= 384);
+        }
+        CHECK(find_text(&doc, "Send") < 0);
+        CHECK(find_text(&doc, "Reply all") < 0);
+        CHECK_INT(stub.calls, 3);
+        cleanup(s, &doc, client, &stub); free(body);
+    }
 }
 static void stale_page(void) {
     InboxStub stub = {0}; stub.accounts = ACCOUNTS; stub.block_first = true;
@@ -447,6 +470,13 @@ static void filter_chips_fit_narrow_pane(void) {
         else if (top != top0) wrapped = 1;
     }
     CHECK(wrapped);
+    int mailbox = find_text(&doc, "Mailbox"), search = find_text(&doc, "Search");
+    CHECK(mailbox >= 0); CHECK(search >= 0);
+    if (mailbox >= 0 && search >= 0) {
+        CHECK(doc.items[mailbox].rc.right <= width);
+        CHECK(doc.items[search].rc.right <= width);
+        CHECK(doc.items[search].rc.top >= doc.items[mailbox].rc.bottom);
+    }
     cleanup(s, &doc, client, &stub);
 }
 static void layout_attached(Screen *s, Doc *doc) {
@@ -498,18 +528,18 @@ static void reader_stays_visible(void) {
     int view_h = view.bottom - view.top;
     layout_attached(s, &doc);
     if (!(scroll > 0 && fully_in_view(&doc, "Close message", scroll, view_h)
-        && fully_in_view(&doc, "First body", scroll, view_h) && fully_in_view(&doc, "Send", scroll, view_h)))
+        && fully_in_view(&doc, "First body", scroll, view_h) && fully_in_view(&doc, "Reply at provider", scroll, view_h)))
         printf("  wide reader scroll=%d view=%d\n", scroll, view_h);
     CHECK(scroll > 0);
     CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
     CHECK(fully_in_view(&doc, "First body", scroll, view_h));
-    CHECK(fully_in_view(&doc, "Send", scroll, view_h));
+    CHECK(fully_in_view(&doc, "Reply at provider", scroll, view_h));
     CHECK(s->vt->key(s, 'K', false, false)); paint_pane();
     scroll = pane_scroll_y(mail_pane);
     layout_attached(s, &doc);
     CHECK(fully_in_view(&doc, "Close message", scroll, view_h));
     CHECK(fully_in_view(&doc, "First body", scroll, view_h));
-    CHECK(fully_in_view(&doc, "Send", scroll, view_h));
+    CHECK(fully_in_view(&doc, "Reply at provider", scroll, view_h));
     // Narrow: the reader follows the list. Opening the first row has to scroll to the reader, not leave it below.
     place_pane(480, 640);
     select_subject(s, &doc, "Row 0"); pump(1); paint_pane();
@@ -812,6 +842,7 @@ void app_mail_inbox_tests(void) {
         RedrawWindow(pane_hwnd(mail_pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
     }
     test_run("mail inbox reads selected account bodies as literal text and resets pagination on filters", screen_reads);
+    test_run("mail inbox offers provider actions only for safe message links", provider_actions);
     test_run("mail inbox splits people from notifications without refetching", people_and_notifications);
     test_run("mail inbox groups one thread per mailbox until messages are separated", thread_grouping);
     test_run("mail inbox ignores superseded pages and clears removed or revoked accounts", stale_page);

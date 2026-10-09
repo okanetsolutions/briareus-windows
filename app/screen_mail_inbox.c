@@ -1,4 +1,4 @@
-// Read-only global inbox; private content never enters DiskCache or the preview WebView.
+// Global synced inbox; private content never enters DiskCache or the preview WebView.
 #include "screens.h"
 #include "dialogs.h"
 #include "mail.h"
@@ -13,7 +13,7 @@
 
 enum { ACT_ACCOUNT = 1900, ACT_Q, ACT_LABEL, ACT_THREAD, ACT_UNREAD, ACT_INBOX, ACT_STARRED,
        ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS,
-       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_LIMITED };
+       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER, ACT_DELETE };
 enum { TIMER_INBOX = 1910 };
 enum { MENU_NONE, MENU_MAILBOX, MENU_FOLDER, MENU_GROUP };
 enum { KIND_PEOPLE, KIND_NOTES, KIND_ALL };
@@ -24,12 +24,13 @@ typedef struct {
     MailMessages messages;
     MailMessage body;
     MailFilter filter;
-    Request *account_read, *list_read, *body_read;
+    Request *account_read, *list_read, *body_read, *deletion;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
     int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y, reader_block_y, reader_blocks;
     // The opened block's last layout, so a later page can add only the height inserted above it. page_follow is 1 to
     // scroll to the block after a wide/stacked swap, and 2 to add page_delta, consumed by the next scrolled().
     int block_offset, block_page, page_follow, page_delta;
+    int reader_body_y, reader_body_bottom;
     bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, reveal_block, reader_block_first, in_scroll, stacked;
     bool block_held, block_stacked;
 } Inbox;
@@ -65,7 +66,7 @@ static void reset_list(Inbox *s) {
     s->generation = s->generation == INT_MAX ? 1 : s->generation + 1;
 }
 static void clear_private(Inbox *s) {
-    cancel(s); reset_list(s); mail_accounts_free(&s->accounts); s->accounts_loaded = false;
+    request_cancel(&s->deletion); cancel(s); reset_list(s); mail_accounts_free(&s->accounts); s->accounts_loaded = false;
     mail_filter_free(&s->filter); text_set(&s->account_error, NULL);
     s->kind = KIND_PEOPLE; s->group = GROUP_THREADS;
 }
@@ -74,7 +75,7 @@ static bool current(Inbox *s, Request *r) {
     if (!mail_inbox_offered() || r->client != g_store.client) { clear_private(s); repaint(s); }
     return false;
 }
-static bool ready(Inbox *s) { return s->shown && !s->modal && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
+static bool ready(Inbox *s) { return s->shown && !s->modal && !s->deletion && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
 static void arm(Inbox *s) {
     if (!s->shown || s->modal || !g_store.active || !mail_inbox_offered() || !window(s)) return;
     ULONGLONG tick = GetTickCount64(), delay = tick < g_store.mail_retry_until ? g_store.mail_retry_until - tick : 30000;
@@ -217,7 +218,6 @@ static void edit_filter(Inbox *s, int act) {
         reload(s);
     } else { if (!s->accounts_loaded || !s->loaded) load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); arm(s); }
 }
-static const char *LIMIT_NOTE = "Replies, archives and stars stay at the provider. This screen only reads the synced copy.";
 
 typedef struct {
     int primary, *members, day;
@@ -453,9 +453,67 @@ static void move_focus(Inbox *s, int delta) {
     repaint(s);
 }
 
+static void delete_done(void *owner, Request *r) {
+    Inbox *s = owner;
+    if (!current(s, r)) return;
+    int account = json_int_or(json_get(r->args, "account"), 0);
+    const char *id = json_str(json_get(r->args, "id"));
+    if (r->ok && json_bool_is(json_get(r->result, "ok"), true)) {
+        g_store.mail_failures = 0;
+        for (size_t i = 0; i < s->messages.count; i++) {
+            MailMessage *m = &s->messages.messages[i];
+            if (m->account_id != account || !str_eq(m->id, id)) continue;
+            mail_message_free(m);
+            memmove(m, m + 1, (s->messages.count - i - 1) * sizeof *m);
+            s->messages.count--;
+            break;
+        }
+        clear_selection(s); s->focus_message = -1;
+        text_set(&s->notice, "Message moved to trash.");
+        load_accounts(s);
+    } else if (!r->ok && (r->error.status == 401 || r->error.status == 403)) {
+        failure(s, r, &s->body_error, true);
+    } else if (!r->ok && r->error.status == 404) {
+        reset_list(s); text_set(&s->notice, "This message or mailbox is no longer available."); load_accounts(s);
+    } else {
+        if (!r->ok && (r->error.status == 429 || r->error.status == 0 || r->error.status >= 500))
+            failure(s, r, &s->body_error, true);
+        const char *message = !r->ok && r->error.status == 409
+            ? "Reconnect this mailbox in Settings > Mail to allow deletion, then try again."
+            : !r->ok && r->error.status == 429
+            ? "The mail provider is busy. Wait before trying deletion again."
+            : "Deletion could not be confirmed. Refresh mail to check whether the message moved to trash before trying again.";
+        text_set(&s->body_error, message);
+    }
+    arm(s); repaint(s);
+}
+static void delete_message(Inbox *s) {
+    if (!ready(s) || !s->body.id || !store_supports("delete_mail_message")
+        || !mail_account_readable(&s->accounts, s->body.account_id)) return;
+    int account = s->body.account_id, generation = s->generation;
+    char *id = xstrdup(s->body.id);
+    ApiClient *client = g_store.client; api_client_retain(client);
+    char *question = xstrfmt("Move this message to trash?\n\n%s\n\nOnly this message will be moved, not the whole conversation. You can restore it in your mailbox.", subject_of(&s->body));
+    s->modal = true; cancel(s);
+    bool confirmed = app_confirm("Delete message?", question, "Move to trash", true);
+    free(question); s->modal = false;
+    if (s->retired) { free(id); api_client_release(client); release(s); return; }
+    bool valid = confirmed && ready(s) && g_store.client == client && s->generation == generation
+        && s->selected_account == account && str_eq(s->selected_id, id)
+        && mail_account_readable(&s->accounts, account) && store_supports("delete_mail_message");
+    api_client_release(client);
+    if (valid) {
+        Json *args = json_object(); json_set_num(args, "account", account); json_set_str(args, "id", id);
+        text_set(&s->body_error, NULL); text_set(&s->notice, NULL);
+        store_call("delete_mail_message", args, 0, s, delete_done, s->generation, &s->deletion);
+    } else { load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); }
+    free(id); arm(s); repaint(s);
+}
+
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     (void)pt; Inbox *s = (Inbox *)base;
-    if (!s->shown || s->modal || !mail_inbox_offered()) return;
+    if (!s->shown || s->modal || s->deletion || !mail_inbox_offered()) return;
+    if (act == ACT_DELETE) { delete_message(s); return; }
     if (act == ACT_MENU) {
         s->menu = s->menu == (int)arg ? MENU_NONE : (int)arg;
         if (s->base.pane) s->scroll_seen = pane_scroll_y(s->base.pane);
@@ -477,9 +535,13 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         s->filter.inbox = (int)arg; free(s->filter.label); s->filter.label = NULL; reload(s); return;
     }
     if (act == ACT_SYNC) { if (ready(s)) reload(s); return; }
-    if (act == ACT_LIMITED) { text_set(&s->limit_note, LIMIT_NOTE); repaint(s); return; }
     if (act == ACT_CLOSE) { clear_selection(s); repaint(s); return; }
     if (act == ACT_PROVIDER) { open_provider(s); return; }
+    if (act == ACT_DELETE_PROVIDER) {
+        if (!s->body.id || !mail_account_readable(&s->accounts, s->body.account_id) || !mail_message_web_url_safe(s->body.web_url)) return;
+        text_set(&s->limit_note, "Delete this message in the mailbox that opens. After the next mail sync, click Refresh to update this list.");
+        open_provider(s); repaint(s); return;
+    }
     if (act == ACT_MORE || act == ACT_RETRY_LIST) { if (!s->accounts_loaded) load_accounts(s); else load_list(s); return; }
     if (act == ACT_RETRY_ACCOUNTS) { load_accounts(s); return; }
     if (act == ACT_RETRY_BODY) { load_body(s); return; }
@@ -597,12 +659,6 @@ static void paint_avatar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     fill_circle(cv, cx, cy, rad, a && a->mine ? theme.accent : theme.field);
     RECT t = *rc;
     draw_text(cv, a ? a->initials : "?", &t, FONT_CAPTION_SEMIBOLD, a && a->mine ? theme.on_accent : theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
-static void paint_compose(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    (void)doc; (void)it;
-    fill_round_rect(cv, rc, px(8), theme.sunken, theme.line);
-    RECT t = { rc->left + px(12), rc->top + px(8), rc->right - px(12), rc->top + px(28) };
-    draw_text(cv, "Write a reply...", &t, FONT_BODY, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE);
 }
 typedef struct { bool on; } MenuRow;
 static void paint_menu_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -722,10 +778,12 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
     for (size_t i = 0; i < nrow; i++) { if (rows[i].notification) notes++; else people++; }
     int h = px(34), y = doc->y, gap = px(8);
     int refresh_w = h, sync_w = px(156), box_w = px(210);
+    bool narrow = w < px(620);
+    if (narrow) { box_w = w - refresh_w - gap; sync_w = 0; }
     int search_x = x + box_w + gap;
     int search_r = x + w - sync_w - refresh_w - gap * 2;
-    if (search_r < search_x + px(120)) { sync_w = px(120); search_r = x + w - sync_w - refresh_w - gap * 2; }
-    if (search_r < search_x + px(40)) search_r = search_x + px(40);
+    if (!narrow && search_r < search_x + px(120)) { sync_w = px(120); search_r = x + w - sync_w - refresh_w - gap * 2; }
+    if (!narrow && search_r < search_x + px(40)) search_r = search_x + px(40);
     char *caption = mailbox_caption(s);
     MailBtn *mb = xcalloc(1, sizeof *mb);
     mb->shown = caption; mb->unread = unread_total(s); mb->on = s->menu == MENU_MAILBOX;
@@ -734,26 +792,27 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
     Item *mit = doc_item(doc, doc_add(doc, &mrc, paint_mailbtn));
     mit->data = mb; mit->free_data = mailbtn_free; mit->text = xstrdup("Mailbox");
     mit->action = ACT_MENU; mit->arg = MENU_MAILBOX; mit->hand = true;
-    const char *placeholder = s->filter.account ? "Search this mailbox    from: to: has:attachment" : "Search all mailboxes    from: to: has:attachment";
+    const char *placeholder = s->filter.account ? "Search this mailbox" : "Search sender, subject or snippet";
     SearchData *sd = xcalloc(1, sizeof *sd);
     sd->shown = xstrdup(s->filter.q ? s->filter.q : placeholder); sd->placeholder = !s->filter.q;
-    RECT src = { search_x, y, search_r, y + h };
+    RECT src = narrow ? (RECT){ x, y + h + gap, x + w, y + h * 2 + gap }
+        : (RECT){ search_x, y, search_r, y + h };
     Item *sit = doc_item(doc, doc_add(doc, &src, paint_search));
     sit->data = sd; sit->free_data = search_free; sit->text = xstrdup("Search");
     sit->action = ACT_Q; sit->hand = true; sit->tip = xstrdup("Search sender, subject or snippet");
     char *sync = sync_label(s);
     RECT sy = { search_r + gap, y, x + w - refresh_w - gap, y + h };
-    doc_text_at(doc, &sy, sync, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (!narrow) doc_text_at(doc, &sy, sync, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     free(sync);
     RECT rr = { x + w - refresh_w, y, x + w, y + h };
     add_icon(doc, &rr, 0xE72C, false, !available, "Refresh", available ? ACT_SYNC : 0, "Refresh mail");
     char *pc = xstrfmt("People %d", people), *nc = xstrfmt("Notifications %d", notes), *ac = xstrfmt("All %d", people + notes);
-    int fh = px(30), fy = y + h + px(10);
+    int fh = px(30), fy = y + h + px(10) + (narrow ? h + gap : 0);
     int widths[3];
     const char *caps[3] = { pc, nc, ac };
     const char *names[3] = { "People", "Notifications", "All" };
     int total = 0;
-    for (int i = 0; i < 3; i++) { widths[i] = text_width(doc->cv, caps[i], FONT_CAPTION) + px(18); total += widths[i]; }
+    for (int i = 0; i < 3; i++) { widths[i] = chip_span(doc, caps[i], false, false); total += widths[i]; }
     int sx = x;
     for (int i = 0; i < 3; i++) {
         RECT rc = { sx, fy, sx + widths[i], fy + fh };
@@ -765,7 +824,7 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
         sx += widths[i] + px(4);
     }
     free(pc); free(nc); free(ac);
-    int filter_y = layout_filters(s, doc, x, w, fy, fh, total, anchors);
+    int filter_y = layout_filters(s, doc, x, w, fy, fh, total + px(8), anchors);
     doc->y = filter_y + fh + px(12);
 }
 static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
@@ -942,7 +1001,9 @@ static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
     free(who); free(name); free(email); free(age);
     doc->y = y + (to ? px(44) : px(36));
     if (selected && s->body.id) {
+        s->reader_body_y = doc->y;
         doc_text(doc, x, w, str_empty(s->body.text) ? "No plain-text body is available in the synced copy." : s->body.text, FONT_BODY, theme.ink, DT_WORDBREAK);
+        s->reader_body_bottom = doc->y;
         if (!str_empty(s->body.cc)) { doc_space(doc, px(6)); char *cc = xstrfmt("Cc  %s", s->body.cc); doc_text(doc, x, w, cc, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(cc); }
         if (!str_empty(s->body.reply_to)) { char *rt = xstrfmt("Reply-To  %s", s->body.reply_to); doc_text(doc, x, w, rt, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(rt); }
         if (s->body.truncated) { doc_space(doc, px(8)); doc_notice(doc, x, w, "The server truncated this body. Open at the provider to read the complete message."); }
@@ -955,7 +1016,7 @@ static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
     }
 }
 static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, int w, bool available) {
-    int pad = px(14);
+    int pad = px(20);
     int box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
     int ix = x + pad, iw = w - pad * 2;
     if (!s->selected_id) {
@@ -975,22 +1036,19 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         RECT rc = { right, bar, right + bh, bar + bh };
         add_icon(doc, &rc, 0xE8A7, false, false, "Open at provider", ACT_PROVIDER, "Open at provider");
     }
-    right -= bh + px(4);
-    RECT star_rc = { right, bar, right + bh, bar + bh };
-    add_icon(doc, &star_rc, s->body.id && s->body.is_starred ? 0xE735 : 0xE734, s->body.id && s->body.is_starred, false, "Star", s->body.id ? ACT_LIMITED : 0, LIMIT_NOTE);
-    right -= bh + px(4);
-    RECT arch_rc = { right, bar, right + bh, bar + bh };
-    add_icon(doc, &arch_rc, 0xE7B8, false, false, "Archive", s->body.id ? ACT_LIMITED : 0, LIMIT_NOTE);
-    if (url) {
-        const char *label = "Mark read at provider";
+    bool native_delete = s->body.id && store_supports("delete_mail_message");
+    if (url || native_delete) {
+        const char *label = native_delete ? "Delete message" : "Delete at provider";
         int bw = text_width(doc->cv, label, FONT_CAPTION) + px(36);
-        int maxw = right - px(8) - (ix + bh + px(8));
-        if (bw > maxw) bw = maxw;
-        if (bw < px(48)) bw = px(48);
-        RECT rc = { right - px(8) - bw, bar, right - px(8), bar + bh };
-        add_command(doc, &rc, 0xE73E, label, ACT_PROVIDER, "Open the message at the provider. Reading it here leaves it unread.");
+        // Put the command on its own row in a stacked/narrow reader.
+        int command_y = bar;
+        if (bw + bh * 2 + px(16) > iw) { command_y += bh + px(8); right = ix + iw; }
+        RECT rc = { right - px(8) - bw, command_y, right - px(8), command_y + bh };
+        add_command(doc, &rc, 0xE74D, label, native_delete ? (available ? ACT_DELETE : 0) : ACT_DELETE_PROVIDER, native_delete ? "Move only the selected message to trash" : "Open this message in your mailbox to delete it; after the next mail sync, click Refresh to update this list.");
+        bar = command_y;
     }
     doc->y = bar + bh + px(12);
+    if (s->deletion) { doc_loading(doc, ix, iw, "Moving message to trash..."); doc_space(doc, px(8)); }
     if (s->body_error) doc_notice(doc, ix, iw, s->body_error);
     if (s->body_read) doc_loading(doc, ix, iw, "Loading message body...");
     else if (!s->body.id) doc_button(doc, ix, 0, "Retry message", BUTTON_BORDERED, ACT_RETRY_BODY, 0, available && store_supports("mail_message"));
@@ -1012,19 +1070,8 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         free(meta);
         doc->y = y + mh + px(10);
         if (!s->body.is_read) {
-            int by = doc->y, text_h = font_height(doc->cv, FONT_CAPTION), ban_h = text_h + px(16);
-            int b = doc_box_begin(doc, ix, iw, 0, theme.field, theme.line, px(8));
-            doc->items[b].hover_fill = false;
-            int btn_w = url ? px(118) : 0;
-            RECT tr = { ix + px(10), by + px(8), ix + iw - px(10) - (btn_w ? btn_w + px(8) : 0), by + px(8) + text_h };
-            doc_text_at(doc, &tr, "Read here only. It is still unread at the provider.", FONT_CAPTION, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            if (url) {
-                RECT brn = { ix + iw - px(10) - btn_w, by + px(4), ix + iw - px(10), by + ban_h - px(4) };
-                add_command(doc, &brn, 0, "Mark read there", ACT_PROVIDER, "Open the message at the provider. Reading it here leaves it unread.");
-            }
-            doc->y = by + ban_h;
-            doc_box_end(doc, b, 0);
-            doc_space(doc, px(8));
+            doc_text(doc, ix, iw, "Unread at provider · Reading here does not mark it read.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+            doc_space(doc, px(10));
         }
         doc_rule(doc, ix, iw);
         doc_space(doc, px(12));
@@ -1043,20 +1090,12 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
                 for (size_t i = 0; i < s->body.attachment_count; i++) { layout_attachment(doc, ix, iw, &s->body.attachments[i]); doc_space(doc, px(6)); }
             }
         }
-        doc_space(doc, px(14));
-        const char *from = a && a->email ? a->email : "this mailbox";
-        char *reply = xstrfmt("Reply from %s", from);
-        doc_text(doc, ix, iw, reply, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        free(reply);
-        doc_space(doc, px(6));
-        doc_custom(doc, ix, iw, px(72), paint_compose, NULL, NULL, 0, 0);
+        doc_space(doc, px(20));
+        doc_rule(doc, ix, iw);
+        doc_space(doc, px(12));
+        doc_text(doc, ix, iw, "Reply, forward, archive and star messages in your mailbox.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(8));
-        ButtonSpec send[] = {
-            { 0, "Send", BUTTON_PROMINENT, ACT_LIMITED, 0, true },
-            { 0, "Reply all", BUTTON_BORDERED, ACT_LIMITED, 0, true },
-            { 0, "Forward", BUTTON_BORDERED, ACT_LIMITED, 0, true }
-        };
-        doc_button_row(doc, ix, iw, send, sizeof send / sizeof *send);
+        doc_button(doc, ix, 0, "Reply at provider", BUTTON_BORDERED, ACT_PROVIDER, 0, url);
     }
     if (s->limit_note) { doc_space(doc, px(8)); doc_text(doc, ix, iw, s->limit_note, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); }
     doc_box_end(doc, box, pad);
@@ -1072,6 +1111,23 @@ static int open_block_target(const Inbox *s) {
     int offset = open_block_offset(s);
     if (offset < 0 || s->reader_block_first) return 0;
     return offset;
+}
+// Keep the card heading when there is room, but reveal the body even for the first block. Long bodies show
+// their beginning; short bodies fit in the space below the pinned controls. pane_scroll_to adds an 8px inset.
+static int stacked_open_target(const Inbox *s) {
+    int row = s->reader_block_y >= 0 && !s->reader_block_first ? s->reader_block_y : s->reader_y;
+    int target = row - s->chrome_bottom;
+    if (s->reader_body_y >= 0) {
+        RECT view = pane_content_rect(s->base.pane);
+        int height = view.bottom - view.top;
+        int room = height - s->chrome_bottom - px(16);
+        if (room < 0) room = 0;
+        int shown = s->reader_body_bottom - s->reader_body_y;
+        if (shown > room) shown = room;
+        int body_target = s->reader_body_y + shown - height + px(16);
+        if (target < body_target) target = body_target;
+    }
+    return target < 0 ? 0 : target;
 }
 // Older mail is laid out above the opened block, and a stacked list sits above the reader, so that block's y grows
 // after the one-shot reveal. Add only that inserted height. Swapping wide and stacked layouts has no common origin,
@@ -1107,6 +1163,7 @@ static void layout(Screen *base, Doc *doc) {
     s->page_follow = 0;
     if (w < px(120)) w = px(120);
     s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->reader_block_y = -1; s->reader_blocks = 0; s->reader_block_first = false; s->stacked = false;
+    s->reader_body_y = s->reader_body_bottom = -1;
     doc_space(doc, px(12));
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
@@ -1193,7 +1250,7 @@ static void activated(Screen *base, bool active) {
 }
 static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     Inbox *s = (Inbox *)base;
-    if (ctrl || shift || !s->shown || s->modal || !mail_inbox_offered()) return false;
+    if (ctrl || shift || !s->shown || s->modal || s->deletion || !mail_inbox_offered()) return false;
     if (vk == VK_ESCAPE) {
         if (s->menu) { s->menu = MENU_NONE; repaint(s); return true; }
         if (s->selected_id) { clear_selection(s); repaint(s); return true; }
@@ -1204,7 +1261,8 @@ static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     if (vk == VK_RETURN) { if (s->focus_message >= 0) action(base, ACT_SELECT, s->focus_message, (POINT){0}); return true; }
     if (vk == 'M') { open_provider(s); return true; }
     if (vk == 'A') { cycle_account(s); return true; }
-    if (vk == 'E' || vk == 'R') { if (s->selected_id) { text_set(&s->limit_note, LIMIT_NOTE); repaint(s); } return true; }
+    if (vk == 'R') { open_provider(s); return true; }
+    if (vk == VK_DELETE) { action(base, store_supports("delete_mail_message") ? ACT_DELETE : ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_OEM_2) { edit_filter(s, ACT_Q); return true; }
     return false;
 }
@@ -1215,14 +1273,16 @@ static void scrolled(Screen *base, bool at_bottom) {
     if (s->reveal_focus || s->reveal_open || s->reveal_block) {
         // j/k keeps the focused list row under the chrome. Beside the list the reader scrolls to the opened block on
         // its own. A stacked reader has no sticky scroll, so opening one scrolls the page to that block, or to the
-        // card top while the body is loading and when the block is already first.
+        // card top while the body is loading. Once loaded, ensure the body fits below the pinned controls.
         bool to_block = s->reveal_block && s->reader_block_y >= 0 && !s->reader_block_first;
         int row = s->reveal_focus ? s->focus_y : s->stacked ? (to_block ? s->reader_block_y : s->reader_y) : s->open_y;
-        bool move = s->reveal_focus || s->reveal_open || (s->stacked && to_block);
+        bool move = s->reveal_focus || s->reveal_open || (s->stacked && s->reveal_block && s->reader_block_y >= 0);
+        bool reveal_reader = s->stacked && !s->reveal_focus;
         s->reveal_focus = false; s->reveal_open = false;
         if (s->reveal_block && (s->reader_block_y >= 0 || !s->body_read)) s->reveal_block = false;
         if (move && s->base.pane && row >= 0) {
             int target = row - s->chrome_bottom;
+            if (reveal_reader) target = stacked_open_target(s);
             if (target < 0) target = 0;
             pane_scroll_to(s->base.pane, target);
         }
@@ -1231,13 +1291,7 @@ static void scrolled(Screen *base, bool at_bottom) {
         int follow = s->page_follow, delta = s->page_delta;
         s->page_follow = 0;
         if (follow == 1) {
-            bool to_block = s->reader_block_y >= 0 && !s->reader_block_first;
-            int row = to_block ? s->reader_block_y : s->reader_y;
-            if (row >= 0) {
-                int target = row - s->chrome_bottom;
-                if (target < 0) target = 0;
-                pane_scroll_to(s->base.pane, target);
-            }
+            if (s->reader_y >= 0) pane_scroll_to(s->base.pane, stacked_open_target(s));
         } else if (follow == 2 && delta > 0) pane_scroll_to(s->base.pane, pane_scroll_y(s->base.pane) + delta + px(8));
     }
     if (s->base.pane && s->menu) {
@@ -1273,9 +1327,9 @@ static void footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     keycap(cv, &x, y, h, "j"); keycap(cv, &x, y, h, "k"); keylabel(cv, &x, y, h, rc->right, "move");
     keycap(cv, &x, y, h, "Enter"); keylabel(cv, &x, y, h, rc->right, "open");
     keycap(cv, &x, y, h, "Esc"); keylabel(cv, &x, y, h, rc->right, "close");
-    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply");
-    keycap(cv, &x, y, h, "e"); keylabel(cv, &x, y, h, rc->right, "archive");
-    keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "mark read at provider");
+    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply at provider");
+    keycap(cv, &x, y, h, "Del"); keylabel(cv, &x, y, h, rc->right, store_supports("delete_mail_message") ? "delete message" : "delete at provider");
+    keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "open at provider");
     keycap(cv, &x, y, h, "a"); keylabel(cv, &x, y, h, rc->right, "switch mailbox");
 }
 static void destroy(Screen *base) {
