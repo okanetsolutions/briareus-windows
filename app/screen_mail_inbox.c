@@ -459,6 +459,7 @@ static void delete_done(void *owner, Request *r) {
     int account = json_int_or(json_get(r->args, "account"), 0);
     const char *id = json_str(json_get(r->args, "id"));
     if (r->ok && json_bool_is(json_get(r->result, "ok"), true)) {
+        g_store.mail_failures = 0;
         for (size_t i = 0; i < s->messages.count; i++) {
             MailMessage *m = &s->messages.messages[i];
             if (m->account_id != account || !str_eq(m->id, id)) continue;
