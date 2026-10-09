@@ -13,7 +13,7 @@
 
 enum { ACT_ACCOUNT = 1900, ACT_Q, ACT_LABEL, ACT_THREAD, ACT_UNREAD, ACT_INBOX, ACT_STARRED,
        ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS,
-       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_LIMITED };
+       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER };
 enum { TIMER_INBOX = 1910 };
 enum { MENU_NONE, MENU_MAILBOX, MENU_FOLDER, MENU_GROUP };
 enum { KIND_PEOPLE, KIND_NOTES, KIND_ALL };
@@ -217,7 +217,6 @@ static void edit_filter(Inbox *s, int act) {
         reload(s);
     } else { if (!s->accounts_loaded || !s->loaded) load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); arm(s); }
 }
-static const char *LIMIT_NOTE = "Replies, archives and stars stay at the provider. This screen only reads the synced copy.";
 
 typedef struct {
     int primary, *members, day;
@@ -477,9 +476,13 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         s->filter.inbox = (int)arg; free(s->filter.label); s->filter.label = NULL; reload(s); return;
     }
     if (act == ACT_SYNC) { if (ready(s)) reload(s); return; }
-    if (act == ACT_LIMITED) { text_set(&s->limit_note, LIMIT_NOTE); repaint(s); return; }
     if (act == ACT_CLOSE) { clear_selection(s); repaint(s); return; }
     if (act == ACT_PROVIDER) { open_provider(s); return; }
+    if (act == ACT_DELETE_PROVIDER) {
+        if (!s->body.id || !mail_account_readable(&s->accounts, s->body.account_id) || !mail_message_web_url_safe(s->body.web_url)) return;
+        text_set(&s->limit_note, "Delete this message in the mailbox that opens. It leaves this list after the next mail sync.");
+        open_provider(s); repaint(s); return;
+    }
     if (act == ACT_MORE || act == ACT_RETRY_LIST) { if (!s->accounts_loaded) load_accounts(s); else load_list(s); return; }
     if (act == ACT_RETRY_ACCOUNTS) { load_accounts(s); return; }
     if (act == ACT_RETRY_BODY) { load_body(s); return; }
@@ -597,12 +600,6 @@ static void paint_avatar(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     fill_circle(cv, cx, cy, rad, a && a->mine ? theme.accent : theme.field);
     RECT t = *rc;
     draw_text(cv, a ? a->initials : "?", &t, FONT_CAPTION_SEMIBOLD, a && a->mine ? theme.on_accent : theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
-static void paint_compose(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    (void)doc; (void)it;
-    fill_round_rect(cv, rc, px(8), theme.sunken, theme.line);
-    RECT t = { rc->left + px(12), rc->top + px(8), rc->right - px(12), rc->top + px(28) };
-    draw_text(cv, "Write a reply...", &t, FONT_BODY, theme.muted, DT_LEFT | DT_TOP | DT_SINGLELINE);
 }
 typedef struct { bool on; } MenuRow;
 static void paint_menu_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
@@ -722,10 +719,12 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
     for (size_t i = 0; i < nrow; i++) { if (rows[i].notification) notes++; else people++; }
     int h = px(34), y = doc->y, gap = px(8);
     int refresh_w = h, sync_w = px(156), box_w = px(210);
+    bool narrow = w < px(620);
+    if (narrow) { box_w = w - refresh_w - gap; sync_w = 0; }
     int search_x = x + box_w + gap;
     int search_r = x + w - sync_w - refresh_w - gap * 2;
-    if (search_r < search_x + px(120)) { sync_w = px(120); search_r = x + w - sync_w - refresh_w - gap * 2; }
-    if (search_r < search_x + px(40)) search_r = search_x + px(40);
+    if (!narrow && search_r < search_x + px(120)) { sync_w = px(120); search_r = x + w - sync_w - refresh_w - gap * 2; }
+    if (!narrow && search_r < search_x + px(40)) search_r = search_x + px(40);
     char *caption = mailbox_caption(s);
     MailBtn *mb = xcalloc(1, sizeof *mb);
     mb->shown = caption; mb->unread = unread_total(s); mb->on = s->menu == MENU_MAILBOX;
@@ -734,26 +733,27 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
     Item *mit = doc_item(doc, doc_add(doc, &mrc, paint_mailbtn));
     mit->data = mb; mit->free_data = mailbtn_free; mit->text = xstrdup("Mailbox");
     mit->action = ACT_MENU; mit->arg = MENU_MAILBOX; mit->hand = true;
-    const char *placeholder = s->filter.account ? "Search this mailbox    from: to: has:attachment" : "Search all mailboxes    from: to: has:attachment";
+    const char *placeholder = s->filter.account ? "Search this mailbox" : "Search sender, subject or snippet";
     SearchData *sd = xcalloc(1, sizeof *sd);
     sd->shown = xstrdup(s->filter.q ? s->filter.q : placeholder); sd->placeholder = !s->filter.q;
-    RECT src = { search_x, y, search_r, y + h };
+    RECT src = narrow ? (RECT){ x, y + h + gap, x + w, y + h * 2 + gap }
+        : (RECT){ search_x, y, search_r, y + h };
     Item *sit = doc_item(doc, doc_add(doc, &src, paint_search));
     sit->data = sd; sit->free_data = search_free; sit->text = xstrdup("Search");
     sit->action = ACT_Q; sit->hand = true; sit->tip = xstrdup("Search sender, subject or snippet");
     char *sync = sync_label(s);
     RECT sy = { search_r + gap, y, x + w - refresh_w - gap, y + h };
-    doc_text_at(doc, &sy, sync, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (!narrow) doc_text_at(doc, &sy, sync, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     free(sync);
     RECT rr = { x + w - refresh_w, y, x + w, y + h };
     add_icon(doc, &rr, 0xE72C, false, !available, "Refresh", available ? ACT_SYNC : 0, "Refresh mail");
     char *pc = xstrfmt("People %d", people), *nc = xstrfmt("Notifications %d", notes), *ac = xstrfmt("All %d", people + notes);
-    int fh = px(30), fy = y + h + px(10);
+    int fh = px(30), fy = y + h + px(10) + (narrow ? h + gap : 0);
     int widths[3];
     const char *caps[3] = { pc, nc, ac };
     const char *names[3] = { "People", "Notifications", "All" };
     int total = 0;
-    for (int i = 0; i < 3; i++) { widths[i] = text_width(doc->cv, caps[i], FONT_CAPTION) + px(18); total += widths[i]; }
+    for (int i = 0; i < 3; i++) { widths[i] = chip_span(doc, caps[i], false, false); total += widths[i]; }
     int sx = x;
     for (int i = 0; i < 3; i++) {
         RECT rc = { sx, fy, sx + widths[i], fy + fh };
@@ -765,7 +765,7 @@ static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, s
         sx += widths[i] + px(4);
     }
     free(pc); free(nc); free(ac);
-    int filter_y = layout_filters(s, doc, x, w, fy, fh, total, anchors);
+    int filter_y = layout_filters(s, doc, x, w, fy, fh, total + px(8), anchors);
     doc->y = filter_y + fh + px(12);
 }
 static int layout_menu(Inbox *s, Doc *doc, const Anchors *anchors) {
@@ -955,7 +955,7 @@ static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
     }
 }
 static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, int w, bool available) {
-    int pad = px(14);
+    int pad = px(20);
     int box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
     int ix = x + pad, iw = w - pad * 2;
     if (!s->selected_id) {
@@ -975,20 +975,15 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         RECT rc = { right, bar, right + bh, bar + bh };
         add_icon(doc, &rc, 0xE8A7, false, false, "Open at provider", ACT_PROVIDER, "Open at provider");
     }
-    right -= bh + px(4);
-    RECT star_rc = { right, bar, right + bh, bar + bh };
-    add_icon(doc, &star_rc, s->body.id && s->body.is_starred ? 0xE735 : 0xE734, s->body.id && s->body.is_starred, false, "Star", s->body.id ? ACT_LIMITED : 0, LIMIT_NOTE);
-    right -= bh + px(4);
-    RECT arch_rc = { right, bar, right + bh, bar + bh };
-    add_icon(doc, &arch_rc, 0xE7B8, false, false, "Archive", s->body.id ? ACT_LIMITED : 0, LIMIT_NOTE);
     if (url) {
-        const char *label = "Mark read at provider";
+        const char *label = "Delete at provider";
         int bw = text_width(doc->cv, label, FONT_CAPTION) + px(36);
-        int maxw = right - px(8) - (ix + bh + px(8));
-        if (bw > maxw) bw = maxw;
-        if (bw < px(48)) bw = px(48);
-        RECT rc = { right - px(8) - bw, bar, right - px(8), bar + bh };
-        add_command(doc, &rc, 0xE73E, label, ACT_PROVIDER, "Open the message at the provider. Reading it here leaves it unread.");
+        // Put the command on its own row in a stacked/narrow reader.
+        int command_y = bar;
+        if (bw + bh * 2 + px(16) > iw) { command_y += bh + px(8); right = ix + iw; }
+        RECT rc = { right - px(8) - bw, command_y, right - px(8), command_y + bh };
+        add_command(doc, &rc, 0xE74D, label, ACT_DELETE_PROVIDER, "Open this message in your mailbox to delete it; the synced list updates after the next sync.");
+        bar = command_y;
     }
     doc->y = bar + bh + px(12);
     if (s->body_error) doc_notice(doc, ix, iw, s->body_error);
@@ -1012,19 +1007,8 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         free(meta);
         doc->y = y + mh + px(10);
         if (!s->body.is_read) {
-            int by = doc->y, text_h = font_height(doc->cv, FONT_CAPTION), ban_h = text_h + px(16);
-            int b = doc_box_begin(doc, ix, iw, 0, theme.field, theme.line, px(8));
-            doc->items[b].hover_fill = false;
-            int btn_w = url ? px(118) : 0;
-            RECT tr = { ix + px(10), by + px(8), ix + iw - px(10) - (btn_w ? btn_w + px(8) : 0), by + px(8) + text_h };
-            doc_text_at(doc, &tr, "Read here only. It is still unread at the provider.", FONT_CAPTION, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-            if (url) {
-                RECT brn = { ix + iw - px(10) - btn_w, by + px(4), ix + iw - px(10), by + ban_h - px(4) };
-                add_command(doc, &brn, 0, "Mark read there", ACT_PROVIDER, "Open the message at the provider. Reading it here leaves it unread.");
-            }
-            doc->y = by + ban_h;
-            doc_box_end(doc, b, 0);
-            doc_space(doc, px(8));
+            doc_text(doc, ix, iw, "Unread at provider · Reading here does not mark it read.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+            doc_space(doc, px(10));
         }
         doc_rule(doc, ix, iw);
         doc_space(doc, px(12));
@@ -1043,20 +1027,12 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
                 for (size_t i = 0; i < s->body.attachment_count; i++) { layout_attachment(doc, ix, iw, &s->body.attachments[i]); doc_space(doc, px(6)); }
             }
         }
-        doc_space(doc, px(14));
-        const char *from = a && a->email ? a->email : "this mailbox";
-        char *reply = xstrfmt("Reply from %s", from);
-        doc_text(doc, ix, iw, reply, FONT_CAPTION, theme.muted, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
-        free(reply);
-        doc_space(doc, px(6));
-        doc_custom(doc, ix, iw, px(72), paint_compose, NULL, NULL, 0, 0);
+        doc_space(doc, px(20));
+        doc_rule(doc, ix, iw);
+        doc_space(doc, px(12));
+        doc_text(doc, ix, iw, "Reply, forward, archive and star messages in your mailbox.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(8));
-        ButtonSpec send[] = {
-            { 0, "Send", BUTTON_PROMINENT, ACT_LIMITED, 0, true },
-            { 0, "Reply all", BUTTON_BORDERED, ACT_LIMITED, 0, true },
-            { 0, "Forward", BUTTON_BORDERED, ACT_LIMITED, 0, true }
-        };
-        doc_button_row(doc, ix, iw, send, sizeof send / sizeof *send);
+        doc_button(doc, ix, 0, "Reply at provider", BUTTON_BORDERED, ACT_PROVIDER, 0, url);
     }
     if (s->limit_note) { doc_space(doc, px(8)); doc_text(doc, ix, iw, s->limit_note, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); }
     doc_box_end(doc, box, pad);
@@ -1204,7 +1180,8 @@ static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     if (vk == VK_RETURN) { if (s->focus_message >= 0) action(base, ACT_SELECT, s->focus_message, (POINT){0}); return true; }
     if (vk == 'M') { open_provider(s); return true; }
     if (vk == 'A') { cycle_account(s); return true; }
-    if (vk == 'E' || vk == 'R') { if (s->selected_id) { text_set(&s->limit_note, LIMIT_NOTE); repaint(s); } return true; }
+    if (vk == 'R') { open_provider(s); return true; }
+    if (vk == VK_DELETE) { action(base, ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_OEM_2) { edit_filter(s, ACT_Q); return true; }
     return false;
 }
@@ -1273,9 +1250,9 @@ static void footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     keycap(cv, &x, y, h, "j"); keycap(cv, &x, y, h, "k"); keylabel(cv, &x, y, h, rc->right, "move");
     keycap(cv, &x, y, h, "Enter"); keylabel(cv, &x, y, h, rc->right, "open");
     keycap(cv, &x, y, h, "Esc"); keylabel(cv, &x, y, h, rc->right, "close");
-    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply");
-    keycap(cv, &x, y, h, "e"); keylabel(cv, &x, y, h, rc->right, "archive");
-    keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "mark read at provider");
+    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply at provider");
+    keycap(cv, &x, y, h, "Del"); keylabel(cv, &x, y, h, rc->right, "delete at provider");
+    keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "open at provider");
     keycap(cv, &x, y, h, "a"); keylabel(cv, &x, y, h, rc->right, "switch mailbox");
 }
 static void destroy(Screen *base) {
