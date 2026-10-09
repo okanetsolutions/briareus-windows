@@ -30,6 +30,7 @@ typedef struct {
     // The opened block's last layout, so a later page can add only the height inserted above it. page_follow is 1 to
     // scroll to the block after a wide/stacked swap, and 2 to add page_delta, consumed by the next scrolled().
     int block_offset, block_page, page_follow, page_delta;
+    int reader_body_y, reader_body_bottom;
     bool shown, accounts_loaded, loaded, modal, retired, reveal_focus, reveal_open, reveal_block, reader_block_first, in_scroll, stacked;
     bool block_held, block_stacked;
 } Inbox;
@@ -999,7 +1000,9 @@ static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
     free(who); free(name); free(email); free(age);
     doc->y = y + (to ? px(44) : px(36));
     if (selected && s->body.id) {
+        s->reader_body_y = doc->y;
         doc_text(doc, x, w, str_empty(s->body.text) ? "No plain-text body is available in the synced copy." : s->body.text, FONT_BODY, theme.ink, DT_WORDBREAK);
+        s->reader_body_bottom = doc->y;
         if (!str_empty(s->body.cc)) { doc_space(doc, px(6)); char *cc = xstrfmt("Cc  %s", s->body.cc); doc_text(doc, x, w, cc, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(cc); }
         if (!str_empty(s->body.reply_to)) { char *rt = xstrfmt("Reply-To  %s", s->body.reply_to); doc_text(doc, x, w, rt, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(rt); }
         if (s->body.truncated) { doc_space(doc, px(8)); doc_notice(doc, x, w, "The server truncated this body. Open at the provider to read the complete message."); }
@@ -1108,6 +1111,23 @@ static int open_block_target(const Inbox *s) {
     if (offset < 0 || s->reader_block_first) return 0;
     return offset;
 }
+// Keep the card heading when there is room, but reveal the body even for the first block. Long bodies show
+// their beginning; short bodies fit in the space below the pinned controls. pane_scroll_to adds an 8px inset.
+static int stacked_open_target(const Inbox *s) {
+    int row = s->reader_block_y >= 0 && !s->reader_block_first ? s->reader_block_y : s->reader_y;
+    int target = row - s->chrome_bottom;
+    if (s->reader_body_y >= 0) {
+        RECT view = pane_content_rect(s->base.pane);
+        int height = view.bottom - view.top;
+        int room = height - s->chrome_bottom - px(16);
+        if (room < 0) room = 0;
+        int shown = s->reader_body_bottom - s->reader_body_y;
+        if (shown > room) shown = room;
+        int body_target = s->reader_body_y + shown - height + px(16);
+        if (target < body_target) target = body_target;
+    }
+    return target < 0 ? 0 : target;
+}
 // Older mail is laid out above the opened block, and a stacked list sits above the reader, so that block's y grows
 // after the one-shot reveal. Add only that inserted height. Swapping wide and stacked layouts has no common origin,
 // so the offset is taken from the block row_open matches. A throwaway layout must not record either: draw() lays
@@ -1142,6 +1162,7 @@ static void layout(Screen *base, Doc *doc) {
     s->page_follow = 0;
     if (w < px(120)) w = px(120);
     s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->reader_block_y = -1; s->reader_blocks = 0; s->reader_block_first = false; s->stacked = false;
+    s->reader_body_y = s->reader_body_bottom = -1;
     doc_space(doc, px(12));
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
@@ -1251,14 +1272,16 @@ static void scrolled(Screen *base, bool at_bottom) {
     if (s->reveal_focus || s->reveal_open || s->reveal_block) {
         // j/k keeps the focused list row under the chrome. Beside the list the reader scrolls to the opened block on
         // its own. A stacked reader has no sticky scroll, so opening one scrolls the page to that block, or to the
-        // card top while the body is loading and when the block is already first.
+        // card top while the body is loading. Once loaded, ensure the body fits below the pinned controls.
         bool to_block = s->reveal_block && s->reader_block_y >= 0 && !s->reader_block_first;
         int row = s->reveal_focus ? s->focus_y : s->stacked ? (to_block ? s->reader_block_y : s->reader_y) : s->open_y;
-        bool move = s->reveal_focus || s->reveal_open || (s->stacked && to_block);
+        bool move = s->reveal_focus || s->reveal_open || (s->stacked && s->reveal_block && s->reader_block_y >= 0);
+        bool reveal_reader = s->stacked && !s->reveal_focus;
         s->reveal_focus = false; s->reveal_open = false;
         if (s->reveal_block && (s->reader_block_y >= 0 || !s->body_read)) s->reveal_block = false;
         if (move && s->base.pane && row >= 0) {
             int target = row - s->chrome_bottom;
+            if (reveal_reader) target = stacked_open_target(s);
             if (target < 0) target = 0;
             pane_scroll_to(s->base.pane, target);
         }
@@ -1267,13 +1290,7 @@ static void scrolled(Screen *base, bool at_bottom) {
         int follow = s->page_follow, delta = s->page_delta;
         s->page_follow = 0;
         if (follow == 1) {
-            bool to_block = s->reader_block_y >= 0 && !s->reader_block_first;
-            int row = to_block ? s->reader_block_y : s->reader_y;
-            if (row >= 0) {
-                int target = row - s->chrome_bottom;
-                if (target < 0) target = 0;
-                pane_scroll_to(s->base.pane, target);
-            }
+            if (s->reader_y >= 0) pane_scroll_to(s->base.pane, stacked_open_target(s));
         } else if (follow == 2 && delta > 0) pane_scroll_to(s->base.pane, pane_scroll_y(s->base.pane) + delta + px(8));
     }
     if (s->base.pane && s->menu) {
