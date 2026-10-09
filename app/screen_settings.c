@@ -913,7 +913,7 @@ typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD } FieldKind;   
 typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; } FieldDef;
 
 enum {
-    F_REPO, F_LABEL, F_ENABLED, F_LOCAL_DIR, F_BOARD,
+    F_REPO, F_LABEL, F_ENABLED, F_MAIL_TOOLS, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT, F_DB_POOL, F_DB_RESTORE,
     F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
@@ -926,6 +926,7 @@ static const FieldDef FIELDS[F_COUNT] = {
     [F_REPO] = { "repo", K_TEXT, "Repository", "owner/name", "Cloned over HTTPS with the machine's own git credentials.", 0, false },
     [F_LABEL] = { "label", K_TEXT, "Label", "shown in the project dropdown", NULL, 0, false },
     [F_ENABLED] = { "enabled", K_BOOL, "Active: sessions can be started on this project" },
+    [F_MAIL_TOOLS] = { "mailToolsEnabled", K_BOOL, "Allow sessions to access connected email accounts" },
     [F_LOCAL_DIR] = { "localDir", K_TEXT, "Local checkout", "/home/you/www/your-checkout",
         "This machine's own checkout of the repo. A session started in Local mode works directly in it: no clone, no setup steps, no pooled database, and the tree is used exactly as it stands. Leave empty to keep Local mode off for this project.", 0, true },
     [F_BOARD] = { "projectBoard", K_BOARD, "GitHub Projects board", "https://github.com/orgs/acme/projects/1/views/2",
@@ -1352,6 +1353,9 @@ static void form_layout(Screen *base, Doc *doc) {
         check(s, doc, x, col, F_ENABLED);
         if (field_offered(s, F_ENABLED) && !s->bools[F_ENABLED])
             note(doc, x, col, "Inactive: no session can be started on it and it is left out of the project lists; its settings are kept for when it is switched back on.");
+        check(s, doc, x, col, F_MAIL_TOOLS);
+        if (field_offered(s, F_MAIL_TOOLS))
+            note(doc, x, col, "Allows interactive sessions in this project to access the operator's connected mailboxes. Off by default.");
         doc_space(doc, px(4));
         field(s, doc, x, col, F_LOCAL_DIR);
         field(s, doc, x, col, F_BOARD);
