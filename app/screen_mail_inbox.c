@@ -538,7 +538,7 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     if (act == ACT_PROVIDER) { open_provider(s); return; }
     if (act == ACT_DELETE_PROVIDER) {
         if (!s->body.id || !mail_account_readable(&s->accounts, s->body.account_id) || !mail_message_web_url_safe(s->body.web_url)) return;
-        text_set(&s->limit_note, "Delete this message in the mailbox that opens. It leaves this list after the next mail sync.");
+        text_set(&s->limit_note, "Delete this message in the mailbox that opens. After the next mail sync, click Refresh to update this list.");
         open_provider(s); repaint(s); return;
     }
     if (act == ACT_MORE || act == ACT_RETRY_LIST) { if (!s->accounts_loaded) load_accounts(s); else load_list(s); return; }
@@ -1043,7 +1043,7 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         int command_y = bar;
         if (bw + bh * 2 + px(16) > iw) { command_y += bh + px(8); right = ix + iw; }
         RECT rc = { right - px(8) - bw, command_y, right - px(8), command_y + bh };
-        add_command(doc, &rc, 0xE74D, label, native_delete ? (available ? ACT_DELETE : 0) : ACT_DELETE_PROVIDER, native_delete ? "Move only the selected message to trash" : "Open this message in your mailbox to delete it; the synced list updates after the next sync.");
+        add_command(doc, &rc, 0xE74D, label, native_delete ? (available ? ACT_DELETE : 0) : ACT_DELETE_PROVIDER, native_delete ? "Move only the selected message to trash" : "Open this message in your mailbox to delete it; after the next mail sync, click Refresh to update this list.");
         bar = command_y;
     }
     doc->y = bar + bh + px(12);
