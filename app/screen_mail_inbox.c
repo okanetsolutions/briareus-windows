@@ -1,4 +1,4 @@
-// Read-only global inbox; private content never enters DiskCache or the preview WebView.
+// Global synced inbox; private content never enters DiskCache or the preview WebView.
 #include "screens.h"
 #include "dialogs.h"
 #include "mail.h"
@@ -13,7 +13,7 @@
 
 enum { ACT_ACCOUNT = 1900, ACT_Q, ACT_LABEL, ACT_THREAD, ACT_UNREAD, ACT_INBOX, ACT_STARRED,
        ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS,
-       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER };
+       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER, ACT_DELETE };
 enum { TIMER_INBOX = 1910 };
 enum { MENU_NONE, MENU_MAILBOX, MENU_FOLDER, MENU_GROUP };
 enum { KIND_PEOPLE, KIND_NOTES, KIND_ALL };
@@ -24,7 +24,7 @@ typedef struct {
     MailMessages messages;
     MailMessage body;
     MailFilter filter;
-    Request *account_read, *list_read, *body_read;
+    Request *account_read, *list_read, *body_read, *deletion;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
     int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y, reader_block_y, reader_blocks;
     // The opened block's last layout, so a later page can add only the height inserted above it. page_follow is 1 to
@@ -65,7 +65,7 @@ static void reset_list(Inbox *s) {
     s->generation = s->generation == INT_MAX ? 1 : s->generation + 1;
 }
 static void clear_private(Inbox *s) {
-    cancel(s); reset_list(s); mail_accounts_free(&s->accounts); s->accounts_loaded = false;
+    request_cancel(&s->deletion); cancel(s); reset_list(s); mail_accounts_free(&s->accounts); s->accounts_loaded = false;
     mail_filter_free(&s->filter); text_set(&s->account_error, NULL);
     s->kind = KIND_PEOPLE; s->group = GROUP_THREADS;
 }
@@ -74,7 +74,7 @@ static bool current(Inbox *s, Request *r) {
     if (!mail_inbox_offered() || r->client != g_store.client) { clear_private(s); repaint(s); }
     return false;
 }
-static bool ready(Inbox *s) { return s->shown && !s->modal && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
+static bool ready(Inbox *s) { return s->shown && !s->modal && !s->deletion && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
 static void arm(Inbox *s) {
     if (!s->shown || s->modal || !g_store.active || !mail_inbox_offered() || !window(s)) return;
     ULONGLONG tick = GetTickCount64(), delay = tick < g_store.mail_retry_until ? g_store.mail_retry_until - tick : 30000;
@@ -452,9 +452,66 @@ static void move_focus(Inbox *s, int delta) {
     repaint(s);
 }
 
+static void delete_done(void *owner, Request *r) {
+    Inbox *s = owner;
+    if (!current(s, r)) return;
+    int account = json_int_or(json_get(r->args, "account"), 0);
+    const char *id = json_str(json_get(r->args, "id"));
+    if (r->ok && json_bool_is(json_get(r->result, "ok"), true)) {
+        for (size_t i = 0; i < s->messages.count; i++) {
+            MailMessage *m = &s->messages.messages[i];
+            if (m->account_id != account || !str_eq(m->id, id)) continue;
+            mail_message_free(m);
+            memmove(m, m + 1, (s->messages.count - i - 1) * sizeof *m);
+            s->messages.count--;
+            break;
+        }
+        clear_selection(s); s->focus_message = -1;
+        text_set(&s->notice, "Message moved to trash.");
+        load_accounts(s);
+    } else if (!r->ok && (r->error.status == 401 || r->error.status == 403)) {
+        failure(s, r, &s->body_error, true);
+    } else if (!r->ok && r->error.status == 404) {
+        reset_list(s); text_set(&s->notice, "This message or mailbox is no longer available."); load_accounts(s);
+    } else {
+        if (!r->ok && (r->error.status == 429 || r->error.status == 0 || r->error.status >= 500))
+            failure(s, r, &s->body_error, true);
+        const char *message = !r->ok && r->error.status == 409
+            ? "Reconnect this mailbox in Settings > Mail to allow deletion, then try again."
+            : !r->ok && r->error.status == 429
+            ? "The mail provider is busy. Wait before trying deletion again."
+            : "Deletion could not be confirmed. Refresh mail to check whether the message moved to trash before trying again.";
+        text_set(&s->body_error, message);
+    }
+    arm(s); repaint(s);
+}
+static void delete_message(Inbox *s) {
+    if (!ready(s) || !s->body.id || !store_supports("delete_mail_message")
+        || !mail_account_readable(&s->accounts, s->body.account_id)) return;
+    int account = s->body.account_id, generation = s->generation;
+    char *id = xstrdup(s->body.id);
+    ApiClient *client = g_store.client; api_client_retain(client);
+    char *question = xstrfmt("Move this message to trash?\n\n%s\n\nOnly this message will be moved, not the whole conversation. You can restore it in your mailbox.", subject_of(&s->body));
+    s->modal = true; cancel(s);
+    bool confirmed = app_confirm("Delete message?", question, "Move to trash", true);
+    free(question); s->modal = false;
+    if (s->retired) { free(id); api_client_release(client); release(s); return; }
+    bool valid = confirmed && ready(s) && g_store.client == client && s->generation == generation
+        && s->selected_account == account && str_eq(s->selected_id, id)
+        && mail_account_readable(&s->accounts, account) && store_supports("delete_mail_message");
+    api_client_release(client);
+    if (valid) {
+        Json *args = json_object(); json_set_num(args, "account", account); json_set_str(args, "id", id);
+        text_set(&s->body_error, NULL); text_set(&s->notice, NULL);
+        store_call("delete_mail_message", args, 0, s, delete_done, s->generation, &s->deletion);
+    } else { load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); }
+    free(id); arm(s); repaint(s);
+}
+
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     (void)pt; Inbox *s = (Inbox *)base;
-    if (!s->shown || s->modal || !mail_inbox_offered()) return;
+    if (!s->shown || s->modal || s->deletion || !mail_inbox_offered()) return;
+    if (act == ACT_DELETE) { delete_message(s); return; }
     if (act == ACT_MENU) {
         s->menu = s->menu == (int)arg ? MENU_NONE : (int)arg;
         if (s->base.pane) s->scroll_seen = pane_scroll_y(s->base.pane);
@@ -975,17 +1032,19 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
         RECT rc = { right, bar, right + bh, bar + bh };
         add_icon(doc, &rc, 0xE8A7, false, false, "Open at provider", ACT_PROVIDER, "Open at provider");
     }
-    if (url) {
-        const char *label = "Delete at provider";
+    bool native_delete = s->body.id && store_supports("delete_mail_message");
+    if (url || native_delete) {
+        const char *label = native_delete ? "Delete message" : "Delete at provider";
         int bw = text_width(doc->cv, label, FONT_CAPTION) + px(36);
         // Put the command on its own row in a stacked/narrow reader.
         int command_y = bar;
         if (bw + bh * 2 + px(16) > iw) { command_y += bh + px(8); right = ix + iw; }
         RECT rc = { right - px(8) - bw, command_y, right - px(8), command_y + bh };
-        add_command(doc, &rc, 0xE74D, label, ACT_DELETE_PROVIDER, "Open this message in your mailbox to delete it; the synced list updates after the next sync.");
+        add_command(doc, &rc, 0xE74D, label, native_delete ? (available ? ACT_DELETE : 0) : ACT_DELETE_PROVIDER, native_delete ? "Move only the selected message to trash" : "Open this message in your mailbox to delete it; the synced list updates after the next sync.");
         bar = command_y;
     }
     doc->y = bar + bh + px(12);
+    if (s->deletion) { doc_loading(doc, ix, iw, "Moving message to trash..."); doc_space(doc, px(8)); }
     if (s->body_error) doc_notice(doc, ix, iw, s->body_error);
     if (s->body_read) doc_loading(doc, ix, iw, "Loading message body...");
     else if (!s->body.id) doc_button(doc, ix, 0, "Retry message", BUTTON_BORDERED, ACT_RETRY_BODY, 0, available && store_supports("mail_message"));
@@ -1169,7 +1228,7 @@ static void activated(Screen *base, bool active) {
 }
 static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     Inbox *s = (Inbox *)base;
-    if (ctrl || shift || !s->shown || s->modal || !mail_inbox_offered()) return false;
+    if (ctrl || shift || !s->shown || s->modal || s->deletion || !mail_inbox_offered()) return false;
     if (vk == VK_ESCAPE) {
         if (s->menu) { s->menu = MENU_NONE; repaint(s); return true; }
         if (s->selected_id) { clear_selection(s); repaint(s); return true; }
@@ -1181,7 +1240,7 @@ static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     if (vk == 'M') { open_provider(s); return true; }
     if (vk == 'A') { cycle_account(s); return true; }
     if (vk == 'R') { open_provider(s); return true; }
-    if (vk == VK_DELETE) { action(base, ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
+    if (vk == VK_DELETE) { action(base, store_supports("delete_mail_message") ? ACT_DELETE : ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_OEM_2) { edit_filter(s, ACT_Q); return true; }
     return false;
 }
@@ -1251,7 +1310,7 @@ static void footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     keycap(cv, &x, y, h, "Enter"); keylabel(cv, &x, y, h, rc->right, "open");
     keycap(cv, &x, y, h, "Esc"); keylabel(cv, &x, y, h, rc->right, "close");
     keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply at provider");
-    keycap(cv, &x, y, h, "Del"); keylabel(cv, &x, y, h, rc->right, "delete at provider");
+    keycap(cv, &x, y, h, "Del"); keylabel(cv, &x, y, h, rc->right, store_supports("delete_mail_message") ? "delete message" : "delete at provider");
     keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "open at provider");
     keycap(cv, &x, y, h, "a"); keylabel(cv, &x, y, h, rc->right, "switch mailbox");
 }

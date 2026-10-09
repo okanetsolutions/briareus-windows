@@ -13,6 +13,7 @@ int main(void) {
     app_mcp_settings_tests();
     app_mail_tests();
     app_mail_inbox_tests();
+    app_mail_delete_tests();
     app_pulls_tests();
     return test_summary();
 }
