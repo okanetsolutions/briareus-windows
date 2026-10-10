@@ -980,7 +980,7 @@ void project_files_layout(ProjectFiles *p, Doc *doc, int w) {
         doc_space(doc, px(4));
         RECT r = { 0, doc->y, tree_w, doc->y + px(18) };
         doc->y = r.bottom;
-        doc_text_at(doc, &r, line, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        doc_text_at(doc, &r, line, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(line);
     }
     doc_space(doc, px(8));
