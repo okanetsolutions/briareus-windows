@@ -7,12 +7,16 @@
 
 typedef struct WebView WebView;
 
+/// The Cloudflare Access service token (`GET /preview/access`): sent as CF-Access-Client-Id and CF-Access-Client-Secret
+/// with every request to a host ending in `.` + `host_suffix`, and to no other.
+typedef struct { const char *client_id, *client_secret, *host_suffix; } WebViewAccess;
+
 /// Whether the WebView2 runtime is installed.
 bool webview_available(void);
 /// Starts a browser as a child of `parent` that opens `url` once it is ready. `changed` is called on the UI thread whenever
-/// the page's title, address or the browser's state changes. Never NULL; a failure
+/// the page's title, address or the browser's state changes. `access` may be NULL; it is copied. Never NULL; a failure
 /// shows in `webview_error`.
-WebView *webview_new(HWND parent, const char *url, void (*changed)(void *ctx), void *ctx);
+WebView *webview_new(HWND parent, const char *url, const WebViewAccess *access, void (*changed)(void *ctx), void *ctx);
 /// Closes the browser; callbacks still in flight are dropped.
 void webview_free(WebView *wv);
 /// Where the browser sits, in `parent`'s client coordinates.

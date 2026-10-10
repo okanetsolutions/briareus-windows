@@ -78,7 +78,7 @@ static void web_app_place(Screen *base, const RECT *content, int scroll_y) {
     (void)scroll_y;
     if (!s->shown || g_current[s->app] != s) return;
     WebView **web = &g_web[s->app];
-    if (!*web) *web = webview_new(pane_hwnd(base->pane), APPS[s->app].url, web_changed, (void *)(intptr_t)s->app);
+    if (!*web) *web = webview_new(pane_hwnd(base->pane), APPS[s->app].url, NULL, web_changed, (void *)(intptr_t)s->app);
     else webview_set_parent(*web, pane_hwnd(base->pane));
     bool on = webview_ready(*web) && content->bottom > content->top;
     if (on) webview_set_bounds(*web, content);

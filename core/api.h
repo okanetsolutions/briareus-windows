@@ -39,6 +39,9 @@ typedef struct { char *base_url; char *origin; char *host; int port; } ServerAdd
 bool server_address_parse(const char *input, ServerAddress *out);
 void server_address_free(ServerAddress *address);
 void server_address_copy(ServerAddress *into, const ServerAddress *from);
+/// Whether a ▶ Run preview's Cloudflare Access service token (`GET /preview/access`) may go with a request to `url`: only
+/// over HTTPS, to a host ending in `.` + `host_suffix`, so the secret never reaches any other site.
+bool preview_access_applies(const char *url, const char *host_suffix);
 
 /// One round trip. Headers come as NULL-terminated name/value pairs. Returns false only when nothing was received;
 /// then `*error_message` says why. Every output string is malloc'd.
