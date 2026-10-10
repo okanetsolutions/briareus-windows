@@ -21,7 +21,7 @@ CFLAGS  += $(DEFINES)
 CXXFLAGS += $(DEFINES)
 LDFLAGS ?= -static -static-libgcc
 CORE_LIBS = -lwinhttp -ladvapi32 -lole32
-APP_LIBS  = $(CORE_LIBS) -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -ld2d1 -ldwrite
+APP_LIBS  = $(CORE_LIBS) -ldbghelp -lcomctl32 -lgdi32 -luser32 -lshell32 -luuid -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -ld2d1 -ldwrite
 
 CORE_SRC = $(wildcard core/*.c)
 APP_SRC  = $(wildcard app/*.c)

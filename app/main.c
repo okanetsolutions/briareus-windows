@@ -1,5 +1,6 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
 #include "canvas.h"
+#include "crash.h"
 #include "dialogs.h"
 #include "media.h"
 #include "meeting.h"
@@ -508,6 +509,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show) {
+    crash_init();
     (void)previous; (void)command_line;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     // The manifest (common controls v6) is activated here rather than at load, so it can live beside MinGW's default one.
