@@ -972,13 +972,15 @@ void project_files_layout(ProjectFiles *p, Doc *doc, int w) {
     if (tree_w < px(240)) tree_w = px(240);
     if (tree_w > px(340)) tree_w = px(340);
     if (!wide) tree_w = w;
+    int file_top = doc->y;
     // The finder, and the branch being read when it changes.
     layout_find(p, doc, 0, tree_w);
     if (p->req && p->loaded) {
         char *line = xstrfmt("Reading %s\xE2\x80\xA6", shown_ref(p));
-        RECT r = { wide ? tree_w + gap : 0, doc->y - px(34), w, doc->y };
-        if (!wide) { doc_space(doc, px(4)); r.top = doc->y; r.bottom = doc->y + px(18); doc->y = r.bottom; }
-        doc_text_at(doc, &r, line, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        doc_space(doc, px(4));
+        RECT r = { 0, doc->y, tree_w, doc->y + px(18) };
+        doc->y = r.bottom;
+        doc_text_at(doc, &r, line, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(line);
     }
     doc_space(doc, px(8));
@@ -994,7 +996,7 @@ void project_files_layout(ProjectFiles *p, Doc *doc, int w) {
         doc_space(doc, px(16));
         return;
     }
-    doc->y = top;
+    doc->y = file_top;
     int fx = tree_w + gap, fw = w - fx;
     if (p->tab_count) { layout_tabs(p, doc, fx, fw); doc_space(doc, px(10)); }
     layout_file(p, doc, fx, fw);
