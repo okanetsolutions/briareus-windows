@@ -846,7 +846,7 @@ static void layout_tree(ProjectFiles *p, Doc *doc, int x, int w) {
     }
 }
 
-/// The open files as tabs, wrapping; each closes with its ✕, or from its menu (right click).
+/// The open files as tabs, wrapping, then the active file's Copy and Open on GitHub; each tab closes with its ✕, or from its menu (right click).
 static void layout_tabs(ProjectFiles *p, Doc *doc, int x, int w) {
     int h = px(32), tx = x, ty = doc->y;
     for (size_t i = 0; i < p->tab_count; i++) {
@@ -866,10 +866,24 @@ static void layout_tabs(ProjectFiles *p, Doc *doc, int x, int w) {
         ci->action = p->base + A_TAB_CLOSE; ci->arg = (intptr_t)i; ci->hand = true; ci->tip = xstrdup("Close");
         tx += tw + px(4);
     }
+    // Copy and Open on GitHub follow the tabs, as an editor's tab bar actions do; they wrap below when the row is full.
+    FileTab *f = active_file(p);
+    ButtonSpec buttons[2]; size_t bc = 0;
+    if (f && f->file.content) buttons[bc++] = (ButtonSpec){ 0xE8C8, "Copy", BUTTON_PLAIN, p->base + A_COPY, 0, true };
+    if (f && safe_web_url(f->file.url)) buttons[bc++] = (ButtonSpec){ 0xE8A7, "Open on GitHub", BUTTON_PLAIN, p->base + A_OPEN_GITHUB, 0, true };
+    if (bc) {
+        // The room they need, measured as doc_button_row lays out plain buttons: the lead-in, each width, 6px gaps.
+        int need = px(8) + px(6) * (int)(bc - 1);
+        for (size_t k = 0; k < bc; k++) need += text_width(doc->cv, buttons[k].text, FONT_CAPTION) + px(2);
+        if (tx > x && x + w - tx < need) { tx = x; ty += h + px(4); }
+        doc->y = ty + (h - font_height(doc->cv, FONT_FOOTNOTE) - px(12)) / 2;
+        doc_button_row(doc, tx + px(8), x + w - tx - px(8), buttons, bc);
+        if (doc->y > ty + h) return;
+    }
     doc->y = ty + h;
 }
 
-/// The file shown: its path and size, Copy and Open on GitHub, then its numbered lines, or why it has none.
+/// The file shown: its path and size, then its numbered lines, or why it has none.
 static void layout_file(ProjectFiles *p, Doc *doc, int x, int w) {
     FileTab *f = active_file(p);
     if (!f) {
@@ -888,10 +902,6 @@ static void layout_file(ProjectFiles *p, Doc *doc, int x, int w) {
     if (meta.len) { doc_space(doc, px(2)); doc_text(doc, x, w, meta.data, FONT_CAPTION2, theme.secondary, DT_LEFT | DT_SINGLELINE); }
     str_free(&meta);
     doc_space(doc, px(8));
-    ButtonSpec buttons[2]; size_t bc = 0;
-    if (f->file.content) buttons[bc++] = (ButtonSpec){ 0xE8C8, "Copy", BUTTON_PLAIN, p->base + A_COPY, 0, true };
-    if (safe_web_url(f->file.url)) buttons[bc++] = (ButtonSpec){ 0xE8A7, "Open on GitHub", BUTTON_PLAIN, p->base + A_OPEN_GITHUB, 0, true };
-    if (bc) { doc_button_row(doc, x, w, buttons, bc); doc_space(doc, px(8)); }
     if (f->error) {
         doc_notice(doc, x, w, f->error);
         doc_space(doc, px(8));
