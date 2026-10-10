@@ -872,7 +872,10 @@ static void layout_tabs(ProjectFiles *p, Doc *doc, int x, int w) {
     if (f && f->file.content) buttons[bc++] = (ButtonSpec){ 0xE8C8, "Copy", BUTTON_PLAIN, p->base + A_COPY, 0, true };
     if (f && safe_web_url(f->file.url)) buttons[bc++] = (ButtonSpec){ 0xE8A7, "Open on GitHub", BUTTON_PLAIN, p->base + A_OPEN_GITHUB, 0, true };
     if (bc) {
-        if (tx > x && x + w - tx < px(200)) { tx = x; ty += h + px(4); }
+        // The room they need, measured as doc_button_row lays out plain buttons: the lead-in, each width, 6px gaps.
+        int need = px(8) + px(6) * (int)(bc - 1);
+        for (size_t k = 0; k < bc; k++) need += text_width(doc->cv, buttons[k].text, FONT_CAPTION) + px(2);
+        if (tx > x && x + w - tx < need) { tx = x; ty += h + px(4); }
         doc->y = ty + (h - font_height(doc->cv, FONT_FOOTNOTE) - px(12)) / 2;
         doc_button_row(doc, tx + px(8), x + w - tx - px(8), buttons, bc);
         if (doc->y > ty + h) return;
