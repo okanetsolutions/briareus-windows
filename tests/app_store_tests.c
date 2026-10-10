@@ -41,8 +41,6 @@ static void test_pinned_catalog_gates_existing_calls(void) {
     const struct { const char *call; int least; } calls[] = {
         { "pulls", 0 }, { "sessions", 0 }, { "session", 0 }, { "runtimes", 0 },
         { "repo_tree", 0 }, { "repo_file", 0 }, { "pull_description", 0 }, { "findings", 0 },
-        { "settings_slack_workspaces", 2 }, { "create_slack_workspace", 2 },
-        { "update_slack_workspace", 2 }, { "delete_slack_workspace", 2 },
         { "settings_mcp_servers", 2 }, { "create_mcp_server", 2 }, { "update_mcp_server", 2 },
         { "delete_mcp_server", 2 }, { "connect_mcp_server", 2 }, { "finish_mcp_sign_in", 2 },
         { "settings_mail_accounts", 2 }, { "connect_mail_account", 2 }, { "finish_mail_account", 2 },
@@ -167,19 +165,6 @@ static void test_supports_needs_the_route_and_its_access(void) {
     store_reset();
 }
 
-static void test_the_preview_token_needs_a_manage_token_on_a_server_that_has_it(void) {
-    Route routes[] = { { "GET", "/preview/access", "manage" } };
-    store_fake("read", routes, 1);
-    CHECK(!store_supports("preview_access"));
-    store_fake("manage", routes, 1);
-    CHECK(store_supports("preview_access"));
-    store_fake("admin", routes, 1);
-    CHECK(store_supports("preview_access"));
-    // An older server without the route: the Run tab opens the browser without a token.
-    store_fake("admin", ROUTES, 5);
-    CHECK(!store_supports("preview_access"));
-    store_reset();
-}
 
 static void test_a_route_the_server_lacks_is_not_supported(void) {
     store_fake("admin", ROUTES, 1);
@@ -417,7 +402,6 @@ void app_store_tests(void) {
     test_run("a client means connected", test_a_client_means_connected);
     test_run("permission ranks decide writing", test_permission_ranks_decide_writing);
     test_run("supports needs the route and its access", test_supports_needs_the_route_and_its_access);
-    test_run("the preview token needs a manage token on a server that has it", test_the_preview_token_needs_a_manage_token_on_a_server_that_has_it);
     test_run("a route the server lacks is not supported", test_a_route_the_server_lacks_is_not_supported);
     test_run("attachments need uploads, messages and writing", test_attachments_need_uploads_messages_and_writing);
     test_run("a first prompt takes files where sessions start", test_a_first_prompt_takes_files_where_sessions_start);

@@ -68,19 +68,8 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
-/// Global admin Slack JSON inbox; availability always requires both catalog and Admin access.
-Screen *slack_screen_new(void);
-bool slack_inbox_offered(void);
-bool slack_inbox_supports(const char *operation);
-/// Clear private state in every open/detached inbox on account or access changes.
-void slack_inbox_store_changed(void);
-void slack_inbox_settings_changed(void);
-/// WhatsApp Web in the detail pane; the screen's id is "whatsapp".
-typedef enum { WEB_APP_WHATSAPP, WEB_APP_COUNT } WebApp;
-/// WhatsApp Web, from the sidebar strip's button.
-Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
-/// servers, the Forge accounts, the Slack workspaces and the mail accounts, each with ＋ New.
+/// servers, the Forge accounts, the mail accounts, each with ＋ New.
 Screen *settings_screen_new(void);
 Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
 void settings_mcp_changed(void);
@@ -261,19 +250,11 @@ bool forge_site_key(ForgeSite *v, WPARAM vk, bool ctrl);
 bool forge_site_can_leave(ForgeSite *v);
 /// True when the action was the tab's.
 bool project_forge_action(ProjectForge *p, int action, intptr_t arg, POINT pt);
-/// The address bar over a Run tab's browser: back, forward and reload, the page's address (`url` until the browser
-/// reports one), and open in the browser; `actions` holds the four actions in that order. Advances.
-struct WebView;
-typedef struct { HWND edit; RECT rc; struct WebView **web; char *url; bool clipped; } RunAddress;
-void run_browser_bar(Doc *doc, int w, struct WebView *web, const char *url, const int actions[4], RunAddress *address);
-/// Places the editable address in the host pane, or hides it when the Run tab is not shown.
-void run_address_place(RunAddress *address, Screen *host, struct WebView **web, const char *url, const RECT *content, int scroll_y, bool shown);
-void run_address_free(RunAddress *address);
 /// A project's Run tab, laid out inside its board: the project's default branch served in a clean workspace with its run
-/// commands (`serve_branch`), shown in an embedded browser, its run profile picked in the header. Its items and header
+/// commands (`serve_branch`), opened in the default browser, its run profile picked in the header. Its items and header
 /// buttons use `PROJECT_RUN_ACTIONS` actions from `action_base` up, and its log polls on the host pane's timer `timer`.
 typedef struct ProjectRun ProjectRun;
-enum { PROJECT_RUN_ACTIONS = 8 };
+enum { PROJECT_RUN_ACTIONS = 4 };
 ProjectRun *project_run_new(const char *repo, Screen *host, int action_base, UINT timer);
 void project_run_free(ProjectRun *p);
 /// Whether this token may serve a branch, on a server that can.
@@ -284,9 +265,9 @@ void project_run_open(ProjectRun *p);
 void project_run_layout(ProjectRun *p, Doc *doc, int w);
 /// The branch under the title, and the profile picker and Delete.
 void project_run_header(ProjectRun *p, HeaderInfo *info);
-/// Shows the browser over the tab's area, or hides it when `shown` is false.
+/// Enables the setup log timer while the tab is shown.
 void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool shown);
-/// Reloads the page, or serves the branch again when there is none.
+/// Serves the branch again when there is no live preview, or when the last serve failed.
 void project_run_refresh(ProjectRun *p);
 /// True when the timer or action was the tab's.
 bool project_run_timer(ProjectRun *p, UINT id);

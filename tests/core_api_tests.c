@@ -125,26 +125,6 @@ static void test_server_address_copy_is_independent(void) {
     server_address_free(&b);
     server_address_free(NULL);
 }
-static void test_preview_access_goes_only_to_preview_hosts(void) {
-    const char *suffix = "preview.example.com";
-    CHECK(preview_access_applies("https://8123.preview.example.com", suffix));
-    CHECK(preview_access_applies("https://8123.preview.example.com/app?x=1#y", suffix));
-    CHECK(preview_access_applies("https://a.b.PREVIEW.example.com:8443/", suffix));
-    CHECK(preview_access_applies("https://8123.preview.example.com./", suffix));
-    CHECK(preview_access_applies("HTTPS://8123.preview.example.com", ".preview.example.com"));
-    // Not over plain HTTP, not the suffix itself, not a host that merely ends in the same letters, not another site.
-    CHECK(!preview_access_applies("http://8123.preview.example.com", suffix));
-    CHECK(!preview_access_applies("https://preview.example.com", suffix));
-    CHECK(!preview_access_applies("https://.preview.example.com", suffix));
-    CHECK(!preview_access_applies("https://evilpreview.example.com", suffix));
-    CHECK(!preview_access_applies("https://8123.preview.example.com.evil.net", suffix));
-    CHECK(!preview_access_applies("https://evil.net/8123.preview.example.com", suffix));
-    CHECK(!preview_access_applies("https://evil.net?h=8123.preview.example.com", suffix));
-    CHECK(!preview_access_applies("https://8123.preview.example.com@evil.net", suffix));
-    CHECK(!preview_access_applies("https://8123.preview.example.com", ""));
-    CHECK(!preview_access_applies(NULL, suffix));
-    CHECK(!preview_access_applies("https://8123.preview.example.com", NULL));
-}
 
 // MARK: - Tokens
 
@@ -306,7 +286,6 @@ static const Expected ROUTE_TABLE[] = {
     { "browser", "GET", "sessions/{sessionId}/browser" }, { "browser_on", "POST", "sessions/{sessionId}/browser" },
     { "browser_off", "DELETE", "sessions/{sessionId}/browser" }, { "browser_input", "POST", "sessions/{sessionId}/browser/input" },
     { "browser_stream", "GET", "sessions/{sessionId}/browser/stream" },
-    { "preview_access", "GET", "preview/access" },
     { "upload", "POST", "uploads" }, { "transcribe", "POST", "transcribe" },
     { "settings_projects", "GET", "settings/projects" }, { "create_project", "POST", "settings/projects" },
     { "update_project", "PUT", "settings/projects/{id}" }, { "delete_project", "DELETE", "settings/projects/{id}" },
@@ -324,16 +303,6 @@ static const Expected ROUTE_TABLE[] = {
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
-    { "slack_workspaces", "GET", "slack/workspaces" },
-    { "slack_events", "GET", "slack/workspaces/{id}/events" },
-    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
-    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
-    { "slack_people", "GET", "slack/workspaces/{id}/people" },
-    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
-    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
-    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
-    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
-    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     { "mail_messages", "GET", "mail/messages" },
     { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
     { "delete_mail_message", "DELETE", "mail/accounts/{account}/messages/{id}" },
@@ -343,8 +312,6 @@ static const Expected ROUTE_TABLE[] = {
     { "update_mail_account", "PUT", "settings/mail/accounts/{id}" },
     { "delete_mail_account", "DELETE", "settings/mail/accounts/{id}" },
     { "sync_mail_account", "POST", "settings/mail/accounts/{id}/sync" },
-    { "settings_slack_workspaces", "GET", "settings/slack/workspaces" }, { "create_slack_workspace", "POST", "settings/slack/workspaces" },
-    { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" }, { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
     { "settings_mcp_servers", "GET", "settings/mcp/servers" },
     { "create_mcp_server", "POST", "settings/mcp/servers" },
     { "update_mcp_server", "PUT", "settings/mcp/servers/{id}" },
@@ -464,7 +431,6 @@ static void test_path_arguments_are_encoded_and_numbers_written_whole(void) {
     check_url(c, &stub, "delete_ssh_server", "{\"id\":1727000000000}", BASE "settings/ssh/servers/1727000000000");
     check_url(c, &stub, "ssh_db_credentials", "{\"id\":1727000000000}", BASE "settings/ssh/servers/1727000000000/db-credentials");
     check_url(c, &stub, "update_forge_account", "{\"id\":1727000000001}", BASE "settings/forge/accounts/1727000000001");
-    check_url(c, &stub, "delete_slack_workspace", "{\"id\":1727000000002}", BASE "settings/slack/workspaces/1727000000002");
     check_url(c, &stub, "update_provider", "{\"id\":999999999999999}", BASE "settings/providers/999999999999999");
     api_client_release(c); stub_reset(&stub);
 }
@@ -577,21 +543,6 @@ static void test_a_run_profile_switch_names_the_session_in_the_path(void) {
     // Without a profile the server serves the one it served last.
     r = call(c, "serve", "{\"sessionId\":\"run-1\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "sessions/run-1/serve"); CHECK_STR(stub.last_body, "{}");
-    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
-}
-static void test_the_preview_access_token_is_a_plain_read(void) {
-    Stub stub = { 0 }; stub_json(&stub, 200, "{\"clientId\":\"id.access\",\"clientSecret\":\"s3cret\",\"hostSuffix\":\"preview.example.com\"}");
-    ApiClient *c = client(&stub);
-    ApiError e; api_error_init(&e);
-    // The Run tab reads it with no arguments: nothing in the path or the query.
-    Json *r = call(c, "preview_access", "{}", &e);
-    CHECK_STR(stub.last_url, BASE "preview/access"); CHECK_STR(stub.last_method, "GET");
-    CHECK_STR(json_str(json_get(r, "clientId")), "id.access"); CHECK_STR(json_str(json_get(r, "clientSecret")), "s3cret");
-    CHECK_STR(json_str(json_get(r, "hostSuffix")), "preview.example.com"); json_free(r);
-    api_error_clear(&e);
-    // No tunnel or no service token on the server: a 404, after which the browser opens without one.
-    stub_reset(&stub); stub_json(&stub, 404, "{\"error\":\"No preview service token is configured.\"}");
-    CHECK(call(c, "preview_access", "{}", &e) == NULL); CHECK_INT(e.status, 404); CHECK(api_error_is_refusal(&e));
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 static void test_the_set_flag_is_always_sent_true(void) {
@@ -995,41 +946,22 @@ static void test_retry_after_http_dates(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { if (api_retry_after(bad[i], 0) >= 0) printf("  read %s\n", bad[i]); CHECK(api_retry_after(bad[i], 0) < 0); }
 }
 
-static void test_slack_json_contract_and_no_retry(void) {
-    Stub stub = {0}; stub_json(&stub, 201, "{\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"workspaceChanged\":true}");
-    ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
-    Json *args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"threadTs\":\"1712345678.000001\",\"text\":\"human reply\"}");
-    Json *result = api_call(c, "slack_send", args, 0, &error);
-    CHECK(result && json_bool_is(json_get(result, "workspaceChanged"), true)); CHECK_INT(stub.calls, 1);
-    CHECK_STR(stub.last_url, BASE "slack/workspaces/1727000000002/conversations/C1/messages");
-    Json *sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "threadTs")), "1712345678.000001");
-    CHECK(json_is_null(json_get(sent, "id"))); CHECK(json_is_null(json_get(sent, "channel"))); json_free(sent); json_free(result);
-    const int failures[] = {401, 403, 404, 409, 429, 503};
-    for (size_t i = 0; i < sizeof failures / sizeof *failures; i++) {
-        stub_json(&stub, failures[i], "{\"error\":\"Slack refused the workspace token\"}"); stub.retry_after = "60";
-        int calls = stub.calls; result = api_call(c, "slack_send", args, 0, &error);
-        CHECK(!result); CHECK_INT(stub.calls, calls + 1); CHECK_INT(error.status, failures[i]); CHECK(error.retry_after == 60);
-    }
-    stub.fail = true; stub.fail_message = "Timed out"; int calls = stub.calls;
-    CHECK(api_call(c, "slack_send", args, 0, &error) == NULL); CHECK_INT(stub.calls, calls + 1); CHECK(error.kind == API_NETWORK);
-    stub_json(&stub, 200, "{\"messages\":[],\"nextCursor\":\"more\",\"hasMore\":true}"); json_free(args);
-    args = json_parsez("{\"id\":\"1727000000002\",\"channel\":\"C1\",\"ts\":\"1712345678.000001\",\"cursor\":\"empty page\",\"oldest\":\"1.000000001\",\"latest\":\"2.000000001\"}");
-    result = api_call(c, "slack_thread", args, 0, &error); CHECK(result != NULL);
-    CHECK(strstr(stub.last_url, "/threads/1712345678.000001?") != NULL);
-    CHECK(strstr(stub.last_url, "cursor=empty%20page") != NULL); CHECK(strstr(stub.last_url, "oldest=1.000000001") != NULL); CHECK(strstr(stub.last_url, "latest=2.000000001") != NULL);
-    json_free(result); json_free(args); api_client_release(c); api_error_clear(&error); stub_reset(&stub);
-}
 
-static void test_slack_stream_route_and_cancellation(void) {
+
+static void test_browser_stream_route_and_cancellation(void) {
     Stub stub = {0}; ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
-    const ApiRoute *route = api_route("slack_events"); CHECK(route != NULL); CHECK_STR(route ? route->method : NULL, "GET");
-    CHECK_STR(route ? route->path : NULL, "slack/workspaces/{id}/events");
+    const ApiRoute *route = api_route("browser_stream"); CHECK(route != NULL); CHECK_STR(route ? route->method : NULL, "GET");
+    CHECK_STR(route ? route->path : NULL, "sessions/{sessionId}/browser/stream");
     ApiStreamCancel cancel; api_stream_cancel_init(&cancel); api_stream_cancel(&cancel);
-    Json *args = json_parsez("{\"id\":\"1727000000002\"}");
-    CHECK(!api_stream(c, "slack_events", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
+    Json *args = json_parsez("{\"sessionId\":\"s1\"}");
+    CHECK(!api_stream(c, "browser_stream", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
     api_stream_cancel_free(&cancel); api_stream_cancel_init(&cancel);
-    CHECK(!api_stream(c, "slack_events", NULL, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
-    CHECK(!api_stream(c, "slack_send", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    CHECK(!api_stream(c, "browser_stream", NULL, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_error_clear(&error);
+    CHECK(!api_stream(c, "browser_on", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_error_clear(&error);
+    CHECK(!api_stream(c, "unknown_stream", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    CHECK_INT(stub.calls, 0);
     api_stream_cancel_free(&cancel); json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
@@ -1161,19 +1093,31 @@ static void test_mail_transport_contract(void) {
     json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&s);
 }
 
+static void test_removed_integrations_are_unregistered(void) {
+    CHECK(api_route("slack_workspaces") == NULL);
+    CHECK(api_route("slack_events") == NULL);
+    CHECK(api_route("slack_send") == NULL);
+    CHECK(api_route("settings_slack_workspaces") == NULL);
+    CHECK(api_route("create_slack_workspace") == NULL);
+    CHECK(api_route("update_slack_workspace") == NULL);
+    CHECK(api_route("delete_slack_workspace") == NULL);
+    CHECK(api_route("preview_access") == NULL);
+    CHECK(api_route("serve") != NULL);
+    CHECK(api_route("serve_branch") != NULL);
+    CHECK(api_route("browser_stream") != NULL);
+}
+
 void api_tests(void) {
-    test_run("Slack SSE route cancellable before start with required workspace ID", test_slack_stream_route_and_cancellation);
-    test_run("Slack JSON contract sends receipts string bounds and never retries", test_slack_json_contract_and_no_retry);
+    test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
+    test_run("removed integrations are unregistered; serving and shared browser remain", test_removed_integrations_are_unregistered);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
     test_run("mail read routes encode opaque IDs filters and cursors without writes or retries", test_mail_read_transport);
     test_run("mail six routes preserve accountId 202 failures and never retry exchanges", test_mail_transport_contract);
-    test_run("the preview access token is a plain read", test_the_preview_access_token_is_a_plain_read);
     test_run("a run profile switch names the session in the path", test_a_run_profile_switch_names_the_session_in_the_path);
     test_run("server address accepts https origins and the api base", test_server_address_accepts_https_origins_and_the_api_base);
     test_run("server address refuses everything else", test_server_address_refuses_everything_else);
     test_run("server address copy is independent", test_server_address_copy_is_independent);
-    test_run("preview access goes only to preview hosts", test_preview_access_goes_only_to_preview_hosts);
     test_run("token shape", test_token_shape);
     test_run("client refuses a bad token without an error to fill", test_client_refuses_a_bad_token_without_an_error_to_fill);
     test_run("client keeps its own copy of the address and counts references", test_client_keeps_its_own_copy_of_the_address_and_counts_references);

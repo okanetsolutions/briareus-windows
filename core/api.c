@@ -125,19 +125,6 @@ done:
     free(trimmed);
     return ok;
 }
-bool preview_access_applies(const char *url, const char *host_suffix) {
-    if (!url || !host_suffix || !*host_suffix || _strnicmp(url, "https://", 8) != 0) return false;
-    const char *p = url + 8;
-    size_t len = strcspn(p, "/?#");
-    // Credentials in the address would let it name one host and reach another.
-    if (memchr(p, '@', len)) return false;
-    const char *colon = memchr(p, ':', len);
-    if (colon) len = (size_t)(colon - p);
-    while (len && p[len - 1] == '.') len--;
-    size_t n = strlen(host_suffix);
-    if (host_suffix[0] == '.') { host_suffix++; n--; }
-    return n && len > n + 1 && p[len - n - 1] == '.' && _strnicmp(p + len - n, host_suffix, n) == 0;
-}
 
 void server_address_free(ServerAddress *a) { if (!a) return; free(a->base_url); free(a->origin); free(a->host); memset(a, 0, sizeof *a); }
 void server_address_copy(ServerAddress *into, const ServerAddress *from) {
@@ -273,17 +260,6 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
 // with each parameter named after the argument that fills it. A route without a `{}` sends every argument in the query
 // (GET, DELETE) or the body (the rest).
 static const ApiRoute ROUTES[] = {
-    // Operator Slack inbox.
-    { "slack_workspaces", "GET", "slack/workspaces" },
-    { "slack_events", "GET", "slack/workspaces/{id}/events" },
-    { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
-    { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
-    { "slack_people", "GET", "slack/workspaces/{id}/people" },
-    { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
-    { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
-    { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
-    { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
-    { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
     // Projects
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },
@@ -352,8 +328,6 @@ static const ApiRoute ROUTES[] = {
     { "session_webhook", "GET", "sessions/{sessionId}/webhook" },
     { "set_session_webhook", "PUT", "sessions/{sessionId}/webhook" },
     { "rotate_session_webhook", "POST", "sessions/{sessionId}/webhook/rotate" },
-    // The Cloudflare Access service token the Run tab's browser sends to ▶ Run preview hosts; a manage token.
-    { "preview_access", "GET", "preview/access" },
     // Composer. These two send raw bytes (api_upload, api_transcribe); the entries say whether the server has them.
     { "upload", "POST", "uploads" },
     { "transcribe", "POST", "transcribe" },
@@ -391,12 +365,6 @@ static const ApiRoute ROUTES[] = {
     { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" },
     { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
-    // The Slack workspaces sessions send messages in: a user token and a signing secret (both write-only) and the projects
-    // that may use it, each with its channels, direct messages and permission mode; admin as well.
-    { "settings_slack_workspaces", "GET", "settings/slack/workspaces" },
-    { "create_slack_workspace", "POST", "settings/slack/workspaces" },
-    { "update_slack_workspace", "PUT", "settings/slack/workspaces/{id}" },
-    { "delete_slack_workspace", "DELETE", "settings/slack/workspaces/{id}" },
     // Operator MCP registry; availability and admin access come from the deployed catalog.
     { "settings_mcp_servers", "GET", "settings/mcp/servers" },
     { "create_mcp_server", "POST", "settings/mcp/servers" },
@@ -552,7 +520,6 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
     bool ended = false;
     HINTERNET connection = NULL, req = NULL;
     SseParser parser; sse_init(&parser);
-    if (str_eq(name, "slack_events")) parser.limit = 2u * 1024 * 1024;
     wchar_t *wurl = utf8_to_wide(url);
     URL_COMPONENTS parts; memset(&parts, 0, sizeof parts); parts.dwStructSize = sizeof parts;
     wchar_t host[256] = L"", wpath[4096] = L"";
@@ -606,9 +573,6 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
         if (!WinHttpReadData(req, buffer, available < sizeof buffer ? available : (DWORD)sizeof buffer, &got)) goto failed;
         if (!got) { ended = true; break; }
         sse_feed(&parser, buffer, got, emit, ctx);
-        if (parser.dropped && str_eq(name, "slack_events")) {
-            api_error_set(error, API_NETWORK, 0, "Slack event exceeded the buffer limit; reconnect to reconcile", -1); goto done;
-        }
     }
     goto done;
 failed:
