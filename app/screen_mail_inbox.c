@@ -1,4 +1,4 @@
-// Global synced inbox; private content never enters DiskCache or the preview WebView.
+// Global synced inbox; private content never enters DiskCache.
 #include "screens.h"
 #include "dialogs.h"
 #include "mail.h"

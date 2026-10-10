@@ -1,5 +1,7 @@
 # October core compatibility evidence (#120 / #129)
 
+Historical evidence: the Windows Slack integration has since been removed; its server contract remains in the pinned fixtures.
+
 This supporting change pins the **merged source contract**, and checks the Windows
 client boundary with automated regressions. It does not close #129 or the epic.
 User instruction for this work: **code review and automated tests only; QA OFF**.

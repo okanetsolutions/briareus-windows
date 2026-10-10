@@ -15,16 +15,6 @@ static void test_incoming_calls_match_final_catalog_when_registered(void) {
     const struct { const char *call, *method, *path; } calls[] = {
         { "mail_messages", "GET", "mail/messages" },
         { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
-        { "slack_workspaces", "GET", "slack/workspaces" },
-        { "slack_conversations", "GET", "slack/workspaces/{id}/conversations" },
-        { "slack_conversation", "GET", "slack/workspaces/{id}/conversations/{channel}" },
-        { "slack_people", "GET", "slack/workspaces/{id}/people" },
-        { "slack_open_dm", "POST", "slack/workspaces/{id}/direct-messages" },
-        { "slack_history", "GET", "slack/workspaces/{id}/conversations/{channel}/messages" },
-        { "slack_send", "POST", "slack/workspaces/{id}/conversations/{channel}/messages" },
-        { "slack_thread", "GET", "slack/workspaces/{id}/conversations/{channel}/threads/{ts}" },
-        { "slack_read", "POST", "slack/workspaces/{id}/conversations/{channel}/read" },
-        { "slack_events", "GET", "slack/workspaces/{id}/events" },
     };
     Str fixture; str_init(&fixture);
     for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
@@ -56,5 +46,5 @@ static void test_incoming_calls_match_final_catalog_when_registered(void) {
 }
 
 void app_contract_tests(void) {
-    test_run("incoming mail and Slack calls match final core gates when registered", test_incoming_calls_match_final_catalog_when_registered);
+    test_run("incoming mail calls match final core gates when registered", test_incoming_calls_match_final_catalog_when_registered);
 }

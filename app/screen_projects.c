@@ -1,4 +1,4 @@
-// The sidebar, as the dashboard draws it: the ＋ New session strip with WhatsApp, Mail, Slack and the 📊 and ⚑ switches, the projects with their
+// The sidebar, as the dashboard draws it: the ＋ New session strip with Mail and the 📊 and ⚑ switches, the projects with their
 // session counts, and inside a project its conversations; what Spotify plays, ☑ Select, ⚙ Settings and the ⎋ Sign out button along the foot.
 #include "dialogs.h"
 #include "media.h"
@@ -13,40 +13,13 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_SLACK, ACT_MAIL };
-enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };   // WhatsApp, Slack, dashboard, findings; Mail joins them when the server offers it
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_MAIL };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 2 };   // dashboard, findings; Mail joins them when the server offers it
 
 static size_t g_waiting;   // review rounds waiting for a decision, the ⚑ badge
 
-typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_SLACK, MARK_MAIL } StripMark;
+typedef enum { MARK_NONE, MARK_MAIL } StripMark;
 typedef struct { char text[40]; int badge; bool active, wide; StripMark mark; } StripData;
-/// WhatsApp's mark, which no font has: a green chat bubble with its tail at the lower left, and a white handset.
-static void paint_whatsapp_mark(Canvas *cv, const RECT *rc) {
-    const COLORREF green = RGB(0x25, 0xD3, 0x66);
-    int d = px(18), cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
-    RECT bubble = { cx - d / 2, cy - d / 2, cx - d / 2 + d, cy - d / 2 + d };
-    draw_thick_line(cv, bubble.left + px(4), bubble.bottom - px(5), bubble.left + px(1), bubble.bottom, green, px(4));
-    fill_round_rect(cv, &bubble, d / 2, green, green);
-    draw_glyph(cv, 0xE717, &bubble, FONT_ICON_SMALL, RGB(0xFF, 0xFF, 0xFF));
-}
-/// Slack's mark, which no font has either: four pills turning about the centre, blue, green, yellow and red, each with a
-/// round nub that carries the other line of the # past it.
-static void paint_slack_mark(Canvas *cv, const RECT *rc) {
-    static const COLORREF colors[4] = { RGB(0x36, 0xC5, 0xF0), RGB(0x2E, 0xB6, 0x7D), RGB(0xEC, 0xB2, 0x2E), RGB(0xE0, 0x1E, 0x5A) };
-    int cx = (rc->left + rc->right) / 2, cy = (rc->top + rc->bottom) / 2;
-    int r = px(10), t = px(4), g = px(3), top = -g - t / 2;
-    // The blue pieces, before turning: a pill across the upper line from the left edge to the centre, and above it the
-    // nub of the left line. A quarter turn maps (x, y) to (-y, x).
-    const int pieces[2][4] = { { -r, top, 0, top + t }, { top, top - px(1) - t, top + t, top - px(1) } };
-    for (int k = 0; k < 4; k++) {
-        for (int p = 0; p < 2; p++) {
-            int x1 = pieces[p][0], y1 = pieces[p][1], x2 = pieces[p][2], y2 = pieces[p][3];
-            for (int q = 0; q < k; q++) { int nx1 = -y2, nx2 = -y1; y1 = x1; y2 = x2; x1 = nx1; x2 = nx2; }
-            RECT box = { cx + x1, cy + y1, cx + x2, cy + y2 };
-            fill_round_rect(cv, &box, t / 2, colors[k], colors[k]);
-        }
-    }
-}
 /// An envelope, which the icon font draws too thinly at this size: a blue body and a white flap.
 static void paint_mail_mark(Canvas *cv, const RECT *rc) {
     const COLORREF blue = RGB(0x3D, 0x8B, 0xF2), paper = RGB(0xFF, 0xFF, 0xFF);
@@ -62,11 +35,7 @@ static void paint_strip(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool hovered = doc_item_hovered(doc, it);
     COLORREF border = d->active ? theme.accent : hovered ? theme.accent_dim : theme.line;
     fill_round_rect(cv, rc, px(8), theme.raise, border);
-    if (d->mark == MARK_WHATSAPP) {
-        paint_whatsapp_mark(cv, rc);
-    } else if (d->mark == MARK_SLACK) {
-        paint_slack_mark(cv, rc);
-    } else if (d->mark == MARK_MAIL) {
+    if (d->mark == MARK_MAIL) {
         paint_mail_mark(cv, rc);
     } else if (d->wide) {
         RECT t = { rc->left + px(6), rc->top, rc->right - px(6), rc->bottom };
@@ -93,7 +62,7 @@ static StripData *strip_button(Doc *doc, const RECT *rc, const char *text, bool 
     it->data = d; it->free_data = free; it->action = action; it->hand = true;
     return d;
 }
-/// The strip; `selected` is the detail pane's root id, for the WhatsApp, Mail, Slack, 📊 and ⚑ switches' accent.
+/// The strip; `selected` is the detail pane's root id, for the Mail, 📊 and ⚑ switches' accent.
 static void sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
@@ -103,8 +72,6 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
     int x = w - icons_w;
-    RECT wr = { x, y, x + iw, y + h }; strip_button(doc, &wr, "", false, 0, str_eq(selected, "whatsapp"), ACT_WHATSAPP)->mark = MARK_WHATSAPP;
-    x += iw + gap;
     if (mail) {
         RECT mr = { x, y, x + iw, y + h };
         bool on = str_eq(selected, "mail") || str_eq(selected, "mail-settings") || str_has_prefix(selected, "mail-settings:");
@@ -112,8 +79,6 @@ static void sidebar_top(Doc *doc, int w, const char *selected) {
         doc_item(doc, (int)doc->count - 1)->tip = xstrdup("Mail");
         x += iw + gap;
     }
-    RECT kr = { x, y, x + iw, y + h }; strip_button(doc, &kr, "", false, 0, str_eq(selected, "slack-inbox"), ACT_SLACK)->mark = MARK_SLACK;
-    x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
@@ -267,8 +232,6 @@ static bool sidebar_common_action(Pane *pane, int action) {
     switch (action) {
     case ACT_MAIL: if (mail_inbox_offered() || mail_settings_offered()) app_show_detail(mail_inbox_offered() ? mail_screen_new() : mail_settings_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
-    case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
-    case ACT_SLACK: app_show_detail(slack_screen_new()); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;
