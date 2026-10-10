@@ -29,6 +29,11 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck curl
       - name: Build the app and run the tests, warnings as errors
         run: mingw32-make WERROR=1
+      - name: Build crash probe
+        run: gcc -std=c11 -Wall -Wextra -Werror -DUNICODE -D_UNICODE -Iapp tests/crash_probe.c app/crash.c -o build/crash_probe.exe -ldbghelp -lshell32 -lole32 -luuid
+      - name: Verify crash report and minidump
+        shell: pwsh
+        run: ./tests/crash_smoke.ps1
       - name: Static analysis (cppcheck)
         run: mingw32-make lint
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

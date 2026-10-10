@@ -108,3 +108,7 @@ MCP server registry settings (Admin tokens on compatible servers): see [MCP sett
 The global read-only [Mail inbox](docs/mail-inbox.md) supports unified/per-account lists, cursor pagination, search, all mail filters and selectable plain-text bodies on compatible servers.
 
 Mail account settings for configured Gmail/Outlook providers are in Settings → Mail for Admin tokens on servers advertising the mail API; see [connection flows, compatibility and pending release checks](docs/mail-account-settings.md).
+
+## Crash reports
+
+Unhandled Windows exceptions save a timestamped `.txt` report and a `.dmp` minidump under `%LOCALAPPDATA%\Okanet\Briareus\Crashes`; the report includes the app version, exception code, address and dump status. Reports stay on your machine and are never uploaded automatically. Keep the matching executable when reporting a crash. Dumps contain process memory and may include private data. Forced termination and Windows fail-fast errors can bypass the handler; a damaged process may also prevent a dump from being written.
