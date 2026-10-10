@@ -297,7 +297,8 @@ void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool sh
     }
 }
 void project_run_refresh(ProjectRun *p) {
-    if (!p->busy) { set_string(&p->serve_error, NULL); start(p); }
+    if (p->busy || (p->url && !p->serve_error)) return;
+    set_string(&p->serve_error, NULL); start(p);
 }
 bool project_run_timer(ProjectRun *p, UINT id) {
     if (id != p->timer) return false;

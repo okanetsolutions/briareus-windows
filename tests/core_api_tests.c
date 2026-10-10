@@ -948,6 +948,23 @@ static void test_retry_after_http_dates(void) {
 
 
 
+static void test_browser_stream_route_and_cancellation(void) {
+    Stub stub = {0}; ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    const ApiRoute *route = api_route("browser_stream"); CHECK(route != NULL); CHECK_STR(route ? route->method : NULL, "GET");
+    CHECK_STR(route ? route->path : NULL, "sessions/{sessionId}/browser/stream");
+    ApiStreamCancel cancel; api_stream_cancel_init(&cancel); api_stream_cancel(&cancel);
+    Json *args = json_parsez("{\"sessionId\":\"s1\"}");
+    CHECK(!api_stream(c, "browser_stream", args, &cancel, NULL, NULL, &error)); CHECK(error.kind == API_CANCELLED); CHECK_INT(stub.calls, 0);
+    api_stream_cancel_free(&cancel); api_stream_cancel_init(&cancel);
+    CHECK(!api_stream(c, "browser_stream", NULL, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_error_clear(&error);
+    CHECK(!api_stream(c, "browser_on", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    api_error_clear(&error);
+    CHECK(!api_stream(c, "unknown_stream", args, &cancel, NULL, NULL, &error)); CHECK_INT(error.status, 400);
+    CHECK_INT(stub.calls, 0);
+    api_stream_cancel_free(&cancel); json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
 static void test_final_catalog_transport_and_session_requests(void) {
     Str fixture; str_init(&fixture);
     for (size_t i = 0; i < sizeof OCTOBER_CATALOG / sizeof *OCTOBER_CATALOG; i++) str_appendz(&fixture, OCTOBER_CATALOG[i]);
@@ -1091,6 +1108,7 @@ static void test_removed_integrations_are_unregistered(void) {
 }
 
 void api_tests(void) {
+    test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving and shared browser remain", test_removed_integrations_are_unregistered);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
