@@ -267,7 +267,7 @@ void project_run_layout(ProjectRun *p, Doc *doc, int w);
 void project_run_header(ProjectRun *p, HeaderInfo *info);
 /// Enables the setup log timer while the tab is shown.
 void project_run_place(ProjectRun *p, const RECT *content, int scroll_y, bool shown);
-/// Serves the branch again.
+/// Serves the branch again when there is no live preview, or when the last serve failed.
 void project_run_refresh(ProjectRun *p);
 /// True when the timer or action was the tab's.
 bool project_run_timer(ProjectRun *p, UINT id);
