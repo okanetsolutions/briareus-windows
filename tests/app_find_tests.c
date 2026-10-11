@@ -3,6 +3,8 @@
 #include "suites.h"
 #include "test.h"
 #include "theme.h"
+#include <stdlib.h>
+#include <string.h>
 
 static void begin_doc(Doc *doc, int width) {
     if (!theme.canvas) theme_init();
@@ -68,9 +70,30 @@ static void test_find_code_and_selection(void) {
     doc_search(&doc, NULL); CHECK_INT(doc.match_count, 0); CHECK(doc_has_selection(&doc));
     doc_free(&doc);
 }
+static void test_find_table_after_item_growth(void) {
+    for (int padding = 0; padding <= 64; padding++) {
+        Doc doc; begin_doc(&doc, 500);
+        RECT empty = { 0, 0, 0, 0 };
+        for (int i = 0; i < padding; i++) doc_add(&doc, &empty, NULL);
+        Str table; str_init(&table);
+        str_appendz(&table, "| Name | Value |\n| --- | --- |\n");
+        for (int i = 0; i < 70; i++) str_appendz(&table, "| needle | result |\n");
+        doc_markdown(&doc, 0, 500, table.data, FONT_BODY);
+        str_free(&table);
+        doc_end(&doc);
+        doc_search(&doc, L"needle");
+        CHECK_INT(doc.match_count, 70);
+        doc_select_all(&doc);
+        char *selected = doc_selection_text(&doc);
+        CHECK(selected && strstr(selected, "Name\tValue") && strstr(selected, "needle\tresult"));
+        free(selected);
+        doc_free(&doc);
+    }
+}
 void app_find_tests(void) {
     test_run("find rendered text and wrap navigation", test_find_rendered_text);
     test_run("find Unicode and wrapped match coordinates", test_find_unicode_and_wrapping);
     test_run("find current match survives transcript refresh", test_find_survives_refresh);
     test_run("find code without changing text selection", test_find_code_and_selection);
+    test_run("find and select table cells after item array growth", test_find_table_after_item_growth);
 }
