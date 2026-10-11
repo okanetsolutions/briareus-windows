@@ -107,7 +107,7 @@ char *format_tokens(double n);
 /// "$33.35": a cost.
 char *format_cost(double usd);
 
-/// Opens an https URL in the default browser; anything else is refused.
+/// Opens an http or https URL in the default browser; anything else is refused.
 void open_web_url(const char *url);
 void copy_to_clipboard(HWND owner, const char *text);
 /// A title bar in the palette's colours.
