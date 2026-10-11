@@ -2603,6 +2603,7 @@ static void pull_layout(Screen *base, Doc *doc) {
         if (side_w < px(240)) side_w = px(240);
         if (side_w > px(320)) side_w = px(320);
         Col main = col_make(0, w - side_w - gap), side = { w - side_w, side_w, w - side_w, side_w };
+        doc->scroll_width = main.w;
         int top = doc->y;
         layout_main(s, doc, main);
         int main_bottom = doc->y;
