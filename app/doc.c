@@ -794,7 +794,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     RECT cr = { x + copy_right - copy_w, doc->y, x + copy_right, doc->y + copy_h };
     if (cr.left < x) cr.left = x;
     char *source = md_table_source(b);
-    Item *ci = &doc->items[doc_add(doc, &cr, paint_table_copy)];
+    Item *ci = doc_item(doc, doc_add(doc, &cr, paint_table_copy));
     ci->data = source; ci->free_data = free; ci->action = ACTION_COPY_CODE; ci->arg = (intptr_t)source; ci->hand = true;
     doc->y += copy_h + px(2);
     RECT rc = { x, doc->y, x + table_w, doc->y + y };
@@ -815,7 +815,7 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
             // The item covers the whole row, its runs moved below the top padding, so a press there lands in this cell.
             rich_offset(cell, 0, px(5));
             RECT cell_rc = { rc.left + t->col_x[c] + pad + shift, rc.top + t->row_y[r], rc.left + t->col_x[c] + col_w[c] - pad, rc.top + t->row_y[r] + t->row_h[r] };
-            Item *cell_it = &doc->items[doc_add(doc, &cell_rc, paint_rich)];
+            Item *cell_it = doc_item(doc, doc_add(doc, &cell_rc, paint_rich));
             cell_it->data = cell; cell_it->free_data = rich_free; cell_it->sel = cell; cell_it->cell = true;
             for (size_t k = 0; k < cell->count; k++) if (cell->runs[k].link) { cell_it->action = ACTION_OPEN_LINK; cell_it->hand = true; break; }
         }
