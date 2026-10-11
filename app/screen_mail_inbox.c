@@ -479,7 +479,7 @@ static void delete_done(void *owner, Request *r) {
         if (!r->ok && (r->error.status == 429 || r->error.status == 0 || r->error.status >= 500))
             failure(s, r, &s->body_error, true);
         const char *message = !r->ok && r->error.status == 409
-            ? "Reconnect this mailbox in Settings > Mail to allow deletion, then try again."
+            ? "Choose Enable mail actions for this mailbox in Settings > Mail, approve access, then try again."
             : !r->ok && r->error.status == 429
             ? "The mail provider is busy. Wait before trying deletion again."
             : "Deletion could not be confirmed. Refresh mail to check whether the message moved to trash before trying again.";
