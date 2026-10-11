@@ -15,7 +15,6 @@ Palette theme;
 static HFONT fonts[FONT_COUNT];
 static int edit_heights[FONT_COUNT];   // edit_line_height's answers, measured once per font
 static int current_dpi = 96;
-static const BriareusPalette *current_palette = &BRIAREUS_PALETTE_DARK;   // the one theme_refresh picked
 
 static COLORREF rgb_hex(unsigned hex) { return RGB((hex >> 16) & 0xFF, (hex >> 8) & 0xFF, hex & 0xFF); }
 
@@ -33,7 +32,7 @@ bool theme_refresh(void) {
     theme.dark = dark;
     // The colours come from briareus-client-contracts (briareus_tokens.h): the dashboard's `@theme` block for dark, and for
     // light the same warm palette on paper, with the accents darkened to read on it.
-    current_palette = dark ? &BRIAREUS_PALETTE_DARK : &BRIAREUS_PALETTE_LIGHT;
+    const BriareusPalette *current_palette = dark ? &BRIAREUS_PALETTE_DARK : &BRIAREUS_PALETTE_LIGHT;
     theme.canvas = rgb_hex(current_palette->canvas);
     theme.sidebar = rgb_hex(current_palette->sidebar);
     theme.raise = rgb_hex(current_palette->raise);
@@ -161,7 +160,13 @@ int edit_line_height(FontId id) {
 }
 
 COLORREF theme_status_color(const char *status) {
-    return rgb_hex(briareus_status_color(current_palette, briareus_status_role(status)));
+    switch (briareus_status_role(status)) {
+    case BRIAREUS_STATUS_ACTIVE: return theme.accent;
+    case BRIAREUS_STATUS_IDLE: return theme.ok;
+    case BRIAREUS_STATUS_ATTENTION: return theme.warn;
+    case BRIAREUS_STATUS_FAILED: return theme.danger;
+    default: return theme.dot;
+    }
 }
 
 COLORREF blend(COLORREF color, COLORREF background, double alpha) {
