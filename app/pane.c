@@ -561,7 +561,7 @@ static RECT scrollbar_rect(Pane *p) {
     RECT rc = pane_content_rect(p);
     rc.top += p->doc.pin_bottom;
     if (rc.top > rc.bottom) rc.top = rc.bottom;
-    if (!p->sidebar) rc.right = margin(p) + p->doc.scroll_width;
+    if (!p->sidebar && p->doc.scroll_width < p->doc.width) rc.right = margin(p) + p->doc.scroll_width;
     return rc;
 }
 
