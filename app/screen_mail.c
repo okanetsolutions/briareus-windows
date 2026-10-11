@@ -271,7 +271,7 @@ static void header(Screen *base, HeaderInfo *info) {
         const char *title = str_empty(a->label) ? a->email : a->label;
         snprintf(info->title, sizeof info->title, "%s", title ? title : "Mailbox");
         if (!str_empty(a->label) && a->email) snprintf(info->subtitle, sizeof info->subtitle, "%s", a->email);
-        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
         if (store_supports("update_mail_account")) {
             HeaderButton *b = &info->buttons[info->button_count++];
             snprintf(b->label, sizeof b->label, "%s", s->label_write ? "Saving\xE2\x80\xA6" : "Save");
@@ -281,7 +281,7 @@ static void header(Screen *base, HeaderInfo *info) {
         return;
     }
     snprintf(info->title, sizeof info->title, "Mail accounts");
-    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
 }
 static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccount *a) {
     int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(8));
