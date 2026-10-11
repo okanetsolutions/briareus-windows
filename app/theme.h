@@ -1,5 +1,6 @@
 // The dashboard's own look, dark or light as Windows' app mode says: its Tailwind palette (canvas, sidebar, raise, field, sunken, line, ink, muted,
-// accent), its pixel sizes for Segoe UI and Cascadia Code, and the drawing helpers the screens share (see canvas.h).
+// accent), its pixel sizes for Segoe UI and Cascadia Code, and the drawing helpers the screens share (see canvas.h). The colours
+// and type are briareus-client-contracts' tokens, in briareus_tokens.h.
 #ifndef BRIAREUS_THEME_H
 #define BRIAREUS_THEME_H
 #include <windows.h>
