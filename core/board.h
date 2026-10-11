@@ -174,6 +174,8 @@ size_t *stack_position_top_first(const StackPosition *stack);
 
 /// An https URL with a host and no credentials, or NULL.
 bool safe_web_url(const char *value);
+/// An HTTP or HTTPS URL suitable for opening in the default browser.
+bool safe_browser_url(const char *value);
 
 // MARK: - ▶ Run
 

@@ -964,6 +964,20 @@ static void test_stack_overviews_list_the_top_first(void) {
 
 // MARK: - Links out
 
+static void test_browser_links_allow_http_and_https_only(void) {
+    const char *safe[] = {
+        "http://192.168.1.47:8123", "http://localhost:8123/", "https://example.com/path?q=a@b#x",
+        "HTTP://192.168.1.47:8123", "HTTPS://example.com",
+    };
+    for (size_t i = 0; i < sizeof safe / sizeof *safe; i++) CHECK(safe_browser_url(safe[i]));
+    const char *unsafe[] = {
+        NULL, "", "http://", "http:///path", "https://?q", "http://user:pass@host/", "https://host@evil/",
+        "javascript:alert(1)", "file:///C:/x", "ftp://host", "//host", "192.168.1.47:8123",
+        "http://host\\@evil", "http://host\n/path", "http://host /path",
+    };
+    for (size_t i = 0; i < sizeof unsafe / sizeof *unsafe; i++) CHECK(!safe_browser_url(unsafe[i]));
+}
+
 static void test_only_https_urls_with_a_host_and_no_credentials_are_opened(void) {
     const char *safe[] = {
         "https://github.com/o/r/pull/1", "https://github.com", "https://github.com/", "https://github.com:443/x", "https://a.b?q=1",
@@ -1398,6 +1412,7 @@ void board_tests(void) {
     test_run("stack copies are independent", test_stack_copies_are_independent);
     test_run("stack overviews list the top first", test_stack_overviews_list_the_top_first);
     test_run("only https urls with a host and no credentials are opened", test_only_https_urls_with_a_host_and_no_credentials_are_opened);
+    test_run("browser links allow HTTP and HTTPS only", test_browser_links_allow_http_and_https_only);
     test_run("run profiles are read for the project, default first", test_run_profiles_are_read_for_the_project_default_first);
     test_run("run profiles are empty when none or unlisted", test_run_profiles_are_empty_when_none_or_unlisted);
     test_run("the run being prepared is the newest run session on the pull request", test_the_run_being_prepared_is_the_newest_run_session_on_the_pull_request);

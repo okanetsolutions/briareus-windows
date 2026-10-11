@@ -643,6 +643,20 @@ bool safe_web_url(const char *value) {
     return true;
 }
 
+bool safe_browser_url(const char *value) {
+    if (!value) return false;
+    const char *host;
+    if (_strnicmp(value, "https://", 8) == 0) host = value + 8;
+    else if (_strnicmp(value, "http://", 7) == 0) host = value + 7;
+    else return false;
+    const char *end = host; while (*end && *end != '/' && *end != '?' && *end != '#') end++;
+    if (end == host) return false;
+    for (const char *p = host; *p; p++) {
+        if ((unsigned char)*p <= 32 || *p == '\\' || (*p == '@' && p < end)) return false;
+    }
+    return true;
+}
+
 // MARK: - ▶ Run
 
 /// The array a list answer holds under `key`, or the answer itself when it is the array.

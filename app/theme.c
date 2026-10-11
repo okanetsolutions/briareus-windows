@@ -311,7 +311,7 @@ char *format_tokens(double n) {
 char *format_cost(double usd) { return xstrfmt("$%.2f", usd); }
 
 void open_web_url(const char *url) {
-    if (!safe_web_url(url)) return;
+    if (!safe_browser_url(url)) return;
     wchar_t *w = utf8_to_wide(url);
     ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL);
     free(w);
