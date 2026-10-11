@@ -577,8 +577,8 @@ static void paint_scrollbar(Pane *p, Canvas *cv) {
     int visible = content->bottom - content->top;
     int total = visible + m;
     int thumb = total > 0 ? track * visible / total : track;
-    if (thumb < px(28)) thumb = px(28);
-    if (thumb > track) thumb = track;
+    int min_thumb = track < px(56) ? (track + 1) / 2 : px(28);
+    if (thumb < min_thumb) thumb = min_thumb;
     int y = content->top + (track - thumb) * p->scroll_y / m;
     RECT r = { content->right - px(10), y, content->right, y + thumb };
     p->thumb_rect = r;
