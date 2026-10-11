@@ -73,13 +73,13 @@ static void ordinary_sign_in(void) {
     action(&s->base, ACT_REAUTH, 7, (POINT){0});
     CHECK_INT(writes, 1);
     CHECK_INT(json_int_or(json_get(sent, "accountId"), 0), 7);
-    CHECK(json_get(sent, "access") == NULL);
+    CHECK(json_is_null(json_get(sent, "access")));
     consent_cleanup(s);
     s = consent_setup();
     action(&s->base, ACT_CONNECT, 0, (POINT){0});
     CHECK_INT(writes, 1);
-    CHECK(json_get(sent, "accountId") == NULL);
-    CHECK(json_get(sent, "access") == NULL);
+    CHECK(json_is_null(json_get(sent, "accountId")));
+    CHECK(json_is_null(json_get(sent, "access")));
     consent_cleanup(s);
 }
 static void revoked_permissions(void) {
