@@ -1,4 +1,5 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
+#include "briareus_tokens.h"
 #include "canvas.h"
 #include "crash.h"
 #include "dialogs.h"
@@ -20,9 +21,10 @@
 #define MAIN_CLASS L"BriareusMain"
 // The dashboard's columns: a 268px sidebar, the main column, and a 272px pull request panel beside a conversation.
 // Below its `lg` breakpoint (64rem) the dashboard turns the columns into drawers; here that is one column at a time.
-#define SIDEBAR_WIDTH 268
-#define PANEL_WIDTH 272
-#define NARROW_WIDTH 1024
+// The widths are briareus-client-contracts' layout tokens.
+#define SIDEBAR_WIDTH BRIAREUS_LAYOUT_SIDEBAR_WIDTH
+#define PANEL_WIDTH BRIAREUS_LAYOUT_PANEL_WIDTH
+#define NARROW_WIDTH BRIAREUS_LAYOUT_NARROW_WIDTH
 // The side panel a board's card opens in covers this share of the main column, at least OVERLAY_MIN_WIDTH.
 #define OVERLAY_SHARE 62
 #define OVERLAY_MIN_WIDTH 560

@@ -1,4 +1,5 @@
 #include "theme.h"
+#include "briareus_tokens.h"
 #include "canvas.h"
 #include "board.h"
 #include "str.h"
@@ -29,45 +30,26 @@ bool theme_refresh(void) {
     bool dark = system_prefers_dark();
     bool changed = !theme.canvas || dark != theme.dark;
     theme.dark = dark;
-    if (dark) {
-        // The dashboard's `@theme` block, verbatim.
-        theme.canvas = rgb_hex(0x262624);
-        theme.sidebar = rgb_hex(0x1F1E1D);
-        theme.raise = rgb_hex(0x30302E);
-        theme.field = rgb_hex(0x3D3D3A);
-        theme.sunken = rgb_hex(0x1C1C1A);
-        theme.line = rgb_hex(0x3E3E3A);
-        theme.line_strong = rgb_hex(0x5A5850);
-        theme.ink = rgb_hex(0xE8E6E1);
-        theme.muted = rgb_hex(0xA29E93);
-        theme.accent = rgb_hex(0xD97757);
-        theme.accent_dim = rgb_hex(0xB35C3E);
-        theme.ok = rgb_hex(0x7FBF7F);
-        theme.warn = rgb_hex(0xE0AF68);
-        theme.danger = rgb_hex(0xE06C75);
-        theme.on_accent = rgb_hex(0x1B1B19);
-        theme.dot = rgb_hex(0x6B6862);
-        theme.thumb = rgb_hex(0x3C3B38);
-    } else {
-        // The dashboard has no light mode; this is the same warm palette on paper, with the accents darkened to read on it.
-        theme.canvas = rgb_hex(0xFAF9F5);
-        theme.sidebar = rgb_hex(0xF0EEE6);
-        theme.raise = rgb_hex(0xFFFFFF);
-        theme.field = rgb_hex(0xE9E6DC);
-        theme.sunken = rgb_hex(0xF3F1EA);
-        theme.line = rgb_hex(0xE0DDD3);
-        theme.line_strong = rgb_hex(0xC4C0B4);
-        theme.ink = rgb_hex(0x1F1E1D);
-        theme.muted = rgb_hex(0x6B675E);
-        theme.accent = rgb_hex(0xC96442);
-        theme.accent_dim = rgb_hex(0xE0A58E);
-        theme.ok = rgb_hex(0x3D8B4A);
-        theme.warn = rgb_hex(0xA86E12);
-        theme.danger = rgb_hex(0xC2404B);
-        theme.on_accent = rgb_hex(0xFFFFFF);
-        theme.dot = rgb_hex(0xA29E93);
-        theme.thumb = rgb_hex(0xCFCBC0);
-    }
+    // The colours come from briareus-client-contracts (briareus_tokens.h): the dashboard's `@theme` block for dark, and for
+    // light the same warm palette on paper, with the accents darkened to read on it.
+    const BriareusPalette *current_palette = dark ? &BRIAREUS_PALETTE_DARK : &BRIAREUS_PALETTE_LIGHT;
+    theme.canvas = rgb_hex(current_palette->canvas);
+    theme.sidebar = rgb_hex(current_palette->sidebar);
+    theme.raise = rgb_hex(current_palette->raise);
+    theme.field = rgb_hex(current_palette->field);
+    theme.sunken = rgb_hex(current_palette->sunken);
+    theme.line = rgb_hex(current_palette->line);
+    theme.line_strong = rgb_hex(current_palette->line_strong);
+    theme.ink = rgb_hex(current_palette->ink);
+    theme.muted = rgb_hex(current_palette->muted);
+    theme.accent = rgb_hex(current_palette->accent);
+    theme.accent_dim = rgb_hex(current_palette->accent_dim);
+    theme.ok = rgb_hex(current_palette->ok);
+    theme.warn = rgb_hex(current_palette->warn);
+    theme.danger = rgb_hex(current_palette->danger);
+    theme.on_accent = rgb_hex(current_palette->on_accent);
+    theme.dot = rgb_hex(current_palette->dot);
+    theme.thumb = rgb_hex(current_palette->thumb);
     theme.background = theme.canvas;
     theme.surface = theme.raise; theme.elevated = theme.raise; theme.bubble = theme.raise;
     theme.border = theme.line; theme.code = theme.sunken;
@@ -102,46 +84,57 @@ static bool font_exists(const wchar_t *face) {
     SelectObject(hdc, old); DeleteObject(f); ReleaseDC(NULL, hdc);
     return _wcsicmp(actual, face) == 0;
 }
+/// The first family of a NULL-terminated BRIAREUS_FONT_* list that is installed; the last is taken without asking.
+static const wchar_t *first_font(const wchar_t *const *families) {
+    while (families[1] && !font_exists(families[0])) families++;
+    return families[0];
+}
+/// A BRIAREUS_TYPE_* text style in the sans or the mono family.
+static void set_style(FontId id, const wchar_t *sans, const wchar_t *mono, BriareusTextStyle style) {
+    set_font(id, style.mono ? mono : sans, style.size, style.weight, style.italic);
+}
 
 void theme_set_dpi(int dpi) {
     current_dpi = dpi > 0 ? dpi : 96;
     for (int i = 0; i < FONT_COUNT; i++) if (fonts[i]) { DeleteObject(fonts[i]); fonts[i] = NULL; }
     memset(edit_heights, 0, sizeof edit_heights);
-    // The dashboard's type at its own pixel sizes: `--font-sans` is Segoe UI on Windows and `--font-mono` Cascadia Code.
-    // Body text is 15px (`text-sm`), the smallest chrome 13px (`text-xs`), the sidebar rows 14px, metadata 12px and 11px.
-    const wchar_t *ui = L"Segoe UI";
-    const wchar_t *mono = font_exists(L"Cascadia Code") ? L"Cascadia Code" : font_exists(L"Cascadia Mono") ? L"Cascadia Mono" : L"Consolas";
-    const wchar_t *icons = font_exists(L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
-    const wchar_t *emoji = font_exists(L"Segoe UI Emoji") ? L"Segoe UI Emoji" : L"Segoe UI Symbol";
-    set_font(FONT_BODY, ui, 15, FW_NORMAL, false);
-    set_font(FONT_BODY_MEDIUM, ui, 15, FW_MEDIUM, false);
-    set_font(FONT_BODY_SEMIBOLD, ui, 15, FW_SEMIBOLD, false);
-    set_font(FONT_HEADLINE, ui, 15, FW_SEMIBOLD, false);
-    set_font(FONT_SUBHEADLINE, ui, 14, FW_NORMAL, false);
-    set_font(FONT_SUBHEADLINE_SEMIBOLD, ui, 14, FW_SEMIBOLD, false);
-    set_font(FONT_TITLE3, ui, 17, FW_SEMIBOLD, false);
-    set_font(FONT_LARGE_TITLE, ui, 26, FW_SEMIBOLD, false);
-    set_font(FONT_CALLOUT, ui, 14, FW_NORMAL, false);
-    set_font(FONT_FOOTNOTE, ui, 13, FW_NORMAL, false);
-    set_font(FONT_CAPTION, ui, 12, FW_NORMAL, false);
-    set_font(FONT_CAPTION_MEDIUM, ui, 12, FW_MEDIUM, false);
-    set_font(FONT_CAPTION_SEMIBOLD, ui, 12, FW_SEMIBOLD, false);
-    set_font(FONT_CAPTION2, ui, 11, FW_NORMAL, false);
-    set_font(FONT_BODY_ITALIC, ui, 15, FW_NORMAL, true);
-    set_font(FONT_CALLOUT_ITALIC, ui, 14, FW_NORMAL, true);
-    set_font(FONT_FOOTNOTE_SEMIBOLD, ui, 13, FW_SEMIBOLD, false);
-    set_font(FONT_SUBHEADLINE_ITALIC, ui, 14, FW_NORMAL, true);
-    set_font(FONT_MONO, mono, 13, FW_NORMAL, false);
-    set_font(FONT_MONO_SMALL, mono, 12, FW_NORMAL, false);
-    set_font(FONT_MONO_CAPTION2, mono, 11, FW_NORMAL, false);
+    // The dashboard's type at its own pixel sizes, from briareus-client-contracts: `--font-sans` is Segoe UI on Windows and
+    // `--font-mono` Cascadia Code. Body text is 15px (`text-sm`), the smallest chrome 13px (`text-xs`), the sidebar rows 14px,
+    // metadata 12px and 11px. The token weights 400/500/600 are FW_NORMAL, FW_MEDIUM and FW_SEMIBOLD.
+    const wchar_t *ui = first_font(BRIAREUS_FONT_SANS);
+    const wchar_t *mono = first_font(BRIAREUS_FONT_MONO);
+    const wchar_t *icons = first_font(BRIAREUS_FONT_ICONS);
+    const wchar_t *emoji = first_font(BRIAREUS_FONT_EMOJI);
+    set_style(FONT_BODY, ui, mono, BRIAREUS_TYPE_BODY);
+    set_style(FONT_BODY_MEDIUM, ui, mono, BRIAREUS_TYPE_BODY_MEDIUM);
+    set_style(FONT_BODY_SEMIBOLD, ui, mono, BRIAREUS_TYPE_BODY_SEMIBOLD);
+    set_style(FONT_HEADLINE, ui, mono, BRIAREUS_TYPE_HEADLINE);
+    set_style(FONT_SUBHEADLINE, ui, mono, BRIAREUS_TYPE_SUBHEADLINE);
+    set_style(FONT_SUBHEADLINE_SEMIBOLD, ui, mono, BRIAREUS_TYPE_SUBHEADLINE_SEMIBOLD);
+    set_style(FONT_TITLE3, ui, mono, BRIAREUS_TYPE_TITLE3);
+    set_style(FONT_LARGE_TITLE, ui, mono, BRIAREUS_TYPE_LARGE_TITLE);
+    set_style(FONT_CALLOUT, ui, mono, BRIAREUS_TYPE_CALLOUT);
+    set_style(FONT_FOOTNOTE, ui, mono, BRIAREUS_TYPE_FOOTNOTE);
+    set_style(FONT_CAPTION, ui, mono, BRIAREUS_TYPE_CAPTION);
+    set_style(FONT_CAPTION_MEDIUM, ui, mono, BRIAREUS_TYPE_CAPTION_MEDIUM);
+    set_style(FONT_CAPTION_SEMIBOLD, ui, mono, BRIAREUS_TYPE_CAPTION_SEMIBOLD);
+    set_style(FONT_CAPTION2, ui, mono, BRIAREUS_TYPE_CAPTION2);
+    set_style(FONT_BODY_ITALIC, ui, mono, BRIAREUS_TYPE_BODY_ITALIC);
+    set_style(FONT_CALLOUT_ITALIC, ui, mono, BRIAREUS_TYPE_CALLOUT_ITALIC);
+    set_style(FONT_FOOTNOTE_SEMIBOLD, ui, mono, BRIAREUS_TYPE_FOOTNOTE_SEMIBOLD);
+    set_style(FONT_SUBHEADLINE_ITALIC, ui, mono, BRIAREUS_TYPE_SUBHEADLINE_ITALIC);
+    set_style(FONT_MONO, ui, mono, BRIAREUS_TYPE_MONO);
+    set_style(FONT_MONO_SMALL, ui, mono, BRIAREUS_TYPE_MONO_SMALL);
+    set_style(FONT_MONO_CAPTION2, ui, mono, BRIAREUS_TYPE_MONO_CAPTION2);
+    // The icon and emoji sizes have no token: they are this client's own.
     set_font(FONT_ICON, icons, 14, FW_NORMAL, false);
     set_font(FONT_ICON_SMALL, icons, 12, FW_NORMAL, false);
     set_font(FONT_ICON_LARGE, icons, 20, FW_NORMAL, false);
     set_font(FONT_ICON_HUGE, icons, 34, FW_NORMAL, false);
-    set_font(FONT_SERIF_MONOGRAM, ui, 17, FW_SEMIBOLD, false);
-    set_font(FONT_TINY_SEMIBOLD, ui, 10, FW_SEMIBOLD, false);
-    set_font(FONT_TITLE, ui, 23, FW_SEMIBOLD, false);
-    set_font(FONT_STAT, ui, 22, FW_SEMIBOLD, false);
+    set_style(FONT_SERIF_MONOGRAM, ui, mono, BRIAREUS_TYPE_MONOGRAM);
+    set_style(FONT_TINY_SEMIBOLD, ui, mono, BRIAREUS_TYPE_TINY_SEMIBOLD);
+    set_style(FONT_TITLE, ui, mono, BRIAREUS_TYPE_TITLE);
+    set_style(FONT_STAT, ui, mono, BRIAREUS_TYPE_STAT);
     set_font(FONT_EMOJI, emoji, 13, FW_NORMAL, false);
     set_font(FONT_EMOJI_LARGE, emoji, 15, FW_NORMAL, false);
     set_font(FONT_EMOJI_HUGE, emoji, 26, FW_NORMAL, false);
@@ -167,11 +160,13 @@ int edit_line_height(FontId id) {
 }
 
 COLORREF theme_status_color(const char *status) {
-    if (str_eq(status, "running") || str_eq(status, "queued") || str_eq(status, "preparing") || str_eq(status, "starting")) return theme.accent;
-    if (str_eq(status, "idle")) return theme.ok;
-    if (str_eq(status, "waiting") || str_eq(status, "interrupted") || str_eq(status, "cancelled")) return theme.warn;
-    if (str_eq(status, "failed") || str_eq(status, "error")) return theme.danger;
-    return theme.dot;
+    switch (briareus_status_role(status)) {
+    case BRIAREUS_STATUS_ACTIVE: return theme.accent;
+    case BRIAREUS_STATUS_IDLE: return theme.ok;
+    case BRIAREUS_STATUS_ATTENTION: return theme.warn;
+    case BRIAREUS_STATUS_FAILED: return theme.danger;
+    default: return theme.dot;
+    }
 }
 
 COLORREF blend(COLORREF color, COLORREF background, double alpha) {
@@ -199,7 +194,7 @@ void draw_glyph(Canvas *cv, wchar_t glyph, const RECT *rc, FontId f, COLORREF co
 }
 void draw_status_dot(Canvas *cv, int cx, int cy, const char *status) {
     COLORREF color = theme_status_color(status);
-    int r = px(7) / 2;
+    int r = px(BRIAREUS_LAYOUT_STATUS_DOT) / 2;
     fill_circle(cv, cx, cy, r, color);
 }
 int draw_badge(Canvas *cv, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height) {
@@ -209,7 +204,7 @@ int draw_badge(Canvas *cv, int x, int y, wchar_t glyph, const char *text, COLORR
     int w = px(6) * 2 + glyph_w + (glyph && text && *text ? px(3) : 0) + text_w + 2;
     if (cv) {
         RECT rc = { x, y, x + w, y + h };
-        fill_round_rect(cv, &rc, px(5), background, color == theme.muted ? theme.line : color);
+        fill_round_rect(cv, &rc, px(BRIAREUS_RADIUS_BADGE), background, color == theme.muted ? theme.line : color);
         int cx = x + px(6);
         if (glyph) { RECT g = { cx, y, cx + glyph_w, y + h }; draw_glyph(cv, glyph, &g, FONT_ICON_SMALL, color); cx += glyph_w + px(3); }
         RECT t = { cx, y, cx + text_w + 2, y + h };
@@ -243,10 +238,12 @@ void draw_monogram(Canvas *cv, int x, int y, int size, const char *text) {
     draw_textw(cv, letter, &rc, FONT_SERIF_MONOGRAM, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-static const wchar_t *const glyphs[] = { L"·", L"✢", L"✳", L"✶", L"✻", L"✽", L"✻", L"✶", L"✳", L"✢" };
-static const char *const verbs[] = { "Working", "Thinking", "Reasoning", "Tinkering", "Crafting", "Pondering" };
-const wchar_t *working_glyph(int tick) { return glyphs[((tick % 10) + 10) % 10]; }
-const char *working_verb(int tick) { return verbs[((tick / 25) % 6 + 6) % 6]; }
+enum {
+    GLYPH_COUNT = (int)(sizeof BRIAREUS_WORKING_GLYPHS / sizeof BRIAREUS_WORKING_GLYPHS[0]),
+    VERB_COUNT = (int)(sizeof BRIAREUS_WORKING_VERBS / sizeof BRIAREUS_WORKING_VERBS[0]),
+};
+const wchar_t *working_glyph(int tick) { return BRIAREUS_WORKING_GLYPHS[((tick % GLYPH_COUNT) + GLYPH_COUNT) % GLYPH_COUNT]; }
+const char *working_verb(int tick) { return BRIAREUS_WORKING_VERBS[((tick / BRIAREUS_WORKING_VERB_TICKS) % VERB_COUNT + VERB_COUNT) % VERB_COUNT]; }
 
 // MARK: - Formatting
 

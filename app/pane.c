@@ -1,4 +1,5 @@
 #include "pane.h"
+#include "briareus_tokens.h"
 #include "canvas.h"
 #include "str.h"
 #include <stdio.h>
@@ -49,8 +50,8 @@ struct Pane {
 
 static Pane **all_panes; static size_t pane_count;
 
-// The dashboard's own padding: the sidebar is `p-2.5` (10px), the main column's lists are `px-[18px]`.
-static int margin(Pane *p) { return px(p->sidebar ? 10 : 18); }
+// The dashboard's own padding: the sidebar is `p-2.5` (10px), the main column's lists are `px-[18px]`; both are layout tokens.
+static int margin(Pane *p) { return px(p->sidebar ? BRIAREUS_LAYOUT_SIDEBAR_MARGIN : BRIAREUS_LAYOUT_PANE_MARGIN); }
 static COLORREF pane_bg(Pane *p) { return p->sidebar ? theme.sidebar : theme.canvas; }
 
 static void find_hide(Pane *p, bool restore_focus);

@@ -3,6 +3,7 @@
 // and the spend by project, activity, provider and model, each with a ring of its share of the tokens. The window and
 // six filters narrow every number on the page; a row of a breakdown is a filter too. Reading it needs an Admin token.
 #include "screens.h"
+#include "briareus_tokens.h"
 #include "str.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -366,11 +367,10 @@ static bool chart(Doc *doc, int x, int w, const Json *u, int chart_id, const cha
 
 // MARK: - Rings
 
-// The categorical series colours, the only place a hue means which one: four slots and the tail's grey.
-enum { SERIES_SLOTS = 4 };
+// The categorical series colours (briareus_tokens.h), the only place a hue means which one: four slots and the tail's grey.
+enum { SERIES_SLOTS = BRIAREUS_CHART_SLOTS };
 static COLORREF series_color(int i) {
-    static const unsigned hex[] = { 0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0x807B71 };
-    unsigned h = hex[i < SERIES_SLOTS ? i : SERIES_SLOTS];
+    unsigned h = briareus_chart_series_color(i);
     return RGB((h >> 16) & 0xFF, (h >> 8) & 0xFF, h & 0xFF);
 }
 /// shareSeries: the first four rows that spent get a colour each, every other row that spent is summed into Other, and
