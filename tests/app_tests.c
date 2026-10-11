@@ -11,6 +11,7 @@ int main(void) {
     app_sql_tests();
     app_mcp_settings_tests();
     app_mail_tests();
+    app_mail_consent_tests();
     app_mail_inbox_tests();
     app_mail_delete_tests();
     app_pulls_tests();

@@ -12,7 +12,7 @@
 #include <string.h>
 #include <time.h>
 
-enum { ACT_CONNECT = 1800, ACT_REAUTH, ACT_ENABLED, ACT_DAYS, ACT_DELETE, ACT_SYNC, ACT_FINISH, ACT_CANCEL, ACT_BROWSER_DONE, ACT_SAVE, ACT_FOCUS };
+enum { ACT_CONNECT = 1800, ACT_REAUTH, ACT_ENABLED, ACT_DAYS, ACT_DELETE, ACT_SYNC, ACT_FINISH, ACT_CANCEL, ACT_BROWSER_DONE, ACT_SAVE, ACT_FOCUS, ACT_MANAGE };
 enum { TIMER_MAIL = 1810, ID_MAIL_LABEL = 2500 };
 typedef struct {
     Screen base;
@@ -132,10 +132,11 @@ static void start_done(void *owner, Request *r) {
     }
     repaint(s);
 }
-static void start(MailScreen *s, const char *provider, int id) {
+static void start(MailScreen *s, const char *provider, int id, bool manage) {
     if (!can_write(s, "connect_mail_account") || !s->loaded || !mail_provider_available(&s->accounts, provider)) return;
     Json *body = json_object(); json_set_str(body, "provider", provider);
     if (id) json_set_num(body, "accountId", id);
+    if (manage) json_set_str(body, "access", "manage");
     // Let the server apply defaults only to new mailboxes and preserve settings on reconnect.
     set_text(&s->starting_provider, provider); s->starting_id = id;
     set_error(s, NULL, false); set_text(&s->notice, NULL);
@@ -243,13 +244,13 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         load(s); repaint(s); return;
     }
     if (act == ACT_FINISH) { finish(s); return; }
-    if (act == ACT_CONNECT) { start(s, arg == 0 ? "gmail" : "outlook", 0); return; }
+    if (act == ACT_CONNECT) { start(s, arg == 0 ? "gmail" : "outlook", 0, false); return; }
     if (act == ACT_SAVE) { label_save(s); return; }
     if (act == ACT_FOCUS) { if (s->label_edit && IsWindowEnabled(s->label_edit)) SetFocus(s->label_edit); return; }
     const MailAccount *a = mail_account_find(&s->accounts, (int)arg);
     if (!a) return;
     int id = a->id;
-    if (act == ACT_REAUTH) { start(s, a->provider, id); return; }
+    if (act == ACT_REAUTH || act == ACT_MANAGE) { start(s, a->provider, id, act == ACT_MANAGE); return; }
     if (act == ACT_DAYS || act == ACT_ENABLED) { update(s, a, act); return; }
     const char *op = act == ACT_DELETE ? "delete_mail_account" : act == ACT_SYNC ? "sync_mail_account" : NULL;
     if (!op || !can_write(s, op)) return;
@@ -270,7 +271,7 @@ static void header(Screen *base, HeaderInfo *info) {
         const char *title = str_empty(a->label) ? a->email : a->label;
         snprintf(info->title, sizeof info->title, "%s", title ? title : "Mailbox");
         if (!str_empty(a->label) && a->email) snprintf(info->subtitle, sizeof info->subtitle, "%s", a->email);
-        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
         if (store_supports("update_mail_account")) {
             HeaderButton *b = &info->buttons[info->button_count++];
             snprintf(b->label, sizeof b->label, "%s", s->label_write ? "Saving\xE2\x80\xA6" : "Save");
@@ -280,7 +281,7 @@ static void header(Screen *base, HeaderInfo *info) {
         return;
     }
     snprintf(info->title, sizeof info->title, "Mail accounts");
-    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. The provider mailbox stays read-only.");
+    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
 }
 static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccount *a) {
     int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(8));
@@ -312,13 +313,18 @@ static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccoun
         { 0, a->enabled ? "Disable" : "Enable", BUTTON_BORDERED, ACT_ENABLED, a->id, edit },
         { 0, "Sync days", BUTTON_BORDERED, ACT_DAYS, a->id, edit },
         { 0, "Sign in again", BUTTON_BORDERED, ACT_REAUTH, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
+        { 0, "Enable mail actions", BUTTON_BORDERED, ACT_MANAGE, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
         { 0, "Sync now", BUTTON_BORDERED, ACT_SYNC, a->id, can_write(s, "sync_mail_account") && !a->syncing && str_eq(a->status, "connected") },
         { 0, "Disconnect", BUTTON_DESTRUCTIVE, ACT_DELETE, a->id, can_write(s, "delete_mail_account") },
     };
-    const char *ops[] = { "update_mail_account", "update_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
-    ButtonSpec offered[5]; size_t n = 0;
+    const char *ops[] = { "update_mail_account", "update_mail_account", "connect_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
+    ButtonSpec offered[6]; size_t n = 0;
     for (size_t k = 0; k < sizeof buttons / sizeof *buttons; k++) if (store_supports(ops[k])) offered[n++] = buttons[k];
     if (n) { doc_space(doc, px(12)); doc_button_row(doc, ix, iw, offered, n); }
+    if (store_supports("connect_mail_account")) {
+        doc_space(doc, px(8));
+        doc_text(doc, ix, iw, "Enable mail actions requests permission to send and move mail, including moving messages to trash. Approve access in your provider's sign-in window.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+    }
     doc_box_end(doc, box, pad);
     doc_space(doc, px(12));
 }
