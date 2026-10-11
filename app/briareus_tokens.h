@@ -156,6 +156,84 @@ static const wchar_t *const BRIAREUS_FONT_EMOJI[] = { L"Segoe UI Emoji", L"Segoe
 #define BRIAREUS_LAYOUT_PANE_MARGIN 18
 #define BRIAREUS_LAYOUT_STATUS_DOT 7
 
+// The usage charts' categorical series: BRIAREUS_CHART_SLOTS slots, then the tail's grey. The same in both modes.
+#define BRIAREUS_CHART_SLOTS 4
+static const unsigned int BRIAREUS_CHART_SERIES[] = { 0x3987E5, 0xD95926, 0x199E70, 0xC98500 };
+#define BRIAREUS_CHART_OTHER 0x807B71
+static inline unsigned int briareus_chart_series_color(int slot) {
+    return slot >= 0 && slot < BRIAREUS_CHART_SLOTS ? BRIAREUS_CHART_SERIES[slot] : BRIAREUS_CHART_OTHER;
+}
+
+// The context-usage bar's colours, by the category names Claude's /context report uses.
+typedef struct {
+    unsigned int messages;
+    unsigned int system_prompt;
+    unsigned int system_tools;
+    unsigned int mcp_tools;
+    unsigned int skills;
+    unsigned int memory_files;
+    unsigned int custom_agents;
+    unsigned int deferred;
+    unsigned int free;
+    unsigned int unknown;
+} BriareusContextPalette;
+
+static const BriareusContextPalette BRIAREUS_CONTEXT_DARK = {
+    .messages = 0x6D9EF7,
+    .system_prompt = 0xE06C75,
+    .system_tools = 0xD98A3F,
+    .mcp_tools = 0x4FAE72,
+    .skills = 0xC96F9E,
+    .memory_files = 0x5FAE5F,
+    .custom_agents = 0x8F7EE8,
+    .deferred = 0x5A5850,
+    .free = 0x3E3E3A,
+    .unknown = 0x8A867C,
+};
+
+static const BriareusContextPalette BRIAREUS_CONTEXT_LIGHT = {
+    .messages = 0x4483F5,
+    .system_prompt = 0xDC5B65,
+    .system_tools = 0xC37327,
+    .mcp_tools = 0x449562,
+    .skills = 0xC66698,
+    .memory_files = 0x4C964C,
+    .custom_agents = 0x8775E6,
+    .deferred = 0xC4C0B4,
+    .free = 0xE0DDD3,
+    .unknown = 0x8A867C,
+};
+
+/// ASCII case-insensitive equality and substring, so the lookup needs no locale.
+static inline int briareus_ascii_lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static inline bool briareus_iequals(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) if (briareus_ascii_lower((unsigned char)*a) != briareus_ascii_lower((unsigned char)*b)) return false;
+    return *a == *b;
+}
+static inline bool briareus_icontains(const char *haystack, const char *needle) {
+    for (; *haystack; haystack++) {
+        const char *h = haystack, *n = needle;
+        while (*h && *n && briareus_ascii_lower((unsigned char)*h) == briareus_ascii_lower((unsigned char)*n)) { h++; n++; }
+        if (!*n) return true;
+    }
+    return !*needle;
+}
+
+/// A category's colour; the name is matched without regard to case, and NULL is unknown.
+static inline unsigned int briareus_context_color(const BriareusContextPalette *palette, const char *category) {
+    if (!category) return palette->unknown;
+    if (briareus_icontains(category, "deferred") || briareus_icontains(category, "autocompact")) return palette->deferred;
+    if (briareus_iequals(category, "messages") || briareus_iequals(category, "context")) return palette->messages;
+    if (briareus_iequals(category, "system prompt")) return palette->system_prompt;
+    if (briareus_iequals(category, "system tools")) return palette->system_tools;
+    if (briareus_iequals(category, "mcp tools")) return palette->mcp_tools;
+    if (briareus_iequals(category, "skills")) return palette->skills;
+    if (briareus_iequals(category, "memory files")) return palette->memory_files;
+    if (briareus_iequals(category, "custom agents")) return palette->custom_agents;
+    if (briareus_iequals(category, "free space")) return palette->free;
+    return palette->unknown;
+}
+
 #define BRIAREUS_MOTION_PULSE_MS 1400
 
 #define BRIAREUS_WORKING_VERB_TICKS 25

@@ -1,6 +1,7 @@
 // The dashboard's `#pr-panel`: the column on the right of a conversation with its pull request, commits, reviews and
 // findings, each finding with its verdict buttons, and under them the session's context usage.
 #include "screens.h"
+#include "briareus_tokens.h"
 #include "canvas.h"
 #include "dialogs.h"
 #include "str.h"
@@ -244,21 +245,13 @@ static void pr_layout(PanelScreen *s, Doc *doc, int w) {
 
 // MARK: - Context usage
 
-/// The bar's colours, keyed on the category names claude's /context report uses; deferred and buffer rows and unknown
-/// categories go grey, free space the near-background grey of the track.
+/// The bar's colours, keyed on the category names claude's /context report uses (briareus_tokens.h), dark or light as the
+/// app is: deferred and buffer rows a dim step above free space, which is the track's own line colour.
 static COLORREF context_color(const char *name) {
-    static const struct { const char *name; COLORREF color; } colors[] = {
-        { "messages", RGB(0x6d, 0x9e, 0xf7) }, { "system prompt", RGB(0xe0, 0x6c, 0x75) }, { "system tools", RGB(0xd9, 0x8a, 0x3f) },
-        { "mcp tools", RGB(0x4f, 0xae, 0x72) }, { "skills", RGB(0xc9, 0x6f, 0x9e) }, { "memory files", RGB(0x5f, 0xae, 0x5f) },
-        { "custom agents", RGB(0x8f, 0x7e, 0xe8) }, { "context", RGB(0x6d, 0x9e, 0xf7) },
-    };
     char *n = str_fold(name ? name : "");
-    COLORREF color = RGB(0x8a, 0x86, 0x7c);
-    if (str_eq(n, "free space")) color = theme.line;
-    else if (strstr(n, "deferred") || strstr(n, "autocompact")) color = RGB(0x55, 0x52, 0x4c);
-    else for (size_t i = 0; i < sizeof colors / sizeof *colors; i++) if (str_eq(n, colors[i].name)) { color = colors[i].color; break; }
+    unsigned h = briareus_context_color(theme.dark ? &BRIAREUS_CONTEXT_DARK : &BRIAREUS_CONTEXT_LIGHT, n);
     free(n);
-    return color;
+    return RGB((h >> 16) & 0xFF, (h >> 8) & 0xFF, h & 0xFF);
 }
 typedef struct { size_t count; COLORREF *colors; double *pct; } BarData;
 static void bar_free(void *p) { BarData *d = p; free(d->colors); free(d->pct); free(d); }
