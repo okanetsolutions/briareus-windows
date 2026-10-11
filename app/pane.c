@@ -558,16 +558,28 @@ static BOOL CALLBACK repaint_child(HWND child, LPARAM lp) {
     return TRUE;
 }
 
-static void paint_scrollbar(Pane *p, Canvas *cv, const RECT *content) {
+static RECT scrollbar_rect(Pane *p) {
+    RECT rc = pane_content_rect(p);
+    rc.top += p->doc.pin_bottom;
+    if (rc.top > rc.bottom) rc.top = rc.bottom;
+    if (!p->sidebar && p->doc.scroll_width < p->doc.width) rc.right = margin(p) + p->doc.scroll_width;
+    return rc;
+}
+
+static void paint_scrollbar(Pane *p, Canvas *cv) {
     // `::-webkit-scrollbar { width: 10px }` with the palette's thumb and no track.
     int m = max_scroll(p);
     memset(&p->thumb_rect, 0, sizeof p->thumb_rect);
     if (m <= 0) return;
+    RECT bounds = scrollbar_rect(p);
+    const RECT *content = &bounds;
     int track = content->bottom - content->top;
+    if (track <= 0) return;
     int visible = content->bottom - content->top;
-    int total = p->content_height + px(12);
+    int total = visible + m;
     int thumb = total > 0 ? track * visible / total : track;
-    if (thumb < px(28)) thumb = px(28);
+    int min_thumb = track < px(56) ? (track + 1) / 2 : px(28);
+    if (thumb < min_thumb) thumb = min_thumb;
     int y = content->top + (track - thumb) * p->scroll_y / m;
     RECT r = { content->right - px(10), y, content->right, y + thumb };
     p->thumb_rect = r;
@@ -609,7 +621,7 @@ static void paint(Pane *p) {
     if (p->carrying) doc_paint_dragged(&p->doc, cv, p->carry_at.x - p->carry_grab.x - margin(p), p->carry_at.y - p->carry_grab.y - content.top);
     canvas_offset(cv, 0, 0);
     canvas_unclip(cv);
-    paint_scrollbar(p, cv, &content);
+    paint_scrollbar(p, cv);
     paint_hscrollbar(p, cv, &content);
     if (p->show_bottom_button && !pane_at_bottom(p) && p->doc.count) {
         int size = px(32);
@@ -772,7 +784,7 @@ static void mouse_move(Pane *p, int x, int y, bool left_down) {
         return;
     }
     if (p->dragging_thumb) {
-        RECT content = pane_content_rect(p);
+        RECT content = scrollbar_rect(p);
         int track = content.bottom - content.top;
         int thumb = p->thumb_rect.bottom - p->thumb_rect.top;
         int m = max_scroll(p);
