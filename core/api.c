@@ -380,6 +380,12 @@ static const ApiRoute ROUTES[] = {
     { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" },
     { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
+    { "home_assistant", "GET", "home-assistant" },
+    { "home_assistant_entities", "GET", "home-assistant/entities" },
+    { "home_assistant_entity", "GET", "home-assistant/entities/{id}" },
+    { "home_assistant_services", "GET", "home-assistant/services" },
+    { "home_assistant_action", "POST", "home-assistant/services/{domain}/{service}" },
+    { "home_assistant_event", "POST", "home-assistant/events/{type}" },
     // Operator MCP registry; availability and admin access come from the deployed catalog.
     { "settings_mcp_servers", "GET", "settings/mcp/servers" },
     { "create_mcp_server", "POST", "settings/mcp/servers" },
@@ -488,6 +494,19 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
         append_query(rest, &path);
         result = request(c, path.data, route->method, NULL, timeout_ms, error);
     } else {
+        // Keep arbitrary Home Assistant data separate from path and query arguments.
+        if (str_eq(name, "home_assistant_action") || str_eq(name, "home_assistant_event")) {
+            const Json *data = json_get(rest, "data");
+            int response = json_int_or(json_get(rest, "returnResponse"), -1);
+            bool has_response = !json_is_null(json_get(rest, "returnResponse"));
+            if (!json_is_object(data) || (has_response && response != 0 && response != 1)) {
+                api_error_set(error, API_HTTP, 400, "Home Assistant requires object data and returnResponse 0 or 1.", -1);
+                str_free(&path); json_free(rest); free(kept); return NULL;
+            }
+            if (str_eq(name, "home_assistant_action") && has_response) str_appendf(&path, "?returnResponse=%d", response);
+            Json *body = json_clone(data);
+            json_free(rest); rest = body;
+        }
         if (route->set) json_set_bool(rest, route->set, true);
         result = request(c, path.data, route->method, rest, timeout_ms, error);
     }

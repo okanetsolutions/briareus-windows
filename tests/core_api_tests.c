@@ -333,6 +333,12 @@ static const Expected ROUTE_TABLE[] = {
     { "update_mail_account", "PUT", "settings/mail/accounts/{id}" },
     { "delete_mail_account", "DELETE", "settings/mail/accounts/{id}" },
     { "sync_mail_account", "POST", "settings/mail/accounts/{id}/sync" },
+    { "home_assistant", "GET", "home-assistant" },
+    { "home_assistant_entities", "GET", "home-assistant/entities" },
+    { "home_assistant_entity", "GET", "home-assistant/entities/{id}" },
+    { "home_assistant_services", "GET", "home-assistant/services" },
+    { "home_assistant_action", "POST", "home-assistant/services/{domain}/{service}" },
+    { "home_assistant_event", "POST", "home-assistant/events/{type}" },
     { "settings_mcp_servers", "GET", "settings/mcp/servers" },
     { "create_mcp_server", "POST", "settings/mcp/servers" },
     { "update_mcp_server", "PUT", "settings/mcp/servers/{id}" },
@@ -384,6 +390,9 @@ static void test_every_route_builds_its_request(void) {
             free(name); params++;
         }
         json_set_str(args, "extra", "v&1");
+        if (str_eq(x->name, "home_assistant_action") || str_eq(x->name, "home_assistant_event")) {
+            Json *data = json_object(); json_set_str(data, "extra", "v&1"); json_object_set(args, "data", data);
+        }
         int calls = stub.calls;
         Json *result = api_call(c, x->name, args, 0, &e);
         if (!result) printf("  %s failed\n", x->name);
@@ -1057,6 +1066,46 @@ static void test_final_catalog_transport_and_session_requests(void) {
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_home_assistant_transport(void) {
+    Stub stub = {0}; stub_json(&stub, 200, "{\"entities\":[],\"response\":{\"forecast\":[]}}");
+    ApiClient *c = client(&stub); ApiError e; api_error_init(&e);
+    check_url(c, &stub, "home_assistant_entities", "{\"domain\":\"light & switch\"}", BASE "home-assistant/entities?domain=light%20%26%20switch");
+    check_url(c, &stub, "home_assistant_entity", "{\"id\":\"light.a/b?#\"}", BASE "home-assistant/entities/light.a%2Fb%3F%23");
+    Json *args = json_parsez("{\"domain\":\"weather\",\"service\":\"get_forecasts\",\"returnResponse\":1,\"data\":{\"entity_id\":[\"weather.home\"],\"domain\":\"preserved\",\"service\":\"custom\",\"returnResponse\":false}}");
+    Json *result = api_call(c, "home_assistant_action", args, 60000, &e);
+    CHECK(result != NULL); CHECK_STR(stub.last_method, "POST");
+    CHECK_STR(stub.last_url, BASE "home-assistant/services/weather/get_forecasts?returnResponse=1");
+    Json *sent = json_parsez(stub.last_body); CHECK(json_equal(sent, json_get(args, "data"))); json_free(sent);
+    CHECK(json_is_object(json_get(result, "response"))); json_free(result);
+    json_set_num(args, "returnResponse", 0);
+    result = api_call(c, "home_assistant_action", args, 0, &e); json_free(result);
+    CHECK_STR(stub.last_url, BASE "home-assistant/services/weather/get_forecasts?returnResponse=0");
+    json_object_remove(args, "returnResponse");
+    result = api_call(c, "home_assistant_action", args, 0, &e); json_free(result);
+    CHECK_STR(stub.last_url, BASE "home-assistant/services/weather/get_forecasts");
+    json_set_num(args, "returnResponse", 2); int before = stub.calls;
+    CHECK(api_call(c, "home_assistant_action", args, 0, &e) == NULL); CHECK_INT(stub.calls, before);
+    json_object_remove(args, "returnResponse");
+    json_object_set(args, "data", json_array());
+    CHECK(api_call(c, "home_assistant_action", args, 0, &e) == NULL); CHECK_INT(stub.calls, before);
+    json_free(args);
+    args = json_parsez("{\"type\":\"custom/event?#\",\"data\":{\"type\":\"preserved\",\"nested\":{\"a\":[1,true,null]}}}");
+    result = api_call(c, "home_assistant_event", args, 0, &e); json_free(result);
+    CHECK_STR(stub.last_url, BASE "home-assistant/events/custom%2Fevent%3F%23");
+    sent = json_parsez(stub.last_body); CHECK(json_equal(sent, json_get(args, "data"))); json_free(sent);
+    const int failures[] = { 401, 403, 404, 429, 502, 503 };
+    for (size_t i = 0; i < sizeof failures / sizeof *failures; i++) {
+        stub_json(&stub, failures[i], "{\"error\":\"Home Assistant unavailable\"}"); before = stub.calls;
+        CHECK(api_call(c, "home_assistant_event", args, 0, &e) == NULL);
+        CHECK_INT(stub.calls, before + 1); CHECK_INT(e.status, failures[i]);
+    }
+    stub_json(&stub, 200, "invalid receipt"); before = stub.calls;
+    CHECK(api_call(c, "home_assistant_event", args, 0, &e) == NULL); CHECK_INT(stub.calls, before + 1);
+    stub.fail = true; stub.fail_message = "timeout"; before = stub.calls;
+    CHECK(api_call(c, "home_assistant_event", args, 0, &e) == NULL); CHECK_INT(stub.calls, before + 1);
+    json_free(args); api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+}
+
 static void test_mcp_contract_and_errors(void) {
     Stub stub = {0}; stub.status = 201; stub.content_type = "application/json";
     stub.body = "{\"server\":{\"id\":1791403200000,\"status\":\"needs-sign-in\",\"signInUrl\":\"https://auth.example/?state=s\",\"signInNeedsPaste\":true,\"headerNames\":[\"Authorization\"],\"envNames\":[],\"hasOAuthClientSecret\":true}}";
@@ -1146,6 +1195,7 @@ void api_tests(void) {
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving, previews and shared browser remain", test_removed_integrations_are_unregistered);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
+    test_run("Home Assistant URLs, direct data bodies, responses and no write retries", test_home_assistant_transport);
     test_run("MCP connect/finish pin large ids and never retry failed writes", test_mcp_contract_and_errors);
     test_run("mail read routes encode opaque IDs filters and cursors without writes or retries", test_mail_read_transport);
     test_run("mail six routes preserve accountId 202 failures and never retry exchanges", test_mail_transport_contract);
