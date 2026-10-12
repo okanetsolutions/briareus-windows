@@ -34,6 +34,7 @@ void app_contract_tests(void);
 void app_sql_tests(void);
 void app_mcp_settings_tests(void);
 void app_home_assistant_tests(void);
+void app_dashboard_tests(void);
 void app_mail_tests(void);
 void app_mail_consent_tests(void);
 void app_pulls_tests(void);

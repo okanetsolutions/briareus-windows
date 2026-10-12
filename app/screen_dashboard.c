@@ -1,13 +1,14 @@
 // The 📊 Dashboard: what every project spent over a window, as the web dashboard's home pane draws it from the usage
 // ledger (`GET /usage/all`). The totals as tiles, tokens and cost per day or month as bars, the most expensive sessions,
 // and the spend by project, activity, provider and model, each with a ring of its share of the tokens. The window and
-// six filters narrow every number on the page; a row of a breakdown is a filter too. Reading it needs an Admin token.
+// six filters narrow the ledger; current account quotas are independent. Reading it needs an Admin token.
 #include "screens.h"
 #include "briareus_tokens.h"
 #include "str.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 enum { ACT_PERIOD = 1000, ACT_REFRESH, ACT_FILTER, ACT_CLEAR, ACT_ROW, ACT_OPEN_SESSION, ACT_BAR };
 enum { TIMER_POLL = 1 };
@@ -56,6 +57,11 @@ typedef struct {
     char **picks[F_COUNT]; size_t pick_count[F_COUNT];
     char *error;
     Request *req;
+    Json *accounts;
+    char *accounts_error;
+    Request *accounts_req, **status_reqs;
+    size_t status_count;
+    bool quota_fresh;
     Poller poller;
 } DashboardScreen;
 
@@ -201,6 +207,56 @@ static const Json *shown(DashboardScreen *s) {
 
 // MARK: - Reading
 
+static void quotas_cancel(DashboardScreen *s) {
+    request_cancel(&s->accounts_req);
+    for (size_t i = 0; i < s->status_count; i++) request_cancel(&s->status_reqs[i]);
+}
+static bool quotas_busy(DashboardScreen *s) {
+    if (s->accounts_req) return true;
+    for (size_t i = 0; i < s->status_count; i++) if (s->status_reqs[i]) return true;
+    return false;
+}
+static void quota_done(void *owner, Request *req) {
+    DashboardScreen *s = owner;
+    if (req->client != g_store.client) return;
+    Json *row = s->accounts->a.items[req->tag];
+    if (req->ok && json_is_object(json_get(req->result, "status"))) {
+        json_object_set(row, "status", json_clone(json_get(req->result, "status")));
+    } else {
+        char *error = request_error_or_unexpected(req);
+        json_set_str(row, "quotaError", error); free(error);
+    }
+    pane_relayout(s->base.pane);
+}
+static void accounts_done(void *owner, Request *req) {
+    DashboardScreen *s = owner;
+    if (req->client != g_store.client) return;
+    const Json *rows = json_get(req->result, "providers");
+    if (!req->ok || !json_is_array(rows)) {
+        char *error = request_error_or_unexpected(req);
+        set_string(&s->accounts_error, error); free(error);
+    } else {
+        set_string(&s->accounts_error, NULL);
+        json_free(s->accounts); s->accounts = json_clone(rows);
+        free(s->status_reqs);
+        s->status_count = json_count(rows);
+        s->status_reqs = xcalloc(s->status_count, sizeof *s->status_reqs);
+        for (size_t i = 0; i < s->status_count; i++) {
+            int id = json_int_or(json_get(json_at(rows, i), "id"), 0);
+            if (id <= 0) continue;
+            Json *args = json_object(); json_set_num(args, "id", id);
+            if (s->quota_fresh) json_set_num(args, "fresh", 1);
+            store_call("provider_status", args, 60000, s, quota_done, (int)i, &s->status_reqs[i]);
+        }
+    }
+    pane_relayout(s->base.pane);
+}
+static void quotas_load(DashboardScreen *s, bool fresh) {
+    if (quotas_busy(s) || !store_supports("settings_providers") || !store_supports("provider_status")) return;
+    s->quota_fresh = fresh;
+    store_call("settings_providers", json_object(), 60000, s, accounts_done, 0, &s->accounts_req);
+}
+
 static void usage_done(void *owner, Request *req) {
     DashboardScreen *s = owner;
     if (req->ok && json_is_object(req->result)) {
@@ -238,6 +294,72 @@ static void restore(DashboardScreen *s) {
 }
 
 // MARK: - Tiles
+
+static char *quota_text(const Json *window) {
+    double used;
+    if (!json_num(json_get(window, "usedPct"), &used) || !isfinite(used)) return xstrdup("Usage unavailable");
+    double remaining = 100 - (used < 0 ? 0 : used > 100 ? 100 : used);
+    time_t resets_at;
+    char *reset = board_date_parse(json_str(json_get(window, "resetsAt")), &resets_at) ? format_event_time(resets_at) : NULL;
+    char *text = reset ? xstrfmt("%.0f%% remaining \xC2\xB7 resets %s", remaining, reset) : xstrfmt("%.0f%% remaining", remaining);
+    free(reset);
+    return text;
+}
+static void quotas_layout(DashboardScreen *s, Doc *doc, int x, int w) {
+    int box = doc_box_begin(doc, x, w, px(12), theme.raise, theme.line, px(12));
+    int ix = x + px(14), iw = w - px(28);
+    int cols = iw >= px(1100) ? 4 : iw >= px(800) ? 3 : iw >= px(520) ? 2 : 1;
+    int row_top = 0, row_bottom = 0;
+    doc_text(doc, ix, iw, "Usage remaining per account", FONT_BODY, theme.ink, DT_LEFT | DT_WORDBREAK);
+    doc_text(doc, ix, iw, "Current account limits across all projects, independent of the spending filters.", FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK);
+    doc_space(doc, px(8));
+    if (!store_supports("settings_providers") || !store_supports("provider_status")) {
+        doc_text(doc, ix, iw, "Account usage is unavailable on this server or with this device's permissions.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    } else if (s->accounts_error) {
+        doc_notice(doc, ix, iw, s->accounts_error);
+    } else if (!s->accounts) {
+        doc_text(doc, ix, iw, "Loading account usage...", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    } else if (!json_count(s->accounts)) {
+        doc_text(doc, ix, iw, "No provider accounts configured.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    } else for (size_t i = 0; i < json_count(s->accounts); i++) {
+        int col = (int)(i % (size_t)cols), cw = (iw - px(16) * (cols - 1)) / cols;
+        int cx = ix + col * (cw + px(16));
+        if (!col) row_top = row_bottom = doc->y;
+        doc->y = row_top;
+        const Json *row = json_at(s->accounts, i), *status = json_get(row, "status");
+        const Json *auth = json_get(status, "auth"), *usage = json_get(status, "usage"), *windows = json_get(usage, "windows");
+        const char *label = json_str_nonempty(json_get(row, "label")), *binary = json_str_nonempty(json_get(row, "binary"));
+        const char *email = json_str_nonempty(json_get(auth, "email")), *name = json_str_nonempty(json_get(auth, "name"));
+        const char *plan = json_str_nonempty(json_get(auth, "plan"));
+        char *fallback = xstrfmt("Account #%d", json_int_or(json_get(row, "id"), 0));
+        char *title = xstrfmt("%s%s%s%s", label ? label : fallback, binary ? " \xC2\xB7 " : "", binary ? binary : "",
+                             json_bool_is(json_get(row, "active"), false) ? " (disabled)" : "");
+        doc_text(doc, cx, cw, title, FONT_BODY, theme.ink, DT_LEFT | DT_WORDBREAK);
+        free(title); free(fallback);
+        if (email || name || plan) {
+            char *detail = xstrfmt("%s%s%s", email ? email : name ? name : "", (email || name) && plan ? " \xC2\xB7 " : "", plan ? plan : "");
+            doc_text(doc, cx, cw, detail, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK); free(detail);
+        }
+        for (size_t j = 0; j < json_count(windows); j++) {
+            const Json *window = json_at(windows, j);
+            const char *label_window = json_str_nonempty(json_get(window, "label"));
+            char *value = quota_text(window), *line = xstrfmt("%s: %s", label_window ? label_window : "Quota", value);
+            doc_text(doc, cx, cw, line, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_WORDBREAK);
+            free(value); free(line);
+        }
+        if (!json_count(windows)) {
+            const char *error = json_str_nonempty(json_get(row, "quotaError"));
+            if (!error) error = json_str_nonempty(json_get(usage, "error"));
+            doc_text(doc, cx, cw, error ? error : s->status_reqs[i] ? "Checking usage..." : "Usage unavailable for this account.",
+                     FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+        }
+        if (doc->y > row_bottom) row_bottom = doc->y;
+        doc->y = row_bottom;
+        if (col == cols - 1 && i + 1 < json_count(s->accounts)) doc_space(doc, px(12));
+    }
+    doc_box_end(doc, box, px(12));
+    doc_space(doc, px(12));
+}
 
 /// A row of stat tiles: the label, the figure, and the line under it, four across (two on a narrow pane).
 static void tiles(Doc *doc, int x, int w, const char *const *labels, char *const *values, char *const *subs, int n) {
@@ -752,6 +874,7 @@ static void dashboard_layout(Screen *base, Doc *doc) {
     for (int f = 0; f < F_COUNT; f++) free(texts[f]);
     doc_space(doc, px(14));
 
+    quotas_layout(s, doc, x, w);
     const Json *u = shown(s);
     if (s->error && !u) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); return; }
     if (!u) { doc_text(doc, x, w, "Loading the usage ledger\xE2\x80\xA6", FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_SINGLELINE); doc_space(doc, px(12)); return; }
@@ -886,7 +1009,7 @@ static void dashboard_action(Screen *base, int action, intptr_t arg, POINT pt) {
     DashboardScreen *s = (DashboardScreen *)base;
     switch (action) {
     case ACT_PERIOD: pick_period(s, pt); break;
-    case ACT_REFRESH: load(s); pane_header_changed(base->pane); break;
+    case ACT_REFRESH: load(s); quotas_load(s, true); pane_header_changed(base->pane); break;
     case ACT_FILTER: if (arg >= 0 && arg < F_COUNT) pick_filter(s, (FilterId)arg, pt); break;
     case ACT_CLEAR: for (int f = 0; f < F_COUNT; f++) picks_clear(s, (FilterId)f); repick(s); break;
     case ACT_OPEN_SESSION: open_top_session(s, (size_t)arg); break;
@@ -909,19 +1032,22 @@ static void dashboard_action(Screen *base, int action, intptr_t arg, POINT pt) {
 static void dashboard_timer(Screen *base, UINT id) {
     DashboardScreen *s = (DashboardScreen *)base;
     if (!poller_fired(&s->poller, id)) return;
+    quotas_load(s, false);
     if (s->req) poller_finished(&s->poller, false, -1); else load(s);
 }
 static void dashboard_visible(Screen *base, bool shown_now) {
     DashboardScreen *s = (DashboardScreen *)base;
     if (shown_now) poller_start(&s->poller, base->pane, TIMER_POLL, 60000);
-    else { poller_stop(&s->poller); request_cancel(&s->req); }
+    else { poller_stop(&s->poller); request_cancel(&s->req); quotas_cancel(s); }
 }
-static void dashboard_refresh(Screen *base) { DashboardScreen *s = (DashboardScreen *)base; load(s); pane_header_changed(base->pane); }
+static void dashboard_refresh(Screen *base) { DashboardScreen *s = (DashboardScreen *)base; load(s); quotas_load(s, true); pane_header_changed(base->pane); }
 static void dashboard_activated(Screen *base, bool active) { if (active) { DashboardScreen *s = (DashboardScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 60000); } }
 static void dashboard_destroy(Screen *base) {
     DashboardScreen *s = (DashboardScreen *)base;
     poller_stop(&s->poller);
     request_cancel(&s->req);
+    quotas_cancel(s);
+    json_free(s->accounts); free(s->accounts_error); free(s->status_reqs);
     json_free(s->data); json_free(s->options); free(s->data_key); free(s->error);
     for (int f = 0; f < F_COUNT; f++) picks_clear(s, (FilterId)f);
     screen_release(base);
