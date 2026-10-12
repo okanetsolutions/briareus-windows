@@ -95,6 +95,18 @@ static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
         "{\"number\":4,\"title\":\"Partial later\",\"stack\":{\"position\":3,\"total\":3,\"partial\":true}},"
         "{\"number\":5,\"title\":\"Unknown stack\",\"stack\":{\"total\":3}}],\"issues\":[]}";
     Screen *s = board(); s->vt->refresh(s); drain(2);
+    HeaderInfo h = header(s);
+    const char *selectors[] = { "All authors \xE2\x96\xBE", "All reviewers \xE2\x96\xBE", "All labels \xE2\x96\xBE" };
+    const char *tips[] = { "Filter by author", "Filter by reviewer", "Filter by label" };
+    wchar_t glyphs[3] = {0};
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < h.button_count; j++) if (str_eq(h.buttons[j].label, selectors[i])) {
+            glyphs[i] = h.buttons[j].glyph;
+            CHECK_STR(h.buttons[j].tip, tips[i]);
+        }
+        CHECK(glyphs[i] != 0);
+    }
+    CHECK(glyphs[0] != glyphs[1] && glyphs[0] != glyphs[2] && glyphs[1] != glyphs[2]);
     CHECK(layout_contains(s, "Later in stack"));
     click_header(s, "Hide later stacked PRs");
     CHECK(layout_contains(s, "Standalone")); CHECK(layout_contains(s, "Next in stack"));

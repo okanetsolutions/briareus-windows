@@ -707,9 +707,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         const char *author = board_filter_get(f, FILTER_AUTHOR), *reviewer = board_filter_get(f, FILTER_REVIEWER), *assignee = board_filter_get(f, FILTER_ASSIGNEE), *label = board_filter_get(f, FILTER_LABEL);
         HeaderButton *b;
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(author) ? "All authors" : author); b->action = ACT_FILTER_AUTHOR; b->enabled = s->loaded;
-        if (s->tab == 0) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(reviewer) ? "All reviewers" : reviewer); b->action = ACT_FILTER_REVIEWER; b->enabled = s->loaded; }
+        b->glyph = 0xE77B; b->tip = "Filter by author";
+        if (s->tab == 0) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(reviewer) ? "All reviewers" : reviewer); b->action = ACT_FILTER_REVIEWER; b->enabled = s->loaded; b->glyph = 0xE73E; b->tip = "Filter by reviewer"; }
         if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : str_eq(assignee, PROJECT_NO_ASSIGNEE) ? "No assignee" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(label) ? "All labels" : label); b->action = ACT_FILTER_LABEL; b->enabled = s->loaded;
+        b->glyph = 0xE8EC; b->tip = "Filter by label";
         if (s->tab == TAB_PULLS) {
             b = &info->buttons[info->button_count++];
             snprintf(b->label, sizeof b->label, "%s", s->hide_later_stacked ? "Show later stacked PRs" : "Hide later stacked PRs");
