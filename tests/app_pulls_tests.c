@@ -134,7 +134,9 @@ static void test_header_tooltip_transitions(void) {
     SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(40), y));
     check_tooltip(tip, "Hide or show stacked pull requests after position 1; keep standalone pull requests visible");
     Item *item = doc_item(pane_doc(pane), 0); CHECK(item != NULL);
-    if (item) SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(px(20), content.top + item->rc.top + px(8)));
+    int padding = (bounds.right - pane_content_width(pane)) / 2;
+    if (item) SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(padding + (item->rc.left + item->rc.right) / 2,
+                                                          content.top + (item->rc.top + item->rc.bottom) / 2));
     check_tooltip(tip, "Document description");
     SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(80), y));
     check_tooltip(tip, "Filter by author");
