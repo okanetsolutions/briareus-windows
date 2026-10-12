@@ -21,7 +21,7 @@
 #define MAIN_CLASS L"BriareusMain"
 // The dashboard's columns: a 268px sidebar, the main column, and a 272px pull request panel beside a conversation.
 // Below its `lg` breakpoint (64rem) the dashboard turns the columns into drawers; here that is one column at a time.
-// The widths are briareus-client-contracts' layout tokens.
+// The widths are briareus-contracts' layout tokens.
 #define SIDEBAR_WIDTH BRIAREUS_LAYOUT_SIDEBAR_WIDTH
 #define PANEL_WIDTH BRIAREUS_LAYOUT_PANEL_WIDTH
 #define NARROW_WIDTH BRIAREUS_LAYOUT_NARROW_WIDTH

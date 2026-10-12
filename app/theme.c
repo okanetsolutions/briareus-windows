@@ -30,7 +30,7 @@ bool theme_refresh(void) {
     bool dark = system_prefers_dark();
     bool changed = !theme.canvas || dark != theme.dark;
     theme.dark = dark;
-    // The colours come from briareus-client-contracts (briareus_tokens.h): the dashboard's `@theme` block for dark, and for
+    // The colours come from briareus-contracts (briareus_tokens.h): the dashboard's `@theme` block for dark, and for
     // light the same warm palette on paper, with the accents darkened to read on it.
     const BriareusPalette *current_palette = dark ? &BRIAREUS_PALETTE_DARK : &BRIAREUS_PALETTE_LIGHT;
     theme.canvas = rgb_hex(current_palette->canvas);
@@ -98,7 +98,7 @@ void theme_set_dpi(int dpi) {
     current_dpi = dpi > 0 ? dpi : 96;
     for (int i = 0; i < FONT_COUNT; i++) if (fonts[i]) { DeleteObject(fonts[i]); fonts[i] = NULL; }
     memset(edit_heights, 0, sizeof edit_heights);
-    // The dashboard's type at its own pixel sizes, from briareus-client-contracts: `--font-sans` is Segoe UI on Windows and
+    // The dashboard's type at its own pixel sizes, from briareus-contracts: `--font-sans` is Segoe UI on Windows and
     // `--font-mono` Cascadia Code. Body text is 15px (`text-sm`), the smallest chrome 13px (`text-xs`), the sidebar rows 14px,
     // metadata 12px and 11px. The token weights 400/500/600 are FW_NORMAL, FW_MEDIUM and FW_SEMIBOLD.
     const wchar_t *ui = first_font(BRIAREUS_FONT_SANS);
