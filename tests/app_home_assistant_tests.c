@@ -287,14 +287,14 @@ static void test_unfiltered_reconciliation(void) {
     CHECK_STR(json_str(json_get(pending[READ_ENTITIES].args, "domain")), "light");
     action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_ACTION, "{}", false);
     CHECK(g_store.home_uncertain); CHECK_INT(calls[READ_ENTITIES], 2);
-    CHECK(json_get(pending[READ_ENTITIES].args, "domain") == NULL);
+    CHECK(json_is_null(json_get(pending[READ_ENTITIES].args, "domain")));
     CHECK(str_empty(s.filter));
     reply(READ_ENTITY, "{\"entity\":{\"id\":\"light.kitchen\",\"state\":\"on\"}}", true);
     CHECK(g_store.home_uncertain);
     reply(READ_ENTITIES, "{}", false);
     action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 1);
     draft_input = "light"; action(&s.base, ACT_FILTER, 0, (POINT){0});
-    CHECK(json_get(pending[READ_ENTITIES].args, "domain") == NULL);
+    CHECK(json_is_null(json_get(pending[READ_ENTITIES].args, "domain")));
     reply(READ_ENTITIES, "{}", true); CHECK(g_store.home_uncertain);
     entities_load(&s);
     reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"cover.garage\",\"state\":\"open\"}]}", true);
@@ -310,7 +310,7 @@ static void test_retry_deadlines_survive_navigation(void) {
     load(s); reply_after(READ_STATUS, "{}", false, 120);
     destroy(&s->base);
     s = (HomeScreen *)test_home_new(); s->entity_id = xstrdup("light.kitchen");
-    visible(&s->base, true);
+    s->shown = true; load(s);
     CHECK_INT(calls[READ_STATUS], 2);
     now += 119999;
     action(&s->base, ACT_REFRESH, 0, (POINT){0}); entities_load(s);
