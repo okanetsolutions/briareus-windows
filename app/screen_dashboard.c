@@ -62,6 +62,7 @@ typedef struct {
     Request *accounts_req, **status_reqs;
     size_t status_count;
     bool quota_fresh;
+    double quota_retry_until;
     Poller poller;
 } DashboardScreen;
 
@@ -216,9 +217,15 @@ static bool quotas_busy(DashboardScreen *s) {
     for (size_t i = 0; i < s->status_count; i++) if (s->status_reqs[i]) return true;
     return false;
 }
+static void quotas_note_retry(DashboardScreen *s, const Request *req) {
+    if (req->ok || req->error.retry_after <= 0) return;
+    double until = (double)GetTickCount64() + req->error.retry_after * 1000;
+    if (until > s->quota_retry_until) s->quota_retry_until = until;
+}
 static void quota_done(void *owner, Request *req) {
     DashboardScreen *s = owner;
     if (req->client != g_store.client) return;
+    quotas_note_retry(s, req);
     Json *row = s->accounts->a.items[req->tag];
     if (req->ok && json_is_object(json_get(req->result, "status"))) {
         json_object_set(row, "status", json_clone(json_get(req->result, "status")));
@@ -231,6 +238,7 @@ static void quota_done(void *owner, Request *req) {
 static void accounts_done(void *owner, Request *req) {
     DashboardScreen *s = owner;
     if (req->client != g_store.client) return;
+    quotas_note_retry(s, req);
     const Json *rows = json_get(req->result, "providers");
     if (!req->ok || !json_is_array(rows)) {
         char *error = request_error_or_unexpected(req);
@@ -252,7 +260,9 @@ static void accounts_done(void *owner, Request *req) {
     pane_relayout(s->base.pane);
 }
 static void quotas_load(DashboardScreen *s, bool fresh) {
-    if (quotas_busy(s) || !store_supports("settings_providers") || !store_supports("provider_status")) return;
+    if (!store_supports("settings_providers") || !store_supports("provider_status")) return;
+    if (!fresh && (quotas_busy(s) || (double)GetTickCount64() < s->quota_retry_until)) return;
+    if (fresh) quotas_cancel(s);
     s->quota_fresh = fresh;
     store_call("settings_providers", json_object(), 60000, s, accounts_done, 0, &s->accounts_req);
 }

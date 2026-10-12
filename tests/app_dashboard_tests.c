@@ -6,6 +6,8 @@
 
 static Request pending[8];
 static int call_count;
+static ULONGLONG quota_ticks;
+static ULONGLONG test_ticks(void) { return quota_ticks; }
 static void changed(Pane *pane) { (void)pane; }
 static Request *test_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
     (void)timeout_ms;
@@ -23,7 +25,9 @@ Screen *test_dashboard_new(void);
 #define request_cancel test_cancel
 #define pane_relayout changed
 #define pane_header_changed changed
+#define GetTickCount64 test_ticks
 #include "../app/screen_dashboard.c"
+#undef GetTickCount64
 #undef dashboard_screen_new
 #undef store_call
 #undef request_cancel
@@ -37,7 +41,7 @@ static Route routes[] = {
 };
 static void fixture(DashboardScreen *s) {
     memset(s, 0, sizeof *s); memset(&g_store, 0, sizeof g_store);
-    memset(pending, 0, sizeof pending); call_count = 0;
+    memset(pending, 0, sizeof pending); call_count = 0; quota_ticks = 1000;
     g_store.client = (ApiClient *)pending; g_store.has_device = true; g_store.device.permission = "admin";
     g_store.routes = routes; g_store.route_count = sizeof routes / sizeof *routes;
 }
@@ -45,16 +49,19 @@ static void cleanup(DashboardScreen *s) {
     quotas_cancel(s);
     json_free(s->accounts); free(s->status_reqs); free(s->accounts_error);
     json_free(s->data); free(s->data_key);
+    for (int f = 0; f < F_COUNT; f++) picks_clear(s, (FilterId)f);
     for (int i = 0; i < call_count; i++) { json_free(pending[i].args); free(pending[i].operation); }
     memset(&g_store, 0, sizeof g_store);
 }
-static void reply(int index, const char *body, bool ok) {
+static void reply_retry(int index, const char *body, bool ok, double retry_after) {
     Request *r = &pending[index]; r->ok = ok; r->result = json_parsez(body);
     if (r->slot) { *r->slot = NULL; r->slot = NULL; }
     api_error_init(&r->error);
-    if (!ok) api_error_set(&r->error, API_NETWORK, 0, "Quota request failed", -1);
+    if (!ok) api_error_set(&r->error, retry_after >= 0 ? API_HTTP : API_NETWORK,
+                           retry_after >= 0 ? 429 : 0, "Quota request failed", retry_after);
     r->done(r->owner, r); json_free(r->result); r->result = NULL; api_error_clear(&r->error);
 }
+static void reply(int index, const char *body, bool ok) { reply_retry(index, body, ok, -1); }
 static bool contains(const Doc *doc, const char *text) {
     for (size_t i = 0; i < doc->count; i++) if (doc->items[i].text && strstr(doc->items[i].text, text)) return true;
     return false;
@@ -119,9 +126,54 @@ static void test_unavailable_and_permissions(void) {
     CHECK(contains(&doc, "No provider accounts configured")); doc_free(&doc);
     cleanup(&s);
 }
+static void test_quota_retry_after(void) {
+    for (int status = 0; status < 2; status++) {
+        DashboardScreen s; fixture(&s);
+        quotas_load(&s, false);
+        if (status) {
+            reply(0, "{\"providers\":[{\"id\":1},{\"id\":2},{\"id\":3}]}", true);
+            reply_retry(1, "{}", false, 300);
+            reply_retry(2, "{}", false, 30);
+            reply(3, "{\"status\":{}}", true);
+        } else reply_retry(0, "{}", false, 300);
+        int quota_calls = call_count;
+        pick_add(&s, F_MODEL, "test-model");
+        load(&s); reply(quota_calls, "{}", true);
+        quota_ticks += 60000;
+        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 1);
+        quota_ticks = 300999;
+        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 1);
+        quota_ticks = 301000;
+        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 2);
+        CHECK_STR(pending[quota_calls + 1].operation, "settings_providers");
+        cleanup(&s);
+    }
+}
+static void test_fresh_refresh_during_quota_reads(void) {
+    for (int status = 0; status < 2; status++) {
+        DashboardScreen s; fixture(&s);
+        quotas_load(&s, false);
+        if (status) reply(0, "{\"providers\":[{\"id\":1},{\"id\":2}]}", true);
+        int old_calls = call_count;
+        dashboard_refresh(&s.base);
+        CHECK_INT(call_count, old_calls + 2);
+        for (int i = status ? 1 : 0; i < old_calls; i++) {
+            CHECK(pending[i].cancelled); CHECK(pending[i].slot == NULL);
+        }
+        CHECK_STR(pending[old_calls + 1].operation, "settings_providers");
+        reply(old_calls + 1, "{\"providers\":[{\"id\":3}]}", true);
+        CHECK_INT(call_count, old_calls + 3);
+        CHECK_STR(pending[old_calls + 2].operation, "provider_status");
+        CHECK_INT(json_int_or(json_get(pending[old_calls + 2].args, "fresh"), 0), 1);
+        CHECK_INT(json_int_or(json_get(pending[old_calls + 2].args, "id"), 0), 3);
+        cleanup(&s);
+    }
+}
 void app_dashboard_tests(void) {
     if (!theme.canvas) theme_init();
     test_run("Dashboard quota percentages distinguish missing data from full allowance", test_remaining_values);
     test_run("Dashboard reads each account and renders quota windows without ledger activity", test_account_loading_and_layout);
     test_run("Dashboard quota reads respect permissions and show unavailable or empty accounts", test_unavailable_and_permissions);
+    test_run("Dashboard quota cooldown survives ledger success and other account responses", test_quota_retry_after);
+    test_run("Dashboard fresh refresh restarts pending account and status reads", test_fresh_refresh_during_quota_reads);
 }
