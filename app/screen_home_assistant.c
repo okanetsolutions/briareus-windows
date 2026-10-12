@@ -60,6 +60,7 @@ static void done(void *owner, Request *req) {
         }
         // Discard reads begun before the action so they cannot overwrite its follow-up state.
         request_cancel(&s->reads[READ_ENTITIES]); request_cancel(&s->reads[READ_ENTITY]);
+        json_free(s->entities); s->entities = NULL;
         json_free(s->entity); s->entity = NULL;
         entities_load(s);
     } else if (!req->ok) {

@@ -333,11 +333,21 @@ static void test_post_command_detail_invalidation(void) {
         s.services = json_parsez("[{\"domain\":\"cover\",\"services\":{\"open_cover\":{}}}]");
         if (!event) action(&s.base, ACT_SERVICE, 0, (POINT){0});
         entities_load(&s);
+        reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"cover.garage\",\"state\":\"closed\"}]}", true);
         reply(READ_ENTITY, "{\"entity\":{\"id\":\"cover.garage\",\"state\":\"closed\"}}", true);
         CHECK_STR(json_str(json_get(s.entity, "state")), "closed");
         action(&s.base, ACT_SEND, 0, (POINT){0});
         reply(event ? WRITE_EVENT : WRITE_ACTION, event ? "{\"ok\":true}" : "{\"entities\":[]}", accepted != 0);
         CHECK(s.entity == NULL); CHECK(s.reads[READ_ENTITY] != NULL);
+        action(&s.base, ACT_TAB, 0, (POINT){0});
+        Doc waiting; doc_init(&waiting); doc_begin(&waiting, NULL, 400);
+        layout(&s.base, &waiting); doc_end(&waiting);
+        bool loading = false;
+        for (size_t i = 0; i < waiting.count; i++) if (waiting.items[i].text) {
+            CHECK(strstr(waiting.items[i].text, "closed") == NULL);
+            if (str_eq(waiting.items[i].text, "Loading entities...")) loading = true;
+        }
+        CHECK(loading); doc_free(&waiting);
         reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"cover.garage\",\"state\":\"open\"}]}", true);
         CHECK(!g_store.home_uncertain);
         action(&s.base, ACT_TAB, 0, (POINT){0});
