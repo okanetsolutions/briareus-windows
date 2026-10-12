@@ -6,6 +6,11 @@
 
 static Request pending[6];
 static int calls[6];
+static const char *draft_input;
+static char *test_dialog_text(HWND owner, const char *caption, const char *label, const char *ok, const char *value) {
+    (void)owner; (void)caption; (void)label; (void)ok; (void)value;
+    return xstrdup(draft_input);
+}
 static void test_changed(Pane *pane) { (void)pane; }
 static Request *test_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone cb, int tag, Request **slot) {
     (void)operation; (void)timeout_ms;
@@ -20,6 +25,7 @@ Screen *test_home_new(void);
 #define home_assistant_screen_new test_home_new
 #define pane_relayout test_changed
 #define pane_header_changed test_changed
+#define dialog_text test_dialog_text
 #define store_call test_call
 #define request_cancel test_cancel
 #include "../app/screen_home_assistant.c"
@@ -27,6 +33,7 @@ Screen *test_home_new(void);
 #undef home_assistant_screen_new
 #undef pane_relayout
 #undef pane_header_changed
+#undef dialog_text
 #undef store_call
 #undef request_cancel
 
@@ -44,13 +51,14 @@ static void fixture(HomeScreen *s) {
     g_store.has_device = true; g_store.device.permission = "admin";
     g_store.routes = routes; g_store.route_count = sizeof routes / sizeof *routes;
     g_store.client = (ApiClient *)pending;
-    s->account = g_store.client; s->shown = true; s->data = xstrdup("{}");
+    s->account = g_store.client; s->shown = true; s->action_data = xstrdup("{}"); s->event_data = xstrdup("{}");
 }
 static void cleanup(HomeScreen *s) {
     for (int i = 0; i < 6; i++) json_free(pending[i].args);
     json_free(s->status); json_free(s->entities); json_free(s->services); json_free(s->entity); json_free(s->service);
     free(s->filter); free(s->entity_id); free(s->domain); free(s->service_name); free(s->event_type);
-    free(s->data); free(s->error); free(s->receipt);
+    for (int i = 0; i < 4; i++) free(s->read_errors[i]);
+    free(s->action_data); free(s->event_data); free(s->error); free(s->receipt);
     memset(&g_store, 0, sizeof g_store);
 }
 static void reply(int tag, const char *body, bool ok) {
@@ -82,7 +90,7 @@ static void test_actions_and_uncertain_outcomes(void) {
     s.entity_id = xstrdup("weather.home");
     action(&s.base, ACT_SERVICE, 0, (POINT){0});
     CHECK(s.response); CHECK_STR(s.domain, "weather"); CHECK_STR(s.service_name, "get_forecasts");
-    CHECK_STR(s.data, "{\"entity_id\":\"weather.home\"}");
+    CHECK_STR(s.action_data, "{\"entity_id\":\"weather.home\"}");
     action(&s.base, ACT_SEND, 0, (POINT){0});
     CHECK_INT(calls[WRITE_ACTION], 1); CHECK_INT(json_int_or(json_get(pending[WRITE_ACTION].args, "returnResponse"), -1), 1);
     CHECK_STR(json_str(json_get(json_get(pending[WRITE_ACTION].args, "data"), "entity_id")), "weather.home");
@@ -100,7 +108,7 @@ static void test_actions_and_uncertain_outcomes(void) {
 }
 static void test_events_and_account_changes(void) {
     HomeScreen s; fixture(&s); s.connected = true; s.tab = 2; s.event_type = xstrdup("custom_event");
-    set_string(&s.data, "{\"type\":\"user-data\"}");
+    set_string(&s.event_data, "{\"type\":\"user-data\"}");
     action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 1);
     CHECK_STR(json_str(json_get(pending[WRITE_EVENT].args, "type")), "custom_event");
     CHECK_STR(json_str(json_get(json_get(pending[WRITE_EVENT].args, "data"), "type")), "user-data");
@@ -111,7 +119,65 @@ static void test_events_and_account_changes(void) {
     CHECK(s.entities == NULL); action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 2);
     cleanup(&s);
 }
+static void test_separate_drafts_and_pending_navigation(void) {
+    HomeScreen s; fixture(&s); s.connected = true; s.tab = 1;
+    s.services = json_parsez("[{\"domain\":\"light\",\"services\":{\"turn_on\":{}}}]");
+    s.event_type = xstrdup("custom_event");
+    action(&s.base, ACT_SERVICE, 0, (POINT){0});
+    draft_input = "{\"entity_id\":\"light.kitchen\",\"brightness\":20}";
+    action(&s.base, ACT_DATA, 0, (POINT){0});
+    action(&s.base, ACT_TAB, 2, (POINT){0});
+    draft_input = "{\"entity_id\":\"light.hall\",\"brightness\":100}";
+    action(&s.base, ACT_DATA, 0, (POINT){0});
+    action(&s.base, ACT_TAB, 1, (POINT){0});
+    CHECK(vt.can_leave(&s.base));
+    action(&s.base, ACT_SEND, 0, (POINT){0});
+    CHECK_STR(json_str(json_get(json_get(pending[WRITE_ACTION].args, "data"), "entity_id")), "light.kitchen");
+    CHECK_INT(json_int_or(json_get(json_get(pending[WRITE_ACTION].args, "data"), "brightness"), 0), 20);
+    CHECK(!vt.can_leave(&s.base)); CHECK(s.write != NULL);
+    action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 1);
+    reply(WRITE_ACTION, "{\"entities\":[]}", true);
+    CHECK(vt.can_leave(&s.base)); CHECK(strstr(s.receipt, "Action accepted") != NULL);
+    action(&s.base, ACT_SERVICE, 0, (POINT){0});
+    action(&s.base, ACT_TAB, 2, (POINT){0});
+    action(&s.base, ACT_SEND, 0, (POINT){0});
+    CHECK_STR(json_str(json_get(json_get(pending[WRITE_EVENT].args, "data"), "entity_id")), "light.hall");
+    CHECK_INT(json_int_or(json_get(json_get(pending[WRITE_EVENT].args, "data"), "brightness"), 0), 100);
+    CHECK(!vt.can_leave(&s.base));
+    reply(WRITE_EVENT, "{\"ok\":true}", true);
+    CHECK(vt.can_leave(&s.base)); CHECK(strstr(s.receipt, "Event accepted") != NULL);
+    cleanup(&s);
+}
+static void test_read_errors_and_backoff(void) {
+    HomeScreen s; fixture(&s); s.entity_id = xstrdup("light.kitchen");
+    load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"light.kitchen\",\"state\":\"off\"}]}", true);
+    reply(READ_ENTITY, "{\"entity\":{\"state\":\"off\"}}", true);
+    reply(READ_SERVICES, "{}", false);
+    for (int i = 1; i <= 3; i++) {
+        load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+        CHECK_INT(s.poll.failures, i - 1);
+        if (i > 1) { CHECK(s.read_errors[READ_ENTITIES] != NULL); CHECK(s.read_errors[READ_ENTITY] != NULL); }
+        reply(READ_ENTITIES, "{}", false); reply(READ_ENTITY, "{}", false); reply(READ_SERVICES, "{}", false);
+        CHECK_INT(s.poll.failures, i);
+        CHECK_INT(poll_delay_ms(10000, s.poll.failures, s.poll.retry_after), 1000 << i);
+    }
+    CHECK_STR(json_str(json_get(s.entity, "state")), "off");
+    load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    reply(READ_ENTITIES, "{}", true); CHECK(s.read_errors[READ_ENTITIES] != NULL); CHECK_INT(s.poll.failures, 4);
+    reply(READ_ENTITY, "{}", true); CHECK(s.read_errors[READ_ENTITY] != NULL);
+    load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    reply(READ_ENTITIES, "{\"entities\":[]}", true);
+    CHECK(s.read_errors[READ_ENTITIES] == NULL); CHECK_INT(s.poll.failures, 0);
+    CHECK(s.read_errors[READ_ENTITY] != NULL); CHECK(s.read_errors[READ_SERVICES] != NULL);
+    reply(READ_ENTITY, "{\"entity\":{\"state\":\"on\"}}", true);
+    CHECK(s.read_errors[READ_ENTITY] == NULL);
+    reply(READ_SERVICES, "{\"services\":[]}", true); CHECK(s.read_errors[READ_SERVICES] == NULL);
+    cleanup(&s);
+}
 void app_home_assistant_tests(void) {
+    test_run("Smart home keeps separate drafts and blocks navigation during writes", test_separate_drafts_and_pending_navigation);
+    test_run("Smart home read errors and backoff survive status success", test_read_errors_and_backoff);
     test_run("Smart home gates admin/catalog/account access and reads only while visible", test_access_and_visible_reads);
     test_run("Smart home action discovery, response data and uncertain outcomes", test_actions_and_uncertain_outcomes);
     test_run("Smart home events preserve data and reject stale account replies", test_events_and_account_changes);

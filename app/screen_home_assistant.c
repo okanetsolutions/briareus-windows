@@ -13,7 +13,8 @@ typedef struct {
     Request *reads[4], *write;
     Poller poll;
     Json *status, *entities, *services, *entity, *service;
-    char *filter, *entity_id, *domain, *service_name, *event_type, *data, *error, *receipt;
+    char *filter, *entity_id, *domain, *service_name, *event_type, *action_data, *event_data, *error, *receipt;
+    char *read_errors[4];
     bool shown, connected, response, uncertain;
     int tab;
 } HomeScreen;
@@ -58,29 +59,31 @@ static void done(void *owner, Request *req) {
         request_cancel(&s->reads[READ_ENTITIES]); request_cancel(&s->reads[READ_ENTITY]);
         entities_load(s);
     } else if (!req->ok) {
-        free(s->error); s->error = api_error_description(&req->error);
+        free(s->read_errors[req->tag]); s->read_errors[req->tag] = api_error_description(&req->error);
         if (req->tag == READ_STATUS) s->connected = false;
         if (req->tag == READ_STATUS || req->tag == READ_ENTITIES) poller_finished(&s->poll, true, req->error.retry_after);
     } else if (req->tag == READ_STATUS) {
         json_free(s->status); s->status = json_clone(req->result);
         s->connected = json_bool_is(json_get(s->status, "configured"), true) && json_bool_is(json_get(s->status, "connected"), true);
-        set_string(&s->error, NULL);
+        set_string(&s->read_errors[READ_STATUS], NULL);
         if (s->connected) {
             entities_load(s);
             if (!s->services) read_call(s, READ_SERVICES, "home_assistant_services", json_object());
         }
-        poller_finished(&s->poll, false, -1);
+        if (!s->reads[READ_ENTITIES]) poller_finished(&s->poll, false, -1);
     } else if (req->tag == READ_ENTITIES || req->tag == READ_SERVICES) {
         const char *key = req->tag == READ_ENTITIES ? "entities" : "services";
-        if (!json_is_array(json_get(req->result, key))) set_string(&s->error, "The server returned an invalid smart home list.");
+        if (!json_is_array(json_get(req->result, key))) set_string(&s->read_errors[req->tag], "The server returned an invalid smart home list.");
         else {
+            set_string(&s->read_errors[req->tag], NULL);
             Json **target = req->tag == READ_ENTITIES ? &s->entities : &s->services;
             json_free(*target); *target = json_clone(json_get(req->result, key));
             if (req->tag == READ_ENTITIES) s->uncertain = false;
         }
+        if (req->tag == READ_ENTITIES) poller_finished(&s->poll, s->read_errors[READ_ENTITIES] != NULL, -1);
     } else if (req->tag == READ_ENTITY) {
-        if (!json_is_object(json_get(req->result, "entity"))) set_string(&s->error, "The server returned an invalid entity.");
-        else { json_free(s->entity); s->entity = json_clone(json_get(req->result, "entity")); }
+        if (!json_is_object(json_get(req->result, "entity"))) set_string(&s->read_errors[READ_ENTITY], "The server returned an invalid entity.");
+        else { set_string(&s->read_errors[READ_ENTITY], NULL); json_free(s->entity); s->entity = json_clone(json_get(req->result, "entity")); }
     }
     repaint(s);
 }
@@ -94,6 +97,7 @@ static void button(Doc *doc, const char *text, int action, intptr_t arg, bool en
 static void layout(Screen *base, Doc *doc) {
     HomeScreen *s = (HomeScreen *)base;
     if (!current(s)) { note(doc, "Smart home requires an Admin token and a server offering Home Assistant. Reopen this screen after reconnecting."); return; }
+    for (int i = 0; i < 4; i++) if (s->read_errors[i]) doc_notice_box(doc, 0, doc->width, s->read_errors[i]);
     if (s->error) doc_notice_box(doc, 0, doc->width, s->error);
     if (!s->status) { note(doc, "Checking Home Assistant connection..."); return; }
     if (json_bool_is(json_get(s->status, "configured"), false)) { note(doc, "Home Assistant is not configured. Set HOME_ASSISTANT_URL and HOME_ASSISTANT_TOKEN on the server."); return; }
@@ -122,7 +126,7 @@ static void layout(Screen *base, Doc *doc) {
             char *label = xstrfmt("%s.%s", s->domain, s->service_name); note(doc, label); free(label);
             char *definition = json_pretty(s->service); note(doc, definition); free(definition);
             button(doc, s->response ? "Response data: requested" : "Response data: not requested", ACT_RESPONSE, 0, !s->write);
-            button(doc, "Edit action data", ACT_DATA, 0, !s->write); note(doc, s->data);
+            button(doc, "Edit action data", ACT_DATA, 0, !s->write); note(doc, s->action_data);
             button(doc, s->write ? "Sending..." : "Run action", ACT_SEND, 0, !s->write && !s->uncertain && store_supports("home_assistant_action"));
         }
         if (!s->services) note(doc, "Loading available actions...");
@@ -139,7 +143,7 @@ static void layout(Screen *base, Doc *doc) {
     } else {
         note(doc, "Send event data to Home Assistant automations.");
         button(doc, str_empty(s->event_type) ? "Choose event type" : s->event_type, ACT_EVENT, 0, !s->write);
-        button(doc, "Edit event data", ACT_DATA, 0, !s->write); note(doc, s->data);
+        button(doc, "Edit event data", ACT_DATA, 0, !s->write); note(doc, s->event_data);
         button(doc, s->write ? "Sending..." : "Fire event", ACT_SEND, 0, !s->write && !s->uncertain && !str_empty(s->event_type) && store_supports("home_assistant_event"));
     }
     if (s->uncertain) note(doc, "Refresh entity states before sending another action.");
@@ -154,11 +158,12 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
         if (id) { set_string(&s->entity_id, id); json_free(s->entity); s->entity = NULL; request_cancel(&s->reads[READ_ENTITY]); entities_load(s); }
     } else if (act == ACT_FILTER || act == ACT_EVENT || act == ACT_DATA) {
         if (s->write) return;
-        char *value = dialog_text(pane_hwnd(base->pane), "Smart home", act == ACT_FILTER ? "Domain (empty for all)" : act == ACT_EVENT ? "Event type" : "Data as a JSON object", "Apply", act == ACT_FILTER ? s->filter : act == ACT_EVENT ? s->event_type : s->data);
+        char **draft = s->tab == 2 ? &s->event_data : &s->action_data;
+        char *value = dialog_text(pane_hwnd(base->pane), "Smart home", act == ACT_FILTER ? "Domain (empty for all)" : act == ACT_EVENT ? "Event type" : "Data as a JSON object", "Apply", act == ACT_FILTER ? s->filter : act == ACT_EVENT ? s->event_type : *draft);
         if (value) {
             if (act == ACT_DATA) {
                 Json *data = json_parsez(value);
-                if (json_is_object(data)) { set_string(&s->data, value); set_string(&s->error, NULL); }
+                if (json_is_object(data)) { set_string(draft, value); set_string(&s->error, NULL); }
                 else set_string(&s->error, "Enter a valid JSON object, such as {\"entity_id\":\"light.kitchen\"}.");
                 json_free(data);
             } else if (act == ACT_FILTER) {
@@ -175,14 +180,14 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
             const Json *response = json_get(s->service, "response");
             s->response = json_is_object(response) && !json_bool_is(json_get(response, "optional"), true);
             Json *data = json_object(); if (!str_empty(s->entity_id)) json_set_str(data, "entity_id", s->entity_id);
-            free(s->data); s->data = json_serialize(data, false); json_free(data);
+            free(s->action_data); s->action_data = json_serialize(data, false); json_free(data);
         }
     } else if (act == ACT_RESPONSE && !s->write) s->response = !s->response;
     else if (act == ACT_SEND && !s->write && !s->uncertain && s->connected) {
         bool event = s->tab == 2;
         const char *op = event ? "home_assistant_event" : "home_assistant_action";
         if (!store_supports(op) || (event ? str_empty(s->event_type) : !s->service)) return;
-        Json *data = json_parsez(s->data);
+        Json *data = json_parsez(event ? s->event_data : s->action_data);
         if (!json_is_object(data)) { json_free(data); return; }
         Json *args = json_object(); json_object_set(args, "data", data);
         if (event) json_set_str(args, "type", s->event_type);
@@ -199,7 +204,11 @@ static void header(Screen *base, HeaderInfo *info) {
 }
 static void timer(Screen *base, UINT id) {
     HomeScreen *s = (HomeScreen *)base;
-    if (poller_fired(&s->poll, id)) { if (s->reads[READ_STATUS] || s->write) poller_finished(&s->poll, false, -1); else load(s); }
+    if (poller_fired(&s->poll, id)) {
+        if (s->reads[READ_STATUS] || s->reads[READ_ENTITIES] || s->write)
+            SetTimer(pane_hwnd(base->pane), id, (UINT)poll_delay_ms(s->poll.base_ms, s->poll.failures, s->poll.retry_after), NULL);
+        else load(s);
+    }
 }
 static void visible(Screen *base, bool shown) {
     HomeScreen *s = (HomeScreen *)base; s->shown = shown;
@@ -207,16 +216,24 @@ static void visible(Screen *base, bool shown) {
     else { poller_stop(&s->poll); for (int i = 0; i < 4; i++) request_cancel(&s->reads[i]); }
 }
 static void refresh(Screen *base) { action(base, ACT_REFRESH, 0, (POINT){0}); }
+static bool can_leave(Screen *base) {
+    HomeScreen *s = (HomeScreen *)base;
+    if (!s->write) return true;
+    set_string(&s->receipt, "Wait for the pending smart home command to finish before leaving this screen.");
+    repaint(s);
+    return false;
+}
 static void destroy(Screen *base) {
     HomeScreen *s = (HomeScreen *)base; poller_stop(&s->poll);
     for (int i = 0; i < 4; i++) request_cancel(&s->reads[i]);
+    for (int i = 0; i < 4; i++) free(s->read_errors[i]);
     request_cancel(&s->write); api_client_release(s->account);
     json_free(s->status); json_free(s->entities); json_free(s->services); json_free(s->entity); json_free(s->service);
-    free(s->filter); free(s->entity_id); free(s->domain); free(s->service_name); free(s->event_type); free(s->data); free(s->error); free(s->receipt);
+    free(s->filter); free(s->entity_id); free(s->domain); free(s->service_name); free(s->event_type); free(s->action_data); free(s->event_data); free(s->error); free(s->receipt);
     screen_release(base);
 }
-static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .visible = visible, .refresh = refresh, .searchable = true };
+static const ScreenVTable vt = { .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .visible = visible, .refresh = refresh, .can_leave = can_leave, .searchable = true };
 Screen *home_assistant_screen_new(void) {
     HomeScreen *s = xcalloc(1, sizeof *s); s->base.vt = &vt; s->base.id = xstrdup("settings-home");
-    s->account = api_client_retain(g_store.client); s->data = xstrdup("{}"); return &s->base;
+    s->account = api_client_retain(g_store.client); s->action_data = xstrdup("{}"); s->event_data = xstrdup("{}"); return &s->base;
 }
