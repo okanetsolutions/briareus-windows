@@ -60,6 +60,7 @@ static void done(void *owner, Request *req) {
         }
         // Discard reads begun before the action so they cannot overwrite its follow-up state.
         request_cancel(&s->reads[READ_ENTITIES]); request_cancel(&s->reads[READ_ENTITY]);
+        json_free(s->entity); s->entity = NULL;
         entities_load(s);
     } else if (!req->ok) {
         if (req->error.retry_after > 0) g_store.home_retry_until[req->tag] = (double)GetTickCount64() + req->error.retry_after * 1000;
@@ -129,7 +130,7 @@ static void layout(Screen *base, Doc *doc) {
         if (s->service) {
             char *label = xstrfmt("%s.%s", s->domain, s->service_name); note(doc, label); free(label);
             char *definition = json_pretty(s->service); note(doc, definition); free(definition);
-            button(doc, s->response ? "Response data: requested" : "Response data: not requested", ACT_RESPONSE, 0, !s->write);
+            button(doc, s->response ? "Response data: requested" : "Response data: not requested", ACT_RESPONSE, 0, !s->write && json_bool_is(json_get(json_get(s->service, "response"), "optional"), true));
             button(doc, "Edit action data", ACT_DATA, 0, !s->write); note(doc, s->action_data);
             button(doc, s->write ? "Sending..." : "Run action", ACT_SEND, 0, !s->write && !g_store.home_uncertain && store_supports("home_assistant_action"));
         }
@@ -190,7 +191,7 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
             Json *data = json_object(); if (!str_empty(s->entity_id)) json_set_str(data, "entity_id", s->entity_id);
             free(s->action_data); s->action_data = json_serialize(data, false); json_free(data);
         }
-    } else if (act == ACT_RESPONSE && !s->write) s->response = !s->response;
+    } else if (act == ACT_RESPONSE && !s->write && json_bool_is(json_get(json_get(s->service, "response"), "optional"), true)) s->response = !s->response;
     else if (act == ACT_SEND && !s->write && !g_store.home_uncertain && s->connected) {
         bool event = s->tab == 2;
         const char *op = event ? "home_assistant_event" : "home_assistant_action";

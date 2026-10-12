@@ -325,7 +325,67 @@ static void test_retry_deadlines_survive_navigation(void) {
     for (int i = 0; i < 6; i++) json_free(pending[i].args);
     memset(&g_store, 0, sizeof g_store);
 }
+static void test_post_command_detail_invalidation(void) {
+    for (int event = 0; event < 2; event++) for (int accepted = 0; accepted < 2; accepted++) {
+        HomeScreen s; fixture(&s); s.connected = true; s.tab = event ? 2 : 1;
+        s.status = json_parsez("{\"configured\":true,\"connected\":true}");
+        s.entity_id = xstrdup("cover.garage"); s.event_type = xstrdup("open_garage");
+        s.services = json_parsez("[{\"domain\":\"cover\",\"services\":{\"open_cover\":{}}}]");
+        if (!event) action(&s.base, ACT_SERVICE, 0, (POINT){0});
+        entities_load(&s);
+        reply(READ_ENTITY, "{\"entity\":{\"id\":\"cover.garage\",\"state\":\"closed\"}}", true);
+        CHECK_STR(json_str(json_get(s.entity, "state")), "closed");
+        action(&s.base, ACT_SEND, 0, (POINT){0});
+        reply(event ? WRITE_EVENT : WRITE_ACTION, event ? "{\"ok\":true}" : "{\"entities\":[]}", accepted != 0);
+        CHECK(s.entity == NULL); CHECK(s.reads[READ_ENTITY] != NULL);
+        reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"cover.garage\",\"state\":\"open\"}]}", true);
+        CHECK(!g_store.home_uncertain);
+        action(&s.base, ACT_TAB, 0, (POINT){0});
+        Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400);
+        layout(&s.base, &doc); doc_end(&doc);
+        bool found = false;
+        for (size_t i = 0; i < doc.count; i++) if (doc.items[i].text) {
+            CHECK(strstr(doc.items[i].text, "closed") == NULL);
+            if (strstr(doc.items[i].text, "cover.garage (cover.garage): open")) found = true;
+        }
+        CHECK(found); doc_free(&doc);
+        reply(READ_ENTITY, "{}", false);
+        CHECK(s.entity == NULL); CHECK(s.read_errors[READ_ENTITY] != NULL);
+        entities_load(&s);
+        reply(READ_ENTITY, "{\"entity\":{\"id\":\"cover.garage\",\"state\":\"open\"}}", true);
+        CHECK_STR(json_str(json_get(s.entity, "state")), "open");
+        cleanup(&s);
+    }
+}
+static void test_response_toggle_matches_discovery(void) {
+    HomeScreen s; fixture(&s); s.connected = true; s.tab = 1;
+    s.status = json_parsez("{\"configured\":true,\"connected\":true}");
+    s.services = json_parsez("[{\"domain\":\"test\",\"services\":{\"required\":{\"response\":{\"optional\":false}},\"unsupported\":{},\"optional\":{\"response\":{\"optional\":true}}}}]");
+    const int expected[] = { 1, 0, 1 };
+    for (int service = 0; service < 3; service++) {
+        action(&s.base, ACT_SERVICE, service, (POINT){0});
+        Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400);
+        layout(&s.base, &doc); doc_end(&doc);
+        bool found = false;
+        for (size_t i = 0; i < doc.count; i++) if (doc.items[i].text && strstr(doc.items[i].text, "Response data:")) {
+            CHECK_INT(doc.items[i].action, service == 2 ? ACT_RESPONSE : 0); found = true;
+        }
+        CHECK(found); doc_free(&doc);
+        action(&s.base, ACT_RESPONSE, 0, (POINT){0});
+        action(&s.base, ACT_SEND, 0, (POINT){0});
+        CHECK_INT(json_int_or(json_get(pending[WRITE_ACTION].args, "returnResponse"), -1), expected[service]);
+        action(&s.base, ACT_RESPONSE, 0, (POINT){0});
+        CHECK_INT(s.response, expected[service]);
+        reply(WRITE_ACTION, "{\"entities\":[]}", true);
+    }
+    action(&s.base, ACT_RESPONSE, 0, (POINT){0});
+    action(&s.base, ACT_SEND, 0, (POINT){0});
+    CHECK_INT(json_int_or(json_get(pending[WRITE_ACTION].args, "returnResponse"), -1), 0);
+    cleanup(&s);
+}
 void app_home_assistant_tests(void) {
+    test_run("Smart home clears selected detail before post-command reconciliation", test_post_command_detail_invalidation);
+    test_run("Smart home response toggles follow service discovery", test_response_toggle_matches_discovery);
     test_run("Smart home receipts remain visible while disconnected", test_disconnected_receipts);
     test_run("Smart home reconciles uncertain commands with all entity states", test_unfiltered_reconciliation);
     test_run("Smart home read deadlines survive reopening", test_retry_deadlines_survive_navigation);
