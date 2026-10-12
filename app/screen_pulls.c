@@ -660,7 +660,7 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         bool here = meeting_for(s->project.repo);
         HeaderButton *m = &info->buttons[info->button_count++];
         snprintf(m->label, sizeof m->label, "%s", here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet");
-        m->action = ACT_MEET; m->enabled = true; m->tip = "Join a meeting with an assistant that can look up this project";
+        m->glyph = 0xE720; m->action = ACT_MEET; m->enabled = true; m->tip = "Join a meeting with an assistant that can look up this project";
     }
     if (s->tab == TAB_MEETING) return;
     if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <commctrl.h>
 
 static Pane *pane;
 static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies;
@@ -86,6 +87,64 @@ static void click_header(Screen *s, const char *label) {
     }
     CHECK(false);
 }
+static void tooltip_header(Screen *s, HeaderInfo *h) {
+    (void)s;
+    strcpy(h->title, "Tooltip test");
+    h->button_count = 3;
+    h->buttons[0] = (HeaderButton){ .glyph = 0xE77B, .enabled = true, .tip = "Filter by author" };
+    h->buttons[1] = (HeaderButton){ .glyph = 0xE71C, .enabled = true, .tip = "Hide or show stacked pull requests after position 1; keep standalone pull requests visible" };
+    h->buttons[2] = (HeaderButton){ .glyph = 0xE72C, .enabled = true };
+}
+static void tooltip_layout(Screen *s, Doc *d) {
+    (void)s;
+    int i = doc_button(d, 0, 160, "Document control", BUTTON_BORDERED, 1, 0, true);
+    doc_item(d, i)->tip = xstrdup("Document description");
+}
+static void tooltip_destroy(Screen *s) { (void)s; }
+static BOOL CALLBACK find_tooltip(HWND hwnd, LPARAM ctx) {
+    wchar_t cls[64]; GetClassNameW(hwnd, cls, 64);
+    TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, 0, pane_hwnd(pane), 1 };
+    if (wcscmp(cls, TOOLTIPS_CLASSW) == 0 && SendMessageW(hwnd, TTM_GETTOOLINFOW, 0, (LPARAM)&ti)) *(HWND *)ctx = hwnd;
+    return TRUE;
+}
+static void check_tooltip(HWND tip, const char *expected) {
+    CHECK(IsWindowVisible(tip));
+    wchar_t text[512] = {0};
+    TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, 0, pane_hwnd(pane), 1 };
+    ti.lpszText = text;
+    SendMessageW(tip, TTM_GETTEXTW, 512, (LPARAM)&ti);
+    char *actual = wide_to_utf8(text); CHECK_STR(actual, expected); free(actual);
+}
+static void test_header_tooltip_transitions(void) {
+    reset();
+    static const ScreenVTable vt = { .destroy = tooltip_destroy, .layout = tooltip_layout, .header = tooltip_header };
+    Screen s = { .vt = &vt };
+    pane_set_root(pane, &s);
+    HWND hwnd = pane_hwnd(pane), parent = GetParent(hwnd);
+    SetWindowPos(parent, NULL, 0, 0, px(400), px(300), SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT bounds = {0, 0, px(360), px(240)}; pane_set_bounds(pane, &bounds);
+    ShowWindow(parent, SW_SHOWNA); pane_show(pane, true);
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    RECT content = pane_content_rect(pane);
+    int y = content.top / 2, right = bounds.right - px(18) - px(16);
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(80), y));
+    HWND tip = NULL; EnumThreadWindows(GetCurrentThreadId(), find_tooltip, (LPARAM)&tip);
+    CHECK(tip != NULL);
+    check_tooltip(tip, "Filter by author");
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(40), y));
+    check_tooltip(tip, "Hide or show stacked pull requests after position 1; keep standalone pull requests visible");
+    Item *item = doc_item(pane_doc(pane), 0); CHECK(item != NULL);
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(px(20), content.top + item->rc.top + px(8)));
+    check_tooltip(tip, "Document description");
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(80), y));
+    check_tooltip(tip, "Filter by author");
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right, y));
+    CHECK(!IsWindowVisible(tip));
+    SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(right - px(40), y));
+    check_tooltip(tip, "Hide or show stacked pull requests after position 1; keep standalone pull requests visible");
+    SendMessageW(hwnd, WM_MOUSELEAVE, 0, 0); CHECK(!IsWindowVisible(tip));
+    pane_set_root(pane, NULL); ShowWindow(parent, SW_HIDE);
+}
 static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
     reset();
     list_body = "{\"pulls\":["
@@ -96,6 +155,8 @@ static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
         "{\"number\":5,\"title\":\"Unknown stack\",\"stack\":{\"total\":3}}],\"issues\":[]}";
     Screen *s = board(); s->vt->refresh(s); drain(2);
     HeaderInfo h = header(s);
+    CHECK_INT(h.buttons[0].glyph, 0xE720);
+    CHECK_STR(h.buttons[0].tip, "Join a meeting with an assistant that can look up this project");
     const char *selectors[] = { "All authors \xE2\x96\xBE", "All reviewers \xE2\x96\xBE", "All labels \xE2\x96\xBE" };
     const char *tips[] = { "Filter by author", "Filter by reviewer", "Filter by label" };
     wchar_t glyphs[3] = {0};
@@ -469,6 +530,7 @@ void app_pulls_tests(void) {
     api_client_set_transport(g_store.client, transport, NULL);
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
+    test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
