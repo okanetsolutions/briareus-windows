@@ -77,6 +77,46 @@ static bool layout_contains(Screen *s, const char *text) {
     for (size_t i = 0; i < d.count; i++) if (d.items[i].text && strstr(d.items[i].text, text)) found = true;
     doc_free(&d); return found;
 }
+static void click_header(Screen *s, const char *label) {
+    HeaderInfo h = header(s);
+    for (int i = 0; i < h.button_count; i++) if (str_eq(h.buttons[i].label, label)) {
+        CHECK(h.buttons[i].enabled);
+        s->vt->action(s, h.buttons[i].action, 0, (POINT){0});
+        return;
+    }
+    CHECK(false);
+}
+static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
+    reset();
+    list_body = "{\"pulls\":["
+        "{\"number\":1,\"title\":\"Standalone\"},"
+        "{\"number\":2,\"title\":\"Next in stack\",\"stack\":{\"position\":1,\"total\":3}},"
+        "{\"number\":3,\"title\":\"Later in stack\",\"stack\":{\"position\":2,\"total\":3}},"
+        "{\"number\":4,\"title\":\"Partial later\",\"stack\":{\"position\":3,\"total\":3,\"partial\":true}},"
+        "{\"number\":5,\"title\":\"Unknown stack\",\"stack\":{\"total\":3}}],\"issues\":[]}";
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    CHECK(layout_contains(s, "Later in stack"));
+    click_header(s, "Hide later stacked PRs");
+    CHECK(layout_contains(s, "Standalone")); CHECK(layout_contains(s, "Next in stack"));
+    CHECK(layout_contains(s, "Unknown stack")); CHECK(layout_contains(s, "Showing 3 of 5"));
+    CHECK(!layout_contains(s, "Later in stack")); CHECK(!layout_contains(s, "Partial later"));
+    Json *saved = cache_value(g_store.cache, "pulls-filters:o/r");
+    CHECK(json_bool_is(json_get(json_get(saved, "pulls"), "hideLaterStacked"), true)); json_free(saved);
+    s = board(); s->vt->refresh(s); drain(2);
+    CHECK(!layout_contains(s, "Later in stack")); CHECK(layout_contains(s, "Showing 3 of 5"));
+    click_header(s, "Show later stacked PRs");
+    CHECK(layout_contains(s, "Later in stack")); CHECK(layout_contains(s, "Partial later"));
+    click_header(s, "Hide later stacked PRs");
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    bool cleared = false;
+    for (size_t i = 0; i < d.count; i++) if (str_eq(d.items[i].text, "Clear filters")) {
+        s->vt->action(s, d.items[i].action, d.items[i].arg, (POINT){0}); cleared = true; break;
+    }
+    doc_free(&d); CHECK(cleared); CHECK(layout_contains(s, "Later in stack"));
+    s = board(); s->vt->refresh(s); drain(2);
+    CHECK(layout_contains(s, "Later in stack"));
+    pane_set_root(pane, NULL);
+}
 static void test_cached_sync_and_error_recovery_transitions(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
     HeaderInfo before = header(s);
@@ -417,6 +457,7 @@ void app_pulls_tests(void) {
     api_client_set_transport(g_store.client, transport, NULL);
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
+    test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);

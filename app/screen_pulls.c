@@ -43,7 +43,7 @@ static BoardAction *row_actions(const Json *catalog, const PullSummary *pull, in
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK };
 enum { ACT_SSH_BASE = 1100 };   // the SSH sessions tab's own actions, PROJECT_SSH_ACTIONS of them
 enum { ACT_SFTP_BASE = 1120 };  // the SFTP sessions tab's, PROJECT_SFTP_ACTIONS of them
 enum { ACT_RUN_BASE = 1140 };   // the Run tab's, PROJECT_RUN_ACTIONS of them
@@ -99,6 +99,7 @@ typedef struct {
     Session *runs; size_t run_count; Request *req_runs;   // the project's conversations, for "N runs" on each pull request
     time_t synced_at;
     BoardFilter pull_filter, issue_filter;
+    bool hide_later_stacked;
     bool loaded, has_opening;
     BoardFilter opening;
     char *error;
@@ -126,6 +127,17 @@ static const char *issue_project_status(const Json *issue) {
 }
 
 static BoardFilter *current_filter(PullsScreen *s) { return s->tab == 0 ? &s->pull_filter : &s->issue_filter; }
+static bool stack_filter_passes(const PullsScreen *s, size_t index) {
+    if (!s->hide_later_stacked) return true;
+    StackPosition stack;
+    if (!stack_position_parse(json_get(s->pulls[index].raw, "stack"), NULL, &stack)) return true;
+    bool first = stack.position <= 1;
+    stack_position_free(&stack);
+    return first;
+}
+static bool row_filter_passes(PullsScreen *s, const BoardRow *row, size_t index) {
+    return board_filter_passes(current_filter(s), row, -1) && (s->tab != TAB_PULLS || stack_filter_passes(s, index));
+}
 static BoardRow *rows_of(PullsScreen *s, size_t *count) {
     size_t n = s->tab == 0 ? s->pull_count : s->issue_count;
     BoardRow *rows = xcalloc(n, sizeof *rows);
@@ -145,7 +157,9 @@ static void filter_read(BoardFilter *f, const Json *j) {
 }
 static void filters_save(PullsScreen *s) {
     Json *saved = json_object();
-    json_object_set(saved, "pulls", filter_json(&s->pull_filter));
+    Json *pulls = filter_json(&s->pull_filter);
+    json_set_bool(pulls, "hideLaterStacked", s->hide_later_stacked);
+    json_object_set(saved, "pulls", pulls);
     json_object_set(saved, "issues", filter_json(&s->issue_filter));
     char *key = xstrfmt("pulls-filters:%s", s->project.repo);
     cache_store(g_store.cache, saved, key);
@@ -158,6 +172,7 @@ static bool filters_restore(PullsScreen *s) {
     free(key);
     if (!saved) return false;
     filter_read(&s->pull_filter, json_get(saved, "pulls"));
+    s->hide_later_stacked = json_bool_is(json_get(json_get(saved, "pulls"), "hideLaterStacked"), true);
     filter_read(&s->issue_filter, json_get(saved, "issues"));
     json_free(saved);
     return true;
@@ -206,7 +221,7 @@ static void status_next(PullsScreen *s) {
     int next = 0;
     for (int pass = 0; pass < 2 && !next; pass++) {
         for (size_t i = 0; i < s->pull_count && !next; i++) {
-            if (!pass && !board_filter_passes(&s->pull_filter, &rows[i], -1)) continue;
+            if (!pass && (!board_filter_passes(&s->pull_filter, &rows[i], -1) || !stack_filter_passes(s, i))) continue;
             for (size_t k = 0; k < s->pulls[i].issue_count && !next; k++) {
                 const BoardLink *l = &s->pulls[i].issues[k];
                 char *nk = number_key(l->number);
@@ -577,8 +592,8 @@ static void pulls_layout(Screen *base, Doc *doc) {
     BoardFilter *filter = current_filter(s);
     size_t total = s->tab == 0 ? s->pull_count : s->issue_count, shown = 0;
     size_t rn; BoardRow *rows = rows_of(s, &rn);
-    for (size_t i = 0; i < rn; i++) if (board_filter_passes(filter, &rows[i], -1)) shown++;
-    if (board_filter_is_on(filter)) {
+    for (size_t i = 0; i < rn; i++) if (row_filter_passes(s, &rows[i], i)) shown++;
+    if (board_filter_is_on(filter) || (s->tab == TAB_PULLS && s->hide_later_stacked)) {
         char *text = xstrfmt("Showing %zu of %zu", shown, total);
         int y = doc->y;
         int cw = text_width(doc->cv, "Clear filters", FONT_CAPTION) + px(8);
@@ -592,7 +607,7 @@ static void pulls_layout(Screen *base, Doc *doc) {
     }
     if (s->tab == 0) {
         for (size_t i = 0; i < s->pull_count; i++) {
-            if (!board_filter_passes(filter, &rows[i], -1)) continue;
+            if (!row_filter_passes(s, &rows[i], i)) continue;
             layout_pull(s, doc, w, i);
         }
         if (s->loaded && !shown && !s->error) doc_text(doc, 0, w, s->pull_count ? "No pull requests match the filters." : "No open pull requests.", FONT_FOOTNOTE, theme.muted, DT_LEFT);
@@ -695,6 +710,12 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
         if (s->tab == 0) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(reviewer) ? "All reviewers" : reviewer); b->action = ACT_FILTER_REVIEWER; b->enabled = s->loaded; }
         if (s->tab == TAB_ISSUES) { b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(assignee) ? "All assignees" : str_eq(assignee, PROJECT_NO_ASSIGNEE) ? "No assignee" : assignee); b->action = ACT_FILTER_ASSIGNEE; b->enabled = s->loaded; }
         b = &info->buttons[info->button_count++]; snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", str_empty(label) ? "All labels" : label); b->action = ACT_FILTER_LABEL; b->enabled = s->loaded;
+        if (s->tab == TAB_PULLS) {
+            b = &info->buttons[info->button_count++];
+            snprintf(b->label, sizeof b->label, "%s", s->hide_later_stacked ? "Show later stacked PRs" : "Hide later stacked PRs");
+            b->glyph = 0xE71C; b->action = ACT_FILTER_STACK; b->enabled = s->loaded;
+            b->tip = "Hide or show stacked pull requests after position 1; keep standalone pull requests visible";
+        }
     }
     HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req && store_supports("pulls") && time(NULL) >= pulls_retry_deadline(s->project.repo); r->tip = "Refresh the list (the server may return cached data)";
 }
@@ -702,6 +723,11 @@ static void pulls_header(Screen *base, HeaderInfo *info) {
 static void filter_pick(PullsScreen *s, FilterKind kind, POINT pt) {
     BoardFilter *filter = current_filter(s);
     size_t rn; BoardRow *rows = rows_of(s, &rn);
+    if (s->tab == TAB_PULLS && s->hide_later_stacked) {
+        size_t shown = 0;
+        for (size_t i = 0; i < rn; i++) if (stack_filter_passes(s, i)) rows[shown++] = rows[i];
+        rn = shown;
+    }
     size_t count; FilterOption *options = board_filter_options(filter, kind, rows, rn, &count);
     HMENU menu = CreatePopupMenu();
     const char *pick = board_filter_get(filter, kind);
@@ -734,6 +760,9 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (board_tab_action(s->board_tab, action, arg, pt)) return;
     if (project_files_action(s->files, action, arg, pt)) return;
     switch (action) {
+    case ACT_FILTER_STACK:
+        s->hide_later_stacked = !s->hide_later_stacked; s->has_opening = false;
+        filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break;
     case ACT_FILTER_AUTHOR: filter_pick(s, FILTER_AUTHOR, pt); break;
     case ACT_FILTER_REVIEWER: filter_pick(s, FILTER_REVIEWER, pt); break;
     case ACT_FILTER_ASSIGNEE: filter_pick(s, FILTER_ASSIGNEE, pt); break;
@@ -754,7 +783,7 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (s->tab == TAB_MEETING) pane_scroll_to_bottom(base->pane);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
-    case ACT_CLEAR: { BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
+    case ACT_CLEAR: { if (s->tab == TAB_PULLS) s->hide_later_stacked = false; BoardFilter *f = current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }
     case ACT_OPEN_PULL: {
         if ((size_t)arg >= s->pull_count) break;
         StackPosition stack; bool has_stack = stack_position_parse(json_get(s->pulls[arg].raw, "stack"), json_get(s->board, "stacks"), &stack);
