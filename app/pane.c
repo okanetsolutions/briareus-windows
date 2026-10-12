@@ -44,8 +44,8 @@ struct Pane {
     Canvas *canvas;         // Direct2D, drawing to the window on the GPU
     bool finding;
     HWND find_edit, find_status, find_prev, find_next, find_close, find_return;
-    HWND tip;               // the tooltip of the hovered item's `tip`, created on first use
-    int tip_item;           // the item it shows for, or -1
+    HWND tip;               // the hovered control's tooltip, created on first use
+    int tip_item;           // header index, HEADER_BUTTONS + document index, or -1
 };
 
 static Pane **all_panes; static size_t pane_count;
@@ -212,11 +212,28 @@ static void hide_tip(Pane *p) {
     TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, 0, p->hwnd, 1 };
     SendMessageW(p->tip, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
 }
-/// Shows the hovered item's tip under it, or hides the tooltip when it has none.
+/// Shows the hovered control's tip under it, or hides the tooltip when it has none.
 static void update_tip(Pane *p) {
-    Item *it = doc_item(&p->doc, p->doc.hover);
-    if (!it || !it->tip) { hide_tip(p); return; }
-    if (p->tip_item == p->doc.hover) return;
+    const char *tip = NULL;
+    int target = -1;
+    POINT at = {0};
+    if (p->hover_button >= 0 && p->hover_button < p->header.button_count) {
+        target = p->hover_button;
+        tip = p->header.buttons[target].tip;
+        at.x = p->button_rects[target].left;
+        at.y = p->button_rects[target].bottom + px(4);
+    } else {
+        Item *it = doc_item(&p->doc, p->doc.hover);
+        if (it) {
+            target = HEADER_BUTTONS + p->doc.hover;
+            tip = it->tip;
+            RECT content = pane_content_rect(p);
+            at.x = it->rc.left + margin(p) - p->scroll_x;
+            at.y = it->rc.bottom + content.top - p->scroll_y + px(4);
+        }
+    }
+    if (!tip) { hide_tip(p); return; }
+    if (p->tip_item == target) return;
     TTTOOLINFOW ti = { TTTOOLINFOW_V2_SIZE, TTF_TRACK | TTF_ABSOLUTE | TTF_TRANSPARENT, p->hwnd, 1 };
     if (!p->tip) {
         p->tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
@@ -226,13 +243,11 @@ static void update_tip(Pane *p) {
         SendMessageW(p->tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
         SendMessageW(p->tip, TTM_SETMAXTIPWIDTH, 0, px(360));
     }
-    p->tip_item = p->doc.hover;
-    wchar_t *text = utf8_to_wide(it->tip);
+    p->tip_item = target;
+    wchar_t *text = utf8_to_wide(tip);
     ti.lpszText = text;
     SendMessageW(p->tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
     free(text);
-    RECT content = pane_content_rect(p);
-    POINT at = { it->rc.left + margin(p) - p->scroll_x, it->rc.bottom + content.top - p->scroll_y + px(4) };
     ClientToScreen(p->hwnd, &at);
     SendMessageW(p->tip, TTM_TRACKPOSITION, 0, MAKELPARAM(at.x, at.y));
     SendMessageW(p->tip, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
