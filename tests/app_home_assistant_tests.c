@@ -253,7 +253,82 @@ static void test_read_retry_deadlines(void) {
     for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 2);
     cleanup(&s);
 }
+static void test_disconnected_receipts(void) {
+    for (int event = 0; event < 2; event++) for (int accepted = 0; accepted < 2; accepted++) {
+        HomeScreen s; fixture(&s); s.connected = true; s.tab = event ? 2 : 1;
+        s.event_type = xstrdup("custom_event");
+        s.services = json_parsez("[{\"domain\":\"light\",\"services\":{\"turn_on\":{}}}]");
+        if (!event) action(&s.base, ACT_SERVICE, 0, (POINT){0});
+        action(&s.base, ACT_SEND, 0, (POINT){0});
+        action(&s.base, ACT_REFRESH, 0, (POINT){0});
+        reply(READ_STATUS, "{\"configured\":true,\"connected\":false}", true);
+        reply(event ? WRITE_EVENT : WRITE_ACTION, event ? "{\"ok\":true}" : "{\"entities\":[]}", accepted != 0);
+        CHECK(!s.connected);
+        for (int state = 0; state < 3; state++) {
+            if (state == 1) { json_free(s.status); s.status = json_parsez("{\"configured\":false}"); }
+            if (state == 2) { json_free(s.status); s.status = NULL; }
+            Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400);
+            layout(&s.base, &doc); doc_end(&doc);
+            bool found = false;
+            const char *expected = accepted ? (event ? "Event accepted." : "Action accepted.") : "The outcome may be unknown.";
+            for (size_t i = 0; i < doc.count; i++) if (doc.items[i].text && strstr(doc.items[i].text, expected)) found = true;
+            CHECK(found); doc_free(&doc);
+        }
+        cleanup(&s);
+    }
+}
+static void test_unfiltered_reconciliation(void) {
+    HomeScreen s; fixture(&s); s.connected = true; s.tab = 1;
+    s.filter = xstrdup("light"); s.entity_id = xstrdup("light.kitchen");
+    s.services = json_parsez("[{\"domain\":\"cover\",\"services\":{\"open_cover\":{}}}]");
+    action(&s.base, ACT_SERVICE, 0, (POINT){0});
+    set_string(&s.action_data, "{\"entity_id\":\"cover.garage\"}");
+    entities_load(&s);
+    CHECK_STR(json_str(json_get(pending[READ_ENTITIES].args, "domain")), "light");
+    action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_ACTION, "{}", false);
+    CHECK(g_store.home_uncertain); CHECK_INT(calls[READ_ENTITIES], 2);
+    CHECK(json_get(pending[READ_ENTITIES].args, "domain") == NULL);
+    CHECK(str_empty(s.filter));
+    reply(READ_ENTITY, "{\"entity\":{\"id\":\"light.kitchen\",\"state\":\"on\"}}", true);
+    CHECK(g_store.home_uncertain);
+    reply(READ_ENTITIES, "{}", false);
+    action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 1);
+    draft_input = "light"; action(&s.base, ACT_FILTER, 0, (POINT){0});
+    CHECK(json_get(pending[READ_ENTITIES].args, "domain") == NULL);
+    reply(READ_ENTITIES, "{}", true); CHECK(g_store.home_uncertain);
+    entities_load(&s);
+    reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"cover.garage\",\"state\":\"open\"}]}", true);
+    CHECK(!g_store.home_uncertain);
+    action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 2);
+    cleanup(&s);
+}
+static void test_retry_deadlines_survive_navigation(void) {
+    HomeScreen *s = xcalloc(1, sizeof *s); fixture(s); s->base.vt = &vt;
+    s->entity_id = xstrdup("light.kitchen");
+    load(s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) reply_after(tag, "{}", false, 120);
+    load(s); reply_after(READ_STATUS, "{}", false, 120);
+    destroy(&s->base);
+    s = (HomeScreen *)test_home_new(); s->entity_id = xstrdup("light.kitchen");
+    visible(&s->base, true);
+    CHECK_INT(calls[READ_STATUS], 2);
+    now += 119999;
+    action(&s->base, ACT_REFRESH, 0, (POINT){0}); entities_load(s);
+    read_call(s, READ_SERVICES, "home_assistant_services", json_object());
+    CHECK_INT(calls[READ_STATUS], 2);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 1);
+    now++;
+    load(s); CHECK_INT(calls[READ_STATUS], 3);
+    reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 2);
+    destroy(&s->base);
+    for (int i = 0; i < 6; i++) json_free(pending[i].args);
+    memset(&g_store, 0, sizeof g_store);
+}
 void app_home_assistant_tests(void) {
+    test_run("Smart home receipts remain visible while disconnected", test_disconnected_receipts);
+    test_run("Smart home reconciles uncertain commands with all entity states", test_unfiltered_reconciliation);
+    test_run("Smart home read deadlines survive reopening", test_retry_deadlines_survive_navigation);
     test_run("Smart home editor teardown defers release and discards apply/cancel", test_editor_retirement);
     test_run("Smart home uncertainty survives reopening until fresh state", test_uncertainty_survives_navigation);
     test_run("Smart home enforces every read retry deadline", test_read_retry_deadlines);

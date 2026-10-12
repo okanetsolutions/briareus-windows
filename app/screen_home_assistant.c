@@ -16,7 +16,6 @@ typedef struct {
     char *filter, *entity_id, *domain, *service_name, *event_type, *action_data, *event_data, *error, *receipt;
     char *read_errors[4];
     bool shown, connected, response, modal, retired;
-    double retry_until[4];
     int tab;
 } HomeScreen;
 
@@ -29,11 +28,13 @@ static void load(HomeScreen *s);
 static void done(void *owner, Request *req);
 static void destroy(Screen *base);
 static void read_call(HomeScreen *s, int tag, const char *operation, Json *args) {
-    if (!s->shown || !current(s) || s->reads[tag] || (double)GetTickCount64() < s->retry_until[tag] || !store_supports(operation)) { json_free(args); return; }
+    if (!s->shown || !current(s) || s->reads[tag] || (double)GetTickCount64() < g_store.home_retry_until[tag] || !store_supports(operation)) { json_free(args); return; }
     store_call(operation, args, 0, s, done, tag, &s->reads[tag]);
 }
 static void entities_load(HomeScreen *s) {
     Json *args = json_object();
+    // Reconcile commands against all devices, regardless of the browsing filter.
+    if (g_store.home_uncertain) set_string(&s->filter, NULL);
     if (!str_empty(s->filter)) json_set_str(args, "domain", s->filter);
     read_call(s, READ_ENTITIES, "home_assistant_entities", args);
     if (!str_empty(s->entity_id)) {
@@ -61,7 +62,7 @@ static void done(void *owner, Request *req) {
         request_cancel(&s->reads[READ_ENTITIES]); request_cancel(&s->reads[READ_ENTITY]);
         entities_load(s);
     } else if (!req->ok) {
-        if (req->error.retry_after > 0) s->retry_until[req->tag] = (double)GetTickCount64() + req->error.retry_after * 1000;
+        if (req->error.retry_after > 0) g_store.home_retry_until[req->tag] = (double)GetTickCount64() + req->error.retry_after * 1000;
         free(s->read_errors[req->tag]); s->read_errors[req->tag] = api_error_description(&req->error);
         if (req->tag == READ_STATUS) s->connected = false;
         if (req->tag == READ_STATUS || req->tag == READ_ENTITIES) poller_finished(&s->poll, true, req->error.retry_after);
@@ -81,7 +82,7 @@ static void done(void *owner, Request *req) {
             set_string(&s->read_errors[req->tag], NULL);
             Json **target = req->tag == READ_ENTITIES ? &s->entities : &s->services;
             json_free(*target); *target = json_clone(json_get(req->result, key));
-            if (req->tag == READ_ENTITIES) g_store.home_uncertain = false;
+            if (req->tag == READ_ENTITIES && !json_str_nonempty(json_get(req->args, "domain"))) g_store.home_uncertain = false;
         }
         if (req->tag == READ_ENTITIES) poller_finished(&s->poll, s->read_errors[READ_ENTITIES] != NULL, -1);
     } else if (req->tag == READ_ENTITY) {
@@ -102,6 +103,7 @@ static void layout(Screen *base, Doc *doc) {
     if (!current(s)) { note(doc, "Smart home requires an Admin token and a server offering Home Assistant. Reopen this screen after reconnecting."); return; }
     for (int i = 0; i < 4; i++) if (s->read_errors[i]) doc_notice_box(doc, 0, doc->width, s->read_errors[i]);
     if (s->error) doc_notice_box(doc, 0, doc->width, s->error);
+    if (s->receipt) note(doc, s->receipt);
     if (!s->status) { note(doc, "Checking Home Assistant connection..."); return; }
     if (json_bool_is(json_get(s->status, "configured"), false)) { note(doc, "Home Assistant is not configured. Set HOME_ASSISTANT_URL and HOME_ASSISTANT_TOKEN on the server."); return; }
     if (!s->connected) { note(doc, "Home Assistant is disconnected. Check the server connection and credentials, then refresh."); return; }
@@ -110,7 +112,6 @@ static void layout(Screen *base, Doc *doc) {
     const char *tabs[] = { "Entities", "Actions", "Events" };
     for (int i = 0; i < 3; i++) doc_tab(doc, &x, &y, 0, doc->width, px(42), 0, tabs[i], NULL, s->tab == i, ACT_TAB, i);
     doc->y = y + px(50);
-    if (s->receipt) note(doc, s->receipt);
     if (!s->tab) {
         char *label = xstrfmt("Domain: %s", str_empty(s->filter) ? "all" : s->filter);
         button(doc, label, ACT_FILTER, 0, true); free(label);
