@@ -11,6 +11,7 @@ int main(void) {
     app_sql_tests();
     app_mcp_settings_tests();
     app_home_assistant_tests();
+    app_dashboard_tests();
     app_mail_tests();
     app_mail_consent_tests();
     app_mail_inbox_tests();
