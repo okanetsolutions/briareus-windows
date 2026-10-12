@@ -7,12 +7,25 @@
 static Request pending[6];
 static int calls[6];
 static const char *draft_input;
+static Screen *retire_in_dialog;
+static int releases, repaints;
+static ULONGLONG now;
+static ULONGLONG test_ticks(void) { return now; }
+static void test_release(Screen *screen) { releases++; screen_release(screen); }
+static ApiClient *test_retain(ApiClient *client) { return client; }
+static void test_client_release(ApiClient *client) { (void)client; }
 static char *test_dialog_text(HWND owner, const char *caption, const char *label, const char *ok, const char *value) {
     (void)owner; (void)caption; (void)label; (void)ok; (void)value;
+    if (retire_in_dialog) {
+        retire_in_dialog->vt->destroy(retire_in_dialog);
+        CHECK_INT(releases, 0);
+        retire_in_dialog = NULL;
+        g_store.client = NULL;
+    }
     return xstrdup(draft_input);
 }
 static HWND test_pane_hwnd(Pane *pane) { (void)pane; return NULL; }
-static void test_changed(Pane *pane) { (void)pane; }
+static void test_changed(Pane *pane) { (void)pane; repaints++; }
 static Request *test_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone cb, int tag, Request **slot) {
     (void)operation; (void)timeout_ms;
     Request *r = &pending[tag]; json_free(r->args); memset(r, 0, sizeof *r);
@@ -30,7 +43,15 @@ Screen *test_home_new(void);
 #define dialog_text test_dialog_text
 #define store_call test_call
 #define request_cancel test_cancel
+#define GetTickCount64 test_ticks
+#define screen_release test_release
+#define api_client_retain test_retain
+#define api_client_release test_client_release
 #include "../app/screen_home_assistant.c"
+#undef GetTickCount64
+#undef screen_release
+#undef api_client_retain
+#undef api_client_release
 #undef home_assistant_offered
 #undef home_assistant_screen_new
 #undef pane_hwnd
@@ -51,6 +72,7 @@ static Route routes[] = {
 static void fixture(HomeScreen *s) {
     memset(&g_store, 0, sizeof g_store); memset(s, 0, sizeof *s);
     memset(pending, 0, sizeof pending); memset(calls, 0, sizeof calls);
+    now = 1000; releases = repaints = 0; retire_in_dialog = NULL;
     g_store.has_device = true; g_store.device.permission = "admin";
     g_store.routes = routes; g_store.route_count = sizeof routes / sizeof *routes;
     g_store.client = (ApiClient *)pending;
@@ -64,13 +86,14 @@ static void cleanup(HomeScreen *s) {
     free(s->action_data); free(s->event_data); free(s->error); free(s->receipt);
     memset(&g_store, 0, sizeof g_store);
 }
-static void reply(int tag, const char *body, bool ok) {
+static void reply_after(int tag, const char *body, bool ok, double retry_after) {
     Request *r = &pending[tag]; r->ok = ok; r->result = json_parsez(body);
     if (r->slot) { *r->slot = NULL; r->slot = NULL; }
     api_error_init(&r->error);
-    if (!ok) api_error_set(&r->error, API_NETWORK, 0, "Timeout", -1);
+    if (!ok) api_error_set(&r->error, API_NETWORK, 0, "Timeout", retry_after);
     r->done(r->owner, r); json_free(r->result); r->result = NULL; api_error_clear(&r->error);
 }
+static void reply(int tag, const char *body, bool ok) { reply_after(tag, body, ok, -1); }
 static void test_access_and_visible_reads(void) {
     HomeScreen s; fixture(&s);
     CHECK(test_home_offered());
@@ -99,14 +122,14 @@ static void test_actions_and_uncertain_outcomes(void) {
     CHECK_STR(json_str(json_get(json_get(pending[WRITE_ACTION].args, "data"), "entity_id")), "weather.home");
     action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 1);
     reply(WRITE_ACTION, "{}", false);
-    CHECK(s.uncertain); CHECK_INT(calls[WRITE_ACTION], 1); CHECK_INT(calls[READ_ENTITIES], 1); CHECK_INT(calls[READ_ENTITY], 1);
+    CHECK(g_store.home_uncertain); CHECK_INT(calls[WRITE_ACTION], 1); CHECK_INT(calls[READ_ENTITIES], 1); CHECK_INT(calls[READ_ENTITY], 1);
     action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_ACTION], 1);
-    reply(READ_ENTITIES, "{\"entities\":[]}", true); CHECK(!s.uncertain);
+    reply(READ_ENTITIES, "{\"entities\":[]}", true); CHECK(!g_store.home_uncertain);
     action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_ACTION, "{\"ok\":true}", true);
-    CHECK(s.uncertain); CHECK(strstr(s.receipt, "Invalid action receipt") != NULL);
+    CHECK(g_store.home_uncertain); CHECK(strstr(s.receipt, "Invalid action receipt") != NULL);
     reply(READ_ENTITIES, "{\"entities\":[]}", true);
     action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_ACTION, "{\"entities\":[],\"response\":{\"forecast\":[]}}", true);
-    CHECK(!s.uncertain); CHECK(strstr(s.receipt, "forecast") != NULL);
+    CHECK(!g_store.home_uncertain); CHECK(strstr(s.receipt, "forecast") != NULL);
     cleanup(&s);
 }
 static void test_events_and_account_changes(void) {
@@ -116,7 +139,7 @@ static void test_events_and_account_changes(void) {
     CHECK_STR(json_str(json_get(pending[WRITE_EVENT].args, "type")), "custom_event");
     CHECK_STR(json_str(json_get(json_get(pending[WRITE_EVENT].args, "data"), "type")), "user-data");
     reply(WRITE_EVENT, "{\"ok\":true}", true); CHECK(strstr(s.receipt, "does not confirm automation completion") != NULL);
-    action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_EVENT, "{\"ok\":false}", true); CHECK(s.uncertain);
+    action(&s.base, ACT_SEND, 0, (POINT){0}); reply(WRITE_EVENT, "{\"ok\":false}", true); CHECK(g_store.home_uncertain);
     g_store.client = NULL;
     reply(READ_ENTITIES, "{\"entities\":[{\"id\":\"other.account\"}]}", true);
     CHECK(s.entities == NULL); action(&s.base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 2);
@@ -178,7 +201,62 @@ static void test_read_errors_and_backoff(void) {
     reply(READ_SERVICES, "{\"services\":[]}", true); CHECK(s.read_errors[READ_SERVICES] == NULL);
     cleanup(&s);
 }
+static void test_editor_retirement(void) {
+    const int editors[] = { ACT_FILTER, ACT_EVENT, ACT_DATA };
+    for (int i = 0; i < 3; i++) for (int apply = 0; apply < 2; apply++) {
+        HomeScreen *s = xcalloc(1, sizeof *s); fixture(s); s->base.vt = &vt;
+        load(s);
+        retire_in_dialog = &s->base; draft_input = apply ? "{}" : NULL;
+        action(&s->base, editors[i], 0, (POINT){0});
+        CHECK_INT(releases, 1); CHECK_INT(repaints, 0);
+        CHECK(pending[READ_STATUS].slot == NULL);
+        for (int k = 0; k < 6; k++) json_free(pending[k].args);
+        memset(&g_store, 0, sizeof g_store);
+    }
+}
+static void test_uncertainty_survives_navigation(void) {
+    HomeScreen *s = xcalloc(1, sizeof *s); fixture(s); s->base.vt = &vt;
+    s->connected = true; s->tab = 2; s->event_type = xstrdup("custom_event");
+    action(&s->base, ACT_SEND, 0, (POINT){0});
+    reply(WRITE_EVENT, "{}", false); reply(READ_ENTITIES, "{}", false);
+    CHECK(vt.can_leave(&s->base)); destroy(&s->base);
+    s = (HomeScreen *)test_home_new(); s->shown = true; s->tab = 2;
+    s->event_type = xstrdup("custom_event");
+    load(s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    action(&s->base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 1);
+    reply(READ_ENTITIES, "{}", false);
+    action(&s->base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 1);
+    entities_load(s); reply(READ_ENTITIES, "{\"entities\":[]}", true);
+    action(&s->base, ACT_SEND, 0, (POINT){0}); CHECK_INT(calls[WRITE_EVENT], 2);
+    reply(WRITE_EVENT, "{\"ok\":true}", true);
+    destroy(&s->base);
+    for (int i = 0; i < 6; i++) json_free(pending[i].args);
+    memset(&g_store, 0, sizeof g_store);
+}
+static void test_read_retry_deadlines(void) {
+    HomeScreen s; fixture(&s); s.entity_id = xstrdup("light.kitchen");
+    load(&s); reply_after(READ_STATUS, "{}", false, 120);
+    load(&s); CHECK_INT(calls[READ_STATUS], 1);
+    now += 120000;
+    load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    // The in-flight status success must not bypass any other read's cooldown.
+    load(&s);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) reply_after(tag, "{}", false, 120);
+    reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 1);
+    now += 119999;
+    action(&s.base, ACT_REFRESH, 0, (POINT){0});
+    reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 1);
+    now++;
+    load(&s); reply(READ_STATUS, "{\"configured\":true,\"connected\":true}", true);
+    for (int tag = READ_ENTITIES; tag <= READ_ENTITY; tag++) CHECK_INT(calls[tag], 2);
+    cleanup(&s);
+}
 void app_home_assistant_tests(void) {
+    test_run("Smart home editor teardown defers release and discards apply/cancel", test_editor_retirement);
+    test_run("Smart home uncertainty survives reopening until fresh state", test_uncertainty_survives_navigation);
+    test_run("Smart home enforces every read retry deadline", test_read_retry_deadlines);
     test_run("Smart home keeps separate drafts and blocks navigation during writes", test_separate_drafts_and_pending_navigation);
     test_run("Smart home read errors and backoff survive status success", test_read_errors_and_backoff);
     test_run("Smart home gates admin/catalog/account access and reads only while visible", test_access_and_visible_reads);

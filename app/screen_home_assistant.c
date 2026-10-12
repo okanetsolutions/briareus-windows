@@ -15,7 +15,8 @@ typedef struct {
     Json *status, *entities, *services, *entity, *service;
     char *filter, *entity_id, *domain, *service_name, *event_type, *action_data, *event_data, *error, *receipt;
     char *read_errors[4];
-    bool shown, connected, response, uncertain;
+    bool shown, connected, response, modal, retired;
+    double retry_until[4];
     int tab;
 } HomeScreen;
 
@@ -26,8 +27,9 @@ static bool current(HomeScreen *s) { return s->account && s->account == g_store.
 static void repaint(HomeScreen *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
 static void load(HomeScreen *s);
 static void done(void *owner, Request *req);
+static void destroy(Screen *base);
 static void read_call(HomeScreen *s, int tag, const char *operation, Json *args) {
-    if (!s->shown || !current(s) || s->reads[tag] || !store_supports(operation)) { json_free(args); return; }
+    if (!s->shown || !current(s) || s->reads[tag] || (double)GetTickCount64() < s->retry_until[tag] || !store_supports(operation)) { json_free(args); return; }
     store_call(operation, args, 0, s, done, tag, &s->reads[tag]);
 }
 static void entities_load(HomeScreen *s) {
@@ -44,7 +46,7 @@ static void done(void *owner, Request *req) {
     if (!current(s) || req->client != s->account) return;
     if (req->tag >= WRITE_ACTION) {
         bool valid = req->ok && (req->tag == WRITE_EVENT ? json_bool_is(json_get(req->result, "ok"), true) : json_is_array(json_get(req->result, "entities")));
-        s->uncertain = !valid;
+        g_store.home_uncertain = !valid;
         free(s->receipt);
         if (valid) {
             char *payload = json_pretty(req->result);
@@ -59,6 +61,7 @@ static void done(void *owner, Request *req) {
         request_cancel(&s->reads[READ_ENTITIES]); request_cancel(&s->reads[READ_ENTITY]);
         entities_load(s);
     } else if (!req->ok) {
+        if (req->error.retry_after > 0) s->retry_until[req->tag] = (double)GetTickCount64() + req->error.retry_after * 1000;
         free(s->read_errors[req->tag]); s->read_errors[req->tag] = api_error_description(&req->error);
         if (req->tag == READ_STATUS) s->connected = false;
         if (req->tag == READ_STATUS || req->tag == READ_ENTITIES) poller_finished(&s->poll, true, req->error.retry_after);
@@ -78,7 +81,7 @@ static void done(void *owner, Request *req) {
             set_string(&s->read_errors[req->tag], NULL);
             Json **target = req->tag == READ_ENTITIES ? &s->entities : &s->services;
             json_free(*target); *target = json_clone(json_get(req->result, key));
-            if (req->tag == READ_ENTITIES) s->uncertain = false;
+            if (req->tag == READ_ENTITIES) g_store.home_uncertain = false;
         }
         if (req->tag == READ_ENTITIES) poller_finished(&s->poll, s->read_errors[READ_ENTITIES] != NULL, -1);
     } else if (req->tag == READ_ENTITY) {
@@ -127,7 +130,7 @@ static void layout(Screen *base, Doc *doc) {
             char *definition = json_pretty(s->service); note(doc, definition); free(definition);
             button(doc, s->response ? "Response data: requested" : "Response data: not requested", ACT_RESPONSE, 0, !s->write);
             button(doc, "Edit action data", ACT_DATA, 0, !s->write); note(doc, s->action_data);
-            button(doc, s->write ? "Sending..." : "Run action", ACT_SEND, 0, !s->write && !s->uncertain && store_supports("home_assistant_action"));
+            button(doc, s->write ? "Sending..." : "Run action", ACT_SEND, 0, !s->write && !g_store.home_uncertain && store_supports("home_assistant_action"));
         }
         if (!s->services) note(doc, "Loading available actions...");
         for (size_t i = 0; i < json_count(s->services); i++) {
@@ -144,9 +147,9 @@ static void layout(Screen *base, Doc *doc) {
         note(doc, "Send event data to Home Assistant automations.");
         button(doc, str_empty(s->event_type) ? "Choose event type" : s->event_type, ACT_EVENT, 0, !s->write);
         button(doc, "Edit event data", ACT_DATA, 0, !s->write); note(doc, s->event_data);
-        button(doc, s->write ? "Sending..." : "Fire event", ACT_SEND, 0, !s->write && !s->uncertain && !str_empty(s->event_type) && store_supports("home_assistant_event"));
+        button(doc, s->write ? "Sending..." : "Fire event", ACT_SEND, 0, !s->write && !g_store.home_uncertain && !str_empty(s->event_type) && store_supports("home_assistant_event"));
     }
-    if (s->uncertain) note(doc, "Refresh entity states before sending another action.");
+    if (g_store.home_uncertain) note(doc, "Refresh entity states before sending another action.");
 }
 static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     HomeScreen *s = (HomeScreen *)base; (void)pt;
@@ -159,7 +162,11 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
     } else if (act == ACT_FILTER || act == ACT_EVENT || act == ACT_DATA) {
         if (s->write) return;
         char **draft = s->tab == 2 ? &s->event_data : &s->action_data;
+        s->modal = true;
         char *value = dialog_text(pane_hwnd(base->pane), "Smart home", act == ACT_FILTER ? "Domain (empty for all)" : act == ACT_EVENT ? "Event type" : "Data as a JSON object", "Apply", act == ACT_FILTER ? s->filter : act == ACT_EVENT ? s->event_type : *draft);
+        s->modal = false;
+        if (s->retired) { free(value); destroy(base); return; }
+        if (!current(s)) { free(value); return; }
         if (value) {
             if (act == ACT_DATA) {
                 Json *data = json_parsez(value);
@@ -183,7 +190,7 @@ static void action(Screen *base, int act, intptr_t arg, POINT pt) {
             free(s->action_data); s->action_data = json_serialize(data, false); json_free(data);
         }
     } else if (act == ACT_RESPONSE && !s->write) s->response = !s->response;
-    else if (act == ACT_SEND && !s->write && !s->uncertain && s->connected) {
+    else if (act == ACT_SEND && !s->write && !g_store.home_uncertain && s->connected) {
         bool event = s->tab == 2;
         const char *op = event ? "home_assistant_event" : "home_assistant_action";
         if (!store_supports(op) || (event ? str_empty(s->event_type) : !s->service)) return;
@@ -205,9 +212,8 @@ static void header(Screen *base, HeaderInfo *info) {
 static void timer(Screen *base, UINT id) {
     HomeScreen *s = (HomeScreen *)base;
     if (poller_fired(&s->poll, id)) {
-        if (s->reads[READ_STATUS] || s->reads[READ_ENTITIES] || s->write)
-            SetTimer(pane_hwnd(base->pane), id, (UINT)poll_delay_ms(s->poll.base_ms, s->poll.failures, s->poll.retry_after), NULL);
-        else load(s);
+        SetTimer(pane_hwnd(base->pane), id, (UINT)poll_delay_ms(s->poll.base_ms, s->poll.failures, s->poll.retry_after), NULL);
+        if (!s->reads[READ_STATUS] && !s->reads[READ_ENTITIES] && !s->write) load(s);
     }
 }
 static void visible(Screen *base, bool shown) {
@@ -226,8 +232,11 @@ static bool can_leave(Screen *base) {
 static void destroy(Screen *base) {
     HomeScreen *s = (HomeScreen *)base; poller_stop(&s->poll);
     for (int i = 0; i < 4; i++) request_cancel(&s->reads[i]);
+    request_cancel(&s->write);
+    s->shown = false; s->retired = true;
+    if (s->modal) return;
     for (int i = 0; i < 4; i++) free(s->read_errors[i]);
-    request_cancel(&s->write); api_client_release(s->account);
+    api_client_release(s->account);
     json_free(s->status); json_free(s->entities); json_free(s->services); json_free(s->entity); json_free(s->service);
     free(s->filter); free(s->entity_id); free(s->domain); free(s->service_name); free(s->event_type); free(s->action_data); free(s->event_data); free(s->error); free(s->receipt);
     screen_release(base);
