@@ -75,6 +75,8 @@ Screen *web_app_screen_new(WebApp app);
 /// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
 /// servers, the Forge accounts, the mail accounts, each with ＋ New.
 Screen *settings_screen_new(void);
+bool home_assistant_offered(void);
+Screen *home_assistant_screen_new(void);
 Screen *mcp_settings_screen_new(const Json *row, const Json *defaults);
 void settings_mcp_changed(void);
 bool mcp_settings_supported(const char *operation);

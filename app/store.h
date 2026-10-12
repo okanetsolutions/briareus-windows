@@ -15,6 +15,8 @@ typedef struct {
     ApiClient *client;                 // NULL until paired
     ULONGLONG mail_retry_until;        // inbox cooldown survives navigation, cleared with the client
     int mail_failures;
+    double home_retry_until[4];        // Smart home read cooldowns survive navigation, cleared with the client
+    bool home_uncertain;               // unresolved command outcome survives Smart home navigation
     bool has_device; Device device;
     Route *routes; size_t route_count;   // what the server lists in its OpenAPI document
     int transcribes;                   // -1 from a server that predates voice notes
