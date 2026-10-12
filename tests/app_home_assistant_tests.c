@@ -11,6 +11,7 @@ static char *test_dialog_text(HWND owner, const char *caption, const char *label
     (void)owner; (void)caption; (void)label; (void)ok; (void)value;
     return xstrdup(draft_input);
 }
+static HWND test_pane_hwnd(Pane *pane) { (void)pane; return NULL; }
 static void test_changed(Pane *pane) { (void)pane; }
 static Request *test_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone cb, int tag, Request **slot) {
     (void)operation; (void)timeout_ms;
@@ -23,6 +24,7 @@ bool test_home_offered(void);
 Screen *test_home_new(void);
 #define home_assistant_offered test_home_offered
 #define home_assistant_screen_new test_home_new
+#define pane_hwnd test_pane_hwnd
 #define pane_relayout test_changed
 #define pane_header_changed test_changed
 #define dialog_text test_dialog_text
@@ -31,6 +33,7 @@ Screen *test_home_new(void);
 #include "../app/screen_home_assistant.c"
 #undef home_assistant_offered
 #undef home_assistant_screen_new
+#undef pane_hwnd
 #undef pane_relayout
 #undef pane_header_changed
 #undef dialog_text
