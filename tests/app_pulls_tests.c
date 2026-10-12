@@ -97,7 +97,7 @@ static void tooltip_header(Screen *s, HeaderInfo *h) {
 }
 static void tooltip_layout(Screen *s, Doc *d) {
     (void)s;
-    int i = doc_button(d, 0, 160, "Document control", BUTTON_BORDERED, 1, 0, true);
+    int i = doc_button(d, 0, 160, "Document control", BUTTON_BORDERED, ACTION_TIP, 0, true);
     doc_item(d, i)->tip = xstrdup("Document description");
 }
 static void tooltip_destroy(Screen *s) { (void)s; }
