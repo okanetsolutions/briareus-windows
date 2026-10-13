@@ -1,10 +1,12 @@
 """Behavior checks for the repository gate, runnable without the Windows SDK."""
 
 from pathlib import Path
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from check_structure import check, condition_findings, tokens
@@ -151,6 +153,7 @@ class GitIntegration(unittest.TestCase):
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Structure tests")
         self.git("config", "user.email", "structure@example.test")
+        self.git("config", "commit.gpgsign", "false")
         self.write("core/a.c", "int value = 1;\n")
         self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 1); }\n")
         self.commit()
@@ -175,6 +178,64 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("Structure checks passed", result.stdout)
+
+    def test_fixture_commits_ignore_inherited_signing(self):
+        config = self.root / "global.gitconfig"
+        config.write_text('[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = missing-structure-test-signer\n',
+                          encoding="utf-8")
+        fixture = GitIntegration("test_clean_branch_passes")
+        self.addCleanup(fixture.doCleanups)
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(config)}):
+            fixture.setUp()
+            fixture.test_clean_branch_passes()
+
+    def test_header_path_changes_recheck_unchanged_core_includes(self):
+        self.write("core/a.c", '#include "thing.h"\nint value = OWNER_CORE;\n')
+        self.write("core/thing.h", "#define OWNER_CORE 1\n")
+        self.write("app/thing.h", "#define OWNER_CORE 9\n")
+        self.commit()
+        (self.root / "core/thing.h").unlink()
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 9); }\n")
+        result = self.run_check("HEAD")
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("core/a.c:1: core includes UI header thing.h", result.stderr)
+        self.assertNotIn("core test gate", result.stderr)
+        self.write("core/thing.h", "#define OWNER_CORE 1\n")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
+    def test_added_app_header_rechecks_unchanged_core_includes(self):
+        self.write("core/a.c", '#include <thing.h>\nint value = 1;\n')
+        self.commit()
+        self.write("app/thing.h", "")
+        result = self.run_check("HEAD")
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("core/a.c:1: core includes UI header thing.h", result.stderr)
+        self.assertNotIn("core test gate", result.stderr)
+        self.commit()
+        self.write("app/unrelated.h", "")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
+    def test_raw_strings_exclude_contents_and_preserve_live_code(self):
+        contents = ('" api_call(c); WinHttpOpen(c);\n'
+                    'if (a && b && c && d && e && f) g();\n'
+                    '#include <commctrl.h>\n'
+                    '#pragma GCC diagnostic ignored "-Wshadow"\n'
+                    '// cppcheck-suppress memleak\n'
+                    '/* sample */ )other"')
+        for prefix in ["", "u8", "u", "U", "L"]:
+            for delimiter in ["", "tag", "abcdefghijklmnop"]:
+                with self.subTest(prefix=prefix, delimiter=delimiter):
+                    source = f'auto s = {prefix}R"{delimiter}({contents}){delimiter}";\n'
+                    self.write("app/canvas.cpp", source)
+                    result = self.run_check()
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.write("app/canvas.cpp", source + "api_call(c);\n")
+                    result = self.run_check()
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    line = source.count("\n") + 1
+                    self.assertIn(f"app/canvas.cpp:{line}: api_call bypasses store", result.stderr)
+        self.write("app/canvas.cpp", '#define SAMPLE R"tag(' + contents + ')tag"\n')
+        self.assertEqual(0, self.run_check().returncode)
 
     def test_unstaged_and_staged_core_changes_fail_without_test_changes(self):
         self.write("core/a.c", "int value = 2;\n")

@@ -17,10 +17,18 @@ CONDITION_OPERANDS = 5
 SOURCE_SUFFIXES = {".c", ".h", ".cpp"}
 BLOCK_COMMENT_PATTERN = r'/\*(?:[^*]|\*(?!/))*\*/'
 COMMENT_PATTERN = rf'//(?:\\\r?\n|[^\n])*|{BLOCK_COMMENT_PATTERN}'
-LITERAL_PATTERN = r'"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\''
+
+
+def raw_literal_pattern(delimiter):
+    return (rf'(?:u8|u|U|L)?R"(?P<{delimiter}>[^ ()\\\t\r\n\v\f]{{0,16}})'
+            rf'\([\s\S]*?\)(?P={delimiter})"')
+
+
+LITERAL_PATTERN = raw_literal_pattern("raw_delimiter") + r'|"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\''
 COMMENTS_AND_LITERALS = re.compile(f'(?P<comment>{COMMENT_PATTERN})|{LITERAL_PATTERN}')
 TOKEN = re.compile(
-    rf'(?P<directive>^[ \t]*(?:{BLOCK_COMMENT_PATTERN}\s*)*(?P<hash>\#)(?:{BLOCK_COMMENT_PATTERN}|\\\r?\n|[^\n])*)'
+    rf'(?P<directive>^[ \t]*(?:{BLOCK_COMMENT_PATTERN}\s*)*(?P<hash>\#)'
+    rf'(?:{BLOCK_COMMENT_PATTERN}|{raw_literal_pattern("directive_delimiter")}|\\\r?\n|[^\n])*)'
     f'|(?P<comment>{COMMENT_PATTERN})'
     f'|(?P<literal>{LITERAL_PATTERN})'
     r'|(?P<space>[^\S\n]+|\n)'
@@ -182,7 +190,7 @@ def source_suppressions(source):
             count += len(re.findall(r"\bcppcheck-suppress(?:-\w+)?\b", match.group()))
     items = tokens(source, include_directives=True)
     code = " ".join(token.value for token in items
-                    if not token.value.startswith(('"', "'")))
+                    if not re.fullmatch(LITERAL_PATTERN, token.value))
     for index in range(len(items) - 3):
         if items[index].value != "_Pragma" or items[index + 1].value != "(":
             continue
@@ -193,7 +201,7 @@ def source_suppressions(source):
         if literal.startswith('"') and operand + 1 < len(items) and items[operand + 1].value == ")":
             decoded = re.sub(r'\\(["\\])', r'\1', literal[1:-1])
             code += " # pragma " + " ".join(token.value for token in tokens(decoded)
-                                             if not token.value.startswith(('"', "'")))
+                                             if not re.fullmatch(LITERAL_PATTERN, token.value))
     count += len(re.findall(
         r"(?:#\s*pragma\s+|\b__pragma\s*\(\s*)"
         r"(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:(?:disable|suppress)\s*:|push\s*,\s*[0-3]\b))",
@@ -212,26 +220,34 @@ def presentation(path):
 
 def check(before, after):
     errors = []
-    app_headers = {PurePosixPath(path).name.lower() for path in before.keys() | after.keys()
-                   if path.startswith("app/") and path.endswith(".h")}
+    old_app_headers, new_app_headers = (
+        {PurePosixPath(path).name.lower() for path in snapshot
+         if path.startswith("app/") and path.endswith(".h")}
+        for snapshot in (before, after)
+    )
     changed = {path for path in before.keys() | after.keys() if before.get(path) != after.get(path)}
+    rechecked = set(changed)
+    if any(path.endswith(".h") for path in before.keys() ^ after.keys()):
+        rechecked.update(path for path in after if path.startswith("core/") and production_source(path))
     core_changes = []
-    for path in sorted(changed):
+    for path in sorted(rechecked):
         old, new = before.get(path, ""), after.get(path, "")
         if presentation(path) and len(new.splitlines()) > max(PRESENTATION_LIMIT, len(old.splitlines())):
             errors.append(f"{path}:1: presentation file grew to {len(new.splitlines())} lines; extract cohesive logic (max 300, existing debt may not grow)")
         if not production_source(path):
             continue
         previous = defaultdict(list)
-        for item in findings(path, old, app_headers, before):
+        for item in findings(path, old, old_app_headers, before):
             previous[item.rule, item.signature].append(item.size)
-        for item in findings(path, new, app_headers, after):
+        for item in findings(path, new, new_app_headers, after):
             key = item.rule, item.signature
             allowance = next((size for size in sorted(previous[key]) if size >= item.size), None)
             if allowance is not None:
                 previous[key].remove(allowance)
             else:
                 errors.append(f"{path}:{item.line}: {item.message}")
+        if path not in changed:
+            continue
         if source_suppressions(new) > source_suppressions(old):
             errors.append(f"{path}:1: warning suppressions increased; fix the cause instead of suppressing it")
         if path.startswith("core/") and token_values(old) != token_values(new):
