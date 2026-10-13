@@ -234,6 +234,87 @@ class GitIntegration(unittest.TestCase):
         self.write("Makefile", "COVERAGE_MIN := 91\nCOVERAGE_MIN = 92\n# COVERAGE_MIN = 0\n")
         self.assertEqual(0, self.run_check("HEAD").returncode)
 
+    def test_target_specific_decimal_and_immediate_coverage_assignments(self):
+        base = "COVERAGE_MIN ?= 90\n"
+        self.write("Makefile", base)
+        self.commit()
+        for assignment in ["coverage: COVERAGE_MIN = 0",
+                           "coverage: override COVERAGE_MIN := 89.5",
+                           "override COVERAGE_MIN := 89.5",
+                           "override COVERAGE_MIN ::= 0"]:
+            with self.subTest(assignment=assignment):
+                self.write("Makefile", base + assignment + "\n")
+                result = self.run_check("HEAD")
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("COVERAGE_MIN was removed or lowered", result.stderr)
+        for assignment in ["coverage: COVERAGE_MIN = 90",
+                           "override COVERAGE_MIN := 90.5",
+                           "override COVERAGE_MIN ::= 91",
+                           "# coverage: COVERAGE_MIN = 0"]:
+            with self.subTest(assignment=assignment):
+                self.write("Makefile", base + assignment + "\n")
+                self.assertEqual(0, self.run_check("HEAD").returncode)
+        self.write("Makefile", "COVERAGE_MIN := 90.5\n")
+        self.commit()
+        self.write("Makefile", "COVERAGE_MIN := 90.4\n")
+        self.assertEqual(1, self.run_check("HEAD").returncode)
+
+    def test_lowered_msvc_warning_levels_count_suppressions(self):
+        for level in range(4):
+            for source in [f"#pragma warning(push, {level})",
+                           f"__pragma(warning(push, {level}))",
+                           f'_Pragma("warning(push, {level})")']:
+                with self.subTest(source=source):
+                    self.write("app/helper.c", source + "\n")
+                    result = self.run_check()
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("warning suppressions increased", result.stderr)
+                    self.write("app/helper.c", '/* ' + source + ' */\n// ' + source + '\n')
+                    self.assertEqual(0, self.run_check().returncode)
+        for operand in ["push", "push, 4"]:
+            self.write("app/helper.c", f'#pragma warning({operand})\n'
+                       f'__pragma(warning({operand}))\n_Pragma("warning({operand})")\n')
+            self.assertEqual(0, self.run_check().returncode)
+        self.write("app/helper.c", 'const char *s = "__pragma(warning(push, 1))";\n'
+                   'const char *t = "_Pragma(\\\"warning(push, 1)\\\")";\n')
+        self.assertEqual(0, self.run_check().returncode)
+
+    def test_builtin_casts_do_not_hide_boolean_operands(self):
+        expression = "a && b && c && d && e && f"
+        for typename in ["int", "char", "short", "long", "signed", "unsigned", "float",
+                         "double", "_Bool", "bool", "wchar_t", "char16_t", "char32_t",
+                         "unsigned long", "const int *"]:
+            with self.subTest(typename=typename):
+                self.write("app/helper.c", f"if (({typename})({expression})) g();\n")
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("6 logical operands", result.stderr)
+        self.write("app/helper.c", "if ((int)(a && b && c && d && e)) g();\n")
+        self.assertEqual(0, self.run_check().returncode)
+        self.write("app/helper.c", f"if ((*callback)({expression})) g();\n")
+        self.assertEqual(0, self.run_check().returncode)
+
+    def test_directive_boundaries_require_core_test_delta(self):
+        before = "int f(void) {\nint x=0;\n#define UNUSED 1\nx=1;\nreturn x;\n}\n#define LAST 2\n"
+        self.write("core/a.c", before)
+        self.commit()
+        for after in [before.replace("UNUSED 1\nx=1;", "UNUSED 1 x=1;"),
+                      before.replace("UNUSED 1\nx=1;", "UNUSED 1 \\\nx=1;")]:
+            with self.subTest(after=after):
+                self.write("core/a.c", after)
+                result = self.run_check("HEAD")
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("core test gate", result.stderr)
+        for after in [before.replace("UNUSED 1", "UNUSED   1 /* explanation */"),
+                      before.replace("UNUSED 1", "UNUSED \\\n1"),
+                      before.replace("\n", "\r\n"), before.rstrip()]:
+            with self.subTest(after=after):
+                self.write("core/a.c", after)
+                self.assertEqual(0, self.run_check("HEAD").returncode)
+        self.write("core/a.c", before.replace("UNUSED 1\nx=1;", "UNUSED 1 x=1;"))
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(f(), 0); }\n")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
     def test_literal_pragma_operators_count_suppressions(self):
         suppression = r'_Pragma("GCC diagnostic ignored \"-Wunused-variable\"")'
         for source in [suppression, suppression.replace("GCC", "clang"),

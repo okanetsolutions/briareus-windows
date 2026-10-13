@@ -28,6 +28,8 @@ TOKEN = re.compile(
 )
 API_CALLS = {"api_call", "api_discovery", "api_catalog", "api_stream", "api_transcribe", "api_upload"}
 UI_HEADERS = {"commctrl.h", "commdlg.h", "d2d1.h", "dwrite.h", "dwmapi.h", "uxtheme.h"}
+BUILTIN_TYPES = {"void", "char", "short", "int", "long", "signed", "unsigned", "float", "double",
+                 "_Bool", "_Complex", "_Imaginary", "bool", "wchar_t", "char16_t", "char32_t"}
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ def tokens(source, include_directives=False):
                 lambda item: " " if item.lastgroup == "comment" else item.group(), logical
             )
             result.extend(tokens(logical.lstrip()[1:]))
+            result.append(Token("\n", line))
         line += match.group().count("\n")
     return result
 
@@ -95,7 +98,8 @@ def call_callees(items, matching):
                 start += 1
             else:
                 break
-        if end == start + 1 and re.fullmatch(r"[A-Za-z_]\w*", items[start].value):
+        if (end == start + 1 and items[start].value not in BUILTIN_TYPES
+                and re.fullmatch(r"[A-Za-z_]\w*", items[start].value)):
             result[index] = items[start]
     return result
 
@@ -186,7 +190,7 @@ def source_suppressions(source):
                                              if not token.value.startswith(('"', "'")))
     count += len(re.findall(
         r"(?:#\s*pragma\s+|\b__pragma\s*\(\s*)"
-        r"(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:(?:disable|suppress)\s*:|push\s*,\s*0\b))",
+        r"(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:(?:disable|suppress)\s*:|push\s*,\s*[0-3]\b))",
         code,
     ))
     return count
@@ -238,8 +242,9 @@ def check(before, after):
         suppressions = lambda text: Counter(re.findall(r"--suppress(?:=|\s+)([^\s]+)", text))
         if suppressions(new) - suppressions(old):
             errors.append("Makefile:1: cppcheck suppressions widened; fix the finding")
-        floor = lambda text: [int(value) for value in re.findall(
-            r"^[ \t]*(?:(?:override|export|private)\s+)*COVERAGE_MIN\s*[?:+]?=\s*(\d+)\s*$",
+        floor = lambda text: [float(value) for value in re.findall(
+            r"^[ \t]*(?:[^:=\n]+:{1,2}[ \t]*)?(?:(?:override|export|private)[ \t]+)*"
+            r"COVERAGE_MIN[ \t]*(?:::?=|[?+]?=)[ \t]*([+-]?(?:\d+(?:\.\d*)?|\.\d+))[ \t]*$",
             text, re.MULTILINE,
         )]
         old_floor, new_floor = floor(old), floor(new)
