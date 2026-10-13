@@ -18,7 +18,7 @@ COMMENT_PATTERN = r'//(?:\\\r?\n|[^\n])*|/\*[\s\S]*?\*/'
 LITERAL_PATTERN = r'"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\''
 COMMENTS_AND_LITERALS = re.compile(f'(?P<comment>{COMMENT_PATTERN})|{LITERAL_PATTERN}')
 TOKEN = re.compile(
-    r'(?P<directive>^[ \t]*\#(?:/\*[\s\S]*?\*/|\\\r?\n|[^\n])*)'
+    r'(?P<directive>^[ \t]*(?:/\*[\s\S]*?\*/[ \t]*)*(?P<hash>\#)(?:/\*[\s\S]*?\*/|\\\r?\n|[^\n])*)'
     f'|(?P<comment>{COMMENT_PATTERN})'
     f'|(?P<literal>{LITERAL_PATTERN})'
     r'|(?P<space>[^\S\n]+|\n)'
@@ -53,7 +53,11 @@ def tokens(source, include_directives=False):
             result.append(Token(match.group(), line))
         elif include_directives and match.lastgroup == "directive":
             result.append(Token("#", line))
-            result.extend(tokens(match.group().lstrip()[1:]))
+            logical = re.sub(r"\\\r?\n", "", match.group())
+            logical = COMMENTS_AND_LITERALS.sub(
+                lambda item: " " if item.lastgroup == "comment" else item.group(), logical
+            )
+            result.extend(tokens(logical.lstrip()[1:]))
         line += match.group().count("\n")
     return result
 
@@ -75,12 +79,33 @@ def pairs(items):
     return result
 
 
-def operand_count(items, matching, start, end):
+def call_callees(items, matching):
+    closing = {end: start for start, end in matching.items()}
+    result = {}
+    for index, token in enumerate(items):
+        if token.value != "(" or index == 0:
+            continue
+        start, end = index - 1, index
+        if items[start].value == ")":
+            start = closing.get(start, start)
+        while start < end:
+            if items[start].value == "(" and matching.get(start) == end - 1:
+                start, end = start + 1, end - 1
+            elif items[start].value == "*":
+                start += 1
+            else:
+                break
+        if end == start + 1 and re.fullmatch(r"[A-Za-z_]\w*", items[start].value):
+            result[index] = items[start]
+    return result
+
+
+def operand_count(items, matching, callees, start, end):
     count = 1
     index = start
     while index < end:
         value = items[index].value
-        is_call = value == "(" and index > start and re.fullmatch(r"[A-Za-z_]\w*", items[index - 1].value)
+        is_call = index in callees and index > start
         if value in {"[", "{"} or is_call:
             index = matching.get(index, index) + 1
             continue
@@ -92,6 +117,7 @@ def operand_count(items, matching, start, end):
 
 def condition_findings(items):
     matching = pairs(items)
+    callees = call_callees(items, matching)
     for index in range(len(items) - 2):
         if items[index].value != "if" or items[index + 1].value != "(":
             continue
@@ -101,7 +127,7 @@ def condition_findings(items):
             continue
         signature = " ".join(token.value for token in items[start:end])
         lines = items[end - 1].line - items[start].line + 1
-        count = operand_count(items, matching, start, end)
+        count = operand_count(items, matching, callees, start, end)
         if lines > CONDITION_LINES:
             yield Finding("condition-lines", signature, items[start].line,
                           f"if condition spans {lines} lines (max {CONDITION_LINES}); extract a named predicate or early returns", lines)
@@ -126,12 +152,10 @@ def findings(path, source, app_headers):
         header = match[1].replace("\\", "/")
         name = PurePosixPath(header).name.lower()
         if path.startswith("core/") and (name in app_headers or name in UI_HEADERS or "app" in header.split("/")):
-            result.append(Finding("core-ui", header, source[:directive.start()].count("\n") + 1,
+            result.append(Finding("core-ui", header, source[:directive.start("hash")].count("\n") + 1,
                                   f"core includes UI header {header}; move UI ownership into app"))
     if path.startswith("app/"):
-        for index, token in enumerate(items[:-1]):
-            if items[index + 1].value != "(":
-                continue
+        for token in call_callees(items, pairs(items)).values():
             if token.value in API_CALLS and path != "app/store.c":
                 result.append(Finding("direct-api", token.value, token.line,
                                       f"{token.value} bypasses store; use a store request helper"))
@@ -143,11 +167,23 @@ def findings(path, source, app_headers):
 
 def source_suppressions(source):
     count = 0
-    for match in TOKEN.finditer(source):
+    for match in COMMENTS_AND_LITERALS.finditer(source):
         if match.lastgroup == "comment":
             count += len(re.findall(r"\bcppcheck-suppress(?:-\w+)?\b", match.group()))
-    code = " ".join(token.value for token in tokens(source, include_directives=True)
+    items = tokens(source, include_directives=True)
+    code = " ".join(token.value for token in items
                     if not token.value.startswith(('"', "'")))
+    for index in range(len(items) - 3):
+        if items[index].value != "_Pragma" or items[index + 1].value != "(":
+            continue
+        operand = index + 2
+        if items[operand].value == "L":
+            operand += 1
+        literal = items[operand].value
+        if literal.startswith('"') and operand + 1 < len(items) and items[operand + 1].value == ")":
+            decoded = re.sub(r'\\(["\\])', r'\1', literal[1:-1])
+            code += " # pragma " + " ".join(token.value for token in tokens(decoded)
+                                             if not token.value.startswith(('"', "'")))
     count += len(re.findall(
         r"(?:#\s*pragma\s+|\b__pragma\s*\(\s*)"
         r"(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:(?:disable|suppress)\s*:|push\s*,\s*0\b))",
@@ -202,9 +238,12 @@ def check(before, after):
         suppressions = lambda text: Counter(re.findall(r"--suppress(?:=|\s+)([^\s]+)", text))
         if suppressions(new) - suppressions(old):
             errors.append("Makefile:1: cppcheck suppressions widened; fix the finding")
-        floor = lambda text: re.search(r"^COVERAGE_MIN\s*[?:+]?=\s*(\d+)\s*$", text, re.MULTILINE)
+        floor = lambda text: [int(value) for value in re.findall(
+            r"^[ \t]*(?:(?:override|export|private)\s+)*COVERAGE_MIN\s*[?:+]?=\s*(\d+)\s*$",
+            text, re.MULTILINE,
+        )]
         old_floor, new_floor = floor(old), floor(new)
-        if old_floor and (not new_floor or int(new_floor[1]) < int(old_floor[1])):
+        if old_floor and (not new_floor or min(new_floor) < min(old_floor)):
             errors.append("Makefile:1: COVERAGE_MIN was removed or lowered; preserve the coverage floor")
     return errors
 

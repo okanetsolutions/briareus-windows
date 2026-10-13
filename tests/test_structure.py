@@ -221,6 +221,100 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_all_literal_coverage_assignments_preserve_floor(self):
+        self.write("Makefile", "COVERAGE_MIN ?= 90\n")
+        self.commit()
+        for operator in ["?=", "=", ":=", "+="]:
+            for prefix in ["", "override ", "export "]:
+                with self.subTest(operator=operator, prefix=prefix):
+                    self.write("Makefile", f"COVERAGE_MIN ?= 90\n{prefix}COVERAGE_MIN {operator} 0\n")
+                    result = self.run_check("HEAD")
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("COVERAGE_MIN was removed or lowered", result.stderr)
+        self.write("Makefile", "COVERAGE_MIN := 91\nCOVERAGE_MIN = 92\n# COVERAGE_MIN = 0\n")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
+    def test_literal_pragma_operators_count_suppressions(self):
+        suppression = r'_Pragma("GCC diagnostic ignored \"-Wunused-variable\"")'
+        for source in [suppression, suppression.replace("GCC", "clang"),
+                       suppression.replace('_Pragma("', '_Pragma(L"'),
+                       "#define QUIET " + suppression,
+                       '_Pragma("warning(disable: 4100)")']:
+            with self.subTest(source=source):
+                self.write("app/helper.c", source + "\n")
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("warning suppressions increased", result.stderr)
+        examples = ('// ' + suppression + '\n/* ' + suppression + ' */\n'
+                    'const char *s = "_Pragma(\\\"GCC diagnostic ignored\\\")";\n'
+                    'const char *t = "GCC diagnostic ignored";\n'
+                    '_Pragma("GCC diagnostic push")\n_Pragma("GCC diagnostic pop")\n')
+        self.write("app/helper.c", examples)
+        self.assertEqual(0, self.run_check().returncode)
+        self.write("app/helper.c", suppression + "\n")
+        self.commit()
+        self.write("app/helper.c", suppression + "\n" + suppression + "\n")
+        result = self.run_check("HEAD")
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.write("app/helper.c", "")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
+    def test_continued_diagnostic_pragmas_count_suppressions(self):
+        for newline in ["\n", "\r\n"]:
+            for compiler in ["GCC", "clang"]:
+                with self.subTest(newline=newline, compiler=compiler):
+                    source = f'#pragma {compiler} \\' + newline + 'diagnostic ignored "-Wshadow"\n'
+                    self.write("app/helper.c", source)
+                    result = self.run_check()
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("warning suppressions increased", result.stderr)
+                    examples = ('/* ' + source + ' */\n// #pragma ' + compiler + ' \\' + newline
+                                + 'diagnostic ignored "-Wshadow"\n'
+                                + 'const char *s = "\\' + newline
+                                + '#pragma ' + compiler + ' diagnostic ignored \\\"-Wshadow\\\"";\n')
+                    self.write("app/helper.c", examples)
+                    self.assertEqual(0, self.run_check().returncode)
+
+    def test_comment_prefixed_directives_are_checked(self):
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
+        for prefix in ["/* explained */ ", "\t/* first */ /* second */ ", "/* # multi\nline */ "]:
+            with self.subTest(prefix=prefix):
+                self.write("core/a.c", prefix + '#include "../app/store.h"\n')
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                line = prefix.count("\n") + 1
+                self.assertIn(f"core/a.c:{line}: core includes UI header ../app/store.h", result.stderr)
+                self.assertNotIn("core test gate", result.stderr)
+        self.write("app/helper.c", '/* explained */ #pragma GCC diagnostic ignored "-Wshadow"\n')
+        self.write("core/a.c", "int value = 1;\n")
+        result = self.run_check()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("warning suppressions increased", result.stderr)
+        self.write("app/helper.c", "/* explanation */ #define GUARD if (a && b && c && d && e && f) g();\n")
+        self.assertEqual(0, self.run_check().returncode)
+
+    def test_parenthesized_callees_use_call_rules(self):
+        for callee, diagnostic, adapter in [("api_call", "bypasses store", "app/store.c"),
+                                             ("WinHttpOpen", "WinHTTP belongs", "app/ws.c")]:
+            for expression in [f"({callee})(c)", f"(({callee}))(c)", f"(*{callee})(c)"]:
+                with self.subTest(expression=expression):
+                    self.write("app/helper.c", expression + ";\n")
+                    result = self.run_check()
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.write("app/helper.c", "")
+                    self.write(adapter, expression + ";\n")
+                    self.assertEqual(0, self.run_check().returncode)
+                    self.write(adapter, "")
+        for callee in ["(callback)", "(*callback)", "((callback))", "(*((callback)))"]:
+            with self.subTest(callee=callee):
+                self.write("app/helper.c", f"if ({callee}(a && b && c && d && e && f)) g();\n")
+                self.assertEqual(0, self.run_check().returncode)
+        self.write("app/helper.c", "if ((a && b && c) && (d && e && f)) g();\n")
+        result = self.run_check()
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("6 logical operands", result.stderr)
+
     def test_continued_includes_fail_with_original_line_numbers(self):
         self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
         for prefix, newline in [("", "\n"), ("", "\r\n"), ("    ", "\n"), ("\t", "\n")]:
