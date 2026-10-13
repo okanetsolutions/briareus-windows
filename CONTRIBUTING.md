@@ -15,7 +15,9 @@ The app is C11 on the Win32 API; its one third-party library is miniaudio, for t
 mingw32-make test
 ```
 
-Everything under `core/` (JSON, models, API client, cache, diff, Markdown, board logic) has no UI code and is covered by `tests/core_tests.c`, with HTTP stubbed through the client's pluggable transport. New core behaviour needs a test there. UI changes in `app/` are checked by running the app against a Briareus server; a screenshot in the pull request helps.
+Core behavior is covered by `tests/core_*tests.c`, called from `tests/core_tests.c`, with HTTP stubbed through the client's pluggable transport. App helpers are covered by `tests/app_*tests.c`, called from `tests/app_tests.c`. New behavior needs meaningful coverage in the owning suite; static copy, styling and layout changes need no new tests. Read [the testing skill](.agents/skills/testing-best-practices/SKILL.md) for harness registration, assertions and cleanup.
+
+Run `make rules` before delivery. This uses Python 3 and Git to check new structure violations and core changes missing a test delta, without requiring a Windows compiler. Use `make rules RULES_BASE=<parent-ref>` for a stacked branch. The checks include their own regression tests and run in a separate Linux CI job. Normal app builds do not require Python. See [the check reference](.ai/rules/checks.md) for limits and source provenance.
 
 The same build and tests run in CI for every pull request, with both GCC and MSVC, and every check must pass:
 
@@ -33,7 +35,7 @@ The same build and tests run in CI for every pull request, with both GCC and MSV
 | --- | --- |
 | `core/` | Portable logic, no UI. |
 | `app/` | The Win32 app: drawing (`canvas.cpp`), theme, layout toolkit (`doc.c`), screen stack (`pane.c`), store, screens, dialogs, voice notes. |
-| `tests/` | Core tests. |
+| `tests/` | Core and app harness suites, contract fixtures, crash probes and structure-check regressions. |
 | `res/` | Icon, manifest, dialogs, version resources. |
 
 ## Style
@@ -42,6 +44,8 @@ The same build and tests run in CI for every pull request, with both GCC and MSV
 - Follow the file you are in: 4-space indent, braces on the same line, short comments that say why.
 - No new dependencies. The executable stays statically linked with nothing to install.
 - Match the dashboard: labels, colours, type and behaviour follow the web app where they overlap.
+
+Agent entrypoints are [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md). Path-specific rules live in [.ai/rules](.ai/rules/index.md); architecture, testing and code-review skills live in `.agents/skills/`, with Claude entrypoints under `.claude/skills/`. They adapt heedly-builder's rule structure to this client's existing modules.
 
 ## Sending a change
 

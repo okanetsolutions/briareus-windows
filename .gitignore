@@ -47,3 +47,7 @@ Desktop.ini
 # Logs and temporary files
 *.log
 *.tmp
+
+# Python tooling caches
+__pycache__/
+*.pyc
