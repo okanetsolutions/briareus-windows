@@ -124,7 +124,10 @@ class StructureRules(unittest.TestCase):
         for suppression in ["// cppcheck-suppress memleak\n", "// cppcheck-suppress-file memleak\n",
                             '#pragma GCC diagnostic ignored "-Wshadow"\n',
                             '#pragma clang diagnostic ignored "-Wshadow"\n',
-                            "#pragma warning(disable: 4100)\n", "#pragma warning(push, 0)\n"]:
+                            "#pragma warning(disable: 4100)\n", "#pragma warning(push, 0)\n",
+                            "#pragma warning(suppress: 4100)\n",
+                            "__pragma(warning(disable: 4100))\n",
+                            "__pragma(warning(suppress: 4100))\n", "__pragma(warning(push, 0))\n"]:
             with self.subTest(suppression=suppression):
                 self.assertTrue(self.errors(suppression))
                 self.assertEqual([], self.errors("", old=suppression))
@@ -193,6 +196,46 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(1, result.returncode)
         self.assertIn("WinHTTP belongs", result.stderr)
+
+    def test_msvc_warning_suppressions_fail(self):
+        for source in ["#pragma warning(suppress: 4100)\n",
+                       "__pragma(warning(disable: 4100))\n",
+                       "__pragma(warning(suppress: 4100))\n",
+                       "__pragma(warning(push, 0))\n",
+                       "#define QUIET __pragma(warning(disable: 4100))\n"]:
+            with self.subTest(source=source):
+                self.write("app/helper.c", source)
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("warning suppressions increased", result.stderr)
+
+    def test_warning_examples_and_non_suppressing_pragmas_pass(self):
+        source = ('// __pragma(warning(disable: 4100))\n'
+                  '/* #pragma warning(suppress: 4100) */\n'
+                  'const char *s = "__pragma(warning(disable: 4100))";\n'
+                  'const char *t = "\\\n#pragma warning(suppress: 4100)";\n'
+                  '#define EXAMPLE "__pragma(warning(disable: 4100))"\n'
+                  '__pragma(warning(push))\n__pragma(warning(pop))\n'
+                  '#pragma warning(default: 4100)\n')
+        self.write("app/helper.c", source)
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_continued_includes_fail_with_original_line_numbers(self):
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
+        for prefix, newline in [("", "\n"), ("", "\r\n"), ("    ", "\n"), ("\t", "\n")]:
+            with self.subTest(prefix=prefix, newline=newline):
+                self.write("core/a.c", "/* heading */\n\n" + prefix + "#include \\" + newline + '"../app/store.h"\n')
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("core/a.c:3: core includes UI header ../app/store.h", result.stderr)
+                self.assertNotIn("core test gate", result.stderr)
+
+    def test_include_text_in_continued_strings_passes(self):
+        self.write("core/a.c", 'const char *s = "\\\n#include <commctrl.h>";\n')
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_missing_ref_and_non_repository_fail_closed(self):
         self.assertEqual(2, self.run_check("missing-base").returncode)

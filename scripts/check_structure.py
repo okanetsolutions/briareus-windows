@@ -21,7 +21,7 @@ TOKEN = re.compile(
     r'(?P<directive>^[ \t]*\#(?:/\*[\s\S]*?\*/|\\\r?\n|[^\n])*)'
     f'|(?P<comment>{COMMENT_PATTERN})'
     f'|(?P<literal>{LITERAL_PATTERN})'
-    r'|(?P<space>\s+)'
+    r'|(?P<space>[^\S\n]+|\n)'
     r'|(?P<word>[A-Za-z_][A-Za-z_0-9]*|[0-9](?:[A-Za-z_0-9.]|(?<=[eEpP])[+-])*'
     r'|>>=|<<=|\.\.\.|&&|\|\||\+\+|--|->|<<|>>|<=|>=|==|!=|[+*/%&|^!-]=|[^\s])',
     re.MULTILINE,
@@ -113,14 +113,20 @@ def condition_findings(items):
 def findings(path, source, app_headers):
     items = tokens(source)
     result = list(condition_findings(items))
-    without_comments = COMMENTS_AND_LITERALS.sub(
-        lambda match: "\n" * match.group().count("\n") if match.lastgroup == "comment" else match.group(), source
-    )
-    for match in re.finditer(r'^[ \t]*#\s*include\s*[<"]([^">]+)[">]', without_comments, re.MULTILINE):
+    for directive in TOKEN.finditer(source):
+        if directive.lastgroup != "directive":
+            continue
+        logical = re.sub(r"\\\r?\n", "", directive.group())
+        logical = COMMENTS_AND_LITERALS.sub(
+            lambda match: " " if match.lastgroup == "comment" else match.group(), logical
+        )
+        match = re.match(r'^[ \t]*#\s*include\s*[<"]([^">]+)[">]', logical)
+        if not match:
+            continue
         header = match[1].replace("\\", "/")
         name = PurePosixPath(header).name.lower()
         if path.startswith("core/") and (name in app_headers or name in UI_HEADERS or "app" in header.split("/")):
-            result.append(Finding("core-ui", header, without_comments[:match.start()].count("\n") + 1,
+            result.append(Finding("core-ui", header, source[:directive.start()].count("\n") + 1,
                                   f"core includes UI header {header}; move UI ownership into app"))
     if path.startswith("app/"):
         for index, token in enumerate(items[:-1]):
@@ -140,9 +146,13 @@ def source_suppressions(source):
     for match in TOKEN.finditer(source):
         if match.lastgroup == "comment":
             count += len(re.findall(r"\bcppcheck-suppress(?:-\w+)?\b", match.group()))
-        elif match.lastgroup == "directive":
-            if re.search(r"#\s*pragma\s+(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:disable\s*:|push\s*,\s*0))", match.group()):
-                count += 1
+    code = " ".join(token.value for token in tokens(source, include_directives=True)
+                    if not token.value.startswith(('"', "'")))
+    count += len(re.findall(
+        r"(?:#\s*pragma\s+|\b__pragma\s*\(\s*)"
+        r"(?:(?:GCC|clang)\s+diagnostic\s+ignored|warning\s*\(\s*(?:(?:disable|suppress)\s*:|push\s*,\s*0\b))",
+        code,
+    ))
     return count
 
 
