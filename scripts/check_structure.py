@@ -2,7 +2,7 @@
 """Reject new structure violations against a Git merge base."""
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import re
@@ -42,6 +42,7 @@ class Finding:
     signature: str
     line: int
     message: str
+    size: int = 0
 
 
 def tokens(source, include_directives=False):
@@ -102,8 +103,8 @@ def condition_findings(items):
         lines = items[end - 1].line - items[start].line + 1
         count = operand_count(items, matching, start, end)
         if lines > CONDITION_LINES:
-            yield Finding("condition-lines", f"{lines}: {signature}", items[start].line,
-                          f"if condition spans {lines} lines (max {CONDITION_LINES}); extract a named predicate or early returns")
+            yield Finding("condition-lines", signature, items[start].line,
+                          f"if condition spans {lines} lines (max {CONDITION_LINES}); extract a named predicate or early returns", lines)
         if count > CONDITION_OPERANDS:
             yield Finding("condition-operands", signature, items[start].line,
                           f"if condition has {count} logical operands (max {CONDITION_OPERANDS}); split the decision")
@@ -165,11 +166,14 @@ def check(before, after):
             errors.append(f"{path}:1: presentation file grew to {len(new.splitlines())} lines; extract cohesive logic (max 300, existing debt may not grow)")
         if not production_source(path):
             continue
-        previous = Counter((item.rule, item.signature) for item in findings(path, old, app_headers))
+        previous = defaultdict(list)
+        for item in findings(path, old, app_headers):
+            previous[item.rule, item.signature].append(item.size)
         for item in findings(path, new, app_headers):
             key = item.rule, item.signature
-            if previous[key]:
-                previous[key] -= 1
+            allowance = next((size for size in sorted(previous[key]) if size >= item.size), None)
+            if allowance is not None:
+                previous[key].remove(allowance)
             else:
                 errors.append(f"{path}:{item.line}: {item.message}")
         if source_suppressions(new) > source_suppressions(old):

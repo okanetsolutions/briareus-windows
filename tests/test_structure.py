@@ -71,6 +71,18 @@ class StructureRules(unittest.TestCase):
         new = old.replace(" d)", "\n d)")
         self.assertTrue(any("spans 5 lines" in error for error in self.errors(new, old=old)))
 
+    def test_existing_long_condition_may_shrink(self):
+        old = "if (a &&\n b &&\n c &&\n d &&\n e) f();"
+        new = old.replace(" d &&\n e", " d && e")
+        self.assertEqual([], self.errors(new, old=old))
+
+    def test_duplicate_condition_debt_cannot_be_reused(self):
+        short = "if (a &&\n b &&\n c &&\n d && e) f();"
+        long = short.replace(" d && e", " d &&\n e")
+        self.assertEqual([], self.errors(short + long, old=long + short))
+        self.assertTrue(self.errors(long + long, old=long + short))
+        self.assertTrue(self.errors(short + short, old=long))
+
     def test_presentation_size_allows_only_existing_debt(self):
         for path in ["app/screen_new.c", "app/project_files.c", "app/forge_site.c"]:
             with self.subTest(path=path):
