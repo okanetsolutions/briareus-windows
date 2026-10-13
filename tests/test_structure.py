@@ -259,6 +259,101 @@ class GitIntegration(unittest.TestCase):
         self.write("Makefile", "COVERAGE_MIN := 90.4\n")
         self.assertEqual(1, self.run_check("HEAD").returncode)
 
+    def test_continued_literal_coverage_assignments_preserve_floor(self):
+        base = "COVERAGE_MIN ?= 90\n"
+        self.write("Makefile", base)
+        self.commit()
+        for newline in ["\n", "\r\n"]:
+            for prefix in ["", "override ", "coverage: "]:
+                with self.subTest(newline=newline, prefix=prefix):
+                    assignment = prefix + "COVERAGE_MIN := \\" + newline + "\t"
+                    self.write("Makefile", base + assignment + "0\n")
+                    result = self.run_check("HEAD")
+                    self.assertEqual(1, result.returncode, result.stderr)
+                    self.assertIn("COVERAGE_MIN was removed or lowered", result.stderr)
+                    for value in ["90", "91"]:
+                        self.write("Makefile", assignment + value + "\n")
+                        self.assertEqual(0, self.run_check("HEAD").returncode)
+                    self.write("Makefile", base + "# example \\" + newline
+                               + "COVERAGE_MIN := 0\n")
+                    self.assertEqual(0, self.run_check("HEAD").returncode)
+        self.write("Makefile", "COVERAGE_MIN := \\\n90\n")
+        self.commit()
+        self.write("Makefile", "COVERAGE_MIN := \\\n89.5\n")
+        self.assertEqual(1, self.run_check("HEAD").returncode)
+
+    def test_comment_boundaries_preserve_live_code_and_directives(self):
+        for code, diagnostic in [("api_call(0);", "bypasses store"),
+                                 ("if (a && b && c && d && e && f) g();", "6 logical operands")]:
+            with self.subTest(code=code):
+                self.write("app/helper.c", "/* license */\nvoid f(void) { " + code
+                           + " }\n/* settings */ #define FLAG 1\n")
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn(diagnostic, result.stderr)
+        self.write("app/helper.c", "")
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
+        for prefix in ["/* note */\n/* reason\n*/ ", "/* first */\n\n/* second */ "]:
+            with self.subTest(prefix=prefix):
+                self.write("core/a.c", prefix + '#include "../app/store.h"\n')
+                result = self.run_check()
+                self.assertEqual(1, result.returncode, result.stderr)
+                line = prefix.count("\n") + 1
+                self.assertIn(f"core/a.c:{line}: core includes UI header", result.stderr)
+                self.write("core/a.c", "int value = 1;\n")
+                self.write("app/helper.c", prefix + '#pragma GCC diagnostic ignored "-Wshadow"\n')
+                self.assertIn("warning suppressions increased", self.run_check().stderr)
+                self.write("app/helper.c", prefix + "#define GUARD if (a && b && c && d && e && f) g();\n")
+                self.assertEqual(0, self.run_check().returncode)
+        self.write("app/helper.c", '/* license */\nconst char *s = "api_call(0);";\n'
+                   '/* settings */ #define FLAG 1\n')
+        self.assertEqual(0, self.run_check().returncode)
+
+    def test_macro_name_adjacency_requires_core_test_delta(self):
+        before = "int F=10;\n#define F(x) +1\nint f(void) { int x=2; return F + (x); }\n"
+        self.write("core/a.c", before)
+        self.commit()
+        for replacement in ["F (x)", "F\t(x)", "F/**/(x)", "F \\\n(x)"]:
+            with self.subTest(replacement=replacement):
+                self.write("core/a.c", before.replace("F(x)", replacement))
+                result = self.run_check("HEAD")
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("core test gate", result.stderr)
+        for replacement in ["F( x )", "F(/**/x)", "F\\\n(x)", "F\\\r\n(x)"]:
+            with self.subTest(replacement=replacement):
+                self.write("core/a.c", before.replace("F(x)", replacement))
+                self.assertEqual(0, self.run_check("HEAD").returncode)
+        self.write("core/a.c", before.replace("F(x)", "F (x)"))
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(f(), 5); }\n")
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+
+    def test_quoted_core_local_headers_precede_app_basename_fallback(self):
+        self.write("core/thing.h", "#define OWNER_CORE 1\n")
+        self.write("app/thing.h", "#error APP_WAS_INCLUDED\n")
+        self.commit()
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
+        for path, header in [("core/a.c", "thing.h"), ("core/a.c", "./thing.h"),
+                             ("core/nested/a.c", "../thing.h")]:
+            with self.subTest(path=path, header=header):
+                self.write(path, f'#include "{header}"\nint value = OWNER_CORE;\n')
+                result = self.run_check("HEAD")
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.write(path, "")
+        self.write("core/commctrl.h", "")
+        for header in ['<thing.h>', '"../app/thing.h"', '"commctrl.h"',
+                       '"missing/thing.h"', '"../app/../core/thing.h"']:
+            with self.subTest(header=header):
+                self.write("core/a.c", f"#include {header}\n")
+                result = self.run_check("HEAD")
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("core includes UI header", result.stderr)
+        self.write("core/a.c", '#include "thing.h"\nint value = OWNER_CORE;\n')
+        self.commit()
+        self.write("core/a.c", '#include "thing.h"\nint value = OWNER_CORE + 1;\n')
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 3); }\n")
+        (self.root / "core/thing.h").unlink()
+        self.assertIn("core includes UI header", self.run_check("HEAD").stderr)
+
     def test_lowered_msvc_warning_levels_count_suppressions(self):
         for level in range(4):
             for source in [f"#pragma warning(push, {level})",

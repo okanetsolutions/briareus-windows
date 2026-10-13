@@ -5,6 +5,7 @@ import argparse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import subprocess
 import sys
@@ -14,11 +15,12 @@ PRESENTATION_LIMIT = 300
 CONDITION_LINES = 3
 CONDITION_OPERANDS = 5
 SOURCE_SUFFIXES = {".c", ".h", ".cpp"}
-COMMENT_PATTERN = r'//(?:\\\r?\n|[^\n])*|/\*[\s\S]*?\*/'
+BLOCK_COMMENT_PATTERN = r'/\*(?:[^*]|\*(?!/))*\*/'
+COMMENT_PATTERN = rf'//(?:\\\r?\n|[^\n])*|{BLOCK_COMMENT_PATTERN}'
 LITERAL_PATTERN = r'"(?:\\[\s\S]|[^"\\])*"|\'(?:\\[\s\S]|[^\'\\])*\''
 COMMENTS_AND_LITERALS = re.compile(f'(?P<comment>{COMMENT_PATTERN})|{LITERAL_PATTERN}')
 TOKEN = re.compile(
-    r'(?P<directive>^[ \t]*(?:/\*[\s\S]*?\*/[ \t]*)*(?P<hash>\#)(?:/\*[\s\S]*?\*/|\\\r?\n|[^\n])*)'
+    rf'(?P<directive>^[ \t]*(?:{BLOCK_COMMENT_PATTERN}\s*)*(?P<hash>\#)(?:{BLOCK_COMMENT_PATTERN}|\\\r?\n|[^\n])*)'
     f'|(?P<comment>{COMMENT_PATTERN})'
     f'|(?P<literal>{LITERAL_PATTERN})'
     r'|(?P<space>[^\S\n]+|\n)'
@@ -55,11 +57,13 @@ def tokens(source, include_directives=False):
             result.append(Token(match.group(), line))
         elif include_directives and match.lastgroup == "directive":
             result.append(Token("#", line))
-            logical = re.sub(r"\\\r?\n", "", match.group())
+            logical = re.sub(r"\\\r?\n", "", source[match.start("hash"):match.end()])
             logical = COMMENTS_AND_LITERALS.sub(
                 lambda item: " " if item.lastgroup == "comment" else item.group(), logical
             )
             result.extend(tokens(logical.lstrip()[1:]))
+            if re.match(r"#\s*define\s+[A-Za-z_]\w*\(", logical):
+                result.append(Token("<function-like-macro>", line))
             result.append(Token("\n", line))
         line += match.group().count("\n")
     return result
@@ -140,22 +144,24 @@ def condition_findings(items):
                           f"if condition has {count} logical operands (max {CONDITION_OPERANDS}); split the decision")
 
 
-def findings(path, source, app_headers):
+def findings(path, source, app_headers, snapshot):
     items = tokens(source)
     result = list(condition_findings(items))
     for directive in TOKEN.finditer(source):
         if directive.lastgroup != "directive":
             continue
-        logical = re.sub(r"\\\r?\n", "", directive.group())
+        logical = re.sub(r"\\\r?\n", "", source[directive.start("hash"):directive.end()])
         logical = COMMENTS_AND_LITERALS.sub(
             lambda match: " " if match.lastgroup == "comment" else match.group(), logical
         )
-        match = re.match(r'^[ \t]*#\s*include\s*[<"]([^">]+)[">]', logical)
+        match = re.match(r'^#\s*include\s*([<"])([^">]+)[">]', logical)
         if not match:
             continue
-        header = match[1].replace("\\", "/")
+        header = match[2].replace("\\", "/")
         name = PurePosixPath(header).name.lower()
-        if path.startswith("core/") and (name in app_headers or name in UI_HEADERS or "app" in header.split("/")):
+        local = posixpath.normpath(str(PurePosixPath(path).parent / header)) if match[1] == '"' else None
+        if path.startswith("core/") and (name in app_headers and local not in snapshot
+                                        or name in UI_HEADERS or "app" in header.split("/")):
             result.append(Finding("core-ui", header, source[:directive.start("hash")].count("\n") + 1,
                                   f"core includes UI header {header}; move UI ownership into app"))
     if path.startswith("app/"):
@@ -217,9 +223,9 @@ def check(before, after):
         if not production_source(path):
             continue
         previous = defaultdict(list)
-        for item in findings(path, old, app_headers):
+        for item in findings(path, old, app_headers, before):
             previous[item.rule, item.signature].append(item.size)
-        for item in findings(path, new, app_headers):
+        for item in findings(path, new, app_headers, after):
             key = item.rule, item.signature
             allowance = next((size for size in sorted(previous[key]) if size >= item.size), None)
             if allowance is not None:
@@ -247,7 +253,9 @@ def check(before, after):
             r"COVERAGE_MIN[ \t]*(?:::?=|[?+]?=)[ \t]*([+-]?(?:\d+(?:\.\d*)?|\.\d+))[ \t]*$",
             text, re.MULTILINE,
         )]
-        old_floor, new_floor = floor(old), floor(new)
+        old_floor, new_floor = (floor(re.sub(r"(?m)#.*$", "", re.sub(
+            r"[ \t]*\\\r?\n[ \t]*", " ", snapshot.get("Makefile", "")
+        ))) for snapshot in (before, after))
         if old_floor and (not new_floor or min(new_floor) < min(old_floor)):
             errors.append("Makefile:1: COVERAGE_MIN was removed or lowered; preserve the coverage floor")
     return errors
