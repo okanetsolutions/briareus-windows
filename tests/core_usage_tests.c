@@ -50,7 +50,8 @@ static void test_percentage_changes(void) {
     CHECK(c.changes[USAGE_TOKENS].percent == -25);
     CHECK(c.changes[USAGE_SESSIONS].percent == 0);
     json_set_num(usage, "sessions", 0);
-    CHECK(usage_comparison(usage).changes[USAGE_SESSIONS].percent == -100);
+    c = usage_comparison(usage);
+    CHECK(c.changes[USAGE_SESSIONS].percent == -100);
     json_free(usage);
 }
 
