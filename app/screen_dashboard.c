@@ -5,6 +5,7 @@
 #include "screens.h"
 #include "briareus_tokens.h"
 #include "str.h"
+#include "usage.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -806,31 +807,30 @@ static void insights(Doc *doc, int x, int w, const Json *u) {
     values[0] = json_num(json_get(i, "costPerSession"), &v) ? xstrfmt("$%.2f%s", v, count_of(u, "unpricedTurns") ? "+" : "") : xstrdup("\xE2\x80\x94");
     values[1] = json_num(json_get(i, "costPerTurn"), &v) ? xstrfmt("$%.2f%s", v, count_of(u, "unpricedTurns") ? "+" : "") : xstrdup("\xE2\x80\x94");
     values[2] = json_num(json_get(i, "averageDurationMs"), &v) ? format_duration_ms(v) : xstrdup("\xE2\x80\x94");
-    int turns = count_of(u, "turns"), priced = turns - count_of(u, "unpricedTurns");
-    values[3] = xstrfmt("%d%%", turns ? (int)(priced * 100.0 / turns + 0.5) : 0);
+    UsagePricing pricing = usage_pricing(u);
+    values[3] = xstrfmt("%d%%", pricing.percent);
     subs[0] = xstrdup("within this selection"); subs[1] = xstrdup("within this selection");
     subs[2] = xstrfmt("%d turns with timing", count_of(i, "timedTurns"));
-    subs[3] = xstrfmt("%d of %d turns priced", priced, turns);
+    subs[3] = xstrfmt("%d of %d turns priced", pricing.priced_turns, pricing.turns);
     static const char *const labels[] = { "Cost / session", "Cost / turn", "Average turn duration", "Pricing coverage" };
     doc_space(doc, px(12));
     tiles(doc, x, w, labels, values, subs, 4);
     for (int k = 0; k < 4; k++) { free(values[k]); free(subs[k]); }
 
-    const Json *prev = json_get(u, "comparison");
-    if (json_is_object(prev)) {
-        double from = num(prev, "from"), to = num(prev, "to");
-        char *a = format_date_abbrev((time_t)(from / 1000)), *b = format_date_abbrev((time_t)((to - 1) / 1000));
+    UsageComparison comparison = usage_comparison(u);
+    if (comparison.present) {
+        char *a = format_date_abbrev((time_t)(comparison.from_ms / 1000)), *b = format_date_abbrev((time_t)((comparison.to_ms - 1) / 1000));
         Str line; str_init(&line);
-        str_appendf(&line, "Compared with %s \xE2\x80\x93 %s%s: ", a, b, json_bool_is(json_get(prev, "partial"), true) ? " (matching elapsed time)" : "");
-        static const char *const keys[] = { "costUsd", "totalTokens", "sessions" }, *const names[] = { "Cost", "Tokens", "Sessions" };
-        for (int k = 0; k < 3; k++) {
-            double old, now;
+        str_appendf(&line, "Compared with %s \xE2\x80\x93 %s%s: ", a, b, comparison.partial_elapsed ? " (matching elapsed time)" : "");
+        static const char *const names[] = { "Cost", "Tokens", "Sessions" };
+        for (int k = 0; k < USAGE_METRIC_COUNT; k++) {
+            UsageChange delta = comparison.changes[k];
             if (k) str_appendz(&line, " \xC2\xB7 ");
-            if (!json_num(json_get(prev, keys[k]), &old) || !json_num(json_get(u, keys[k]), &now)) str_appendf(&line, "%s: unavailable", names[k]);
-            else if (!old) str_appendf(&line, "%s: %s", names[k], now ? "new usage (previously zero)" : "unchanged");
-            else { double pct = (now - old) / old * 100; str_appendf(&line, "%s: %s%.1f%%", names[k], pct > 0 ? "+" : "", pct); }
+            if (delta.kind == USAGE_CHANGE_UNAVAILABLE) str_appendf(&line, "%s: unavailable", names[k]);
+            else if (delta.kind != USAGE_CHANGE_PERCENT) str_appendf(&line, "%s: %s", names[k], delta.kind == USAGE_CHANGE_NEW ? "new usage (previously zero)" : "unchanged");
+            else str_appendf(&line, "%s: %s%.1f%%", names[k], delta.percent > 0 ? "+" : "", delta.percent);
         }
-        if (count_of(u, "unpricedTurns") || count_of(prev, "unpricedTurns")) str_appendz(&line, " \xC2\xB7 cost comparison is partial");
+        if (comparison.partial_cost) str_appendz(&line, " \xC2\xB7 cost comparison is partial");
         doc_space(doc, px(12));
         doc_text(doc, x, w, line.data, FONT_CAPTION, theme.muted, DT_LEFT | DT_WORDBREAK);
         str_free(&line); free(a); free(b);

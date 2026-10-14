@@ -917,5 +917,6 @@ int main(void) {
     mail_tests();
     mail_inbox_tests();
     repo_index_tests();
+    usage_tests();
     return test_summary();
 }
