@@ -203,7 +203,7 @@ static void test_the_download_follows_redirects_and_checks_the_bytes(void) {
 
 static void test_a_download_that_does_not_match_is_refused(void) {
     UpdateRelease r = parsed_release();
-    const char *bodies[] = { "MZ the old build", "MZ short", "PE the new build" };
+    const char *bodies[] = { "MZ the old build", "MZ short", "PE the new build", "M", "", "MP the new build", "PZ the new build" };
     for (size_t i = 0; i < sizeof bodies / sizeof *bodies; i++) {
         Answer answers[] = { { BUILD_URL, 200, NULL, bodies[i], 0, false } };
         Stub s = { answers, 1, 0, NULL, { 0 } };

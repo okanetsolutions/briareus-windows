@@ -235,12 +235,19 @@ bool update_check(UpdateRelease *out, char **error) {
     return ok;
 }
 
+static bool release_bytes_match(const UpdateRelease *r, const char *body, size_t len) {
+    if (len != r->size || len < 2) return false;
+    if (body[0] != 'M' || body[1] != 'Z') return false;
+    char hex[65];
+    if (!update_sha256(body, len, hex)) return false;
+    return str_eq(hex, r->sha256);
+}
+
 bool update_download(const UpdateRelease *r, char **bytes, size_t *len, char **error) {
     *bytes = NULL; *len = 0;
     char *body; size_t got;
     if (!fetch(r->url, "application/octet-stream", &body, &got, error)) return false;
-    char hex[65];
-    if (got != r->size || got < 2 || body[0] != 'M' || body[1] != 'Z' || !update_sha256(body, got, hex) || !str_eq(hex, r->sha256)) {
+    if (!release_bytes_match(r, body, got)) {
         free(body);
         *error = xstrdup("The downloaded update does not match the release on GitHub, so it was not installed.");
         return false;

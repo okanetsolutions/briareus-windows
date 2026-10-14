@@ -289,6 +289,14 @@ static const char *find_close(const char *p, const char *end, const char *marker
     return NULL;
 }
 
+static bool triple_emphasis_open(const char *text, const char *p, const char *end) {
+    char marker = *p;
+    if (marker != '*' && marker != '_') return false;
+    if (marker == '_' && p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) return false;
+    if (end - p <= 3) return false;
+    return p[1] == marker && p[2] == marker && !isspace((unsigned char)p[3]);
+}
+
 static void parse_inline(Spans *out, const char *text, size_t len, unsigned flags) {
     const char *p = text, *end = text + len;
     Str plain; str_init(&plain);
@@ -334,7 +342,7 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             }
             str_append(&plain, p, ticks); p += ticks; continue;
         }
-        if ((c == '*' || (c == '_' && !(p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_')))) && p + 3 < end && p[1] == c && p[2] == c && !isspace((unsigned char)p[3])) {
+        if (triple_emphasis_open(text, p, end)) {
             const char *close = find_close(p + 3, end, c == '*' ? "***" : "___");
             if (close && close > p + 3) {
                 FLUSH();

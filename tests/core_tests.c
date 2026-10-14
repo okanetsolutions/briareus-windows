@@ -80,6 +80,15 @@ static void test_normalizes_origin_and_api_path(void) {
     CHECK_STR(a.origin, "https://example.com:8443");
     server_address_free(&a);
 }
+static void test_https_scheme_and_host_characters(void) {
+    ServerAddress a;
+    CHECK(server_address_parse("hTtPs://API_HOST-1.Example:443/", &a));
+    CHECK_STR(a.origin, "https://api_host-1.example"); server_address_free(&a);
+    CHECK(server_address_parse("HTTPS://[::1]:8443", &a));
+    CHECK_STR(a.origin, "https://[::1]:8443"); server_address_free(&a);
+    const char *bad[] = { "h", "https:", "https:/", "httpsx//host", "https://ho!st", "https://ho%20st", "https://ho\\st" };
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(!server_address_parse(bad[i], &a));
+}
 static void test_rejects_unsafe_or_ambiguous_addresses(void) {
     const char *bad[] = { "http://example.com", "https://user:pass@example.com", "https://example.com?token=x", "https://example.com/#x",
                           "https://example.com/api/dev", "https://example.com/api/mobile/v1", "file:///secret", "example.com", "https://", "https://example.com:0", "https://example.com:99999" };
@@ -853,6 +862,7 @@ static void test_json_round_trips(void) {
 int main(void) {
     struct { const char *name; void (*fn)(void); } tests[] = {
         { "normalizes origin and API path", test_normalizes_origin_and_api_path },
+        { "HTTPS scheme and host preserve accepted characters", test_https_scheme_and_host_characters },
         { "rejects unsafe or ambiguous addresses", test_rejects_unsafe_or_ambiguous_addresses },
         { "rejects invalid tokens", test_rejects_invalid_tokens },
         { "calls take their route and arguments from the table", test_calls_take_their_route_and_arguments_from_the_table },

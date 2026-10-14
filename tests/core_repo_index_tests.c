@@ -42,6 +42,13 @@ static char *symbols_of(const char *path, const char *text) {
     return str_detach(&out);
 }
 
+static void test_declaration_context_rejects_member_and_template_uses(void) {
+    CHECK_OWNED_STR(symbols_of("a.php", "Foo::class;\n$this->type;\n$function fake;\nclass Real {}\n"), "c:Real@4");
+    CHECK_OWNED_STR(symbols_of("a.ts", "options.type;\nclass extends Base {}\ninterface implements X {}\ntype Real = string;\n"), "c:Real@4");
+    CHECK_OWNED_STR(symbols_of("a.cpp", "template <class K, class V>\nclass Real {};\n"), "c:Real@2");
+    CHECK_OWNED_STR(symbols_of("a.kt", "enum class Color {}\nfun interface Runner {}\n"), "c:Color@1 c:Runner@2");
+}
+
 static void test_finds_declarations_in_php(void) {
     CHECK_OWNED_STR(symbols_of("app/User.php",
         "<?php\n"
@@ -293,6 +300,7 @@ static void test_searches_symbols_and_text(void) {
 
 void repo_index_tests(void) {
     test_run("index picks the files worth indexing", test_picks_the_files_worth_indexing);
+    test_run("index rejects words used as members and template parameters", test_declaration_context_rejects_member_and_template_uses);
     test_run("index finds declarations in PHP", test_finds_declarations_in_php);
     test_run("index finds declarations in JavaScript and TypeScript", test_finds_declarations_in_javascript_and_typescript);
     test_run("index finds declarations in other languages", test_finds_declarations_in_other_languages);

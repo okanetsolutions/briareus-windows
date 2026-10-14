@@ -925,6 +925,7 @@ static void test_board_date_parse_rejects_what_is_not_a_timestamp(void) {
         if (ok) printf("  read: %s\n", bad[i] ? bad[i] : "(null)");
         CHECK(!ok); CHECK_INT(t, 12345);
     }
+    time_t upper; CHECK(board_date_parse("2026-12-31T23:59:60Z", &upper)); CHECK_INT(upper, 1798761600);
     // A leap second is read, landing on the next minute.
     time_t t; CHECK(board_date_parse("2016-12-31T23:59:60Z", &t)); CHECK_INT(t, 1483228800);
 }

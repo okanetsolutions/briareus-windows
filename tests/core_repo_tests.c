@@ -214,6 +214,7 @@ static void test_colours_a_line(void) {
     CHECK_OWNED_STR(runs_of(&lx, "echo ${HOME}/a#b \"open"), "k:echo|p: |v:${HOME}|p:/a#b |s:\"open");
     CHECK_OWNED_STR(runs_of(&lx, "x=$# # c"), "p:x=$# |c:# c");
     CHECK_OWNED_STR(runs_of(&lx, "echo ${unterminated"), "k:echo|p: |v:${unterminated");
+    CHECK_OWNED_STR(runs_of(&lx, "$name $_private $9 $"), "v:$name|p: |v:$_private|p: $|n:9|p: $");
     // SQL's keywords in any case; numbers inside words stay plain; hex numbers.
     code_lexer_init(&lx, code_language_of("q.sql"));
     CHECK_OWNED_STR(runs_of(&lx, "SELECT a1 FROM t WHERE x = 0x1F -- c"), "k:SELECT|p: a1 |k:FROM|p: t |k:WHERE|p: x = |n:0x1F|p: |c:-- c");

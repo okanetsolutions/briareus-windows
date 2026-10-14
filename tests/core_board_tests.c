@@ -1092,6 +1092,10 @@ static void test_the_run_log_reads_log_lines_past_its_cursor(void) {
     events = json_parsez("[{\"seq\":9,\"kind\":\"info\",\"text\":\"again\"},{\"seq\":10,\"kind\":\"info\",\"text\":\"Serving on 8123\"}]");
     CHECK(run_log_add_events(&log, events)); CHECK_INT(log.count, 8); CHECK_STR(log.lines[7], "Serving on 8123");
     json_free(events);
+    events = json_parsez("[{\"seq\":11,\"kind\":\"claude\",\"text\":\"Agent log\"},{\"seq\":12,\"kind\":\"info\"},{\"seq\":13,\"kind\":\"unknown\",\"text\":\"Hidden\"}]");
+    CHECK(run_log_add_events(&log, events)); CHECK_INT(log.count, 9);
+    CHECK_STR(log.lines[8], "Agent log"); CHECK(!log.errors[8]); CHECK_INT(log.cursor, 13);
+    json_free(events);
     run_log_clear(&log);
     CHECK_INT(log.count, 0); CHECK(log.lines == NULL); CHECK_INT((int)log.cursor, 0);
 }
@@ -1283,6 +1287,17 @@ static void test_column_sums_drop_needless_decimals(void) {
     t = project_sum_text(-2); CHECK_STR(t, "-2"); free(t);
 }
 static void test_board_settings_are_read_from_their_github_address(void) {
+    const char *valid[] = { "https://github.com/orgs/hq/projects/1", "https://github.com/orgs/hq/projects/1/",
+        "https://github.com/orgs/hq/projects/1/views/2", "https://github.com/orgs/hq/projects/1/views/2/" };
+    for (size_t i = 0; i < sizeof valid / sizeof *valid; i++) {
+        Json *setting = project_board_setting_from_url(valid[i]); CHECK(setting != NULL);
+        CHECK_INT(json_int_or(json_get(setting, "number"), 0), 1);
+        CHECK_INT(json_int_or(json_get(setting, "view"), 0), i < 2 ? 0 : 2); json_free(setting);
+    }
+    const char *invalid[] = { "https://github.com/orgs/hq/projects/1/extra", "https://github.com/orgs/hq/projects/1/views/",
+        "https://github.com/orgs/hq/projects/1/views/0", "https://github.com/orgs/hq/projects/1/views/2/extra",
+        "https://github.com/orgs/hq/projects/1/views/2//", "https://github.com/orgs//projects/1" };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; i++) CHECK(project_board_setting_from_url(invalid[i]) == NULL);
     Json *j = project_board_setting_from_url(" https://github.com/orgs/hq/projects/1/views/42?filterQuery=x ");
     CHECK(j != NULL);
     CHECK_STR(json_str(json_get(j, "owner")), "hq"); CHECK_STR(json_str(json_get(j, "ownerType")), "organization");

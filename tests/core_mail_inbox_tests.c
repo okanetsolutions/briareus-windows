@@ -36,6 +36,10 @@ static void bodies(void) {
     const char *bad[] = { NULL, "", "https://", "http://gmail.com", "javascript:alert(1)", "data:text/html,hello", "https://user@host/", "https://host\\evil/", "https://host/\nfile", "https://host/ a", "https://evil%40host/", "https://%65vil.example/" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(!mail_message_web_url_safe(bad[i]));
     CHECK(mail_message_web_url_safe("https://mail.google.com/mail/u/0/#inbox/id"));
+    CHECK(mail_message_web_url_safe("https://AZaz09-host.example:8443/message"));
+    CHECK(mail_message_web_url_safe("https://[::1]/message"));
+    CHECK(!mail_message_web_url_safe("https://host_name/message"));
+    CHECK(!mail_message_web_url_safe("https://host\177/message"));
 }
 static void pagination(void) {
     MailMessages all = {0}, p;

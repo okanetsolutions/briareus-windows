@@ -290,16 +290,19 @@ static void test_conversations_are_listed_with_their_pull_requests(void) {
 static void test_a_conversation_is_read_with_its_open_question(void) {
     const char *answers[] = { SESSIONS, "{\"session\":{\"id\":\"s2\",\"repo\":\"okanet/app\",\"title\":\"Issue #7: Dark mode\",\"status\":\"idle\"},\"events\":["
         "{\"seq\":1,\"kind\":\"user\",\"text\":\"Add **dark** mode\"},{\"seq\":2,\"kind\":\"tool\",\"name\":\"Bash\"},"
-        "{\"seq\":3,\"kind\":\"text\",\"text\":\"Done with the toggle.\"},{\"seq\":4,\"kind\":\"ask\",\"question\":\"Which default?\",\"options\":[{\"label\":\"Light\"},{\"label\":\"Dark\"}]}]}" };
+        "{\"seq\":3,\"kind\":\"result\",\"text\":\"Result summary\"},{\"seq\":4,\"kind\":\"text\",\"text\":\"Done with the toggle.\"},"
+        "{\"seq\":5,\"kind\":\"text\",\"text\":\"\"},{\"seq\":6,\"kind\":\"info\",\"text\":\"Internal log\"},"
+        "{\"seq\":7,\"kind\":\"ask\",\"question\":\"Which default?\",\"options\":[{\"label\":\"Light\"},{\"label\":\"Dark\"}]}]}" };
     Json *o = parsed(run_tool(MEET_TOOL_READ_CONVERSATION, "{\"session_id\":\"s2\"}", answers, 2));
     CHECK_STR(json_str(json_get(o, "status")), "waiting for an answer");
     CHECK_STR(json_str(json_get(o, "question")), "Which default?");
     CHECK_STR(json_str(json_at(json_get(o, "options"), 1)), "Dark");
     const Json *latest = json_get(o, "latest");
-    CHECK_INT((int)json_count(latest), 3);
+    CHECK_INT((int)json_count(latest), 4);
     CHECK_STR(json_str(json_get(json_at(latest, 0), "from")), "user");
     CHECK_STR(json_str(json_get(json_at(latest, 0), "text")), "Add dark mode");
     CHECK_STR(json_str(json_get(json_at(latest, 2), "from")), "agent");
+    CHECK_STR(json_str(json_get(json_at(latest, 1), "text")), "Result summary");
     json_free(o);
     // Another project's conversation is not read.
     o = parsed(run_tool(MEET_TOOL_READ_CONVERSATION, "{\"session_id\":\"s3\"}", answers, 2));

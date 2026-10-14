@@ -132,6 +132,7 @@ const char *code_language_name(const CodeLanguage *language) { return language ?
 static bool is_letter(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (unsigned char)c >= 0x80; }
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool is_hex(char c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+static bool is_variable_start(char c) { return is_letter(c) || c == '_' || c == '{'; }
 static bool is_word_char(char c) { return is_letter(c) || is_digit(c) || c == '_'; }
 static bool is_word_start(char c) { return is_letter(c) || c == '_' || c == '@' || c == '#'; }
 static char fold(char c) { return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c; }
@@ -235,7 +236,7 @@ CodeToken *code_lexer_line(CodeLexer *lexer, const char *s, size_t n, size_t *co
             emit(&t, i, end, CODE_STRING); i = plain = end;
             continue;
         }
-        if (l->dollar && c == '$' && i + 1 < n && (is_letter(s[i + 1]) || s[i + 1] == '_' || s[i + 1] == '{')) {
+        if (l->dollar && c == '$' && i + 1 < n && is_variable_start(s[i + 1])) {
             emit(&t, plain, i, CODE_PLAIN);
             size_t j = i + 1;
             if (s[j] == '{') { while (j < n && s[j] != '}') j++; j = j < n ? j + 1 : n; }

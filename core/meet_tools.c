@@ -265,6 +265,10 @@ static Json *list_conversations(const Json *args, const char *repo, const Json *
     return out;
 }
 
+static bool conversational_event(const Event *e) {
+    return str_eq(e->kind, "user") || str_eq(e->kind, "text") || str_eq(e->kind, "result") || str_eq(e->kind, "ask");
+}
+
 static Json *read_conversation(const Json *args, const char *repo, const Json *list, const Json *answer) {
     const char *id = json_str(json_get(args, "session_id"));
     size_t n; Session *sessions = project_sessions(list, repo, &n);
@@ -283,12 +287,12 @@ static Json *read_conversation(const Json *args, const char *repo, const Json *l
     size_t said = 0, from = t.count;
     while (from > 0 && said < 6) {
         const Event *e = &t.events[--from];
-        if ((str_eq(e->kind, "user") || str_eq(e->kind, "text") || str_eq(e->kind, "result") || str_eq(e->kind, "ask")) && (e->question || (e->text && *e->text))) said++;
+        if (conversational_event(e) && (e->question || (e->text && *e->text))) said++;
     }
     for (size_t i = from; i < t.count; i++) {
         const Event *e = &t.events[i];
         const char *text = e->question ? e->question : e->text;
-        if (!(str_eq(e->kind, "user") || str_eq(e->kind, "text") || str_eq(e->kind, "result") || str_eq(e->kind, "ask")) || !text || !*text) continue;
+        if (!conversational_event(e) || !text || !*text) continue;
         Json *line = json_object();
         json_set_str(line, "from", str_eq(e->kind, "user") ? "user" : "agent");
         set_cut(line, "text", text, 600);

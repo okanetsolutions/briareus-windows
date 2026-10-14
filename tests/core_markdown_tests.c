@@ -297,6 +297,10 @@ static void test_tripled_markers_are_bold_and_italic(void) {
     CHECK_OWNED_STR(spans_desc("a ___bi___ b"), "[:a ][BI:bi][: b]");
     CHECK_OWNED_STR(spans_desc("a___b___c"), "[:a___b___c]");
     CHECK_OWNED_STR(spans_desc("***open"), "[:***open]");
+    CHECK_OWNED_STR(spans_desc("___"), "[:___]");
+    CHECK_OWNED_STR(spans_desc("___ spaced___"), "[B:_ spaced][:_]");
+    CHECK_OWNED_STR(spans_desc("_prefix___tail___"), "[I:prefix][:__tail___]");
+    CHECK_OWNED_STR(spans_desc("word***emphasis***"), "[:word][BI:emphasis]");
 }
 
 static void test_italics_step_over_bold_inside_them(void) {
