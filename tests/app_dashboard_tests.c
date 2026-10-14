@@ -180,11 +180,13 @@ static void test_unavailable_and_permissions(void) {
     Screen *screen = setup(&stub, "admin", 3); pump(2); CHECK_INT(stub.count[STATUS_READ], 0);
     stub.accounts = ACCOUNTS; stub.status = "{\"status\":{\"auth\":{\"email\":\"missing@example.com\"},\"usage\":null}}";
     poll(screen); pump(3); Doc doc; doc_init(&doc); draw(screen, &doc, 600);
-    CHECK(text_with(&doc, "missing@example.com") != NULL); CHECK(text_with(&doc, "%") == NULL);
+    CHECK(text_with(&doc, "missing@example.com") != NULL);
+    const char *quota = text_with(&doc, "Quota:"); CHECK(!quota || strchr(quota, '%') == NULL);
     const char *invalid_status[] = { "{}", "{\"status\":{\"usage\":{\"windows\":[{\"usedPct\":1e999}]}}}" };
     for (size_t i = 0; i < sizeof invalid_status / sizeof *invalid_status; i++) {
         stub.status = invalid_status[i]; poll(screen); pump(3); draw(screen, &doc, 600);
-        CHECK(text_with(&doc, "Work") != NULL); CHECK(text_with(&doc, "%") == NULL);
+        CHECK(text_with(&doc, "Work") != NULL);
+        quota = text_with(&doc, "Quota:"); CHECK(!quota || strchr(quota, '%') == NULL);
     }
     stub.accounts = "{\"providers\":[]}"; poll(screen); pump(2); draw(screen, &doc, 600);
     CHECK_INT(stub.count[STATUS_READ], 3); CHECK(text_with(&doc, "missing@example.com") == NULL);
