@@ -116,6 +116,25 @@ static void test_clean_save_preserves_pending_sign_in(void) {
     cleanup(&f);
     setup(&f, false); CHECK(save_button(&f).enabled); save_failure(&f); CHECK_INT(f.fixture.writes, 1); cleanup(&f);
 }
+static void test_sign_in_callback_contract(void) {
+    Form f; setup(&f, true);
+    json_set_str(f.row, "signInUrl", "https://auth.example/?state=pending"); json_set_bool(f.row, "signInNeedsPaste", true); refresh(&f);
+    const char *callback = "http://localhost/?state=pending&code=private-code";
+    edit(&f, "Complete callback URL from the browser", callback);
+    HWND control = field(&f, "Complete callback URL from the browser");
+    screen_fixture_draw(f.screen, &f.doc); int i = screen_fixture_find(&f.doc, "Finish sign-in"); CHECK(i >= 0);
+    if (i >= 0) {
+        Item button = f.doc.items[i]; CHECK(button.action != 0);
+        f.screen->vt->action(f.screen, button.action, button.arg, (POINT){0}); screen_fixture_pump(&f.fixture, 1);
+        CHECK_INT(f.fixture.writes, 1); CHECK_STR(f.fixture.method, "POST");
+        CHECK_STR(f.fixture.url, "https://example.com/api/v1/settings/mcp/servers/123/finish-sign-in");
+        CHECK_STR(json_str(json_get(f.fixture.body, "url")), callback); CHECK_INT(GetWindowTextLengthW(control), 0);
+        f.screen->vt->action(f.screen, button.action, button.arg, (POINT){0}); CHECK_INT(f.fixture.writes, 1);
+        screen_fixture_draw(f.screen, &f.doc);
+        for (size_t k = 0; k < f.doc.count; k++) if (f.doc.items[k].text) CHECK(strstr(f.doc.items[k].text, "private-code") == NULL);
+    }
+    cleanup(&f);
+}
 static void test_normalized_endpoint_partial_updates(void) {
     Form f; setup(&f, true); Str endpoint; str_init(&endpoint); str_appendz(&endpoint, "https://mcp.example/");
     for (int i = 0; i < 300; i++) str_appendz(&endpoint, "%E4%B8%AD");
@@ -250,6 +269,7 @@ void app_mcp_settings_tests(void) {
     test_run("MCP linked form retains assignments and validates disabled empty selections", test_assignments_and_disabled_empty_selection);
     test_run("MCP refresh preserves drafts until actual conflict confirmation or reload", test_clean_refresh_and_dirty_conflict);
     test_run("MCP clean saves and status polls preserve pending OAuth callbacks", test_clean_save_preserves_pending_sign_in);
+    test_run("MCP sign-in callbacks send the deployed contract once and erase private input on failure", test_sign_in_callback_contract);
     test_run("MCP partial updates omit stored normalized endpoints and validate replacements", test_normalized_endpoint_partial_updates);
     test_run("MCP metadata updates preserve connections and send explicit secret changes", test_metadata_updates_preserve_connection);
     test_run("MCP uncertain and postcommit failed creates reconcile names without automatic retries", test_uncertain_create_reconciliation);
