@@ -11,7 +11,7 @@ static Screen *setup(ScreenFixture *f) {
     screen_fixture_init(f, ROUTES, 2); f->read_response = ACCOUNTS;
     // A rejected exchange lets us inspect consent without launching a browser.
     f->write_status = 409;
-    Screen *s = mail_settings_screen_new(); s->vt->visible(s, true); screen_fixture_pump(f, 1); return s;
+    Screen *s = mail_settings_screen_new(); screen_fixture_pane(f, s); s->vt->visible(s, true); screen_fixture_pump(f, 1); return s;
 }
 static void explicit_management(void) {
     ScreenFixture f; Screen *s = setup(&f); Doc doc; doc_init(&doc);
