@@ -25,6 +25,7 @@ void app_mail_inbox_tests(void);
 void app_mail_delete_tests(void);
 void repo_index_tests(void);
 void usage_tests(void);
+void pull_conversation_tests(void);
 
 // app_tests.exe
 void app_find_tests(void);

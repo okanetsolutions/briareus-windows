@@ -2,6 +2,8 @@
 #include "credentials.h"
 #include "dialogs.h"
 #include "meeting.h"
+#include "markdown.h"
+#include "pull_conversation.h"
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
@@ -1005,7 +1007,6 @@ enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_STAR
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
 
 /// One of the Conversation tab's lists, read page by page: `incoming` fills up and replaces `items` once the last page is in.
-enum { CONV_COMMENTS, CONV_REVIEWS, CONV_REVIEW_COMMENTS, CONV_FEEDS };
 static const struct { const char *op, *field; } conv_feeds[CONV_FEEDS] = {
     { "pull_comments", "comments" }, { "pull_reviews", "reviews" }, { "pull_review_comments", "reviewComments" },
 };
@@ -1636,7 +1637,6 @@ static bool conv_read(PullScreen *s) {
     for (int k = 0; k < CONV_FEEDS; k++) if (store_supports(conv_feeds[k].op) && !s->conv[k].read) return false;
     return true;
 }
-static size_t conv_count(PullScreen *s);
 
 /// `tabnav`: Sessions, PR Body, Conversation, Files changed, Commits, Checks and Findings with their counts (doc_tab),
 /// and the diffstat at the right.
@@ -1690,7 +1690,7 @@ static void layout_tabs(PullScreen *s, Doc *doc, Col c) {
     if (store_supports(conv_feeds[CONV_COMMENTS].op)) {
         // The messages once they are read; until then the board's count of conversation comments.
         double comments = 0;
-        bool has_count = conv_read(s) ? (comments = (double)conv_count(s), true) : row && json_num(json_get(row->raw, "comments"), &comments);
+        bool has_count = conv_read(s) ? (comments = (double)pull_conversation_count(s->conv[CONV_COMMENTS].items, s->conv[CONV_REVIEWS].items, s->conv[CONV_REVIEW_COMMENTS].items), true) : row && json_num(json_get(row->raw, "comments"), &comments);
         if (has_count) snprintf(count, sizeof count, "%d", (int)comments);
         doc_tab(doc, &x, &y, c.ix, right, h, 0xE8BD, "Conversation", has_count ? count : NULL, s->tab == PR_TAB_CONVERSATION, ACT_PR_TAB, PR_TAB_CONVERSATION);
     }
@@ -1745,28 +1745,6 @@ static void paint_comment_head(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT t = { x, rc->top, rc->right - px(16), rc->bottom };
     draw_text(cv, d->when, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
-/// What GitHub shows of a description: without HTML comments and raw HTML lines (bots' badges and footers), code blocks kept whole.
-static char *visible_markdown(const char *body) {
-    Str bare; str_init(&bare);
-    for (const char *p = body; *p;) {
-        if (str_has_prefix(p, "<!--")) { const char *end = strstr(p + 4, "-->"); if (!end) break; p = end + 3; continue; }
-        str_appendf(&bare, "%c", *p++);
-    }
-    Str out; str_init(&out);
-    bool fenced = false;
-    for (const char *p = bare.data ? bare.data : ""; *p;) {
-        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
-        char *line = xstrndup(p, n), *t = str_trim(line);
-        if (str_has_prefix(t, "```")) fenced = !fenced;
-        if (fenced || str_has_prefix(t, "```") || *t != '<') str_appendf(&out, "%s\n", line);
-        free(t); free(line);
-        p = e ? e + 1 : p + n;
-    }
-    str_free(&bare);
-    char *result = str_trim(out.data ? out.data : "");
-    str_free(&out);
-    return result;
-}
 /// A timeline comment: a box opened with its header (`h`, which is taken). Returns the box for doc_box_end, with the
 /// inner column in `ix`/`iw`. A header with an action opens the comment on GitHub.
 static int comment_begin(Doc *doc, Col c, CommentHeadData *h, int action, intptr_t arg, int *ix, int *iw) {
@@ -1804,26 +1782,6 @@ static void layout_description(PullScreen *s, Doc *doc, Col c) {
 
 // The Conversation tab: GitHub's timeline of conversation comments, reviews and the line comments they carry.
 
-/// When a comment or review was made, 0 when the server left it out.
-static time_t conv_time(const Json *v, const char *field) { time_t t; return board_date_parse(json_str(json_get(v, field)), &t) ? t : 0; }
-static bool conv_find(const Json *list, const Json *id, size_t *out) {
-    double want, have;
-    if (!json_num(id, &want)) return false;
-    for (size_t i = 0; i < json_count(list); i++) if (json_num(json_get(json_at(list, i), "id"), &have) && have == want) { *out = i; return true; }
-    return false;
-}
-/// The comment a line comment's thread starts with: each reply points at the comment it answers.
-static size_t conv_thread_root(const Json *lines, size_t i) {
-    size_t parent;
-    for (int hop = 0; hop < 64 && conv_find(lines, json_get(json_at(lines, i), "inReplyTo"), &parent) && parent != i; hop++) i = parent;
-    return i;
-}
-/// The submitted review a thread is shown under, when the server listed it.
-static bool conv_thread_review(PullScreen *s, size_t root, size_t *review) {
-    const Json *reviews = s->conv[CONV_REVIEWS].items;
-    return conv_find(reviews, json_get(json_at(s->conv[CONV_REVIEW_COMMENTS].items, root), "reviewId"), review)
-        && !str_ieq(json_str(json_get(json_at(reviews, *review), "state")), "pending");
-}
 /// A review's verdict as its header words it, with its glyph; NULL for a plain comment review.
 static const char *review_verdict(const Json *review, wchar_t *glyph, COLORREF *color) {
     const char *state = json_str(json_get(review, "state"));
@@ -1833,62 +1791,13 @@ static const char *review_verdict(const Json *review, wchar_t *glyph, COLORREF *
     *glyph = 0xE8BD; *color = theme.muted;
     return NULL;
 }
-static bool has_visible_body(const Json *v) {
-    const char *body = json_str(json_get(v, "body"));
-    if (!body) return false;
-    char *t = visible_markdown(body); bool has = *t != 0; free(t);
-    return has;
-}
-/// A review says something of its own with a verdict or a summary; one that only holds line comments is shown for them.
-static bool review_speaks(const Json *review) {
-    wchar_t g; COLORREF cc;
-    if (str_ieq(json_str(json_get(review, "state")), "pending")) return false;
-    return review_verdict(review, &g, &cc) || has_visible_body(review);
-}
-static bool review_has_threads(PullScreen *s, size_t r) {
-    const Json *lines = s->conv[CONV_REVIEW_COMMENTS].items;
-    size_t rv;
-    for (size_t i = 0; i < json_count(lines); i++) if (conv_thread_root(lines, i) == i && conv_thread_review(s, i, &rv) && rv == r) return true;
-    return false;
-}
-/// The messages in the conversation: every comment, every line comment and each review with a verdict or summary.
-static size_t conv_count(PullScreen *s) {
-    const Json *reviews = s->conv[CONV_REVIEWS].items;
-    size_t n = json_count(s->conv[CONV_COMMENTS].items) + json_count(s->conv[CONV_REVIEW_COMMENTS].items);
-    for (size_t i = 0; i < json_count(reviews); i++) if (review_speaks(json_at(reviews, i))) n++;
-    return n;
-}
-/// The timeline, oldest first: comments, reviews, and line comment threads whose review is not listed.
-typedef struct { int feed; size_t i; time_t at; } ConvEntry;
-static int conv_entry_cmp(const void *a, const void *b) {
-    const ConvEntry *x = a, *y = b;
-    if (x->at != y->at) return x->at < y->at ? -1 : 1;
-    if (x->feed != y->feed) return x->feed - y->feed;
-    return x->i < y->i ? -1 : x->i > y->i;
-}
-static ConvEntry *conv_timeline(PullScreen *s, size_t *n) {
-    const Json *comments = s->conv[CONV_COMMENTS].items, *reviews = s->conv[CONV_REVIEWS].items, *lines = s->conv[CONV_REVIEW_COMMENTS].items;
-    ConvEntry *e = xcalloc(json_count(comments) + json_count(reviews) + json_count(lines) + 1, sizeof *e);
-    *n = 0;
-    for (size_t i = 0; i < json_count(comments); i++) e[(*n)++] = (ConvEntry){ CONV_COMMENTS, i, conv_time(json_at(comments, i), "createdAt") };
-    for (size_t i = 0; i < json_count(reviews); i++) {
-        const Json *r = json_at(reviews, i);
-        if (str_ieq(json_str(json_get(r, "state")), "pending")) continue;
-        if (review_speaks(r) || review_has_threads(s, i)) e[(*n)++] = (ConvEntry){ CONV_REVIEWS, i, conv_time(r, "submittedAt") };
-    }
-    size_t rv;
-    for (size_t i = 0; i < json_count(lines); i++)
-        if (conv_thread_root(lines, i) == i && !conv_thread_review(s, i, &rv)) e[(*n)++] = (ConvEntry){ CONV_REVIEW_COMMENTS, i, conv_time(json_at(lines, i), "createdAt") };
-    qsort(e, *n, sizeof *e, conv_entry_cmp);
-    return e;
-}
 static intptr_t conv_arg(int feed, size_t i) { return ((intptr_t)feed << 24) | (intptr_t)i; }
 /// The header of a timeline entry: `author did · 3h ago`.
 static CommentHeadData *conv_head(const Json *v, const char *did, const char *time_field) {
     CommentHeadData *h = xcalloc(1, sizeof *h);
     const char *author = json_str(json_get(v, "author"));
     h->author = xstrdup(author ? author : "Someone");
-    time_t at = conv_time(v, time_field);
+    time_t at = pull_conversation_time(v, time_field);
     if (at) { char *rel = format_relative(at); h->when = xstrfmt("%s \xC2\xB7 %s", did, rel); free(rel); }
     else h->when = xstrdup(did);
     return h;
@@ -1918,14 +1827,14 @@ static void layout_thread(PullScreen *s, Doc *doc, int x, int w, size_t root) {
     doc_space(doc, px(8));
     doc_rule(doc, x, w);
     for (size_t i = 0; i < json_count(lines); i++) {
-        if (conv_thread_root(lines, i) != root) continue;
+        if (pull_thread_root(lines, i) != root) continue;
         const Json *cm = json_at(lines, i);
         doc_space(doc, px(10));
         int y = doc->y, h = px(20), ix = x + px(12), iw = w - px(24);
         const char *author = json_str(json_get(cm, "author")); if (!author) author = "Someone";
         int aw = text_width(doc->cv, author, FONT_FOOTNOTE_SEMIBOLD); if (aw > iw) aw = iw;
         RECT a = { ix, y, ix + aw + px(2), y + h }; doc_text_at(doc, &a, author, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        time_t at = conv_time(cm, "createdAt");
+        time_t at = pull_conversation_time(cm, "createdAt");
         if (at) { char *rel = format_relative(at); RECT t = { ix + aw + px(8), y, ix + iw, y + h }; doc_text_at(doc, &t, rel, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS); free(rel); }
         doc->y = y + h + px(4);
         layout_comment_body(doc, ix, iw, cm);
@@ -1937,10 +1846,10 @@ static void layout_conversation(PullScreen *s, Doc *doc, Col c) {
     for (int k = 0; k < CONV_FEEDS; k++) if (s->conv[k].error) { doc_notice(doc, c.x, c.w, s->conv[k].error); doc_space(doc, px(12)); break; }
     if (!conv_read(s)) { doc_loading(doc, c.x, c.w, "Loading the conversation\xE2\x80\xA6"); return; }
     size_t n;
-    ConvEntry *entries = conv_timeline(s, &n);
+    PullConversationEntry *entries = pull_conversation_timeline(s->conv[CONV_COMMENTS].items, s->conv[CONV_REVIEWS].items, s->conv[CONV_REVIEW_COMMENTS].items, &n);
     const Json *lines = s->conv[CONV_REVIEW_COMMENTS].items;
     for (size_t e = 0; e < n; e++) {
-        const ConvEntry *en = &entries[e];
+        const PullConversationEntry *en = &entries[e];
         const Json *v = json_at(s->conv[en->feed].items, en->i);
         int ix, iw, box, action = safe_web_url(json_str(json_get(v, "url"))) ? ACT_CONV_URL : 0;
         if (e) doc_space(doc, px(16));
@@ -1956,7 +1865,7 @@ static void layout_conversation(PullScreen *s, Doc *doc, Col c) {
             bool any = layout_comment_body(doc, ix, iw, v);
             size_t rv;
             for (size_t i = 0; i < json_count(lines); i++) {
-                if (conv_thread_root(lines, i) != i || !conv_thread_review(s, i, &rv) || rv != en->i) continue;
+                if (pull_thread_root(lines, i) != i || !pull_thread_review(lines, s->conv[CONV_REVIEWS].items, i, &rv) || rv != en->i) continue;
                 if (any) doc_space(doc, px(10));
                 layout_thread(s, doc, ix, iw, i);
                 any = true;
