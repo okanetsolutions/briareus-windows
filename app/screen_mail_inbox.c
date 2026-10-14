@@ -2,6 +2,7 @@
 #include "screens.h"
 #include "dialogs.h"
 #include "mail.h"
+#include "mail_group.h"
 #include "mail_inbox.h"
 #include "mail_settings.h"
 #include "str.h"
@@ -219,11 +220,6 @@ static void edit_filter(Inbox *s, int act) {
     } else { if (!s->accounts_loaded || !s->loaded) load_accounts(s); if (s->selected_id && !s->body.id) load_body(s); arm(s); }
 }
 
-typedef struct {
-    int primary, *members, day;
-    size_t count;
-    bool unread, starred, notification;
-} Convo;
 typedef struct { RECT mailbox, folder, group; } Anchors;
 
 static int day_key(double ms) {
@@ -249,58 +245,12 @@ static char *day_title(int key) {
     if (month < 1 || month > 12) return xstrdup("UNDATED");
     return xstrfmt("%s %d", mon[month - 1], day);
 }
-static bool is_notification(const MailMessage *m) {
-    static const char *const labels[] = { "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_SOCIAL", "CATEGORY_FORUMS" };
-    for (size_t i = 0; i < m->label_count; i++)
-        for (size_t k = 0; k < sizeof labels / sizeof *labels; k++)
-            if (m->labels[i] && str_eq(m->labels[i], labels[k])) return true;
-    const char *s = m->sender ? m->sender : "";
-    return str_icontains(s, "noreply") || str_icontains(s, "no-reply") || str_icontains(s, "donotreply")
-        || str_icontains(s, "notifications@") || str_icontains(s, "notify@") || str_icontains(s, "mailer-daemon");
-}
-static bool same_thread(const MailMessage *a, const MailMessage *b) {
-    return a->account_id == b->account_id && !str_empty(a->thread_id) && str_eq(a->thread_id, b->thread_id);
-}
-static void free_convos(Convo *rows, size_t n) {
-    if (!rows) return;
-    for (size_t i = 0; i < n; i++) free(rows[i].members);
-    free(rows);
-}
-static void build_convos(const Inbox *s, Convo **out, size_t *count) {
-    *out = NULL; *count = 0;
-    if (!s->messages.count) return;
-    bool *used = xcalloc(s->messages.count, sizeof *used);
-    Convo *rows = NULL; size_t n = 0, cap = 0;
-    for (size_t i = 0; i < s->messages.count; i++) {
-        if (used[i]) continue;
-        if (n == cap) { cap = cap ? cap * 2 : 8; rows = xrealloc(rows, cap * sizeof *rows); }
-        Convo *c = &rows[n++];
-        memset(c, 0, sizeof *c);
-        c->primary = (int)i;
-        c->day = day_key(s->messages.messages[i].received_at);
-        size_t mc = 0, mcap = 4;
-        int *members = xcalloc(mcap, sizeof *members);
-        for (size_t k = i; k < s->messages.count; k++) {
-            if (k != i && (s->group != GROUP_THREADS || !same_thread(&s->messages.messages[i], &s->messages.messages[k]))) continue;
-            used[k] = true;
-            if (mc == mcap) { mcap *= 2; members = xrealloc(members, mcap * sizeof *members); }
-            members[mc++] = (int)k;
-            if (!s->messages.messages[k].is_read) c->unread = true;
-            if (s->messages.messages[k].is_starred) c->starred = true;
-        }
-        for (size_t a = 0, b = mc; a + 1 < b; a++) { b--; int tmp = members[a]; members[a] = members[b]; members[b] = tmp; }
-        c->members = members; c->count = mc;
-        c->notification = is_notification(&s->messages.messages[c->primary]);
-    }
-    free(used);
-    *out = rows; *count = n;
-}
-static bool convo_shown(const Inbox *s, const Convo *c) {
+static bool convo_shown(const Inbox *s, const MailGroup *c) {
     if (s->kind == KIND_ALL) return true;
     if (s->kind == KIND_NOTES) return c->notification;
     return !c->notification;
 }
-static bool convo_open(const Inbox *s, const Convo *c) {
+static bool convo_open(const Inbox *s, const MailGroup *c) {
     if (!s->selected_id) return false;
     for (size_t i = 0; i < c->count; i++) {
         const MailMessage *m = &s->messages.messages[c->members[i]];
@@ -309,14 +259,15 @@ static bool convo_open(const Inbox *s, const Convo *c) {
     return false;
 }
 static int convo_primary_for(const Inbox *s, int message) {
-    Convo *rows; size_t n; build_convos(s, &rows, &n);
+    MailGroups groups = mail_groups_build(&s->messages, s->group == GROUP_THREADS);
+    MailGroup *rows = groups.groups; size_t n = groups.count;
     int primary = message;
     for (size_t i = 0; i < n; i++) for (size_t k = 0; k < rows[i].count; k++)
         if (rows[i].members[k] == message) primary = rows[i].primary;
-    free_convos(rows, n);
+    mail_groups_free(&groups);
     return primary;
 }
-static const Convo *convo_for_selection(const Inbox *s, const Convo *rows, size_t n) {
+static const MailGroup *convo_for_selection(const Inbox *s, const MailGroup *rows, size_t n) {
     for (size_t i = 0; i < n; i++) if (convo_open(s, &rows[i])) return &rows[i];
     return NULL;
 }
@@ -438,10 +389,11 @@ static void cycle_account(Inbox *s) {
     reload(s);
 }
 static void move_focus(Inbox *s, int delta) {
-    Convo *rows; size_t n; build_convos(s, &rows, &n);
+    MailGroups groups = mail_groups_build(&s->messages, s->group == GROUP_THREADS);
+    MailGroup *rows = groups.groups; size_t n = groups.count;
     int *shown = xcalloc(n ? n : 1, sizeof *shown); int sn = 0;
     for (size_t i = 0; i < n; i++) if (convo_shown(s, &rows[i])) shown[sn++] = rows[i].primary;
-    free_convos(rows, n);
+    mail_groups_free(&groups);
     if (!sn) { free(shown); return; }
     int at = -1;
     for (int i = 0; i < sn; i++) if (shown[i] == s->focus_message) at = i;
@@ -773,7 +725,7 @@ static void layout_attachment(Doc *doc, int x, int w, const MailAttachment *a) {
     Item *it = doc_item(doc, doc_custom(doc, x, w, px(36), paint_attach, d, attach_free, 0, 0));
     it->text = xstrfmt("%s | %s | %.0f bytes", name, type, a->size);
 }
-static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const Convo *rows, size_t nrow, bool available, Anchors *anchors) {
+static void layout_chrome(Inbox *s, Doc *doc, int x, int w, const MailGroup *rows, size_t nrow, bool available, Anchors *anchors) {
     int people = 0, notes = 0;
     for (size_t i = 0; i < nrow; i++) { if (rows[i].notification) notes++; else people++; }
     int h = px(34), y = doc->y, gap = px(8);
@@ -879,7 +831,7 @@ static void layout_day(Doc *doc, int x, int w, int day, int convos, int messages
     free(title); free(meta);
     doc->y = y + h + px(6);
 }
-static void layout_row(Inbox *s, Doc *doc, int x, int w, const Convo *c) {
+static void layout_row(Inbox *s, Doc *doc, int x, int w, const MailGroup *c) {
     const MailMessage *m = &s->messages.messages[c->primary];
     bool open = convo_open(s, c), focused = s->focus_message == c->primary;
     COLORREF fill = open ? blend(theme.accent, theme.canvas, theme.dark ? 0.20 : 0.10) : theme.canvas;
@@ -932,7 +884,7 @@ static void layout_row(Inbox *s, Doc *doc, int x, int w, const Convo *c) {
     if (store_supports("mail_message")) doc_box_action(doc, box, ACT_SELECT, c->primary);
     doc->y += px(4);
 }
-static void layout_list(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, int w, bool available) {
+static void layout_list(Inbox *s, Doc *doc, const MailGroup *rows, size_t n, int x, int w, bool available) {
     if (s->list_error) { doc_notice(doc, x, w, s->list_error); doc_button(doc, x, 0, "Retry list", BUTTON_BORDERED, ACT_RETRY_LIST, 0, available && !s->list_read); doc_space(doc, px(8)); }
     if (s->list_read) { doc_loading(doc, x, w, "Loading messages..."); doc_space(doc, px(6)); }
     if (s->loaded && !s->messages.count) {
@@ -944,16 +896,17 @@ static void layout_list(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, 
     int last_day = -2;
     for (size_t i = 0; i < n; i++) {
         if (!convo_shown(s, &rows[i])) continue;
-        if (rows[i].day != last_day) {
+        int day = day_key(s->messages.messages[rows[i].primary].received_at);
+        if (day != last_day) {
             int convos = 0, messages = 0;
             // A hidden conversation between two shown ones on this day is skipped. The tally stops only when the day changes.
-            for (size_t k = i; k < n && rows[k].day == rows[i].day; k++) {
+            for (size_t k = i; k < n && day_key(s->messages.messages[rows[k].primary].received_at) == day; k++) {
                 if (!convo_shown(s, &rows[k])) continue;
                 convos++;
                 messages += (int)rows[k].count;
             }
-            layout_day(doc, x, w, rows[i].day, convos, messages);
-            last_day = rows[i].day;
+            layout_day(doc, x, w, day, convos, messages);
+            last_day = day;
         }
         layout_row(s, doc, x, w, &rows[i]);
     }
@@ -1015,7 +968,7 @@ static void layout_block(Inbox *s, Doc *doc, int x, int w, int index) {
         if (store_supports("mail_message")) { doc->items[i].action = ACT_SELECT; doc->items[i].arg = index; doc->items[i].hand = true; }
     }
 }
-static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x, int w, bool available) {
+static void layout_reader(Inbox *s, Doc *doc, const MailGroup *rows, size_t n, int x, int w, bool available) {
     int pad = px(20);
     int box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
     int ix = x + pad, iw = w - pad * 2;
@@ -1053,7 +1006,7 @@ static void layout_reader(Inbox *s, Doc *doc, const Convo *rows, size_t n, int x
     if (s->body_read) doc_loading(doc, ix, iw, "Loading message body...");
     else if (!s->body.id) doc_button(doc, ix, 0, "Retry message", BUTTON_BORDERED, ACT_RETRY_BODY, 0, available && store_supports("mail_message"));
     if (s->body.id) {
-        const Convo *c = convo_for_selection(s, rows, n);
+        const MailGroup *c = convo_for_selection(s, rows, n);
         const MailMessage *head = c ? &s->messages.messages[c->primary] : &s->body;
         doc_text(doc, ix, iw, subject_of(head), FONT_TITLE, theme.ink, DT_WORDBREAK);
         doc_space(doc, px(6));
@@ -1168,8 +1121,8 @@ static void layout(Screen *base, Doc *doc) {
     if (!mail_inbox_offered()) { clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) clear_selection(s);
     bool available = ready(s);
-    Convo *rows = NULL; size_t nrow = 0;
-    build_convos(s, &rows, &nrow);
+    MailGroups groups = mail_groups_build(&s->messages, s->group == GROUP_THREADS);
+    MailGroup *rows = groups.groups; size_t nrow = groups.count;
     Anchors anchors; memset(&anchors, 0, sizeof anchors);
     layout_chrome(s, doc, x, w, rows, nrow, available, &anchors);
     if (s->notice) { doc_notice(doc, x, w, s->notice); doc_space(doc, px(8)); }
@@ -1181,7 +1134,7 @@ static void layout(Screen *base, Doc *doc) {
         int menu_bottom = layout_menu(s, doc, &anchors);
         if (doc->y < menu_bottom) doc->y = menu_bottom;
         doc_pin(doc, pin_at, s->chrome_bottom);
-        free_convos(rows, nrow);
+        mail_groups_free(&groups);
         return;
     }
     if (!s->accounts.count && !s->account_error) {
@@ -1231,7 +1184,7 @@ static void layout(Screen *base, Doc *doc) {
     if (content_bottom > doc->y) doc->y = content_bottom;
     if (menu_bottom > doc->y) doc->y = menu_bottom;
     doc_pin(doc, pin_at, s->chrome_bottom);
-    free_convos(rows, nrow);
+    mail_groups_free(&groups);
 }
 static void refresh(Screen *base) { Inbox *s = (Inbox *)base; if (ready(s)) reload(s); }
 static void timer(Screen *base, UINT id) {

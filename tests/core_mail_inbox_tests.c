@@ -1,5 +1,6 @@
 // Fixtures match nadinyamaui/briareus mail merge 4eba29400a1bd0a7072a9991395332fbd710f6bf.
 #include "mail.h"
+#include "mail_group.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
@@ -87,7 +88,88 @@ static void filters(void) {
     for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) CHECK(!str_empty(mail_read_error(statuses[i], false)));
     CHECK(strstr(mail_read_error(404, true), "removed") != NULL);
 }
+static void conversations(void) {
+    MailMessage rows[] = {
+        { .account_id = 7, .id = "latest", .thread_id = "shared", .sender = "Person <person@example.com>", .received_at = 400, .is_read = true },
+        { .account_id = 8, .id = "other-account", .thread_id = "shared", .sender = "notify@example.com", .received_at = 300, .is_read = true },
+        { .account_id = 7, .id = "middle", .thread_id = "shared", .sender = "no-reply@example.com", .received_at = 200, .is_starred = true },
+        { .account_id = 7, .id = "oldest", .thread_id = "shared", .received_at = 100, .is_read = true },
+    };
+    MailMessages messages = { .messages = rows, .count = sizeof rows / sizeof *rows };
+    MailGroups groups = mail_groups_build(&messages, true);
+    CHECK_INT(groups.count, 2);
+    CHECK_INT(groups.groups[0].primary, 0); CHECK_INT(groups.groups[0].count, 3);
+    CHECK_INT(groups.groups[0].members[0], 3); CHECK_INT(groups.groups[0].members[1], 2); CHECK_INT(groups.groups[0].members[2], 0);
+    CHECK(groups.groups[0].unread && groups.groups[0].starred);
+    CHECK(!groups.groups[0].notification); // The primary controls classification, even when an older member is automated.
+    CHECK_INT(groups.groups[1].primary, 1); CHECK_INT(groups.groups[1].members[0], 1);
+    CHECK(!groups.groups[1].unread && !groups.groups[1].starred && groups.groups[1].notification);
+    CHECK_STR(rows[0].id, "latest"); CHECK(rows[0].is_read); CHECK(!rows[2].is_read);
+    mail_groups_free(&groups); CHECK(groups.groups == NULL && groups.count == 0);
+    mail_groups_free(&groups);
+}
+static void separate_messages(void) {
+    MailMessage rows[] = {
+        { .account_id = 7, .thread_id = NULL, .is_read = true },
+        { .account_id = 7, .thread_id = "", .is_read = true },
+        { .account_id = 7, .thread_id = NULL, .is_starred = true },
+        { .account_id = 7, .thread_id = "thread", .is_read = true },
+        { .account_id = 7, .thread_id = "thread", .is_read = true },
+    };
+    MailMessages messages = { .messages = rows, .count = sizeof rows / sizeof *rows };
+    MailGroups groups = mail_groups_build(&messages, true);
+    CHECK_INT(groups.count, 4);
+    for (size_t i = 0; i < 3; i++) {
+        CHECK_INT(groups.groups[i].primary, i); CHECK_INT(groups.groups[i].count, 1); CHECK_INT(groups.groups[i].members[0], i);
+    }
+    CHECK_INT(groups.groups[3].count, 2); CHECK_INT(groups.groups[3].members[0], 4); CHECK_INT(groups.groups[3].members[1], 3);
+    mail_groups_free(&groups);
+    groups = mail_groups_build(&messages, false); CHECK_INT(groups.count, 5);
+    for (size_t i = 0; i < groups.count; i++) {
+        CHECK_INT(groups.groups[i].primary, i); CHECK_INT(groups.groups[i].count, 1); CHECK_INT(groups.groups[i].members[0], i);
+    }
+    CHECK(!groups.groups[1].unread && !groups.groups[1].starred);
+    CHECK(groups.groups[2].unread && groups.groups[2].starred);
+    mail_groups_free(&groups);
+    messages = (MailMessages){0}; groups = mail_groups_build(&messages, true);
+    CHECK(groups.groups == NULL && groups.count == 0); mail_groups_free(&groups);
+}
+static void large_conversations(void) {
+    MailMessage rows[16] = {0};
+    for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
+        rows[i].account_id = 7; rows[i].thread_id = xstrfmt("thread-%d", i < 6 ? 0 : (int)i);
+        rows[i].is_read = true;
+    }
+    MailMessages messages = { .messages = rows, .count = sizeof rows / sizeof *rows };
+    MailGroups groups = mail_groups_build(&messages, true);
+    CHECK_INT(groups.count, 11); CHECK_INT(groups.groups[0].count, 6);
+    CHECK_INT(groups.groups[0].primary, 0); CHECK_INT(groups.groups[0].members[0], 5); CHECK_INT(groups.groups[0].members[5], 0);
+    CHECK_INT(groups.groups[10].primary, 15); CHECK_INT(groups.groups[10].members[0], 15);
+    mail_groups_free(&groups);
+    for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) free(rows[i].thread_id);
+}
+static void notification_classification(void) {
+    MailMessage m = {0}; CHECK(!mail_message_is_notification(&m));
+    char *labels[] = { NULL, "INBOX", "CATEGORY_PROMOTIONS" };
+    m.labels = labels; m.label_count = sizeof labels / sizeof *labels;
+    const char *categories[] = { "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_SOCIAL", "CATEGORY_FORUMS" };
+    for (size_t i = 0; i < sizeof categories / sizeof *categories; i++) {
+        labels[2] = (char *)categories[i]; CHECK(mail_message_is_notification(&m));
+    }
+    labels[2] = "category_updates"; CHECK(!mail_message_is_notification(&m));
+    const char *senders[] = { "NoReply@example.com", "Sender <NO-REPLY@example.com>", "DONOTREPLY@example.com",
+        "NOTIFICATIONS@example.com", "NOTIFY@example.com", "MAILER-DAEMON@example.com" };
+    for (size_t i = 0; i < sizeof senders / sizeof *senders; i++) {
+        m.sender = (char *)senders[i]; CHECK(mail_message_is_notification(&m));
+    }
+    m.sender = "Person <person@example.com>"; CHECK(!mail_message_is_notification(&m));
+    m.sender = ""; CHECK(!mail_message_is_notification(&m));
+}
 void mail_inbox_tests(void) {
+    test_run("mail conversations isolate accounts and aggregate member flags without changing messages", conversations);
+    test_run("mail conversation modes keep absent thread IDs and ungrouped messages separate", separate_messages);
+    test_run("mail conversation ownership supports many groups and a long thread", large_conversations);
+    test_run("mail notification classification recognizes category labels and automated senders", notification_classification);
     test_run("mail models retain only literal text with attachment metadata and safe provider URLs", bodies);
     test_run("mail cursor pages deduplicate account+id and preserve newest-first order", pagination);
     test_run("mail account removal and reauth purge private rows and old pagination", privacy);
