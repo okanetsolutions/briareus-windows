@@ -103,7 +103,8 @@ static void read_done(void *owner, Request *r) {
     repaint(s);
 }
 static void load(MailScreen *s) {
-    if (!s->shown || s->blocked || s->modal || s->read || s->write || !g_store.active || !mail_settings_offered()) return;
+    if (!s->shown || s->blocked || s->modal) return;
+    if (s->read || s->write || !g_store.active || !mail_settings_offered()) return;
     ULONGLONG tick = GetTickCount64();
     if (tick < s->retry_until) { arm(s, (int)(s->retry_until - tick)); return; }
     if (tick < s->next_read) { arm(s, (int)(s->next_read - tick)); return; }

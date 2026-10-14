@@ -4,6 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool form_shortcut_character(WPARAM character, bool multiline) {
+    switch (character) {
+    case '\t': case 0x13: case 0x01: case 0x1B: return true;
+    case '\r': return !multiline;
+    default: return false;
+    }
+}
+
 // MARK: - Polling
 
 void poller_start(Poller *p, Pane *pane, UINT timer_id, int base_ms) {

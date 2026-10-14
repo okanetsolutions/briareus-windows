@@ -324,7 +324,7 @@ static void initials_of(const char *name, char out[3]) {
     out[0] = out[1] = out[2] = 0;
     int n = 0; bool start = true;
     for (const unsigned char *p = (const unsigned char *)(name ? name : ""); *p && n < 2; p++) {
-        if (*p == ' ' || *p == '<' || *p == '@' || *p == '.' || *p == '-' || *p == '_') { start = true; continue; }
+        if (strchr(" <@.-_", *p)) { start = true; continue; }
         if (start && ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))) {
             out[n++] = (char)(*p >= 'a' ? *p - 32 : *p);
             start = false;
@@ -1250,7 +1250,8 @@ static void activated(Screen *base, bool active) {
 }
 static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     Inbox *s = (Inbox *)base;
-    if (ctrl || shift || !s->shown || s->modal || s->deletion || !mail_inbox_offered()) return false;
+    if (ctrl || shift) return false;
+    if (!s->shown || s->modal || s->deletion || !mail_inbox_offered()) return false;
     if (vk == VK_ESCAPE) {
         if (s->menu) { s->menu = MENU_NONE; repaint(s); return true; }
         if (s->selected_id) { clear_selection(s); repaint(s); return true; }

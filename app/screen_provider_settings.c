@@ -578,7 +578,7 @@ static LRESULT CALLBACK field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
         if (wp == VK_RETURN && !is_multiline(f)) { SetFocus(s->edits[next_field(s, f, 1)]); return 0; }
         break;
     case WM_CHAR:
-        if (wp == '\t' || wp == 0x13 || wp == 0x01 || wp == 0x1B || (wp == '\r' && !is_multiline(f))) return 0;
+        if (form_shortcut_character(wp, is_multiline(f))) return 0;
         break;
     case WM_MOUSEWHEEL: {
         bool own = is_multiline(f) && SendMessageW(hwnd, EM_GETLINECOUNT, 0, 0) > shown_rows(s, f);

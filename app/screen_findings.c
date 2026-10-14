@@ -855,8 +855,11 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (s->doc_stale) return;
     size_t r, k = 0; int segment = -1;
     if (action == ACT_VERDICT) { segment = (int)(arg % 4); arg /= 4; }
-    if (action == ACT_VERDICT || action == ACT_COMMENT || action == ACT_REPLY || action == ACT_DELETE || action == ACT_OPEN_FINDING || action == ACT_REPLIED_URL) { r = (size_t)arg / FINDING_STRIDE; k = (size_t)arg % FINDING_STRIDE; }
-    else r = (size_t)arg;
+    switch (action) {
+    case ACT_VERDICT: case ACT_COMMENT: case ACT_REPLY: case ACT_DELETE: case ACT_OPEN_FINDING: case ACT_REPLIED_URL:
+        r = (size_t)arg / FINDING_STRIDE; k = (size_t)arg % FINDING_STRIDE; break;
+    default: r = (size_t)arg; break;
+    }
     if (r >= s->round_count) return;
     const Session *ses = round_session(s, r);
     const Json *held = s->rounds[r].held;

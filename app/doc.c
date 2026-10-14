@@ -1240,7 +1240,7 @@ void doc_clear_selection(Doc *doc) {
 int doc_text_item_at(Doc *doc, int x, int y) {
     for (size_t i = doc->count; i-- > 0;) {
         Item *it = &doc->items[i];
-        if (it->sel && !pin_covered(doc, i, y) && !region_hidden(doc, i, x, y) && x >= it->rc.left && x < it->rc.right && y >= it->rc.top && y < it->rc.bottom) return (int)i;
+        if (it->sel && !pin_covered(doc, i, y) && !region_hidden(doc, i, x, y) && in_view(&it->rc, x, y)) return (int)i;
     }
     return -1;
 }

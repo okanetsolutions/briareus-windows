@@ -337,7 +337,8 @@ static void read_done(void *owner, Request *req) {
     poller_finished(&s->poll, !listed, req->error.retry_after); repaint(s);
 }
 static void load(McpForm *s) {
-    if (!s->shown || (!s->id && !(s->uncertain && s->create_name)) || !account_current(s) || s->read || busy(s)) return;
+    if (!s->shown || !account_current(s) || s->read || busy(s)) return;
+    if (!s->id && !(s->uncertain && s->create_name)) return;
     store_call("settings_mcp_servers", json_object(), 0, s, read_done, 0, &s->read);
 }
 static void write_done(void *owner, Request *req) {

@@ -70,15 +70,21 @@ static void take_drop(HDROP drop, AttachJob *job) {
         job->paths[job->path_count++] = path;
     }
 }
+static bool dibv5_has_rgba(const BITMAPV5HEADER *hdr, SIZE_T size) {
+    if (size < sizeof *hdr || hdr->bV5Size < sizeof *hdr) return false;
+    if (hdr->bV5BitCount != 32 || hdr->bV5Planes != 1 || hdr->bV5Width <= 0 || hdr->bV5Height == 0) return false;
+    if (hdr->bV5AlphaMask != 0xFF000000) return false;
+    if (hdr->bV5Compression == BI_RGB) return true;
+    return hdr->bV5Compression == BI_BITFIELDS && hdr->bV5RedMask == 0x00FF0000
+        && hdr->bV5GreenMask == 0x0000FF00 && hdr->bV5BlueMask == 0x000000FF;
+}
 // A 32-bit DIB with an alpha channel keeps it: an image copied from a browser may have a transparent background.
 static bool take_dibv5(HGLOBAL h, AttachJob *job) {
     SIZE_T size = GlobalSize(h);
     const BITMAPV5HEADER *hdr = GlobalLock(h);
     if (!hdr) return false;
     bool ok = false;
-    if (size >= sizeof *hdr && hdr->bV5Size >= sizeof *hdr && hdr->bV5BitCount == 32 && hdr->bV5Planes == 1 && hdr->bV5Width > 0 && hdr->bV5Height != 0
-        && hdr->bV5AlphaMask == 0xFF000000
-        && (hdr->bV5Compression == BI_RGB || (hdr->bV5Compression == BI_BITFIELDS && hdr->bV5RedMask == 0x00FF0000 && hdr->bV5GreenMask == 0x0000FF00 && hdr->bV5BlueMask == 0x000000FF))) {
+    if (dibv5_has_rgba(hdr, size)) {
         int w = hdr->bV5Width, hgt = hdr->bV5Height < 0 ? -hdr->bV5Height : hdr->bV5Height;
         bool bottom_up = hdr->bV5Height > 0;
         size_t offset = hdr->bV5Size + (size_t)hdr->bV5ClrUsed * 4, stride = (size_t)w * 4;

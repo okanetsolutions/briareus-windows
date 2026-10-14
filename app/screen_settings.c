@@ -417,7 +417,8 @@ static void order_done(void *owner, Request *req) {
 static void settings_move(SettingsScreen *s, size_t index, int delta) {
     const Json *rows = settings_rows(s);
     size_t n = json_count(rows);
-    if (s->req_order || index >= n || (delta < 0 && index == 0) || (delta > 0 && index + 1 >= n)) return;
+    if (s->req_order || index >= n) return;
+    if ((delta < 0 && index == 0) || (delta > 0 && index + 1 >= n)) return;
     size_t other = delta < 0 ? index - 1 : index + 1;
     Json *ids = json_array();
     for (size_t i = 0; i < n; i++) {
@@ -1399,7 +1400,7 @@ static LRESULT CALLBACK field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
         break;
     case WM_CHAR:
         // The control characters of the keys handled above, which an edit would otherwise beep at or type.
-        if (wp == '\t' || wp == 0x13 || wp == 0x01 || wp == 0x1B || (wp == '\r' && !is_multiline(f))) return 0;
+        if (form_shortcut_character(wp, is_multiline(f))) return 0;
         break;
     case WM_MOUSEWHEEL: {
         // The form scrolls under the pointer unless a long box has more of its own to show.

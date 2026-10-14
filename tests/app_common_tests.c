@@ -8,6 +8,7 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include "terminal.h"
 #include "theme.h"
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,57 @@ static Session session_from(const char *json) {
 static int item_with_text(Doc *doc, const char *text) {
     for (size_t i = 0; i < doc->count; i++) if (str_eq(doc->items[i].text, text)) return (int)i;
     return -1;
+}
+
+static void test_form_shortcut_characters(void) {
+    for (int multiline = 0; multiline <= 1; multiline++) {
+        CHECK(form_shortcut_character('\t', multiline));
+        CHECK(form_shortcut_character(0x13, multiline));
+        CHECK(form_shortcut_character(0x01, multiline));
+        CHECK(form_shortcut_character(0x1B, multiline));
+        CHECK(!form_shortcut_character('s', multiline));
+        CHECK(!form_shortcut_character(0x16, multiline));
+        CHECK(!form_shortcut_character('\n', multiline));
+    }
+    CHECK(form_shortcut_character('\r', false));
+    CHECK(!form_shortcut_character('\r', true));
+}
+
+static void test_terminal_argument_characters(void) {
+    TermTarget target = { .host = "Example-09.local", .user = "User_09.$", .port = 22 };
+    CHECK(term_target_problem(&target) == NULL);
+    target.host = "[fe80::1%eth0]";
+    target.user = "domain\\user";
+    CHECK(term_target_problem(&target) == NULL);
+    target.host = "\xC3\xA9xample.local";
+    target.user = "\xC3\xA9ric";
+    CHECK(term_target_problem(&target) == NULL);
+    const char *invalid[] = { "-option", "two words", "host;command", "host\ncommand", "host\"quote" };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; i++) {
+        target.host = invalid[i];
+        char *problem = term_target_problem(&target); CHECK(problem != NULL); free(problem);
+        target.host = "localhost"; target.user = invalid[i];
+        problem = term_target_problem(&target); CHECK(problem != NULL); free(problem);
+        target.user = "user";
+    }
+}
+
+static void test_text_selection_hit_bounds_and_clipping(void) {
+    ensure_theme();
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 200);
+    RECT rect = {10, 20, 100, 80};
+    int item = doc_text_at(&doc, &rect, "Selectable", FONT_BODY, theme.ink, 0);
+    CHECK_INT(doc_text_item_at(&doc, 10, 20), item);
+    CHECK_INT(doc_text_item_at(&doc, 99, 79), item);
+    CHECK_INT(doc_text_item_at(&doc, 9, 20), -1);
+    CHECK_INT(doc_text_item_at(&doc, 100, 20), -1);
+    CHECK_INT(doc_text_item_at(&doc, 10, 19), -1);
+    CHECK_INT(doc_text_item_at(&doc, 10, 80), -1);
+    RECT view = {30, 40, 100, 80};
+    doc_region(&doc, item, item + 1, &view, 80);
+    CHECK_INT(doc_text_item_at(&doc, 10, 20), -1);
+    CHECK_INT(doc_text_item_at(&doc, 30, 40), item);
+    doc_free(&doc);
 }
 
 // MARK: - Labels
@@ -484,6 +536,9 @@ static void test_a_tab_count_makes_it_wider(void) {
 }
 
 void app_common_tests(void) {
+    test_run("settings form shortcut characters preserve editing and multiline Enter", test_form_shortcut_characters);
+    test_run("terminal argument validation preserves ASCII, UTF-8 and permitted punctuation", test_terminal_argument_characters);
+    test_run("selectable text hit testing respects bounds and region clipping", test_text_selection_hit_bounds_and_clipping);
     test_run("severity labels and colours", test_severity_labels_and_colours);
     test_run("unknown severity reads as medium", test_unknown_severity_reads_as_medium);
     test_run("severity colours are the ones the screens used before sharing", test_severity_colours_are_the_ones_the_screens_used_before_sharing);

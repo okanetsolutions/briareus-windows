@@ -546,7 +546,11 @@ static LRESULT CALLBACK find_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
     case WM_CHAR:
         // Enter, Escape and the control characters the shortcuts above leave behind (^N, ^P, ^O, ^F, ^A);
         // the rest reach the edit, so Ctrl+V, Ctrl+C, Ctrl+X and Ctrl+Z still paste, copy, cut and undo.
-        if (wp == '\r' || wp == 0x1B || (ctrl && (wp == 0x0E || wp == 0x10 || wp == 0x0F || wp == 0x06 || wp == 0x01))) return 0;
+        if (wp == '\r' || wp == 0x1B) return 0;
+        if (!ctrl) break;
+        switch (wp) {
+        case 0x0E: case 0x10: case 0x0F: case 0x06: case 0x01: return 0;
+        }
         break;
     case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
     case WM_NCDESTROY: RemoveWindowSubclass(hwnd, find_proc, id); break;
