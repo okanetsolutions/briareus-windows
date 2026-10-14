@@ -501,11 +501,13 @@ static void test_tabs_run_left_to_right_and_wrap(void) {
     CHECK_INT(doc.items[0].rc.left, 0);
     CHECK_INT(doc.items[0].action, 0);
     CHECK(!doc.items[0].hover_fill);
+    CHECK_STR(doc.items[0].tip, "Conversation");
     doc_tab(&doc, &x, &y, 0, 1000, 40, 0xE8BD, "Files", "12", false, 5, 2);
     CHECK_INT(doc.items[1].rc.left, first);
     CHECK_INT(doc.items[1].rc.top, 0);
     CHECK_INT(doc.items[1].action, 5);
     CHECK_INT(doc.items[1].arg, 2);
+    CHECK_STR(doc.items[1].tip, "Files");
     CHECK_INT(y, 0);
     // A tab past the right edge starts a new line; the first one on a line never wraps however wide it is.
     doc_tab(&doc, &x, &y, 0, x + 10, 40, 0xE8BD, "Checks", NULL, false, 5, 3);

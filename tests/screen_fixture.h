@@ -103,7 +103,7 @@ static inline void screen_fixture_draw(Screen *s, Doc *doc) {
 }
 
 static inline int screen_fixture_find(Doc *doc, const char *text) {
-    for (size_t i = 0; i < doc->count; i++) if (str_eq(doc->items[i].text, text)) return (int)i;
+    for (size_t i = 0; i < doc->count; i++) if (str_eq(doc->items[i].text, text) || str_eq(doc->items[i].tip, text)) return (int)i;
     return -1;
 }
 

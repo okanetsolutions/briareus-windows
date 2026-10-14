@@ -431,6 +431,7 @@ void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph
     doc->y = *y;
     int i = doc_custom(doc, *x, w, h, paint_tabnav, d, tabnav_free, active ? 0 : action, arg);
     doc_item(doc, i)->hover_fill = false;
+    doc_item(doc, i)->tip = xstrdup(title);
     *x += w;
 }
 int content_left(Pane *pane) { (void)pane; return 0; }
