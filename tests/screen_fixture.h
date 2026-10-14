@@ -45,7 +45,7 @@ static inline bool screen_fixture_transport(void *ctx, const char *method, const
 
 static inline void screen_fixture_prepare(void) {
     if (!theme.canvas) theme_init();
-    // Warm process-lifetime pane and drawing registries outside the per-test leak snapshot.
+    // Warm process-lifetime drawing registries outside the per-test leak snapshot.
     HWND parent = CreateWindowExW(0, L"STATIC", L"Screen test startup", 0,
         0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
     CHECK(parent != NULL); Pane *pane = pane_create(parent, false);

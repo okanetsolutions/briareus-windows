@@ -202,9 +202,15 @@ static void test_nul_authoring(void) {
     edit(&f, "Replacement environment (JSON object)", "{\"TOKEN\":\"replacement\"}"); save_failure(&f);
     CHECK_STR(json_str(json_get(json_get(f.fixture.body, "env"), "TOKEN")), "replacement"); cleanup(&f);
 }
+static Screen *settings_sidebar(Form *f, Pane **sidebar) {
+    *sidebar = pane_create(f->fixture.parent, true); CHECK(*sidebar != NULL);
+    Screen *settings = settings_screen_new(); settings->pane = *sidebar;
+    return settings;
+}
+
 static void test_departed_mutation_completion(void) {
     for (int deleting = 0; deleting < 2; deleting++) for (int allowed = 0; allowed < 2; allowed++) {
-        Form f; setup(&f, true); Screen *settings = settings_screen_new();
+        Form f; setup(&f, true); Pane *sidebar = NULL; Screen *settings = settings_sidebar(&f, &sidebar);
         f.fixture.block_write = true;
         if (deleting) {
             HeaderInfo info = {0}; f.screen->vt->header(f.screen, &info); CHECK_INT(info.button_count, 2);
@@ -216,12 +222,12 @@ static void test_departed_mutation_completion(void) {
         LONG reads = f.fixture.reads;
         SetEvent(f.fixture.resume); screen_fixture_pump(&f.fixture, allowed ? 2 : 1);
         CHECK_INT(f.fixture.writes, 1); CHECK_INT(f.fixture.reads, reads + allowed);
-        settings->vt->destroy(settings);
+        settings->vt->destroy(settings); pane_destroy(sidebar);
         doc_free(&f.doc); json_free(f.row); free(f.registry); screen_fixture_clear(&f.fixture);
     }
 }
 static void test_polled_status_and_deletion_refresh_settings(void) {
-    Form f; setup(&f, true); Screen *settings = settings_screen_new();
+    Form f; setup(&f, true); Pane *sidebar = NULL; Screen *settings = settings_sidebar(&f, &sidebar);
     json_set_str(f.row, "status", "ready"); json_set_bool(f.row, "signedIn", true); registry(&f, true);
     LONG reads = f.fixture.reads;
     f.screen->vt->refresh(f.screen); screen_fixture_pump(&f.fixture, 2); CHECK_INT(f.fixture.reads, reads + 2);
@@ -230,7 +236,7 @@ static void test_polled_status_and_deletion_refresh_settings(void) {
     f.screen->vt->refresh(f.screen); screen_fixture_pump(&f.fixture, 2);
     CHECK_INT(f.fixture.reads, reads + 5); CHECK(!save_button(&f).enabled);
     save(&f); CHECK_INT(f.fixture.writes, 0);
-    settings->vt->destroy(settings); cleanup(&f);
+    settings->vt->destroy(settings); pane_destroy(sidebar); cleanup(&f);
 }
 static bool has_text(Form *f, const char *fragment) {
     screen_fixture_draw(f->screen, &f->doc);

@@ -93,6 +93,7 @@ void pane_destroy(Pane *p) {
     if (p->edit_brush) DeleteObject(p->edit_brush);
     canvas_free(p->canvas);
     free(p);
+    if (!pane_count) { free(all_panes); all_panes = NULL; }
 }
 HWND pane_hwnd(Pane *p) { return p->hwnd; }
 void pane_set_bounds(Pane *p, const RECT *rc) { MoveWindow(p->hwnd, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, TRUE); p->dirty = true; }
