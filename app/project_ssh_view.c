@@ -143,4 +143,3 @@ void project_ssh_header(ProjectSsh *p, HeaderInfo *info) {
     b = &info->buttons[info->button_count++];
     b->glyph = 0xE711; b->action = p->base + A_CLOSE; b->enabled = true; b->tip = "Close this session";
 }
-

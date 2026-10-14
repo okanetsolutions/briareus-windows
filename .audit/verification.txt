@@ -8,7 +8,7 @@ PASS: native portable subset, 259 tests / 3534 checks / 0 failures, GCC with ASa
 PASS: MinGW cross-build of Briareus.exe, core_tests.exe and app_tests.exe with WERROR=1.
 PASS: make lint with cppcheck.
 PASS: editorconfig-checker 4.0.2.
-PASS: git diff --check.
+PASS: git diff --check 8ff02661ab2f..HEAD, checking the entire committed branch.
 
 Windows build command (fresh toolchain container mounted on this worktree):
 make -j4 WERROR=1 BUILD=build-debt CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ WINDRES=x86_64-w64-mingw32-windres build-debt/Briareus.exe build-debt/core_tests.exe build-debt/app_tests.exe
