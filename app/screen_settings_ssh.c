@@ -40,7 +40,7 @@ static void ssh_save_done(void *owner, Request *req) {
     set_string(&s->error, NULL);
     s->id = screen_settings_ssh_row_id(row);
     free(s->base.id); s->base.id = screen_settings_ssh_form_id(s->id);
-    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    settings_select_id(s->base.id);
     screen_settings_ssh_fill(s);
     // A server that answers without the login's fields did not keep it: say so rather than show an empty form as saved.
     bool sent_login = json_str(json_get(req->args, "dbUsername")) || json_str(json_get(req->args, "dbPassword"));

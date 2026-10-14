@@ -32,7 +32,7 @@ The change-based check compares findings per file and token expression against t
 
 `make rules` also runs the full-tree audit used by `make audit`. It reports all existing layer, condition and presentation-size violations without baseline allowances. After the structural cleanup, both checks must pass; new presentation components retain the 300-line ceiling. Warning suppression and core test-delta checks still compare against the merge base.
 
-The cleanup extraction is recorded in `scripts/refactors/presentation.json`. Run `python3 scripts/extract_presentation.py scripts/refactors/presentation.json --check` to reproduce it from its pinned source and explicit pointer-marker fixes. This proves that migration only; later intentional changes to those components need normal behavior tests and `make rules`, not a rewritten extraction manifest.
+The cleanup extraction is recorded in `scripts/refactors/presentation.json`. Run `python3 scripts/extract_presentation.py scripts/refactors/presentation.json --check` to reproduce it from its pinned source and explicit pointer-marker and Settings selection ownership fixes. This proves that migration only; later intentional changes to those components need normal behavior tests and `make rules`, not a rewritten extraction manifest.
 
 ## Limits and review
 

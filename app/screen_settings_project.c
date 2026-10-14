@@ -17,7 +17,7 @@ static bool form_can_leave(Screen *base);
 static void form_set_id(FormScreen *s, int id) {
     s->id = id;
     free(s->base.id); s->base.id = screen_settings_form_id(id);
-    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    settings_select_id(s->base.id);
 }
 
 static void save_done(void *owner, Request *req) {

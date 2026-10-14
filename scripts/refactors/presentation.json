@@ -1405,6 +1405,42 @@
                 "old": "            // cppcheck-suppress intToPointerCast\n            it->data = str_eq(s->deleting_run, run_target(s)) ? (void *)1 : NULL;   // a marker only, never freed",
                 "new": "            it->data = str_eq(s->deleting_run, run_target(s)) ? s : NULL;   // borrowed owner marks the pending deletion"
             }
+        ],
+        "app/screen_settings.c": [
+            {
+                "old": "// MARK: Saving, cloning, deleting\n\nstatic void form_set_id(FormScreen *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    pane_set_selected_id(app_sidebar_pane(), s->base.id);\n}\n",
+                "new": "// MARK: Saving, cloning, deleting\n\nstatic void form_set_id(FormScreen *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    settings_select_id(s->base.id);\n}\n"
+            },
+            {
+                "old": "static void ssh_save_done(void *owner, Request *req) {\n    SshForm *s = owner;\n    const Json *row = req->ok ? json_get(req->result, \"server\") : NULL;\n    if (!json_is_object(row)) {\n        char *text = request_error_or_unexpected(req);\n        // The server's own words, on the tab in use; one about the database login or its key opens the Database tab.\n        s->error_tab = str_icontains(text, \"database\") || str_icontains(text, \"credential\") ? ST_DATABASE : g_ssh_tab;\n        ssh_show_error(s, text);\n        return;\n    }\n    // The server's word on what was saved: an empty label is now user@host:port, and a new server has an id.\n    // The username just sent is now the stored one; a server without a login has none.\n    const Json *sent = json_get(req->args, \"dbUsername\");\n    if (!json_bool_is(json_get(row, \"hasDbCredentials\"), true)) set_string(&s->db_user, \"\");\n    else if (json_str(sent)) set_string(&s->db_user, json_str(sent));\n    else if (!s->db_user && !s->id) set_string(&s->db_user, \"\");\n    json_free(s->row); s->row = json_clone(row);\n    set_string(&s->error, NULL);\n    s->id = ssh_row_id(row);\n    free(s->base.id); s->base.id = ssh_form_id(s->id);\n    pane_set_selected_id(app_sidebar_pane(), s->base.id);\n    ssh_fill(s);\n    // A server that answers without the login's fields did not keep it: say so rather than show an empty form as saved.\n    bool sent_login = json_str(json_get(req->args, \"dbUsername\")) || json_str(json_get(req->args, \"dbPassword\"));\n    const Json *has = json_get(row, \"hasDbCredentials\");\n    if (sent_login && !json_bool_is(has, true) && !json_bool_is(has, false)) {\n        s->error_tab = ST_DATABASE;\n        ssh_show_error(s, xstrdup(\"The server saved the SSH server but not its database login: it does not store database logins yet. Update the Briareus server.\"));\n    }\n    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);\n    settings_ssh_changed();\n}\n",
+                "new": "static void ssh_save_done(void *owner, Request *req) {\n    SshForm *s = owner;\n    const Json *row = req->ok ? json_get(req->result, \"server\") : NULL;\n    if (!json_is_object(row)) {\n        char *text = request_error_or_unexpected(req);\n        // The server's own words, on the tab in use; one about the database login or its key opens the Database tab.\n        s->error_tab = str_icontains(text, \"database\") || str_icontains(text, \"credential\") ? ST_DATABASE : g_ssh_tab;\n        ssh_show_error(s, text);\n        return;\n    }\n    // The server's word on what was saved: an empty label is now user@host:port, and a new server has an id.\n    // The username just sent is now the stored one; a server without a login has none.\n    const Json *sent = json_get(req->args, \"dbUsername\");\n    if (!json_bool_is(json_get(row, \"hasDbCredentials\"), true)) set_string(&s->db_user, \"\");\n    else if (json_str(sent)) set_string(&s->db_user, json_str(sent));\n    else if (!s->db_user && !s->id) set_string(&s->db_user, \"\");\n    json_free(s->row); s->row = json_clone(row);\n    set_string(&s->error, NULL);\n    s->id = ssh_row_id(row);\n    free(s->base.id); s->base.id = ssh_form_id(s->id);\n    settings_select_id(s->base.id);\n    ssh_fill(s);\n    // A server that answers without the login's fields did not keep it: say so rather than show an empty form as saved.\n    bool sent_login = json_str(json_get(req->args, \"dbUsername\")) || json_str(json_get(req->args, \"dbPassword\"));\n    const Json *has = json_get(row, \"hasDbCredentials\");\n    if (sent_login && !json_bool_is(has, true) && !json_bool_is(has, false)) {\n        s->error_tab = ST_DATABASE;\n        ssh_show_error(s, xstrdup(\"The server saved the SSH server but not its database login: it does not store database logins yet. Update the Briareus server.\"));\n    }\n    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);\n    settings_ssh_changed();\n}\n"
+            },
+            {
+                "old": "static void forge_save_done(void *owner, Request *req) {\n    ForgeForm *s = owner;\n    const Json *row = req->ok ? json_get(req->result, \"account\") : NULL;\n    if (!json_is_object(row)) {\n        char *text = request_error_or_unexpected(req);\n        forge_show_error(s, text);\n        return;\n    }\n    // The server's word on what was saved: an empty label is now the organization, and a new account has an id.\n    json_free(s->row); s->row = json_clone(row);\n    set_string(&s->error, NULL);\n    s->id = ssh_row_id(row);\n    free(s->base.id); s->base.id = forge_form_id(s->id);\n    pane_set_selected_id(app_sidebar_pane(), s->base.id);\n    forge_fill(s);\n    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);\n    settings_forge_changed();\n}\n",
+                "new": "static void forge_save_done(void *owner, Request *req) {\n    ForgeForm *s = owner;\n    const Json *row = req->ok ? json_get(req->result, \"account\") : NULL;\n    if (!json_is_object(row)) {\n        char *text = request_error_or_unexpected(req);\n        forge_show_error(s, text);\n        return;\n    }\n    // The server's word on what was saved: an empty label is now the organization, and a new account has an id.\n    json_free(s->row); s->row = json_clone(row);\n    set_string(&s->error, NULL);\n    s->id = ssh_row_id(row);\n    free(s->base.id); s->base.id = forge_form_id(s->id);\n    settings_select_id(s->base.id);\n    forge_fill(s);\n    pane_relayout(s->base.pane); pane_header_changed(s->base.pane);\n    settings_forge_changed();\n}\n"
+            },
+            {
+                "old": "Screen *settings_screen_new(void) {",
+                "new": "void settings_select_id(const char *id) {\n    if (g_settings && g_settings->base.pane) pane_set_selected_id(g_settings->base.pane, id);\n}\n\nScreen *settings_screen_new(void) {"
+            }
+        ],
+        "app/screen_provider_settings.c": [
+            {
+                "old": "// MARK: Saving, cloning, deleting\n\nstatic void form_set_id(FormScreen *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    pane_set_selected_id(app_sidebar_pane(), s->base.id);\n}\n",
+                "new": "// MARK: Saving, cloning, deleting\n\nstatic void form_set_id(FormScreen *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    settings_select_id(s->base.id);\n}\n"
+            }
+        ],
+        "app/screen_db_servers.c": [
+            {
+                "old": "// MARK: - Saving, testing, cloning, deleting\n\nstatic void form_set_id(DbForm *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    pane_set_selected_id(app_sidebar_pane(), s->base.id);\n}\n",
+                "new": "// MARK: - Saving, testing, cloning, deleting\n\nstatic void form_set_id(DbForm *s, int id) {\n    s->id = id;\n    free(s->base.id); s->base.id = form_id(id);\n    settings_select_id(s->base.id);\n}\n"
+            }
+        ],
+        "app/screen_mcp_settings.c": [
+            {
+                "old": "static void adopt_id(McpForm *s, double id) {\n    s->id = id; free(s->base.id); s->base.id = form_id(id); pane_set_selected_id(app_sidebar_pane(), s->base.id);\n}\n",
+                "new": "static void adopt_id(McpForm *s, double id) {\n    s->id = id; free(s->base.id); s->base.id = form_id(id); settings_select_id(s->base.id);\n}\n"
+            }
         ]
     }
 }

@@ -200,6 +200,10 @@ static const ScreenVTable settings_vt = {
     .footer_height = settings_footer_height, .footer_paint = settings_footer_paint, .footer_click = settings_footer_click,
 };
 
+void settings_select_id(const char *id) {
+    if (screen_settings_g_settings && screen_settings_g_settings->base.pane) pane_set_selected_id(screen_settings_g_settings->base.pane, id);
+}
+
 Screen *settings_screen_new(void) {
     SettingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");

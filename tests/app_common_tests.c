@@ -491,6 +491,22 @@ static void test_label_chips_wrap_within_the_width(void) {
     doc_free(&doc);
 }
 
+static void test_settings_selection_follows_registered_owner(void) {
+    ensure_theme();
+    settings_select_id("before-settings");
+    HWND parent = CreateWindowExW(0, L"STATIC", L"Settings selection fixture", 0, 0, 0, 10, 10,
+        HWND_MESSAGE, NULL, GetModuleHandleW(NULL), NULL);
+    CHECK(parent != NULL);
+    Pane *sidebar = pane_create(parent, true); CHECK(sidebar != NULL);
+    Screen *settings = settings_screen_new(); settings->pane = sidebar;
+    settings_select_id("settings-mcp:456"); CHECK_STR(pane_selected_id(sidebar), "settings-mcp:456");
+    settings_select_id(NULL); CHECK(pane_selected_id(sidebar) == NULL);
+    settings_select_id("settings-project:9");
+    settings->vt->destroy(settings);
+    settings_select_id("after-settings"); CHECK_STR(pane_selected_id(sidebar), "settings-project:9");
+    pane_destroy(sidebar); DestroyWindow(parent);
+}
+
 static void test_tabs_run_left_to_right_and_wrap(void) {
     ensure_theme();
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 1000);
@@ -571,6 +587,7 @@ void app_common_tests(void) {
     test_run("issue row names its parent unless nested", test_issue_row_names_its_parent_unless_nested);
     test_run("epic issue title has the target mark", test_epic_issue_title_has_the_target_mark);
     test_run("label chips wrap within the width", test_label_chips_wrap_within_the_width);
+    test_run("settings selection updates only the registered sidebar owner", test_settings_selection_follows_registered_owner);
     test_run("tabs run left to right and wrap", test_tabs_run_left_to_right_and_wrap);
     test_run("a tab count makes it wider", test_a_tab_count_makes_it_wider);
 }

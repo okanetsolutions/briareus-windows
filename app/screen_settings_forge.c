@@ -51,7 +51,7 @@ static void forge_save_done(void *owner, Request *req) {
     set_string(&s->error, NULL);
     s->id = screen_settings_ssh_row_id(row);
     free(s->base.id); s->base.id = screen_settings_forge_form_id(s->id);
-    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    settings_select_id(s->base.id);
     screen_settings_forge_fill(s);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
     screen_settings_settings_forge_changed();

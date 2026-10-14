@@ -222,6 +222,7 @@ void screen_settings_settings_move(SettingsScreen *s, size_t index, int delta);
 void screen_settings_section_title(Doc *doc, int w, const char *title, const char *screen_settings_note, int new_action);
 void screen_settings_settings_layout(Screen *base, Doc *doc);
 void screen_settings_layout_move_arrows(SettingsScreen *s, Doc *doc, int row, size_t i, size_t n, bool selected);
+void settings_select_id(const char *id);
 Screen *settings_screen_new(void);
 int screen_settings_field_tab(int f);
 int screen_settings_runtime_tab(int r);

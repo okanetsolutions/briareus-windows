@@ -51,7 +51,7 @@ const int screen_provider_settings_LOGIN_WAITS_MS[] = { 10000, 30000, 60000, 120
 static void form_set_id(FormScreen *s, int id) {
     s->id = id;
     free(s->base.id); s->base.id = form_id(id);
-    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    settings_select_id(s->base.id);
 }
 
 static void save_done(void *owner, Request *req) {

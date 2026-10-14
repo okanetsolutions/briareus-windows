@@ -50,7 +50,7 @@ bool screen_db_servers_row_has(DbForm *s, const char *key) {
 static void form_set_id(DbForm *s, int id) {
     s->id = id;
     free(s->base.id); s->base.id = form_id(id);
-    pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    settings_select_id(s->base.id);
 }
 
 static void show_error(DbForm *s, const char *text) {

@@ -51,7 +51,7 @@ static void status_update(McpForm *s, const Json *row) {
 }
 
 static void adopt_id(McpForm *s, double id) {
-    s->id = id; free(s->base.id); s->base.id = form_id(id); pane_set_selected_id(app_sidebar_pane(), s->base.id);
+    s->id = id; free(s->base.id); s->base.id = form_id(id); settings_select_id(s->base.id);
 }
 
 static void read_done(void *owner, Request *req) {
