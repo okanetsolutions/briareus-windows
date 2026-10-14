@@ -43,6 +43,7 @@ RULES_BASE ?= origin/main
 rules:
 	$(PYTHON) -m unittest discover -s tests -p 'test_structure.py'
 	$(PYTHON) scripts/check_structure.py $(RULES_BASE)
+	$(PYTHON) scripts/check_structure.py $(RULES_BASE) --audit
 
 audit:
 	$(PYTHON) scripts/check_structure.py $(RULES_BASE) --audit

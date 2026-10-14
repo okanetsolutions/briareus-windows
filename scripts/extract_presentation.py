@@ -29,6 +29,22 @@ def identifiers(source):
 
 
 def rename(source, names):
+    items = lex(source)
+    protected = []
+    for i, item in enumerate(items):
+        if item.group() not in {"struct", "union"}:
+            continue
+        j = i + 1
+        if j < len(items) and re.fullmatch(r"[A-Za-z_]\w*", items[j].group()):
+            j += 1
+        if j >= len(items) or items[j].group() != "{":
+            continue
+        level = 0
+        for end in items[j:]:
+            level += (end.group() == "{") - (end.group() == "}")
+            if level == 0:
+                protected.append((items[j].start(), end.end()))
+                break
     previous = ""
 
     def replacement(match):
@@ -36,11 +52,19 @@ def rename(source, names):
         value = match.group()
         if match.lastgroup != "word":
             return value
-        result = names.get(value, value) if previous not in {".", "->"} else value
+        member = previous in {".", "->"} or any(start <= match.start() < end for start, end in protected)
+        result = value if member else names.get(value, value)
         previous = value
         return result
 
     return TOKEN.sub(replacement, source)
+
+
+def without_static(source):
+    first = lex(source)[0]
+    if first.group() == "static":
+        return source[:first.start()] + source[first.end():].lstrip()
+    return source
 
 
 def units(source):
@@ -91,7 +115,7 @@ def units(source):
 
 
 def extern_data(unit, alias):
-    definition = re.sub(r"\bstatic\s+", "", unit.text, count=1)
+    definition = without_static(unit.text)
     declaration = definition.split("=", 1)[0].strip().rstrip(";")
     extra = ""
     anonymous = re.search(r"\bstruct\s*(\{.*?\})", declaration, re.DOTALL)
@@ -170,18 +194,17 @@ def extract(path, source, components):
     header_name = stem + "_internal.h"
     guard = "BRIAREUS_" + header_name.replace(".", "_").upper()
     header = [f"#ifndef {guard}\n#define {guard}\n", "\n".join(directives) + "\n\n"]
+    definitions = {}
     for unit in declarations:
         if unit.kind == "type" and type_groups[id(unit)] is None:
-            header.append(unit.text + "\n")
+            header.append(rename(unit.text, names) + "\n")
+        elif unit.kind == "data" and unit.name in cross:
+            declaration, definition = extern_data(unit, names.get(unit.name, unit.name))
+            header.append(rename(declaration, names))
+            definitions[unit.name] = definition
     for name, unit in functions.items():
         if name in cross or "static" not in identifiers(unit.signature):
             header.append(rename(re.sub(r"^static\s+", "", unit.signature), names) + ";\n")
-    definitions = {}
-    for name, unit in data.items():
-        if name in cross:
-            declaration, definition = extern_data(unit, names.get(name, name))
-            header.append(rename(declaration, names))
-            definitions[name] = definition
     header.append("\n#endif\n")
     output = {str(Path(path).with_name(header_name)): "".join(header)}
     for suffix in ["", *components]:
@@ -189,7 +212,7 @@ def extract(path, source, components):
         parts = [f'#include "{header_name}"\n\n']
         for unit in types:
             if type_groups[id(unit)] == suffix:
-                parts.append(unit.text + "\n")
+                parts.append(rename(unit.text, names) + "\n")
         for name, unit in functions.items():
             if groups[name] == suffix and name not in cross and "static" in identifiers(unit.signature):
                 parts.append(rename(unit.signature, names) + ";\n")
@@ -199,13 +222,23 @@ def extract(path, source, components):
                 continue
             text = definitions.get(unit.name, unit.text)
             if unit.kind == "function" and unit.name in cross:
-                text = re.sub(r"\bstatic\s+", "", text, count=1)
+                text = without_static(text)
             parts.append(rename(text, names) + "\n")
-        content = "".join(parts)
+        content = "".join(parts).rstrip() + "\n"
         if len(content.splitlines()) > 300:
             raise ValueError(f"{filename}: {len(content.splitlines())} lines; select a cohesive smaller component")
         output[str(Path(path).with_name(filename))] = content
     return output
+
+
+def prepared_source(manifest, path):
+    source = subprocess.run(["git", "show", f'{manifest["base"]}:{path}'], check=True, capture_output=True, text=True).stdout
+    for replacement in manifest.get("replacements", {}).get(path, []):
+        old, new = replacement["old"], replacement["new"]
+        if source.count(old) != 1:
+            raise ValueError(f"{path}: preparation must match exactly once")
+        source = source.replace(old, new, 1)
+    return source
 
 
 def main():
@@ -217,7 +250,7 @@ def main():
     manifest = json.loads(args.manifest.read_text())
     outputs = {}
     for path, components in manifest["sources"].items():
-        source = subprocess.run(["git", "show", f'{manifest["base"]}:{path}'], check=True, capture_output=True, text=True).stdout
+        source = prepared_source(manifest, path)
         if args.list:
             for unit in units(source)[1]:
                 if unit.kind == "function":

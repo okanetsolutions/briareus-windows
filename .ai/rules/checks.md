@@ -8,7 +8,7 @@ Adapted from [heedly-builder](https://github.com/okanetsolutions/heedly-builder/
 | Architecture, testing and review skills | Repository skills under `.agents/skills/`, with Claude entrypoints |
 | Presentation calls services, services call clients/connectors | Screens call store, store calls core API/transport; domain logic stays in core |
 | Architecture tests | New core-to-app includes and UI imports, direct API calls outside store, and WinHTTP outside its transport adapters fail |
-| Presentation files over 300 lines cannot grow | Same limit for `app/screen_*.c`, `app/project_*.c` and `app/forge_site.c` |
+| Presentation files over 300 lines cannot grow | Same limit for `app/screen_*.c`, `app/project_*.c` and `app/forge_site*.c` |
 | PHPStan limits `if` conditions to three lines and five operands | A C token check applies the same limits to new or changed conditions |
 | Escape hatch checker | New source warning suppressions, new Makefile cppcheck suppressions, and lower `COVERAGE_MIN` fail |
 | Test-delta checker | Core C/header token changes need a changed C test suite; app behavior coverage is reviewed |
@@ -21,13 +21,18 @@ Laravel packages, database migrations, tenancy, query budgets and package-specif
 ```sh
 make rules
 make rules RULES_BASE=origin/main
+make audit
 python3 scripts/check_structure.py <parent-ref>
 python3 -m unittest discover -s tests -p 'test_structure.py'
 ```
 
 The checker requires Python 3 and Git, not Windows SDK headers. It resolves the merge base of `HEAD` and the supplied ref, defaulting to `origin/main`, then compares that snapshot with tracked and untracked working files. CI fetches full history and supplies the PR base SHA. Main pushes compare with their previous commit. Missing refs or Git errors fail with exit code 2; violations fail with exit code 1.
 
-New findings are compared per file and token expression against the base. Moving an unchanged condition within a file does not make it new; new copies do. An existing long condition cannot span more lines. Existing oversized files may stay the same size or shrink. Deleted files do not create structure findings, but core removals still need a test delta. No committed exemption list or suppression option is provided.
+The change-based check compares findings per file and token expression against the base. Moving an unchanged condition within a file does not make it new; new copies do. An existing long condition cannot span more lines. Existing oversized files may stay the same size or shrink. Deleted files do not create structure findings, but core removals still need a test delta. No committed exemption list or suppression option is provided.
+
+`make rules` also runs the full-tree audit used by `make audit`. It reports all existing layer, condition and presentation-size violations without baseline allowances. After the structural cleanup, both checks must pass; new presentation components retain the 300-line ceiling. Warning suppression and core test-delta checks still compare against the merge base.
+
+The cleanup extraction is recorded in `scripts/refactors/presentation.json`. Run `python3 scripts/extract_presentation.py scripts/refactors/presentation.json --check` to reproduce it from its pinned source and explicit pointer-marker fixes. This proves that migration only; later intentional changes to those components need normal behavior tests and `make rules`, not a rewritten extraction manifest.
 
 ## Limits and review
 

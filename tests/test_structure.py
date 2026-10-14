@@ -88,7 +88,7 @@ class StructureRules(unittest.TestCase):
         self.assertTrue(self.errors(short + short, old=long))
 
     def test_presentation_size_allows_only_existing_debt(self):
-        for path in ["app/screen_new.c", "app/project_files.c", "app/forge_site.c"]:
+        for path in ["app/screen_new.c", "app/project_files.c", "app/forge_site.c", "app/forge_site_editor.c"]:
             with self.subTest(path=path):
                 self.assertEqual([], self.errors("\n" * 300, path=path))
                 self.assertTrue(self.errors("\n" * 301, path=path))
@@ -616,12 +616,13 @@ class PresentationExtraction(unittest.TestCase):
             self.skipTest("native C compiler unavailable")
         source = """#include <stddef.h>
 typedef struct { int value; } State;
-static const struct { int amount; } STEPS[] = { { 3 }, { 5 }, };
+static const struct { int amount, advance; } STEPS[] = { { 3, 0 }, { 5, 0 }, };
+enum { STEP_COUNT = sizeof STEPS / sizeof *STEPS };
 static int advance(State *state) {
-    for (size_t i = 0; i < sizeof STEPS / sizeof *STEPS; i++) state->value += STEPS[i].amount;
+    for (size_t i = 0; i < STEP_COUNT; i++) state->value += STEPS[i].amount;
     return state->value;
 }
-int answer(void) { State state = { 29 }; return advance(&state) + STEPS[0].amount; }
+int answer(void) { State state = { 29 }; return advance(&state) + STEPS[0].amount + STEPS[0].advance; }
 """
         output = extract("app/screen_counter.c", source, {"advance": ["advance"]})
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,269 @@
+Integrated portable core test subset
+Host: Linux aarch64
+Compiler: 13.3.0
+Flags: -O0 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
+Adapter: temporary windows.h supplies UTF conversion and exception setup; no Windows UI, network or credential emulation.
+Suites: board, models, Markdown, repo, repo index, mail, inbox, meeting, VT, usage, pull conversation.
+Windows API/cache/update and app suites were cross-compiled, not executed.
+
+ok   labels read from an object or a bare name
+ok   label colours read as six hex digits
+ok   board links need a number and default their title
+ok   board links name their repository only when foreign
+ok   board links are not planned only when closed as such
+ok   board link copies are independent
+ok   pull summaries read every field
+ok   pull summaries default what the server left out
+ok   pull summaries without a positive number are rejected
+ok   pull summary lists keep only valid rows
+ok   pull summary copies are independent
+ok   pull predicates read mergeable, checks and labels
+ok   issue summaries read every field
+ok   issue summaries default what the server left out
+ok   issue summaries read when they were opened
+ok   issue open sub-issues are the epic's children here
+ok   pulls find by number
+ok   issues nest depth first under epics on the list
+ok   issues in a cycle are each drawn once
+ok   issue prompts name the issue, its epic and how to close it
+ok   board rows carry what the pickers filter on
+ok   board filters keep their picks folded
+ok   board filter copies compare equal and are independent
+ok   board filters pass rows folding case
+ok   board filter options are counted against the other pickers
+ok   a pick the others empty still lists itself
+ok   issues filter by assignee
+ok   issue rows offer no reviewers
+ok   the board opens on the author only while they have rows
+ok   known errands are listed in the dashboard's order
+ok   errands start through their own operation
+ok   errand arguments take the shape each route wants
+ok   errands are offered for the state a pull request is in
+ok   a known catalog restricts errands to those it lists
+ok   errands the app does not know follow in the server's order
+ok   the server words the question an errand asks
+ok   an errand the server lists without a question keeps the app's own
+ok   board action copies are independent
+ok   merge warnings cover every mergeable state
+ok   review status weighs the decision before the reviewers
+ok   review status reads the board row's reviewers
+ok   stack positions need a position and a total
+ok   stack chains are found by id, number or string
+ok   stack labels show each item's own depth
+ok   stack branches come from the board's rows
+ok   stacks survive a save and restore
+ok   stack copies are independent
+ok   stack overviews list the top first
+ok   only https urls with a host and no credentials are opened
+ok   browser links allow HTTP and HTTPS only
+ok   run profiles are read for the project, default first
+ok   run profiles are empty when none or unlisted
+ok   the run being prepared is the newest run session on the pull request
+ok   a run already serving is found by its serve link
+ok   a branch run is a preview with no pull request
+ok   the run log reads log lines past its cursor
+ok   the run log keeps its latest lines
+ok   project boards read columns, cards and sums
+ok   project boards carry why GitHub refused
+ok   project boards filter by assignee
+ok   project board cards list their pull requests
+ok   project boards keep only the project's cards
+ok   project boards move a card and its totals
+ok   project boards find cards and columns by id
+ok   project option colours are GitHub's names
+ok   column sums drop needless decimals
+ok   board settings are read from their GitHub address
+ok   edited names are split, trimmed and listed once
+ok   names join as the edit box shows them
+ok   assign me adds or takes off the login
+ok   review list keeps what waits on my review
+ok   device reads every field
+ok   device rejects missing or mistyped fields
+ok   device round trips and copies deeply
+ok   permission ranks and who may manage
+ok   admin tokens manage since the client API
+ok   discovery reads the client record and transcription
+ok   discovery rejects a missing version or client
+ok   voice notes off says what to do
+ok   routes read each operation of an OpenAPI document
+ok   routes reject what is neither OpenAPI nor a saved list
+ok   routes round trip and copy deeply
+ok   routes allow prefers a literal segment over a parameter
+ok   routes allow matches parameters on either side
+ok   routes allow needs the method and enough permission
+ok   connection round trips with its transcription
+ok   connection rejects a bad device or routes
+ok   projects read label and title
+ok   project copy is independent
+ok   session needs an id and a status
+ok   session copy is independent
+ok   session accessors fall back when fields are missing
+ok   session is active by status
+ok   session live input and queue
+ok   session review loop flags
+ok   held triage needs findings and prefers the standalone review
+ok   session pull number ignores what is not a pull request
+ok   session on issue reads the title an issue start gives
+ok   held rounds of an empty list
+ok   held rounds with equal holds keep the list order
+ok   held round URL reuses the conversation's own link only for its pull request
+ok   held round is mine unless a standalone review says otherwise
+ok   triage outcome text covers every outcome
+ok   findings subtitle counts reviews and pull requests
+ok   event reads every field
+ok   event needs a kind and a sequence
+ok   event detail prefers text over summary
+ok   event visible by kind and content
+ok   setup output stays in the transcript
+ok   transcript cursor only moves forward
+ok   transcript grows past its first allocation
+ok   saved transcript restores events and cursor
+ok   runtime catalog reads providers and models
+ok   runtime catalog rejects malformed providers
+ok   runtime catalog round trips
+ok   runtime choice falls back from model to default to first
+ok   runtime first available skips only providers turned off
+ok   runtime efforts and labels for known and unknown choices
+ok   runtime choice copy, equality and arguments
+ok   runtime offered keeps only what the catalog still has
+ok   runtime choice saves and reads back
+ok   pull file reads and round trips
+ok   pull file name and directory
+ok   pull files page reads paging and rejects without files
+ok   pull file list starts on page one and round trips
+ok   pull file list arguments pin later pages
+ok   pull file list append keeps the first revision and skips repeats
+ok   pull file list confirm needs the same revision
+ok   board date parse reads UTC and offsets
+ok   board date parse rejects what is not a timestamp
+ok   visible Markdown preserves rendered body semantics
+ok   empty and null sources have no blocks
+ok   headings take one to six hashes and a space
+ok   headings and rules end a paragraph
+ok   paragraph lines join and blank lines split them
+ok   CRLF sources parse like LF
+ok   rules need three of the same mark
+ok   bullets take dash, star or plus and nest by two spaces
+ok   ordered markers keep their number with a dot
+ok   a paragraph ends where a list starts
+ok   indented lines continue the list item above
+ok   task items carry their box
+ok   quotes gather lines without their marker
+ok   quotes end at blank lines and other blocks
+ok   fences keep their lines verbatim
+ok   a fence closes only on its own mark at least as long
+ok   an unterminated fence runs to the end
+ok   tables read alignments from the delimiter row
+ok   table rows are padded or cut to the header
+ok   table cells unescape pipes
+ok   tables end at a blank line or a line without a pipe
+ok   pipes without a matching delimiter row are text
+ok   a full reply mixes every block
+ok   plain text is one span without a URL
+ok   newlines stay in the text
+ok   code spans take matching backtick runs
+ok   unclosed backticks are literal
+ok   bold, italic and strike markers
+ok   tripled markers are bold and italic
+ok   italics step over bold inside them
+ok   emphasis needs text hugging its markers
+ok   unclosed emphasis is literal
+ok   intraword underscores are literal
+ok   backslash escapes drop the backslash
+ok   links carry their URL on every label span
+ok   link urls keep balanced parentheses
+ok   links with an empty label show their url
+ok   adjacent links stay separate spans
+ok   brackets that are not links are literal
+ok   images show their alt text as a link
+ok   angle autolinks
+ok   bare URLs drop trailing punctuation
+ok   URL schemes inside words are not links
+ok   HTML entities are decoded
+ok   spans with the same style merge
+ok   md_plain strips every marker
+ok   repo lists folders first in natural order
+ok   repo puts back folders a truncated list skipped
+ok   repo compares names as people do
+ok   repo finds files as Go to File does
+ok   repo reads one file
+ok   repo splits lines
+ok   code picks a language by name
+ok   code colours a line
+ok   index picks the files worth indexing
+ok   index rejects words used as members and template parameters
+ok   index finds declarations in PHP
+ok   index finds declarations in JavaScript and TypeScript
+ok   index finds declarations in other languages
+ok   index keeps files in order and on disk
+ok   index keeps up with the tree
+ok   index holds to its byte limit
+ok   index reads a commit for walking back
+ok   index searches symbols and text
+ok   mail accounts are credential-free and providers come from the server
+ok   mail settings validate the sync window and send only editable fields
+ok   mail callback validates destination state expiry and single-use parameters
+ok   mail sign-in refuses malformed and unavailable provider starts
+ok   mail redirects accept exact loopback hosts with optional valid ports
+ok   mail callbacks equate only empty and root paths
+ok   mail server completion requires the right account and ignores sync timestamps
+ok   mail failures explain reauth unavailable provider and wrong mailbox
+ok   mail conversations isolate accounts and aggregate member flags without changing messages
+ok   mail conversation modes keep absent thread IDs and ungrouped messages separate
+ok   mail conversation ownership supports many groups and a long thread
+ok   mail notification classification recognizes category labels and automated senders
+ok   mail models retain only literal text with attachment metadata and safe provider URLs
+ok   mail cursor pages deduplicate account+id and preserve newest-first order
+ok   mail account removal and reauth purge private rows and old pagination
+ok   mail filters preserve all tri-state flags and opaque cursor arguments
+ok   the agent speaks in the user's voice with the project tools
+ok   a prompt the user wrote replaces the default with its placeholders filled
+ok   tools are client tools that wait for the app
+ok   base64 encodes every tail length
+ok   audio, pongs and tool results go out as the agent names them
+ok   agent events are read
+ok   costs follow each model's rates
+ok   records round trip and add up by model
+ok   the log keeps speakers on their own lines and its tail
+ok   replies are made fit to say
+ok   models are named
+ok   each tool reads the project only
+ok   conversations are listed with their pull requests
+ok   a conversation is read with its open question
+ok   pull requests say whether they are ready to merge
+ok   a pull request is read with its diffs
+ok   findings say their verdicts
+ok   issues are listed and read with their comments
+ok   vt prints text and moves the cursor
+ok   vt wraps at the edge only when the next character comes
+ok   vt scrolling off the top feeds the scrollback
+ok   vt scrollback keeps only its capacity
+ok   vt cursor position and erases
+ok   vt relative moves stop at the edges
+ok   vt insert and delete characters and lines
+ok   vt scroll region scrolls inside itself
+ok   vt sgr sets colours and attributes
+ok   vt alternate screen keeps the main one
+ok   vt utf8 split across writes and wide characters
+ok   vt dec line drawing
+ok   vt titles and the bell
+ok   vt reports answer the program
+ok   vt modes the keyboard depends on
+ok   vt resizing keeps the cursor line on screen
+ok   vt tabs and backspace
+ok   vt char widths and the palette
+ok   usage comparison preserves its window and elapsed-time marker
+ok   usage comparison needs numeric values in both windows
+ok   usage comparison distinguishes unchanged zero from new usage
+ok   usage comparison computes increases, decreases and unchanged totals
+ok   usage comparison marks partial pricing in either window
+ok   usage pricing coverage rounds and handles empty or missing counts
+ok   pull threads follow numeric reply chains
+ok   pull thread traversal caps cycles and long chains
+ok   pull threads associate with submitted root reviews
+ok   pull conversation counts visible submitted review messages
+ok   pull timeline groups reviews and preserves orphan threads
+ok   pull timeline sorts chronologically with deterministic ties
+ok   pull conversation accepts empty and malformed feeds
+
+259 tests, 3534 checks, 0 failures

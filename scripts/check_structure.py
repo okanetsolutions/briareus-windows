@@ -228,7 +228,7 @@ def production_source(path):
 
 
 def presentation(path):
-    return path.startswith(("app/screen_", "app/project_")) and path.endswith(".c") or path == "app/forge_site.c"
+    return path.startswith(("app/screen_", "app/project_", "app/forge_site")) and path.endswith(".c")
 
 
 def check(before, after):

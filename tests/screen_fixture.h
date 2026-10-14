@@ -113,7 +113,13 @@ static inline void screen_fixture_click(Screen *s, Doc *doc, const char *text) {
 }
 
 static inline void screen_fixture_select(Screen *s, Doc *doc, const char *subject) {
-    screen_fixture_draw(s, doc); int i = screen_fixture_find(doc, subject); CHECK(i > 0);
-    if (i > 0) { Item *box = &doc->items[i - 1]; CHECK(box->action != 0); s->vt->action(s, box->action, box->arg, (POINT){0}); }
+    screen_fixture_draw(s, doc); int i = screen_fixture_find(doc, subject); CHECK(i >= 0);
+    if (i < 0) return;
+    RECT rc = doc->items[i].rc;
+    int hit = doc_hit(doc, (rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2); CHECK(hit >= 0);
+    if (hit >= 0) {
+        Item *row = &doc->items[hit]; CHECK(row->action != 0);
+        s->vt->action(s, row->action, row->arg, (POINT){0});
+    }
 }
 #endif

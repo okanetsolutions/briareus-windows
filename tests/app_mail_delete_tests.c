@@ -21,6 +21,11 @@ static Screen *setup(ScreenFixture *f, Doc *doc, Item *button) {
 static void cleanup(Screen *s, Doc *doc, ScreenFixture *f) {
     s->vt->destroy(s); doc_free(doc); screen_fixture_clear(f);
 }
+static bool revoked_in_modal;
+static void revoke_during_confirmation(void) {
+    g_store.device.permission = "read";
+    revoked_in_modal = true;
+}
 static void delete_requires_confirmation(void) {
     ScreenFixture f; Doc doc; Item button = {0}; Screen *s = setup(&f, &doc, &button);
     modal_driver_action(s, button.action, button.arg, IDCANCEL); screen_fixture_pump(&f, 1);
@@ -30,6 +35,9 @@ static void delete_requires_confirmation(void) {
     s->vt->action(s, button.action, button.arg, (POINT){0}); CHECK_INT(f.writes, 0);
     g_store.device.permission = "admin"; g_store.route_count = 3;
     s->vt->action(s, button.action, button.arg, (POINT){0}); CHECK_INT(f.writes, 0);
+    g_store.route_count = 4; revoked_in_modal = false;
+    modal_driver_action_during(s, button.action, button.arg, IDOK, revoke_during_confirmation);
+    CHECK(revoked_in_modal); CHECK_INT(f.writes, 0);
     cleanup(s, &doc, &f);
 }
 static void delete_selected_only(void) {

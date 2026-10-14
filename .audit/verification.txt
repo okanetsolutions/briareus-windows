@@ -1,0 +1,18 @@
+Structural cleanup verification
+Timestamp: 2026-10-14T07:28:54.591617+00:00
+Base: 8ff02661ab2f
+
+PASS: make rules, including 52 tooling/extractor tests, merge-base checks and full-tree audit.
+PASS: python3 scripts/extract_presentation.py scripts/refactors/presentation.json --check (139 files).
+PASS: native portable subset, 259 tests / 3534 checks / 0 failures, GCC with ASan and UBSan; scope and output in core-portable-tests.txt.
+PASS: MinGW cross-build of Briareus.exe, core_tests.exe and app_tests.exe with WERROR=1.
+PASS: make lint with cppcheck.
+PASS: editorconfig-checker 4.0.2.
+PASS: git diff --check.
+
+Windows build command (fresh toolchain container mounted on this worktree):
+make -j4 WERROR=1 BUILD=build-debt CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ WINDRES=x86_64-w64-mingw32-windres build-debt/Briareus.exe build-debt/core_tests.exe build-debt/app_tests.exe
+
+Not run locally: native Windows executables, MSVC, debug CRT leak checks, Windows sanitizer/fortify and full coverage gate. Host is aarch64 and no registered Windows SSH server is available; required checks remain in PR CI.
+
+Switch follow-up before its submodule bump: extend the external Makefile REPLACED filter to exclude screen_browser*.c and project_sftp*.c components, matching its existing owner-file stubs. No new Windows calls were introduced in production.
