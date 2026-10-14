@@ -1332,10 +1332,10 @@ static void test_names_join_as_the_edit_box_shows_them(void) {
     check_names(j, false, "[\"needs: review, qa\",\"\\\"x\\\"\",\"ui\"]"); free(j);
 }
 static void test_review_list_keeps_what_waits_on_my_review(void) {
-    Json *j = json_parsez("[{\"number\":1,\"labels\":[{\"name\":\"required-dev-review\"}],\"assignees\":[]},"
-        "{\"number\":2,\"labels\":[{\"name\":\"Required-Dev-Review\"}],\"assignees\":[\"Me\"]},"
-        "{\"number\":3,\"labels\":[{\"name\":\"required-dev-review\"}],\"stack\":{\"id\":7,\"position\":1,\"total\":2}},"
-        "{\"number\":4,\"labels\":[{\"name\":\"required-dev-review\"}],\"stack\":{\"id\":7,\"position\":2,\"total\":2}},"
+    Json *j = json_parsez("[{\"number\":1,\"labels\":[{\"name\":\"requires-dev-review\"}],\"assignees\":[]},"
+        "{\"number\":2,\"labels\":[{\"name\":\"Requires-Dev-Review\"}],\"assignees\":[\"Me\"]},"
+        "{\"number\":3,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":1,\"total\":2}},"
+        "{\"number\":4,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":2,\"total\":2}},"
         "{\"number\":5,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"changes_requested\"}],"
         "\"stack\":{\"id\":7,\"position\":2,\"total\":2},\"assignees\":[\"me\"]},"
         "{\"number\":6,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"someone\",\"state\":\"requested\"}]},"

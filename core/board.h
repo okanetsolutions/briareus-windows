@@ -88,10 +88,10 @@ size_t *issue_open_sub_issues(const IssueSummary *issues, size_t count, int epic
 const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number);
 
 /// The label that asks a developer to review a pull request, and the one that says its author has answered a review.
-#define REVIEW_LIST_REQUEST_LABEL "required-dev-review"
+#define REVIEW_LIST_REQUEST_LABEL "requires-dev-review"
 #define REVIEW_LIST_ANSWERED_LABEL "feedback-implemented"
 /// The Review List: the pull requests waiting on `me`'s review, as indices in board order. Those labelled
-/// required-dev-review that are not assigned to `me` and not stacked on another (outside a stack, or its first), and those
+/// requires-dev-review that are not assigned to `me` and not stacked on another (outside a stack, or its first), and those
 /// labelled feedback-implemented that `me` reviews. None without a login. Labels and logins match ignoring case.
 size_t *pulls_review_list(const PullSummary *pulls, size_t count, const Json *stacks, const char *me, size_t *found);
 
