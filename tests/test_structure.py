@@ -171,8 +171,8 @@ class GitIntegration(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "fixture")
 
-    def run_check(self, base="main"):
-        return subprocess.run([sys.executable, str(CHECKER), base], cwd=self.root, capture_output=True, text=True)
+    def run_check(self, base="main", *options):
+        return subprocess.run([sys.executable, str(CHECKER), base, *options], cwd=self.root, capture_output=True, text=True)
 
     def test_clean_branch_passes(self):
         result = self.run_check()
@@ -251,6 +251,19 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(1, result.returncode)
         self.assertIn("bypasses store", result.stderr)
+
+    def test_audit_reports_unchanged_debt_and_clears_after_repair(self):
+        self.write("app/screen_legacy.c", "void f(void) { api_call(c); }\n" + "\n" * 300)
+        self.commit()
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+        result = self.run_check("HEAD", "--audit")
+        self.assertEqual(1, result.returncode)
+        self.assertIn("presentation file has 301 lines", result.stderr)
+        self.assertIn("api_call bypasses store", result.stderr)
+        self.write("app/screen_legacy.c", "void f(void) { store_call(c); }\n")
+        result = self.run_check("HEAD", "--audit")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Full-tree structure audit passed", result.stdout)
 
     def test_untracked_source_is_checked(self):
         self.write("app/untracked.c", "void f(void) { WinHttpOpen(c); }\n")

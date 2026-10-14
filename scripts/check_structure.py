@@ -183,6 +183,19 @@ def findings(path, source, app_headers, snapshot):
     return result
 
 
+def audit(snapshot):
+    """Report all existing structural debt, without merge-base allowances."""
+    app_headers = {PurePosixPath(path).name.lower() for path in snapshot
+                   if path.startswith("app/") and path.endswith(".h")}
+    errors = []
+    for path, source in sorted(snapshot.items()):
+        if presentation(path) and len(source.splitlines()) > PRESENTATION_LIMIT:
+            errors.append(f"{path}:1: presentation file has {len(source.splitlines())} lines (max {PRESENTATION_LIMIT})")
+        if production_source(path):
+            errors.extend(f"{path}:{item.line}: {item.message}" for item in findings(path, source, app_headers, snapshot))
+    return errors
+
+
 def source_suppressions(source):
     count = 0
     for match in COMMENTS_AND_LITERALS.finditer(source):
@@ -300,11 +313,12 @@ def snapshots(root, base):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base", nargs="?", default="origin/main")
+    parser.add_argument("--audit", action="store_true", help="report existing debt as well as new violations")
     args = parser.parse_args()
     try:
         root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel").strip())
         ancestor, before, after = snapshots(root, args.base)
-        errors = check(before, after)
+        errors = audit(after) if args.audit else check(before, after)
     except (subprocess.CalledProcessError, OSError, UnicodeError) as error:
         detail = error.stderr.decode("utf-8", errors="replace") if isinstance(error, subprocess.CalledProcessError) else str(error)
         print(f"Structure check could not run: {detail.strip()}", file=sys.stderr)
@@ -312,7 +326,10 @@ def main():
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"Structure checks passed against {args.base} (merge base {ancestor[:12]}).")
+    if args.audit:
+        print("Full-tree structure audit passed.")
+    else:
+        print(f"Structure checks passed against {args.base} (merge base {ancestor[:12]}).")
     return 0
 
 

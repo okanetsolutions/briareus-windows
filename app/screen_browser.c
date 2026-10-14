@@ -33,8 +33,7 @@ static const GUID wic_bgra = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0
 typedef struct {
     volatile LONG refs;
     CRITICAL_SECTION lock;
-    ApiStreamCancel cancel;
-    ApiClient *client; char *session_id;
+    StoreStream *stream;
     HWND notify;                                // told when something arrived; NULL once the screen let go
     bool posted;                                // a WM_BROWSER_FEED is on its way
     Json *tabs;                                 // the latest `tabs` event
@@ -45,10 +44,9 @@ typedef struct {
 
 static void feed_release(Feed *f) {
     if (InterlockedDecrement(&f->refs) > 0) return;
-    api_stream_cancel_free(&f->cancel);
+    store_stream_free(f->stream);
     DeleteCriticalSection(&f->lock);
-    api_client_release(f->client);
-    json_free(f->tabs); free(f->pixels); free(f->session_id);
+    json_free(f->tabs); free(f->pixels);
     api_error_clear(&f->error);
     free(f);
 }
@@ -117,10 +115,8 @@ static DWORD WINAPI feed_thread(LPVOID p) {
     HRESULT co = CoInitializeEx(NULL, COINIT_MULTITHREADED);
     FeedReader r = { f, NULL };
     if (FAILED(CoCreateInstance(&clsid_wic_factory, NULL, CLSCTX_INPROC_SERVER, &iid_wic_factory, (void **)&r.wic))) r.wic = NULL;
-    Json *args = json_object(); json_set_str(args, "sessionId", f->session_id);
     ApiError error; api_error_init(&error);
-    api_stream(f->client, "browser_stream", args, &f->cancel, feed_event, &r, &error);
-    json_free(args);
+    store_stream_read(f->stream, feed_event, &r, &error);
     EnterCriticalSection(&f->lock);
     f->ended = true; api_error_copy(&f->error, &error);
     feed_post(f);
@@ -136,10 +132,10 @@ static Feed *feed_start(const char *session_id, HWND notify) {
     Feed *f = xcalloc(1, sizeof *f);
     f->refs = 2;
     InitializeCriticalSection(&f->lock);
-    api_stream_cancel_init(&f->cancel);
     api_error_init(&f->error);
-    f->client = api_client_retain(g_store.client);
-    f->session_id = xstrdup(session_id);
+    Json *args = json_object(); json_set_str(args, "sessionId", session_id);
+    f->stream = store_stream_new("browser_stream", args, &f->error);
+    if (!f->stream) { DeleteCriticalSection(&f->lock); api_error_clear(&f->error); free(f); return NULL; }
     f->notify = notify;
     HANDLE thread = CreateThread(NULL, 0, feed_thread, f, 0, NULL);
     if (!thread) { f->refs = 1; feed_release(f); return NULL; }
@@ -152,7 +148,7 @@ static void feed_stop(Feed *f) {
     EnterCriticalSection(&f->lock);
     f->notify = NULL;
     LeaveCriticalSection(&f->lock);
-    api_stream_cancel(&f->cancel);
+    store_stream_cancel(f->stream);
     feed_release(f);
 }
 
