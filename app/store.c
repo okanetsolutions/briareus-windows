@@ -323,6 +323,37 @@ Request *store_upload(const char *name, void *bytes, size_t len, void *owner, Re
     request_start(r);
     return r;
 }
+struct StoreStream {
+    ApiClient *client;
+    char *operation;
+    Json *args;
+    ApiStreamCancel cancel;
+};
+StoreStream *store_stream_new(const char *operation, Json *args, ApiError *error) {
+    if (!g_store.client || !store_supports(operation)) {
+        json_free(args);
+        api_error_set(error, API_HTTP, 403, "This token cannot perform that action.", -1);
+        return NULL;
+    }
+    StoreStream *stream = xcalloc(1, sizeof *stream);
+    stream->client = api_client_retain(g_store.client);
+    stream->operation = xstrdup(operation);
+    stream->args = args;
+    api_stream_cancel_init(&stream->cancel);
+    return stream;
+}
+bool store_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiError *error) {
+    return api_stream(stream->client, stream->operation, stream->args, &stream->cancel, emit, ctx, error);
+}
+void store_stream_cancel(StoreStream *stream) { api_stream_cancel(&stream->cancel); }
+void store_stream_free(StoreStream *stream) {
+    api_stream_cancel_free(&stream->cancel);
+    api_client_release(stream->client);
+    json_free(stream->args);
+    free(stream->operation);
+    free(stream);
+}
+
 void request_cancel(Request **slot) {
     if (!slot || !*slot) return;
     (*slot)->cancelled = true; (*slot)->slot = NULL;

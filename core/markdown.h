@@ -32,4 +32,7 @@ void md_spans_free(MdSpan *spans, size_t count);
 /// The text with inline markers removed, as a new string.
 char *md_plain(const char *text);
 
+/// Markdown without HTML comments and raw HTML lines, retaining fenced code; returns a new trimmed string.
+char *visible_markdown(const char *body);
+
 #endif

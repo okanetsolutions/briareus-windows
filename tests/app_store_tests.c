@@ -404,7 +404,33 @@ static void test_cancelled_mcp_finish_is_never_delivered(void) {
     request_cancel(&slot); CHECK(slot == NULL); CHECK_INT(deliver(), 1); CHECK_INT(answer.calls, 0); answer_free(&answer);
 }
 
+static void test_stream_creation_requires_connection_and_capability(void) {
+    ApiError error; api_error_init(&error);
+    store_reset();
+    CHECK(store_stream_new("browser_stream", json_object(), &error) == NULL);
+    CHECK_INT(error.status, 403);
+    ServerAddress address; CHECK(server_address_parse("https://briareus.example.test", &address));
+    ApiClient *client = api_client_new(&address, TOKEN, &error);
+    Route route = { "GET", "/sessions/{id}/browser/stream", "read" };
+    store_fake("read", &route, 1); g_store.client = client;
+    CHECK(store_stream_new("message", json_object(), &error) == NULL);
+    CHECK_INT(error.status, 403);
+    Json *args = json_object(); json_set_str(args, "sessionId", "s1");
+    StoreStream *stream = store_stream_new("browser_stream", args, &error);
+    CHECK(stream != NULL);
+    // Navigation can release the store's client before the worker finishes.
+    store_reset(); api_client_release(client);
+    if (stream) {
+        store_stream_cancel(stream);
+        CHECK(!store_stream_read(stream, NULL, NULL, &error));
+        CHECK_INT(error.kind, API_CANCELLED);
+        store_stream_free(stream);
+    }
+    server_address_free(&address); api_error_clear(&error);
+}
+
 void app_store_tests(void) {
+    test_run("streams check capability and retain their client through cancellation", test_stream_creation_requires_connection_and_capability);
     test_run("pinned catalog gates actual calls and absent routes", test_pinned_catalog_gates_existing_calls);
     test_run("MCP settings require admin catalog routes and the same account", test_mcp_admin_catalog_and_account_gates);
     test_run("cancelled MCP callbacks are discarded", test_cancelled_mcp_finish_is_never_delivered);

@@ -716,7 +716,8 @@ bool board_date_parse(const char *value, time_t *out) {
         offset = sign * (oh * 3600LL + om * 60LL);
     } else return false;
     if (*p) return false;
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 60) return false;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+    if (h > 23 || mi > 59 || s > 60) return false;
     long long days = days_from_civil(y, mo, d);
     *out = (time_t)(days * 86400 + h * 3600 + mi * 60 + s - offset);
     return true;

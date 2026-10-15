@@ -60,6 +60,8 @@ static void callbacks(void) {
     };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) CHECK(mail_sign_in_finish(&s, bad[i], 1791400000000) == NULL);
     CHECK(mail_sign_in_finish(&s, NULL, 1791400000000) == NULL);
+    CHECK(mail_sign_in_finish(&s, "http://127.0.0.1:8888/callback?state=s%2B1&code=c", INFINITY) == NULL);
+    CHECK(mail_sign_in_finish(&s, "http://127.0.0.1:8888/callback?state=s%2B1&code=c", -INFINITY) == NULL);
     CHECK(mail_sign_in_finish(&s, "http://127.0.0.1:8888/callback?state=s%2B1&code=c", s.expires_at) == NULL);
     CHECK(mail_sign_in_finish(&s, "http://127.0.0.1:8888/callback?state=s%2B1&code=c", NAN) == NULL);
     s.server_finish = true; CHECK(mail_sign_in_finish(&s, "http://127.0.0.1:8888/callback?state=s%2B1&code=c", 1) == NULL);
@@ -71,7 +73,7 @@ static void invalid_starts(void) {
     const char *bad[] = { "javascript:alert(1)", "http://remote.example/x", "https://u@host/x", "https://host/x#fragment", "https://host/x?query", "http://127.0.0.1:0/x", "http://localhost:65536/x", "http://localhost:8x", "http://localhost:8/a b", "http://localhost:8/a\\b",
         "http://localhost.evil/callback", "http://127.0.0.10/callback", "http://localhost@evil/callback", "http://localhost:/callback",
         "http://localhost:+80/callback", "http://localhost:999999999999999999999/callback", "http://localhost/callback?query", "http://localhost/callback#fragment",
-        "http://localhost/a\177", "http://[::1].evil/callback", "http://[::1]:0/callback", "http://[::2]/callback", "http://::1/callback" };
+        "http://localhost/a\177", "http://localhost/a@b", "http://localhost/a\t", "http://[::1].evil/callback", "http://[::1]:0/callback", "http://[::2]/callback", "http://::1/callback" };
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { json_set_str(j, "redirectUri", bad[i]); CHECK(!mail_sign_in_parse(j, "gmail", 0, &a, &s)); }
     json_set_str(j, "redirectUri", "https://core.example/oauth/mail/callback");
     CHECK(mail_sign_in_parse(j, "gmail", 0, &a, &s)); mail_sign_in_free(&s);

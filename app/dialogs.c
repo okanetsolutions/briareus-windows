@@ -413,9 +413,12 @@ static INT_PTR CALLBACK new_conversation_proc(HWND dialog, UINT msg, WPARAM wp, 
     }
     case WM_CTLCOLORSTATIC: {
         int id = GetDlgCtrlID((HWND)lp);
-        if (id == IDC_ERROR) return dialog_static_color(dialog, wp, lp, theme.danger);
-        if (id == IDC_PROJECT_NAME || id == IDC_BRANCH_LABEL || id == IDC_MODEL_LABEL || id == IDC_EFFORT_LABEL || id == IDC_NOTE || id == IDC_UNCERTAIN || id == IDC_RECORDING) return dialog_static_color(dialog, wp, lp, theme.secondary);
-        return dialog_ctl_color(dialog, msg, wp, lp);
+        switch (id) {
+        case IDC_ERROR: return dialog_static_color(dialog, wp, lp, theme.danger);
+        case IDC_PROJECT_NAME: case IDC_BRANCH_LABEL: case IDC_MODEL_LABEL: case IDC_EFFORT_LABEL:
+        case IDC_NOTE: case IDC_UNCERTAIN: case IDC_RECORDING: return dialog_static_color(dialog, wp, lp, theme.secondary);
+        default: return dialog_ctl_color(dialog, msg, wp, lp);
+        }
     }
     case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
     case WM_PAINT: { static const int ids[] = { IDC_PROMPT }; dialog_paint_frames(dialog, ids, 1); return TRUE; }

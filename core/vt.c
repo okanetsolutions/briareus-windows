@@ -125,16 +125,28 @@ char *vt_take_response(Vt *vt, size_t *len) {
 
 // MARK: - Character widths and colours
 
+typedef struct { uint32_t first, last; } CharRange;
+
+static bool char_in_ranges(uint32_t c, const CharRange *ranges, size_t count) {
+    for (size_t i = 0; i < count; i++)
+        if (c >= ranges[i].first && c <= ranges[i].last) return true;
+    return false;
+}
+
 int vt_char_width(uint32_t c) {
-    if (c == 0) return 0;
     // Combining marks and zero-width joiners ride on the cell before them.
-    if ((c >= 0x0300 && c <= 0x036F) || (c >= 0x1AB0 && c <= 0x1AFF) || (c >= 0x1DC0 && c <= 0x1DFF) || (c >= 0x20D0 && c <= 0x20FF)
-        || (c >= 0xFE20 && c <= 0xFE2F) || c == 0x200B || c == 0x200C || c == 0x200D || c == 0xFE0F || c == 0xFE0E) return 0;
-    if ((c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0x303E) || (c >= 0x3041 && c <= 0x33FF) || (c >= 0x3400 && c <= 0x4DBF)
-        || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xA000 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF)
-        || (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6)
-        || (c >= 0x1F300 && c <= 0x1F64F) || (c >= 0x1F900 && c <= 0x1F9FF) || (c >= 0x1F680 && c <= 0x1F6FF)
-        || (c >= 0x20000 && c <= 0x3FFFD)) return 2;
+    static const CharRange zero_width[] = {
+        { 0, 0 }, { 0x0300, 0x036F }, { 0x1AB0, 0x1AFF }, { 0x1DC0, 0x1DFF },
+        { 0x20D0, 0x20FF }, { 0xFE20, 0xFE2F }, { 0x200B, 0x200D }, { 0xFE0E, 0xFE0F },
+    };
+    static const CharRange wide[] = {
+        { 0x1100, 0x115F }, { 0x2E80, 0x303E }, { 0x3041, 0x33FF }, { 0x3400, 0x4DBF },
+        { 0x4E00, 0x9FFF }, { 0xA000, 0xA4CF }, { 0xAC00, 0xD7A3 }, { 0xF900, 0xFAFF },
+        { 0xFE30, 0xFE4F }, { 0xFF00, 0xFF60 }, { 0xFFE0, 0xFFE6 },
+        { 0x1F300, 0x1F64F }, { 0x1F900, 0x1F9FF }, { 0x1F680, 0x1F6FF }, { 0x20000, 0x3FFFD },
+    };
+    if (char_in_ranges(c, zero_width, sizeof zero_width / sizeof *zero_width)) return 0;
+    if (char_in_ranges(c, wide, sizeof wide / sizeof *wide)) return 2;
     return 1;
 }
 

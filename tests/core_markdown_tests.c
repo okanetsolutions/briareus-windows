@@ -297,6 +297,10 @@ static void test_tripled_markers_are_bold_and_italic(void) {
     CHECK_OWNED_STR(spans_desc("a ___bi___ b"), "[:a ][BI:bi][: b]");
     CHECK_OWNED_STR(spans_desc("a___b___c"), "[:a___b___c]");
     CHECK_OWNED_STR(spans_desc("***open"), "[:***open]");
+    CHECK_OWNED_STR(spans_desc("___"), "[:___]");
+    CHECK_OWNED_STR(spans_desc("___ spaced___"), "[B:_ spaced][:_]");
+    CHECK_OWNED_STR(spans_desc("_prefix___tail___"), "[I:prefix][:__tail___]");
+    CHECK_OWNED_STR(spans_desc("word***emphasis***"), "[:word][BI:emphasis]");
 }
 
 static void test_italics_step_over_bold_inside_them(void) {
@@ -441,7 +445,17 @@ static void test_md_plain_strips_every_marker(void) {
     CHECK_OWNED_STR(md_plain(NULL), "");
 }
 
+static void test_visible_markdown_preserves_rendered_body(void) {
+    CHECK_OWNED_STR(visible_markdown("  \n\t"), "");
+    CHECK_OWNED_STR(visible_markdown("Before<!-- hidden --> after\n<badge>\nTail"), "Before after\nTail");
+    CHECK_OWNED_STR(visible_markdown("Before<!-- unfinished"), "Before");
+    CHECK_OWNED_STR(visible_markdown("<details>\n<summary>Title</summary>\n  Review text  \n</details>"), "Review text");
+    CHECK_OWNED_STR(visible_markdown("```html\n<code>\n```"), "```html\n<code>\n```");
+    CHECK_OWNED_STR(visible_markdown("```html\n<code>\n```\n<footer>\nText"), "```html\n<code>\n```\nText");
+}
+
 void markdown_tests(void) {
+    test_run("visible Markdown preserves rendered body semantics", test_visible_markdown_preserves_rendered_body);
     test_run("empty and null sources have no blocks", test_empty_and_null_sources_have_no_blocks);
     test_run("headings take one to six hashes and a space", test_headings_take_one_to_six_hashes_and_a_space);
     test_run("headings and rules end a paragraph", test_headings_and_rules_end_a_paragraph);

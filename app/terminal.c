@@ -136,7 +136,8 @@ static bool safe_word(const char *z, const char *extra) {
     if (str_empty(z) || z[0] == '-') return false;
     for (const char *p = z; *p; p++) {
         unsigned char c = (unsigned char)*p;
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c >= 0x80 || strchr(extra, c))) return false;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) continue;
+        if (!((c >= '0' && c <= '9') || c >= 0x80 || strchr(extra, c))) return false;
     }
     return true;
 }

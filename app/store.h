@@ -75,6 +75,15 @@ Request *store_call(const char *operation, Json *args, int timeout_ms, void *own
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot);
 /// Stores a file on the server for the next message; the answer's `text` is the id to send. Takes ownership of `bytes`.
 Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot);
+typedef struct StoreStream StoreStream;
+/// Creates a stream on the UI thread after checking capability, retaining the current client; takes ownership of args.
+StoreStream *store_stream_new(const char *operation, Json *args, ApiError *error);
+/// Reads on the calling worker thread; callbacks must not touch controls. Free only after this returns.
+bool store_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiError *error);
+/// Stops a current or future read; may be called from another thread.
+void store_stream_cancel(StoreStream *stream);
+void store_stream_free(StoreStream *stream);
+
 /// Drops the request in the slot: its answer is discarded, and the slot is cleared.
 void request_cancel(Request **slot);
 /// The user-facing text of a failed request.

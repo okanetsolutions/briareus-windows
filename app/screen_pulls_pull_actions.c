@@ -1,0 +1,159 @@
+#include "screen_pulls_internal.h"
+
+
+void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)pt;
+    PullScreen *s = (PullScreen *)base;
+    switch (action) {
+    case ACT_OPEN_URL: {
+        const char *url = json_str(json_get(s->pr, "url"));
+        if (arg == 1) { char *files = xstrfmt("%s/files", url); open_web_url(files); free(files); } else open_web_url(url);
+        break;
+    }
+    case ACT_STACK_ITEM: app_push_from(&s->base, pull_detail_screen_new(&s->project, (int)arg, s->has_stack ? &s->stack : NULL, NULL)); break;
+    case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
+    case ACT_PR_TAB:
+        if (arg == PR_TAB_RUN) { screen_pulls_run_open(s); break; }
+        s->tab = (int)arg;
+        if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
+        if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s);
+        pane_relayout(base->pane); pane_header_changed(base->pane);
+        break;
+    case ACT_WEB_RELOAD: if (s->web) webview_reload(s->web); break;
+    case ACT_WEB_BACK: if (s->web) webview_back(s->web); break;
+    case ACT_WEB_FORWARD: if (s->web) webview_forward(s->web); break;
+    case ACT_RUN_PROFILE: screen_pulls_run_pick_profile(s, pt); break;
+    case ACT_RUN_RETRY: screen_pulls_run_start(s); break;
+    case ACT_WEB_BROWSER: open_web_url(s->web && webview_url(s->web) ? webview_url(s->web) : s->run_url); break;
+    case ACT_CONV_URL: {
+        const Json *feed = s->conv[arg >> 24].items;
+        open_web_url(json_str(json_get(json_at(feed, (size_t)(arg & 0xFFFFFF)), "url")));
+        break;
+    }
+    case ACT_FINDING_TOGGLE: {
+        bool open = screen_pulls_finding_open(s, (int)arg);
+        if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
+        else { s->open_findings = xrealloc(s->open_findings, (s->open_finding_count + 1) * sizeof *s->open_findings); s->open_findings[s->open_finding_count++] = (int)arg; }
+        pane_relayout(base->pane);
+        break;
+    }
+    case ACT_FINDING_DECISION: {
+        size_t index = (size_t)(arg / 8); int d = (int)(arg % 8);
+        const char *key = json_str(json_get(json_at(s->findings, index), "key"));
+        if (key && d >= 0 && d < 4) screen_pulls_decide(s, key, d == 0 ? NULL : screen_pulls_decision_ids[d]);
+        break;
+    }
+    case ACT_FINDING_URL: open_web_url(json_str(json_get(json_at(s->findings, (size_t)arg), "url"))); break;
+    case ACT_CHECK_URL: open_web_url(json_str(json_get(json_at(json_get(json_get(s->pr, "checks"), "runs"), (size_t)arg), "url"))); break;
+    case ACT_COMMIT_URL: open_web_url(json_str(json_get(json_at(json_get(s->pr, "commitList"), (size_t)arg), "url"))); break;
+    case ACT_ISSUE_URL: {
+        // An issue of this repository opens here, which reads the rest itself; any other on GitHub.
+        const PullSummary *row = screen_pulls_board_row(s);
+        BoardLink parsed; memset(&parsed, 0, sizeof parsed);
+        const BoardLink *link = row && (size_t)arg < row->issue_count ? &row->issues[arg]
+            : board_link_parse(json_at(json_get(s->pr, "issues"), (size_t)arg), &parsed) ? &parsed : NULL;
+        if (link && !board_link_is_foreign(link, s->project.repo) && store_supports("issue")) {
+            IssueSummary bare; memset(&bare, 0, sizeof bare);
+            bare.number = link->number; bare.title = link->title; bare.url = link->url;
+            app_push_from(&s->base, issue_detail_screen_new(&s->project, &bare));
+        } else if (link && safe_web_url(link->url)) open_web_url(link->url);
+        board_link_free(&parsed);
+        break;
+    }
+    case ACT_PR_PROJECT: open_web_url(json_str(json_get(json_at(json_get(json_at(s->issue_projects, (size_t)(arg >> 16)), "projects"), (size_t)(arg & 0xFFFF)), "url"))); break;
+    case ACT_MERGE: screen_pulls_merge(s, "squash"); break;
+    case ACT_UPDATE_BRANCH: screen_pulls_update_branch(s); break;
+    case ACT_EDIT: {
+        const char *title = json_str(json_get(s->pr, "title"));
+        if (!title && screen_pulls_board_row(s)) title = screen_pulls_board_row(s)->title;
+        if (s->editing || !screen_pulls_pull_body(s)) break;
+        char *t = xstrdup(title ? title : ""), *b = xstrdup(screen_pulls_pull_body(s));
+        s->dialog_open = true;
+        Json *fields = screen_pulls_details_edit("pull request", s->number, t, b);
+        s->dialog_open = false;
+        free(t); free(b);
+        screen_pulls_pull_edit(s, fields);
+        break;
+    }
+    case ACT_EDIT_ASSIGNEES: case ACT_EDIT_LABELS: {
+        const PullSummary *row = screen_pulls_board_row(s);
+        if (!row || s->editing) break;
+        s->dialog_open = true;
+        Json *list = action == ACT_EDIT_LABELS ? screen_pulls_labels_edit(row->labels, row->label_count, s->number)
+                                               : screen_pulls_assignees_edit(pane_hwnd(base->pane), pt, row->assignees, row->assignee_count, s->number);
+        s->dialog_open = false;
+        if (list) { Json *fields = json_object(); json_object_set(fields, action == ACT_EDIT_LABELS ? "labels" : "assignees", list); screen_pulls_pull_edit(s, fields); }
+        pane_relayout(base->pane);
+        break;
+    }
+    case ACT_RELOAD: screen_pulls_pull_refresh(base); break;
+    case ACT_START_ACTION: {
+        if ((size_t)arg >= s->action_count) break;
+        // The list may be rebuilt while the prompt is up, so the errand is copied first.
+        BoardAction a; board_action_copy(&a, &s->actions[arg]);
+        char *input = NULL;
+        s->dialog_open = true;
+        bool ok = screen_pulls_action_prompt(&a, s->number, &input);
+        s->dialog_open = false;
+        if (ok) screen_pulls_start_action(s, &a, input);
+        free(input); board_action_free(&a);
+        break;
+    }
+    case ACT_SOLVE_FINDINGS: {
+        if (!screen_pulls_solve_findings_offered(s) || s->busy || s->uncertain || s->deciding) break;
+        // The errand as the server words it when it is on offer, else as this app knows it.
+        const BoardAction *src = NULL;
+        for (size_t i = 0; i < s->action_count && !src; i++) if (str_eq(s->actions[i].id, "implement-feedback")) src = &s->actions[i];
+        if (!src) { size_t kn; const BoardAction *known = board_actions_known(&kn); for (size_t i = 0; i < kn && !src; i++) if (str_eq(known[i].id, "implement-feedback")) src = &known[i]; }
+        if (!src) break;
+        BoardAction a; board_action_copy(&a, src);
+        size_t fixes = screen_pulls_findings_to_fix(s), open = screen_pulls_findings_unfixed(s);
+        char *title = fixes ? xstrfmt("Start a paid fix session for %zu finding%s?", fixes, fixes == 1 ? "" : "s")
+                            : xstrfmt("Start a paid fix session for %zu open finding%s?", open, open == 1 ? "" : "s");
+        char *message = xstrfmt("The agent addresses the findings on PR #%d, pushes the fixes to its branch and has them reviewed again. Uses the provider and model configured for this project.", s->number);
+        s->dialog_open = true;
+        bool ok = app_confirm(title, message, "Solve findings", false);
+        s->dialog_open = false;
+        free(title); free(message);
+        if (ok) screen_pulls_start_action(s, &a, NULL);
+        board_action_free(&a);
+        break;
+    }
+    case ACT_DELETE_SERVED: {
+        if (!screen_pulls_run_target(s) || s->deleting_run || !store_supports("delete")) break;
+        char *id = xstrdup(screen_pulls_run_target(s));
+        s->dialog_open = true;
+        bool ok = app_confirm("Delete this run?", "Its workspace stops serving the pull request, and its conversation and transcript are deleted permanently.", "Delete", true);
+        s->dialog_open = false;
+        // The run may have changed while the dialog was open: delete the one asked about only if it is still shown.
+        if (ok && !s->deleting_run && str_eq(id, screen_pulls_run_target(s))) {
+            set_string(&s->deleting_run, id); set_string(&s->run_error, NULL);
+            Json *args = json_object(); json_set_str(args, "sessionId", id);
+            store_call("delete", args, 0, s, screen_pulls_delete_run_done, TAG_DELETE_RUN, &s->req_delete_run);
+            pane_relayout(s->base.pane);
+        }
+        free(id);
+        break;
+    }
+    case ACT_OPEN_RUN: if ((size_t)arg < s->run_count) app_push_from(&s->base, conversation_screen_new(&s->runs[arg])); break;
+    case ACT_DELETE_RUN: {
+        if ((size_t)arg >= s->run_count || s->deleting_run || !store_supports("delete")) break;
+        char *id = xstrdup(session_id(&s->runs[arg]));
+        char *message = xstrfmt("\xE2\x80\x9C%s\xE2\x80\x9D", session_display_title(&s->runs[arg]));
+        s->dialog_open = true;
+        bool ok = app_confirm("Permanently delete this conversation and its transcript?", message, "Delete", true);
+        s->dialog_open = false;
+        free(message);
+        // The list may have been read again while the dialog was open: delete by id, not by row.
+        if (ok && !s->deleting_run) {
+            set_string(&s->deleting_run, id); set_string(&s->run_error, NULL);
+            Json *args = json_object(); json_set_str(args, "sessionId", id);
+            store_call("delete", args, 0, s, screen_pulls_delete_run_done, TAG_DELETE_RUN, &s->req_delete_run);
+            pane_relayout(s->base.pane);
+        }
+        free(id);
+        break;
+    }
+    default: pull_files_action(s->files, action, arg); break;
+    }
+}

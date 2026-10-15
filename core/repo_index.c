@@ -91,6 +91,18 @@ static const Declarer *declarer_of(const char *word, size_t len, const char *lan
 /// The class the lines below are in: the last one declared, while lines are indented past it.
 typedef struct { char *name; int indent; } Scope;
 
+static bool declaration_context(const char *code, size_t before) {
+    if (!before) return true;
+    char prev = code[before - 1];
+    if (prev && strchr(".:$<,", prev)) return false;
+    return !(prev == '>' && before >= 2 && code[before - 2] == '-');
+}
+
+static bool declaration_keyword_name(const char *name, size_t len, const char *language, const char *code, size_t after, size_t n) {
+    if (word_is(name, len, "import") || word_is(name, len, "extends") || word_is(name, len, "implements")) return true;
+    return declarer_of(name, len, language) && after < n && ident_start(code[after]);
+}
+
 /// A declaration introduced by one of DECLARERS on a line, outside comments and strings; false when there is none.
 static bool keyword_declaration(const char *code, size_t n, int indent, const char *language, size_t *name_at, size_t *name_len, SymbolKind *kind) {
     size_t first_word = skip_spaces(code, n, 0);
@@ -100,11 +112,10 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         while (j < n && ident_char(code[j])) j++;
         size_t before = i;
         while (before && (code[before - 1] == ' ' || code[before - 1] == '\t')) before--;
-        char prev = before ? code[before - 1] : 0;
         const Declarer *d = declarer_of(code + i, j - i, language);
         // `Foo::class`, `$this->type`, `options.type` name a word; they declare nothing. Nor does C++'s template
         // parameter, `template <class K, class V>`: the class is declared after its `>`.
-        if (!d || prev == '.' || (prev == '>' && before >= 2 && code[before - 2] == '-') || prev == ':' || prev == '$' || prev == '<' || prev == ',') { i = j; continue; }
+        if (!d || !declaration_context(code, before)) { i = j; continue; }
         size_t k = skip_spaces(code, n, j);
         // PHP's `function &name` returns a reference; JavaScript's `function* name` is a generator.
         if (str_eq(d->word, "function") && k < n && (code[k] == '&' || code[k] == '*')) k = skip_spaces(code, n, k + 1);
@@ -126,8 +137,7 @@ static bool keyword_declaration(const char *code, size_t n, int indent, const ch
         size_t after = skip_spaces(code, n, e);
         // A keyword in the name's place: Kotlin's `enum class Color` and `fun interface Runner` declare with the next
         // word, and Python's `from enum import`, or JavaScript's `class extends Base`, declare nothing here.
-        if (word_is(code + k, e - k, "import") || word_is(code + k, e - k, "extends") || word_is(code + k, e - k, "implements") ||
-            (declarer_of(code + k, e - k, language) && after < n && ident_start(code[after]))) { i = j; continue; }
+        if (declaration_keyword_name(code + k, e - k, language, code, after, n)) { i = j; continue; }
         bool ok = true;
         // `type` and `module` lead their line, after `export` or `declare` at most.
         if (str_eq(d->word, "type") || str_eq(d->word, "module")) {

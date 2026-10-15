@@ -1,43 +1,20 @@
-// Global mailbox settings. The read-only inbox has its own screen.
-#include "screens.h"
-#include "dialogs.h"
-#include "mail.h"
-#include "mail_settings.h"
-#include <commctrl.h>
-#include <limits.h>
-#include <math.h>
-#include "str.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include "screen_mail_internal.h"
 
-enum { ACT_CONNECT = 1800, ACT_REAUTH, ACT_ENABLED, ACT_DAYS, ACT_DELETE, ACT_SYNC, ACT_FINISH, ACT_CANCEL, ACT_BROWSER_DONE, ACT_SAVE, ACT_FOCUS, ACT_MANAGE };
-enum { TIMER_MAIL = 1810, ID_MAIL_LABEL = 2500 };
-typedef struct {
-    Screen base;
-    MailAccounts accounts;
-    MailSignIn sign_in;
-    Request *read, *write;
-    char *error, *notice, *starting_provider;
-    int starting_id, failures, focus;
-    bool shown, loaded, blocked, modal, retired, read_error;
-    ULONGLONG next_read, retry_until;
-    // The label is a field on the page, as a project's Label is, saved with Save. Not a dialog.
-    HWND label_edit;
-    RECT label_rect;
-    bool label_laid, label_clipped, label_focused, dirty, filling, label_write;
-} MailScreen;
-static char *edit_text(HWND edit);
-static void set_edit_text(HWND edit, const char *text);
-static void label_fill(MailScreen *s);
-static void label_save(MailScreen *s);
-static void label_field(MailScreen *s, Doc *doc, int x, int w);
+static void timer(Screen *base, UINT id);
+static void refresh(Screen *base);
+static bool can_leave(Screen *base);
+static void destroy(Screen *base);
+static void activated(Screen *base, bool active);
+static Screen *open_mail_settings(int account_id);
 
 bool mail_settings_offered(void) { return g_store.has_device && permission_rank(g_store.device.permission) == 2 && store_supports("settings_mail_accounts"); }
-static double now_ms(void) { FILETIME ft; GetSystemTimeAsFileTime(&ft); ULARGE_INTEGER n; n.LowPart = ft.dwLowDateTime; n.HighPart = ft.dwHighDateTime; return (double)(n.QuadPart / 10000ULL - 11644473600000ULL); }
-static void set_text(char **slot, const char *text) { free(*slot); *slot = xstrdup(text); }
+
+double screen_mail_now_ms(void) { FILETIME ft; GetSystemTimeAsFileTime(&ft); ULARGE_INTEGER n; n.LowPart = ft.dwLowDateTime; n.HighPart = ft.dwHighDateTime; return (double)(n.QuadPart / 10000ULL - 11644473600000ULL); }
+
+void screen_mail_set_text(char **slot, const char *text) { free(*slot); *slot = xstrdup(text); }
+
 bool mail_settings_result_current(bool shown, const Request *r) { return shown && !r->cancelled && r->client && r->client == g_store.client && mail_settings_offered(); }
+
 int mail_settings_retry_ms(int failures, double retry_after) {
     int delay = 10000;
     for (int i = 1; i < failures && delay < 60000; i++) delay = delay > 30000 ? 60000 : delay * 2;
@@ -46,506 +23,75 @@ int mail_settings_retry_ms(int failures, double retry_after) {
     }
     return delay;
 }
-static void set_error(MailScreen *s, const char *text, bool from_read) {
-    set_text(&s->error, text); s->read_error = from_read;
+
+void screen_mail_set_error(MailScreen *s, const char *text, bool from_read) {
+    screen_mail_set_text(&s->error, text); s->read_error = from_read;
 }
-static bool current(MailScreen *s, Request *r) { return mail_settings_result_current(s->shown, r); }
-static bool can_write(MailScreen *s, const char *op) { return s->shown && !s->blocked && !s->write && !s->sign_in.state && !s->read && GetTickCount64() >= s->retry_until && store_supports(op); }
-static void repaint(MailScreen *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
-static void load(MailScreen *s);
-static void release(MailScreen *s) {
+
+bool screen_mail_current(MailScreen *s, Request *r) { return mail_settings_result_current(s->shown, r); }
+
+bool screen_mail_can_write(MailScreen *s, const char *op) { return s->shown && !s->blocked && !s->write && !s->sign_in.state && !s->read && GetTickCount64() >= s->retry_until && store_supports(op); }
+
+void screen_mail_repaint(MailScreen *s) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
+
+void screen_mail_release(MailScreen *s) {
     if (s->label_edit) { DestroyWindow(s->label_edit); s->label_edit = NULL; }
     mail_sign_in_free(&s->sign_in); mail_accounts_free(&s->accounts);
     free(s->error); free(s->notice); free(s->starting_provider); screen_release(&s->base);
 }
-static void arm(MailScreen *s, int delay) {
-    if (!s->shown || s->blocked || s->modal || !g_store.active || !mail_settings_offered()) return;
-    s->next_read = GetTickCount64() + (ULONGLONG)delay;
-    SetTimer(pane_hwnd(s->base.pane), TIMER_MAIL, (UINT)delay, NULL);
-}
-static bool syncing(MailScreen *s) { for (size_t i = 0; i < s->accounts.count; i++) if (s->accounts.accounts[i].syncing) return true; return false; }
-static void stop_waiting(MailScreen *s) { mail_sign_in_free(&s->sign_in); }
-static void failed(MailScreen *s, Request *r, bool finish) {
-    set_error(s, mail_error_message(r->error.status, finish, r->error.message), str_eq(r->operation, "settings_mail_accounts"));
-    if (r->error.status == 401 || r->error.status == 403 || (r->error.status == 404 && s->read_error)) s->blocked = true;
-    if (r->error.status == 429) {
-        s->failures++;
-        int delay = mail_settings_retry_ms(s->failures, r->error.retry_after);
-        s->retry_until = GetTickCount64() + (ULONGLONG)delay;
-        arm(s, delay);
-    }
-}
-static void read_done(void *owner, Request *r) {
-    MailScreen *s = owner;
-    if (!current(s, r)) return;
-    MailAccounts fresh;
-    if (!r->ok) {
-        failed(s, r, false);
-        if (!s->blocked && r->error.status != 429) {
-            s->failures++;
-            int delay = mail_settings_retry_ms(s->failures, r->error.retry_after);
-            arm(s, delay);
-        }
-    } else if (!mail_accounts_parse(r->result, &fresh)) {
-        set_error(s, "The server returned an unexpected mail account list.", true);
-        s->blocked = true;
-    } else {
-        if (s->read_error) set_error(s, NULL, false);
-        s->loaded = true; s->failures = 0; s->next_read = 0; s->retry_until = 0;
-        if (s->sign_in.state && mail_sign_in_completed(&s->sign_in, &fresh)) {
-            stop_waiting(s); set_text(&s->notice, "The account list now reflects a connected mailbox.");
-        }
-        mail_accounts_free(&s->accounts); s->accounts = fresh;
-        settings_mail_changed(r->result);
-        label_fill(s);
-        if (s->sign_in.state || syncing(s)) arm(s, 10000);
-    }
-    repaint(s);
-}
-static void load(MailScreen *s) {
-    if (!s->shown || s->blocked || s->modal || s->read || s->write || !g_store.active || !mail_settings_offered()) return;
-    ULONGLONG tick = GetTickCount64();
-    if (tick < s->retry_until) { arm(s, (int)(s->retry_until - tick)); return; }
-    if (tick < s->next_read) { arm(s, (int)(s->next_read - tick)); return; }
-    store_call("settings_mail_accounts", json_object(), 0, s, read_done, 0, &s->read);
-    repaint(s);
-}
-static void start_done(void *owner, Request *r) {
-    MailScreen *s = owner;
-    if (!current(s, r)) return;
-    if (!r->ok) failed(s, r, false);
-    else if (!mail_sign_in_parse(r->result, s->starting_provider, s->starting_id, &s->accounts, &s->sign_in)
-             || now_ms() >= s->sign_in.expires_at
-             || (!s->sign_in.server_finish && !store_supports("finish_mail_account"))) {
-        stop_waiting(s); set_error(s, "The server returned an invalid or expired sign-in. Start again.", false);
-    } else {
-        set_error(s, NULL, false);
-        set_text(&s->notice, s->sign_in.server_finish
-            ? "Finish sign-in in the browser. This page checks every 10 seconds. The browser reports errors, including a different mailbox (409). For an already connected mailbox, confirm the browser result then refresh here."
-            : "Finish sign-in in the browser, then immediately paste the complete final callback address here; Microsoft codes may expire within a minute.");
-        open_web_url(json_str(json_get(r->result, "url")));
-        arm(s, 10000);
-    }
-    if (!s->sign_in.state && (syncing(s) || (!r->ok && r->error.status == 404))) {
-        if (!r->ok && r->error.status == 404) s->next_read = 0;
-        load(s);
-    }
-    repaint(s);
-}
-static void start(MailScreen *s, const char *provider, int id, bool manage) {
-    if (!can_write(s, "connect_mail_account") || !s->loaded || !mail_provider_available(&s->accounts, provider)) return;
-    Json *body = json_object(); json_set_str(body, "provider", provider);
-    if (id) json_set_num(body, "accountId", id);
-    if (manage) json_set_str(body, "access", "manage");
-    // Let the server apply defaults only to new mailboxes and preserve settings on reconnect.
-    set_text(&s->starting_provider, provider); s->starting_id = id;
-    set_error(s, NULL, false); set_text(&s->notice, NULL);
-    store_call("connect_mail_account", body, 0, s, start_done, 0, &s->write); repaint(s);
-}
-static void write_done(void *owner, Request *r) {
-    MailScreen *s = owner;
-    if (!current(s, r)) return;
-    bool finish = str_eq(r->operation, "finish_mail_account");
-    bool label_write = s->label_write;
-    if (finish) { stop_waiting(s); set_text(&s->notice, NULL); } // Exchanges are single-use, including a refusal or ambiguous network failure.
-    char *saved_label = NULL;
-    if (!r->ok) { failed(s, r, finish); }
-    else {
-        bool deletion = str_eq(r->operation, "delete_mail_account");
-        MailAccount a = {0};
-        bool valid = deletion ? json_bool_is(json_get(r->result, "ok"), true) : mail_account_parse(json_get(r->result, "account"), &a);
-        if (valid && !deletion) {
-            if (!finish && a.id != r->tag) valid = false;
-            if (finish && s->starting_id && a.id != s->starting_id) valid = false;
-            if (valid && label_write) saved_label = xstrdup(a.label ? a.label : "");
-            mail_account_free(&a);
-        }
-        if (!valid) set_error(s, "The server returned an unexpected mail response. Refresh before trying again.", false);
-        else {
-            set_error(s, NULL, false);
-            set_text(&s->notice, str_eq(r->operation, "sync_mail_account")
-                ? "Sync started (202); polling account status until it finishes."
-                : deletion ? "Disconnected. The provider may still list this app as having access; remove it there to revoke access."
-                : finish ? "Mailbox connected; refreshing status."
-                : "Account settings saved; refreshing status.");
-        }
-    }
-    if (label_write) {
-        s->label_write = false;
-        // A keystroke after Save started is kept. The box is saved only when it still matches the answer.
-        if (saved_label && s->label_edit) {
-            char *now = edit_text(s->label_edit), *trim = str_trim(now);
-            if (str_eq(trim, saved_label)) {
-                s->filling = true; set_edit_text(s->label_edit, saved_label); s->filling = false; s->dirty = false;
-            }
-            free(now); free(trim);
-        }
-        free(saved_label);
-        pane_header_changed(s->base.pane);
-    }
-    if (!s->blocked && GetTickCount64() >= s->retry_until) { s->next_read = 0; load(s); }
-    repaint(s);
-}
-// A token revocation can replace the screen inside a modal dialog's nested message loop.
-// Retain the screen until the dialog returns, then discard its input if it was retired.
-static void modal_begin(MailScreen *s) {
-    s->modal = true; KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL); request_cancel(&s->read); s->next_read = 0;
-}
-static bool modal_end(MailScreen *s) {
-    s->modal = false;
-    if (s->retired) { release(s); return false; }
-    if (s->sign_in.state || syncing(s)) arm(s, 10000);
-    return true;
-}
-static void finish(MailScreen *s) {
-    if (!s->sign_in.state || s->sign_in.server_finish || s->write || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) return;
-    modal_begin(s);
-    char *url = dialog_text(pane_hwnd(s->base.pane), "Finish mail sign-in", "Paste the complete callback address immediately after sign-in", "Finish", "");
-    if (!modal_end(s)) { free(url); return; }
-    if (!url) return;
-    if (!s->shown || s->blocked || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) { free(url); return; }
-    Json *body = mail_sign_in_finish(&s->sign_in, url, now_ms()); free(url);
-    if (!body) { set_error(s, "Callback does not match this sign-in, contains an error, or has expired. Check the final address or start again.", false); repaint(s); return; }
-    request_cancel(&s->read); KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL);
-    s->next_read = 0;
-    store_call("finish_mail_account", body, 0, s, write_done, s->starting_id, &s->write); repaint(s);
-}
-static void update(MailScreen *s, const MailAccount *a, int action) {
-    if (!can_write(s, "update_mail_account")) return;
-    // Dialogs run a nested message loop: copy the id and values before status polling can replace the list.
-    int id = a->id; bool enabled = a->enabled;
-    char *label = xstrdup(a->label ? a->label : ""), *days = xstrfmt("%d", a->sync_days);
-    Json *body = NULL;
-    if (action == ACT_DAYS) {
-        modal_begin(s);
-        char *v = dialog_text(pane_hwnd(s->base.pane), "Mail sync window", "Days to keep (1-365); changing this restarts the first sync", "Save", days);
-        if (!modal_end(s)) { free(v); free(label); free(days); return; }
-        if (v) { body = mail_settings_body(label, enabled, v); if (!body) set_error(s, "Enter a whole number of days from 1 to 365.", false); free(v); }
-    } else body = mail_settings_body(label, !enabled, days);
-    free(label); free(days);
-    if (body && can_write(s, "update_mail_account") && mail_account_find(&s->accounts, id)) {
-        // Send only the field edited. The label is the page's own field, saved with Save.
-        json_object_remove(body, "label");
-        if (action != ACT_ENABLED) json_object_remove(body, "enabled");
-        if (action != ACT_DAYS) json_object_remove(body, "syncDays");
-        json_set_num(body, "id", id);
-        store_call("update_mail_account", body, 0, s, write_done, id, &s->write);
-    } else json_free(body);
-    repaint(s);
-}
-static void action(Screen *base, int act, intptr_t arg, POINT pt) {
+
+void screen_mail_action(Screen *base, int act, intptr_t arg, POINT pt) {
     (void)pt;
     MailScreen *s = (MailScreen *)base;
     if (!mail_settings_offered()) return;
     if (act == ACT_CANCEL || act == ACT_BROWSER_DONE) {
         if (s->write) return;
-        stop_waiting(s); request_cancel(&s->read); KillTimer(pane_hwnd(base->pane), TIMER_MAIL); s->next_read = 0;
-        set_text(&s->notice, act == ACT_CANCEL ? "Stopped waiting locally. You can start a new sign-in." : "Check the browser's result for success or a wrong-mailbox error; refreshing account status.");
-        load(s); repaint(s); return;
+        screen_mail_stop_waiting(s); request_cancel(&s->read); KillTimer(pane_hwnd(base->pane), TIMER_MAIL); s->next_read = 0;
+        screen_mail_set_text(&s->notice, act == ACT_CANCEL ? "Stopped waiting locally. You can start a new sign-in." : "Check the browser's result for success or a wrong-mailbox error; refreshing account status.");
+        screen_mail_load(s); screen_mail_repaint(s); return;
     }
-    if (act == ACT_FINISH) { finish(s); return; }
-    if (act == ACT_CONNECT) { start(s, arg == 0 ? "gmail" : "outlook", 0, false); return; }
-    if (act == ACT_SAVE) { label_save(s); return; }
+    if (act == ACT_FINISH) { screen_mail_finish(s); return; }
+    if (act == ACT_CONNECT) { screen_mail_start(s, arg == 0 ? "gmail" : "outlook", 0, false); return; }
+    if (act == ACT_SAVE) { screen_mail_label_save(s); return; }
     if (act == ACT_FOCUS) { if (s->label_edit && IsWindowEnabled(s->label_edit)) SetFocus(s->label_edit); return; }
     const MailAccount *a = mail_account_find(&s->accounts, (int)arg);
     if (!a) return;
     int id = a->id;
-    if (act == ACT_REAUTH || act == ACT_MANAGE) { start(s, a->provider, id, act == ACT_MANAGE); return; }
-    if (act == ACT_DAYS || act == ACT_ENABLED) { update(s, a, act); return; }
+    if (act == ACT_REAUTH || act == ACT_MANAGE) { screen_mail_start(s, a->provider, id, act == ACT_MANAGE); return; }
+    if (act == ACT_DAYS || act == ACT_ENABLED) { screen_mail_update(s, a, act); return; }
     const char *op = act == ACT_DELETE ? "delete_mail_account" : act == ACT_SYNC ? "sync_mail_account" : NULL;
-    if (!op || !can_write(s, op)) return;
+    if (!op || !screen_mail_can_write(s, op)) return;
     if (act == ACT_DELETE) {
-        modal_begin(s);
+        screen_mail_modal_begin(s);
         bool confirmed = app_confirm("Disconnect mailbox?", "Core deletes its synced copy, its messages and saved tokens. Your provider's mailbox is kept. To revoke the app's access too, remove it in Google or Microsoft account settings.", "Disconnect", true);
-        if (!modal_end(s)) return;
+        if (!screen_mail_modal_end(s)) return;
         if (!confirmed) return;
     }
-    if (!can_write(s, op) || !mail_account_find(&s->accounts, id)) return;
+    if (!screen_mail_can_write(s, op) || !mail_account_find(&s->accounts, id)) return;
     Json *body = json_object(); json_set_num(body, "id", id);
-    store_call(op, body, 0, s, write_done, id, &s->write); repaint(s);
+    store_call(op, body, 0, s, screen_mail_write_done, id, &s->write); screen_mail_repaint(s);
 }
-static void header(Screen *base, HeaderInfo *info) {
-    MailScreen *s = (MailScreen *)base;
-    const MailAccount *a = s->focus > 0 ? mail_account_find(&s->accounts, s->focus) : NULL;
-    if (a) {
-        const char *title = str_empty(a->label) ? a->email : a->label;
-        snprintf(info->title, sizeof info->title, "%s", title ? title : "Mailbox");
-        if (!str_empty(a->label) && a->email) snprintf(info->subtitle, sizeof info->subtitle, "%s", a->email);
-        else snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
-        if (store_supports("update_mail_account")) {
-            HeaderButton *b = &info->buttons[info->button_count++];
-            snprintf(b->label, sizeof b->label, "%s", s->label_write ? "Saving\xE2\x80\xA6" : "Save");
-            b->glyph = 0xE74E; b->action = ACT_SAVE; b->prominent = true; b->tip = "Save this mailbox (Ctrl+S)";
-            b->enabled = s->dirty && can_write(s, "update_mail_account");
-        }
-        return;
-    }
-    snprintf(info->title, sizeof info->title, "Mail accounts");
-    snprintf(info->subtitle, sizeof info->subtitle, "Gmail and Outlook. Read-only until you enable mail actions.");
-}
-static void account_card(MailScreen *s, Doc *doc, int x, int w, const MailAccount *a) {
-    int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(8));
-    int ix = x + pad, iw = w - pad * 2;
-    const char *title = str_empty(a->label) ? a->email : a->label;
-    doc_text(doc, ix, iw, title ? title : "Mailbox", FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_WORDBREAK);
-    if (!str_empty(a->label) && a->email) { doc_space(doc, px(2)); doc_text(doc, ix, iw, a->email, FONT_CAPTION, theme.muted, DT_WORDBREAK); }
-    doc_space(doc, px(8));
-    COLORREF status_color = str_eq(a->status, "connected") ? theme.ok : str_eq(a->status, "reauth") ? theme.warn : theme.muted;
-    char *days = xstrfmt("%d day%s", a->sync_days, a->sync_days == 1 ? "" : "s");
-    char *counts = xstrfmt("%d messages, %d unread", a->messages, a->unread);
-    BadgeSpec badges[] = {
-        { 0, a->provider ? a->provider : "mail", theme.accent, true },
-        { 0, a->status ? a->status : "unknown", status_color, true },
-        { 0, a->enabled ? "Enabled" : "Disabled", a->enabled ? theme.ok : theme.muted, true },
-        { 0, days, theme.muted, true },
-        { 0, counts, theme.muted, true },
-    };
-    doc_badges(doc, ix, iw, badges, sizeof badges / sizeof *badges, theme.raise);
-    char *last = a->last_sync_at ? format_relative((time_t)(a->last_sync_at / 1000)) : xstrdup("never");
-    char *sync = xstrfmt("Last sync %s%s", last, a->syncing ? "  ·  Syncing" : "");
-    doc_space(doc, px(8));
-    doc_text(doc, ix, iw, sync, FONT_CAPTION, theme.muted, DT_WORDBREAK);
-    free(sync); free(last); free(days); free(counts);
-    if (!str_empty(a->last_sync_error)) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, a->last_sync_error); }
-    if (str_eq(a->status, "reauth")) { doc_space(doc, px(8)); doc_notice(doc, ix, iw, "Provider access expired or was revoked. Sign in again with this mailbox."); }
-    bool edit = can_write(s, "update_mail_account");
-    ButtonSpec buttons[] = {
-        { 0, a->enabled ? "Disable" : "Enable", BUTTON_BORDERED, ACT_ENABLED, a->id, edit },
-        { 0, "Sync days", BUTTON_BORDERED, ACT_DAYS, a->id, edit },
-        { 0, "Sign in again", BUTTON_BORDERED, ACT_REAUTH, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
-        { 0, "Enable mail actions", BUTTON_BORDERED, ACT_MANAGE, a->id, can_write(s, "connect_mail_account") && mail_provider_available(&s->accounts, a->provider) },
-        { 0, "Sync now", BUTTON_BORDERED, ACT_SYNC, a->id, can_write(s, "sync_mail_account") && !a->syncing && str_eq(a->status, "connected") },
-        { 0, "Disconnect", BUTTON_DESTRUCTIVE, ACT_DELETE, a->id, can_write(s, "delete_mail_account") },
-    };
-    const char *ops[] = { "update_mail_account", "update_mail_account", "connect_mail_account", "connect_mail_account", "sync_mail_account", "delete_mail_account" };
-    ButtonSpec offered[6]; size_t n = 0;
-    for (size_t k = 0; k < sizeof buttons / sizeof *buttons; k++) if (store_supports(ops[k])) offered[n++] = buttons[k];
-    if (n) { doc_space(doc, px(12)); doc_button_row(doc, ix, iw, offered, n); }
-    if (store_supports("connect_mail_account")) {
-        doc_space(doc, px(8));
-        doc_text(doc, ix, iw, "Enable mail actions requests permission to send and move mail, including moving messages to trash. Approve access in your provider's sign-in window.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-    }
-    doc_box_end(doc, box, pad);
-    doc_space(doc, px(12));
-}
-static char *edit_text(HWND edit) {
-    int n = GetWindowTextLengthW(edit);
-    wchar_t *w = xmalloc(((size_t)n + 1) * sizeof *w);
-    GetWindowTextW(edit, w, n + 1);
-    char *text = wide_to_utf8(w); free(w);
-    return text;
-}
-static void set_edit_text(HWND edit, const char *text) { wchar_t *w = utf8_to_wide(text ? text : ""); SetWindowTextW(edit, w); free(w); }
-static const char *saved_label(const MailScreen *s) {
-    const MailAccount *a = mail_account_find(&s->accounts, s->focus);
-    return a && a->label ? a->label : "";
-}
-static bool label_differs(MailScreen *s) {
-    if (!s->label_edit || s->focus <= 0) return false;
-    char *now = edit_text(s->label_edit);
-    bool differs = !str_eq(now, saved_label(s));
-    free(now);
-    return differs;
-}
-static void label_changed(MailScreen *s) {
-    if (s->filling) return;
-    bool dirty = label_differs(s);
-    if (dirty == s->dirty) return;
-    s->dirty = dirty;
-    pane_header_changed(s->base.pane);
-    pane_relayout(s->base.pane);
-}
-static void label_fill(MailScreen *s) {
-    if (!s->label_edit || s->dirty || s->focus <= 0 || !mail_account_find(&s->accounts, s->focus)) return;
-    s->filling = true;
-    set_edit_text(s->label_edit, saved_label(s));
-    s->filling = false;
-    s->dirty = false;
-}
-static LRESULT CALLBACK label_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref);
-static void label_ensure(MailScreen *s) {
-    if (s->label_edit || !s->base.pane) return;
-    HWND e = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(s->base.pane), (HMENU)(INT_PTR)ID_MAIL_LABEL, GetModuleHandleW(NULL), NULL);
-    SendMessageW(e, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
-    SendMessageW(e, EM_SETLIMITTEXT, 200, 0); // The server refuses a label longer than 200 characters.
-    { wchar_t *w = utf8_to_wide("shown in the mail menu"); SendMessageW(e, EM_SETCUEBANNER, TRUE, (LPARAM)w); free(w); }
-    SetWindowSubclass(e, label_proc, ID_MAIL_LABEL, (DWORD_PTR)s);
-    theme_apply_control(e);
-    s->label_edit = e;
-    label_fill(s);
-}
-static void label_save(MailScreen *s) {
-    if (!s->dirty || !s->label_edit || !can_write(s, "update_mail_account")) return;
-    const MailAccount *a = mail_account_find(&s->accounts, s->focus);
-    if (!a) return;
-    char *now = edit_text(s->label_edit), *label = str_trim(now);
-    free(now);
-    if (str_eq(label, a->label ? a->label : "")) {
-        s->filling = true; set_edit_text(s->label_edit, label); s->filling = false; s->dirty = false;
-        free(label); pane_header_changed(s->base.pane); pane_relayout(s->base.pane); return;
-    }
-    char *days = xstrfmt("%d", a->sync_days);
-    Json *body = mail_settings_body(label, a->enabled, days);
-    free(label); free(days);
-    if (!body) return;
-    json_object_remove(body, "enabled");
-    json_object_remove(body, "syncDays");
-    json_set_num(body, "id", a->id);
-    s->label_write = true;
-    store_call("update_mail_account", body, 0, s, write_done, a->id, &s->write);
-    repaint(s);
-}
-static LRESULT CALLBACK label_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
-    MailScreen *s = (MailScreen *)ref;
-    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    switch (msg) {
-    case WM_KEYDOWN:
-        if (ctrl && wp == 'S') { label_save(s); return 0; }
-        if (ctrl && wp == 'A') { SendMessageW(hwnd, EM_SETSEL, 0, -1); return 0; }
-        if (wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
-        if (wp == VK_RETURN) { label_save(s); return 0; }
-        break;
-    case WM_CHAR:
-        if (wp == 0x13 || wp == 0x01 || wp == 0x1B || wp == '\r') return 0;
-        break;
-    case WM_MOUSEWHEEL: SendMessageW(GetParent(hwnd), msg, wp, lp); return 0;
-    case WM_NCDESTROY: RemoveWindowSubclass(hwnd, label_proc, id); break;
-    }
-    return DefSubclassProc(hwnd, msg, wp, lp);
-}
-static void paint_label_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    (void)doc;
-    MailScreen *s = it->data;
-    bool on = s->label_edit && IsWindowEnabled(s->label_edit);
-    COLORREF border = s->label_focused ? theme.accent_dim : theme.line;
-    fill_round_rect(cv, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
-}
-/// The Label box, as a project form lays its fields out. The edit itself is placed over it.
-static void label_field(MailScreen *s, Doc *doc, int x, int w) {
-    label_ensure(s);
-    bool on = store_supports("update_mail_account") && !s->blocked;
-    doc_field_label(doc, x, w, "Label", on ? theme.ink : theme.muted, NULL);
-    doc_space(doc, px(6));
-    int fh = edit_line_height(FONT_BODY), h = px(36);
-    RECT box = { x, doc->y, x + w, doc->y + h };
-    Item *it = doc_item(doc, doc_add(doc, &box, paint_label_box));
-    it->data = s; it->action = ACT_FOCUS;
-    s->label_rect = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
-    s->label_laid = true;
-    if (s->label_edit) EnableWindow(s->label_edit, on);
-    doc->y = box.bottom;
-    doc_space(doc, px(14));
-}
-/// The project settings tab bar, with the one Mailbox tab. A dot follows the title while the label is unsaved.
-static void layout_tab(MailScreen *s, Doc *doc, int w) {
-    int h = px(42), tx = 0, ty = doc->y;
-    doc_tab(doc, &tx, &ty, 0, w, h, 0xE715, s->dirty ? "Mailbox \xE2\x80\xA2" : "Mailbox", NULL, true, 0, 0);
-    doc->y = ty + h;
-    doc_rule(doc, 0, w);
-    doc_space(doc, px(18));
-}
-static void layout(Screen *base, Doc *doc) {
-    MailScreen *s = (MailScreen *)base;
-    int col = doc->width, x = px(20), w = col - 2 * x;
-    s->label_laid = false;
-    doc_space(doc, px(8));
-    if (!mail_settings_offered()) { doc_notice(doc, x, w, "Mail settings are unavailable: this server must advertise the mail account route and this device needs an Admin token."); return; }
-    layout_tab(s, doc, col);
-    if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
-    if (s->notice) { doc_text(doc, x, w, s->notice, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); doc_space(doc, px(12)); }
-    if (!s->loaded) { if (!s->blocked) doc_loading(doc, x, w, "Loading mail accounts..."); return; }
-    if (s->sign_in.state) {
-        int pad = px(14), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.accent_dim, px(8));
-        int ix = x + pad, iw = w - pad * 2;
-        doc_text(doc, ix, iw, "Finish signing in", FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_SINGLELINE);
-        doc_space(doc, px(10));
-        ButtonSpec pending[] = {
-            { 0, "Paste callback address", BUTTON_PROMINENT, ACT_FINISH, 0, !s->write && !s->sign_in.server_finish && GetTickCount64() >= s->retry_until && store_supports("finish_mail_account") },
-            { 0, "Browser finished: refresh", BUTTON_BORDERED, ACT_BROWSER_DONE, 0, !s->write && s->sign_in.server_finish },
-            { 0, "Cancel waiting", BUTTON_BORDERED, ACT_CANCEL, 0, !s->write },
-        };
-        doc_button_row(doc, ix, iw, pending, sizeof pending / sizeof *pending);
-        doc_box_end(doc, box, pad);
-        doc_space(doc, px(16));
-    }
-    if (s->focus > 0) {
-        const MailAccount *a = mail_account_find(&s->accounts, s->focus);
-        if (!a) { s->label_laid = false; doc_text(doc, x, w, "This mailbox is no longer connected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); return; }
-        label_field(s, doc, x, w);
-        account_card(s, doc, x, w, a);
-        return;
-    }
-    doc_text(doc, x, w, "Add a mailbox", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
-    doc_space(doc, px(4));
-    doc_text(doc, x, w, "Sign-in opens in the browser. Tokens stay on the server.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-    doc_space(doc, px(10));
-    ButtonSpec gmail = { 0, "Connect Gmail", BUTTON_PROMINENT, ACT_CONNECT, 0, can_write(s, "connect_mail_account") };
-    ButtonSpec outlook = { 0, "Connect Outlook", BUTTON_PROMINENT, ACT_CONNECT, 1, can_write(s, "connect_mail_account") };
-    ButtonSpec connect[2]; size_t connect_count = 0;
-    // Only configured providers appear; each operation also requires its deployed route.
-    if (s->accounts.gmail && store_supports("connect_mail_account")) connect[connect_count++] = gmail;
-    if (s->accounts.outlook && store_supports("connect_mail_account")) connect[connect_count++] = outlook;
-    if (connect_count) doc_button_row(doc, x, w, connect, connect_count);
-    if (!s->accounts.gmail && !s->accounts.outlook) doc_text(doc, x, w, "No mail providers are configured on this server.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-    if (!s->accounts.count) { doc_space(doc, px(16)); doc_text(doc, x, w, "No connected mailboxes yet.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK); }
-}
+
 static void timer(Screen *base, UINT id) {
     if (id != TIMER_MAIL) return;
     MailScreen *s = (MailScreen *)base; KillTimer(pane_hwnd(base->pane), id);
-    if (s->sign_in.state && now_ms() >= s->sign_in.expires_at) {
-        stop_waiting(s); set_text(&s->notice, NULL);
-        set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
+    if (s->sign_in.state && screen_mail_now_ms() >= s->sign_in.expires_at) {
+        screen_mail_stop_waiting(s); screen_mail_set_text(&s->notice, NULL);
+        screen_mail_set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
     }
     // Paste-back sign-ins need expiry checks, not account reads that can impose a callback-blocking backoff.
-    if (s->sign_in.state && !s->sign_in.server_finish && !syncing(s) && !s->retry_until) arm(s, 10000);
-    else load(s);
-    repaint(s);
+    if (s->sign_in.state && !s->sign_in.server_finish && !screen_mail_syncing(s) && !s->retry_until) screen_mail_arm(s, 10000);
+    else screen_mail_load(s);
+    screen_mail_repaint(s);
 }
+
 static void refresh(Screen *base) {
     MailScreen *s = (MailScreen *)base;
     if (s->write || GetTickCount64() < s->retry_until) return;
     s->next_read = 0;
-    s->blocked = false; request_cancel(&s->read); set_error(s, NULL, false); load(s);
+    s->blocked = false; request_cancel(&s->read); screen_mail_set_error(s, NULL, false); screen_mail_load(s);
 }
-static int margin_of(Pane *pane) { RECT rc; GetClientRect(pane_hwnd(pane), &rc); return (rc.right - rc.left - pane_content_width(pane)) / 2; }
-static void place(Screen *base, const RECT *content, int scroll_y) {
-    MailScreen *s = (MailScreen *)base;
-    HWND e = s->label_edit;
-    if (!e) return;
-    if (!s->shown || !s->label_laid) { ShowWindow(e, SW_HIDE); return; }
-    int m = margin_of(base->pane);
-    RECT r = { content->left + m + s->label_rect.left, content->top + s->label_rect.top - scroll_y, content->left + m + s->label_rect.right, content->top + s->label_rect.bottom - scroll_y };
-    RECT visible;
-    if (!IntersectRect(&visible, &r, content)) { ShowWindow(e, SW_HIDE); return; }
-    MoveWindow(e, r.left, r.top, r.right - r.left, r.bottom - r.top, TRUE);
-    bool clipped = !EqualRect(&visible, &r);
-    if (clipped) SetWindowRgn(e, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
-    else if (s->label_clipped) SetWindowRgn(e, NULL, TRUE);
-    s->label_clipped = clipped;
-    ShowWindow(e, SW_SHOWNA);
-}
-static void command(Screen *base, int id, int code, HWND control) {
-    (void)control;
-    MailScreen *s = (MailScreen *)base;
-    if (id != ID_MAIL_LABEL || !s->label_edit) return;
-    switch (code) {
-    case EN_CHANGE: label_changed(s); break;
-    case EN_SETFOCUS: {
-        s->label_focused = true;
-        RECT content = pane_content_rect(base->pane);
-        int top = s->label_rect.top - px(40), bottom = s->label_rect.bottom + px(16), y = pane_scroll_y(base->pane);
-        if (top < y || bottom > y + (content.bottom - content.top)) pane_scroll_to(base->pane, top);
-        pane_repaint(base->pane);
-        break;
-    }
-    case EN_KILLFOCUS: s->label_focused = false; pane_repaint(base->pane); break;
-    }
-}
-static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
-    (void)shift;
-    if (ctrl && vk == 'S') { label_save((MailScreen *)base); return true; }
-    return false;
-}
+
 static bool can_leave(Screen *base) {
     MailScreen *s = (MailScreen *)base;
     if (!s->dirty) return true;
@@ -559,43 +105,48 @@ static bool can_leave(Screen *base) {
     s->modal = false;
     if (s->retired) return true;
     if (leave) s->dirty = false;
-    else if (s->sign_in.state || syncing(s)) arm(s, 10000);
+    else if (s->sign_in.state || screen_mail_syncing(s)) screen_mail_arm(s, 10000);
     return leave;
 }
-static void visible(Screen *base, bool shown) {
+
+void screen_mail_visible(Screen *base, bool shown) {
     MailScreen *s = (MailScreen *)base; s->shown = shown;
     if (shown) {
         s->blocked = false; s->next_read = 0;
-        label_ensure(s);
+        screen_mail_label_ensure(s);
         ULONGLONG tick = GetTickCount64();
-        if (tick < s->retry_until) arm(s, (int)(s->retry_until - tick));
-        else load(s);
+        if (tick < s->retry_until) screen_mail_arm(s, (int)(s->retry_until - tick));
+        else screen_mail_load(s);
     }
     else {
         KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); request_cancel(&s->write);
-        stop_waiting(s); set_text(&s->notice, NULL);
+        screen_mail_stop_waiting(s); screen_mail_set_text(&s->notice, NULL);
         s->dirty = false; s->label_write = false;
-        if (s->label_edit) { s->filling = true; set_edit_text(s->label_edit, ""); s->filling = false; ShowWindow(s->label_edit, SW_HIDE); }
+        if (s->label_edit) { s->filling = true; screen_mail_set_edit_text(s->label_edit, ""); s->filling = false; ShowWindow(s->label_edit, SW_HIDE); }
         // No retained account data crosses a hidden screen or account/server change.
         mail_accounts_free(&s->accounts); s->loaded = false;
     }
 }
+
 static void destroy(Screen *base) {
     MailScreen *s = (MailScreen *)base;
     if (base->pane) KillTimer(pane_hwnd(base->pane), TIMER_MAIL);
     request_cancel(&s->read); request_cancel(&s->write);
     if (s->modal) { s->retired = true; s->shown = false; return; }
-    release(s);
+    screen_mail_release(s);
 }
+
 static void activated(Screen *base, bool active) {
     MailScreen *s = (MailScreen *)base;
     if (!active) { KillTimer(pane_hwnd(base->pane), TIMER_MAIL); request_cancel(&s->read); }
     else if (s->shown && !s->modal) { s->next_read = 0; timer(base, TIMER_MAIL); }
 }
+
 static const ScreenVTable vt = {
-    .destroy = destroy, .layout = layout, .header = header, .action = action, .timer = timer, .refresh = refresh,
-    .place = place, .visible = visible, .command = command, .key = key, .can_leave = can_leave, .activated = activated,
+    .destroy = destroy, .layout = screen_mail_layout, .header = screen_mail_header, .action = screen_mail_action, .timer = timer, .refresh = refresh,
+    .place = screen_mail_place, .visible = screen_mail_visible, .command = screen_mail_command, .key = screen_mail_key, .can_leave = can_leave, .activated = activated,
 };
+
 static Screen *open_mail_settings(int account_id) {
     MailScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &vt;
@@ -603,5 +154,7 @@ static Screen *open_mail_settings(int account_id) {
     s->base.id = s->focus ? xstrfmt("mail-settings:%d", s->focus) : xstrdup("mail-settings");
     return &s->base;
 }
+
 Screen *mail_settings_screen_new(void) { return open_mail_settings(0); }
+
 Screen *mail_settings_screen_open(int account_id) { return open_mail_settings(account_id); }

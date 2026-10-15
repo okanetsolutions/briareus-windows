@@ -269,6 +269,30 @@ static void test_char_widths_and_the_palette(void) {
     CHECK_INT(vt_char_width(0x0301), 0);
     CHECK_INT(vt_char_width(0x4E2D), 2);
     CHECK_INT(vt_char_width(0x1F600), 2);
+    static const struct { uint32_t ch; int width; } edges[] = {
+        { 0, 0 }, { 0x02FF, 1 }, { 0x0300, 0 }, { 0x036F, 0 }, { 0x0370, 1 },
+        { 0x1AAF, 1 }, { 0x1AB0, 0 }, { 0x1AFF, 0 }, { 0x1B00, 1 },
+        { 0x1DBF, 1 }, { 0x1DC0, 0 }, { 0x1DFF, 0 }, { 0x1E00, 1 },
+        { 0x20CF, 1 }, { 0x20D0, 0 }, { 0x20FF, 0 }, { 0x2100, 1 },
+        { 0xFE1F, 1 }, { 0xFE20, 0 }, { 0xFE2F, 0 }, { 0xFE30, 2 },
+        { 0x200A, 1 }, { 0x200B, 0 }, { 0x200C, 0 }, { 0x200D, 0 }, { 0x200E, 1 },
+        { 0xFE0D, 1 }, { 0xFE0E, 0 }, { 0xFE0F, 0 }, { 0xFE10, 1 },
+        { 0x10FF, 1 }, { 0x1100, 2 }, { 0x115F, 2 }, { 0x1160, 1 },
+        { 0x2E7F, 1 }, { 0x2E80, 2 }, { 0x303E, 2 }, { 0x303F, 1 },
+        { 0x3040, 1 }, { 0x3041, 2 }, { 0x33FF, 2 }, { 0x3400, 2 },
+        { 0x4DBF, 2 }, { 0x4DC0, 1 }, { 0x4DFF, 1 }, { 0x4E00, 2 },
+        { 0x9FFF, 2 }, { 0xA000, 2 }, { 0xA4CF, 2 }, { 0xA4D0, 1 },
+        { 0xABFF, 1 }, { 0xAC00, 2 }, { 0xD7A3, 2 }, { 0xD7A4, 1 },
+        { 0xF8FF, 1 }, { 0xF900, 2 }, { 0xFAFF, 2 }, { 0xFB00, 1 },
+        { 0xFE4F, 2 }, { 0xFE50, 1 }, { 0xFEFF, 1 }, { 0xFF00, 2 },
+        { 0xFF60, 2 }, { 0xFF61, 1 }, { 0xFFDF, 1 }, { 0xFFE0, 2 },
+        { 0xFFE6, 2 }, { 0xFFE7, 1 }, { 0x1F2FF, 1 }, { 0x1F300, 2 },
+        { 0x1F64F, 2 }, { 0x1F650, 1 }, { 0x1F67F, 1 }, { 0x1F680, 2 },
+        { 0x1F6FF, 2 }, { 0x1F700, 1 }, { 0x1F8FF, 1 }, { 0x1F900, 2 },
+        { 0x1F9FF, 2 }, { 0x1FA00, 1 }, { 0x1FFFF, 1 }, { 0x20000, 2 },
+        { 0x3FFFD, 2 }, { 0x3FFFE, 1 },
+    };
+    for (size_t i = 0; i < sizeof edges / sizeof *edges; i++) CHECK_INT(vt_char_width(edges[i].ch), edges[i].width);
     CHECK_INT(vt_index_rgb(16), 0x000000);
     CHECK_INT(vt_index_rgb(231), 0xFFFFFF);
     CHECK_INT(vt_index_rgb(232), 0x080808);

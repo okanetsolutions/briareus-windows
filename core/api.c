@@ -73,13 +73,20 @@ static const char *status_text(int status) {
 
 // MARK: - Address
 
+static bool https_scheme(const char *url) {
+    static const char scheme[] = "https://";
+    if (strlen(url) < sizeof scheme - 1) return false;
+    for (size_t i = 0; i < sizeof scheme - 1; i++)
+        if (tolower((unsigned char)url[i]) != scheme[i]) return false;
+    return true;
+}
+
 bool server_address_parse(const char *input, ServerAddress *out) {
     memset(out, 0, sizeof *out);
     char *trimmed = str_trim(input);
     bool ok = false;
     const char *p = trimmed;
-    if (strlen(p) < 8 || tolower((unsigned char)p[0]) != 'h' || tolower((unsigned char)p[1]) != 't' || tolower((unsigned char)p[2]) != 't'
-        || tolower((unsigned char)p[3]) != 'p' || tolower((unsigned char)p[4]) != 's' || strncmp(p + 5, "://", 3) != 0) goto done;
+    if (!https_scheme(p)) goto done;
     p += 8;
     if (strchr(p, '?') || strchr(p, '#')) goto done;
     const char *slash = strchr(p, '/');
@@ -112,7 +119,7 @@ bool server_address_parse(const char *input, ServerAddress *out) {
     if (!*host) { free(host); goto done; }
     for (char *h = host; *h; h++) {
         unsigned char c = (unsigned char)*h;
-        if (!(isalnum(c) || c == '-' || c == '.' || c == '[' || c == ']' || c == ':' || c == '_')) { free(host); goto done; }
+        if (!isalnum(c) && !strchr("-.[]:_", c)) { free(host); goto done; }
         *h = (char)tolower(c);
     }
     if (!(str_eq(path, "") || str_eq(path, "/") || str_eq(path, "/api/v1") || str_eq(path, "/api/v1/"))) { free(host); goto done; }

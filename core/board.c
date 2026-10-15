@@ -744,6 +744,10 @@ size_t run_log_add(RunLog *log, const char *text, bool error) {
     }
     return added;
 }
+static bool run_output_kind(const char *kind) {
+    return str_eq(kind, "info") || str_eq(kind, "git") || str_eq(kind, "setup") || str_eq(kind, "claude") || str_eq(kind, "stderr");
+}
+
 bool run_log_add_events(RunLog *log, const Json *events) {
     size_t added = 0;
     for (size_t i = 0; i < json_count(events); i++) {
@@ -756,7 +760,7 @@ bool run_log_add_events(RunLog *log, const Json *events) {
             if (status) { char *t = xstrfmt("\xE2\x80\xA2 %s", status); added += run_log_add(log, t, false); free(t); }
         } else if (str_eq(kind, "cmd") && text) {
             char *t = xstrfmt("$ %s", text); added += run_log_add(log, t, false); free(t);
-        } else if (text && (str_eq(kind, "info") || str_eq(kind, "git") || str_eq(kind, "setup") || str_eq(kind, "claude") || str_eq(kind, "stderr"))) {
+        } else if (text && run_output_kind(kind)) {
             added += run_log_add(log, text, str_eq(kind, "stderr"));
         }
     }
@@ -1026,6 +1030,17 @@ static int whole_number(const char *p, const char *end) {
     for (; p < end; p++) { if (!isdigit((unsigned char)*p)) return 0; n = n * 10 + (*p - '0'); }
     return n;
 }
+static bool project_board_path_complete(char **parts, size_t count, int number, int view) {
+    if (!count || !*parts[0] || !number) return false;
+    switch (count) {
+    case 3: return true;
+    case 4: return !*parts[3];
+    case 5: return view != 0;
+    case 6: return view != 0 && !*parts[5];
+    default: return false;
+    }
+}
+
 Json *project_board_setting_from_url(const char *url) {
     if (!url) return NULL;
     while (isspace((unsigned char)*url)) url++;
@@ -1045,7 +1060,7 @@ Json *project_board_setting_from_url(const char *url) {
     Json *out = NULL;
     int number = n >= 3 && str_eq(parts[1], "projects") ? whole_number(parts[2], parts[2] + strlen(parts[2])) : 0;
     int view = n >= 5 && str_eq(parts[3], "views") ? whole_number(parts[4], parts[4] + strlen(parts[4])) : 0;
-    if (n && *parts[0] && number && (n == 3 || (n == 4 && !*parts[3]) || (view && (n == 5 || (n == 6 && !*parts[5]))))) {
+    if (project_board_path_complete(parts, n, number, view)) {
         out = json_object();
         json_set_str(out, "owner", parts[0]); json_set_str(out, "ownerType", type);
         json_set_num(out, "number", number);

@@ -91,15 +91,15 @@ static bool redirect_safe(const char *uri) {
         if (end == port || n == 0) return false;
     }
     if (*end && *end != '/') return false;
-    for (const char *p = uri; *p; p++) if ((unsigned char)*p <= 32 || (unsigned char)*p == 127 || *p == '@' || *p == '?' || *p == '#' || *p == '\\') return false;
+    for (const char *p = uri; *p; p++) if ((unsigned char)*p <= 32 || (unsigned char)*p == 127 || strchr("@?#\\", *p)) return false;
     return true;
 }
 bool mail_sign_in_parse(const Json *j, const char *provider, int id, const MailAccounts *before, MailSignIn *s) {
     memset(s, 0, sizeof *s);
     const char *state = json_str_nonempty(json_get(j, "state")), *redirect = json_str_nonempty(json_get(j, "redirectUri"));
     double expiry = timestamp(json_get(j, "expiresAt"));
-    if (!oauth_web_url(json_str(json_get(j, "url"))) || !state || !redirect || !redirect_safe(redirect) || !expiry
-        || json_bool_tristate(json_get(j, "finishesOnServer")) < 0 || !mail_provider_available(before, provider)) return false;
+    if (!oauth_web_url(json_str(json_get(j, "url"))) || !state || !redirect || !redirect_safe(redirect)) return false;
+    if (!expiry || json_bool_tristate(json_get(j, "finishesOnServer")) < 0 || !mail_provider_available(before, provider)) return false;
     s->state = xstrdup(state); s->redirect_uri = xstrdup(redirect); s->provider = xstrdup(provider);
     s->expires_at = expiry; s->account_id = id; s->server_finish = json_bool_is(json_get(j, "finishesOnServer"), true);
     s->before.count = before->count; s->before.accounts = xcalloc(before->count, sizeof *s->before.accounts);
@@ -124,7 +124,8 @@ static char *decode(const char *p, size_t n) {
     return out.data ? str_detach(&out) : xstrdup("");
 }
 Json *mail_sign_in_finish(const MailSignIn *s, const char *url, double now) {
-    if (!s->state || s->server_finish || now >= s->expires_at || !isfinite(now) || !url || strchr(url, '#')) return NULL;
+    if (!s->state || s->server_finish || now >= s->expires_at || !isfinite(now)) return NULL;
+    if (!url || strchr(url, '#')) return NULL;
     const char *q = strchr(url, '?');
     if (!q) return NULL;
     size_t destination = (size_t)(q - url), expected = strlen(s->redirect_uri);
@@ -175,14 +176,20 @@ const char *mail_error_message(int status, bool finishing, const char *detail) {
     }
 }
 
+static bool web_host_byte(unsigned char c) {
+    if (c >= 'a' && c <= 'z') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    if (c >= '0' && c <= '9') return true;
+    return strchr(".-:[]", c) != NULL;
+}
+
 bool mail_message_web_url_safe(const char *url) {
     if (!safe_web_url(url)) return false;
     const char *host = url + 8;
     size_t authority = strcspn(host, "/?#");
     for (size_t i = 0; i < authority; i++) {
         unsigned char c = (unsigned char)host[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-            || c == '.' || c == '-' || c == ':' || c == '[' || c == ']')) return false;
+        if (!web_host_byte(c)) return false;
     }
     for (const unsigned char *p = (const unsigned char *)url; *p; p++)
         if (*p <= 32 || *p == 127 || *p == '\\') return false;

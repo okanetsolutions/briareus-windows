@@ -24,11 +24,17 @@ void cache_free(DiskCache *c) {
     free(c->directory); free(c);
 }
 
+static bool cache_literal_byte(unsigned char c) {
+    if (c >= 'a' && c <= 'z') return true;
+    if (c >= 'A' && c <= 'Z') return true;
+    return c >= '0' && c <= '9';
+}
+
 char *cache_file_name(const char *key) {
     // Keys carry repository names and server ids; encoding leaves no path separators or dots.
     Str s; str_init(&s);
     for (const unsigned char *p = (const unsigned char *)(key ? key : ""); *p; p++) {
-        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9')) str_appendc(&s, (char)*p);
+        if (cache_literal_byte(*p)) str_appendc(&s, (char)*p);
         else str_appendf(&s, "%%%02X", *p);
     }
     if (!s.len) str_appendc(&s, '_');

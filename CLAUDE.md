@@ -20,7 +20,7 @@ Read [.ai/rules/index.md](.ai/rules/index.md) for rules selected by path, and [t
 
 ## Verification
 
-`make rules` runs the repository structure checks and their own regression tests using Python 3 and Git. Python is a tooling dependency only; normal app builds do not need it. The check runs separately in CI on Linux, while the existing Windows jobs retain their builds, tests, sanitizers and coverage checks.
+`make rules` runs the change-based checks, a full-tree structure audit, and their regression tests using Python 3 and Git. Python is a tooling dependency only; normal app builds do not need it. The check runs separately in CI on Linux, while the existing Windows jobs retain their builds, tests, sanitizers and coverage checks.
 
 For C/C++ behavior changes, add or update meaningful tests in the owning suite. Copy, styling, static layout and documentation changes do not need new behavior tests. The automated test-delta check covers core C/header token changes; app test coverage and presentation exemptions are assessed in review. Do not add dummy test edits to satisfy the check.
 

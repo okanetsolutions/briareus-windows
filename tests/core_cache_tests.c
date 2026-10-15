@@ -109,6 +109,7 @@ static ULONGLONG modified(const wchar_t *dir, const char *key) {
 static void test_file_names_keep_only_letters_and_digits(void) {
     CHECK_OWNED_STR(cache_file_name("projects"), "projects");
     CHECK_OWNED_STR(cache_file_name("AZaz09"), "AZaz09");
+    CHECK_OWNED_STR(cache_file_name("/09:AZ[\\`az{"), "%2F09%3AAZ%5B%5C%60az%7B");
     CHECK_OWNED_STR(cache_file_name(""), "_");
     CHECK_OWNED_STR(cache_file_name(NULL), "_");
     CHECK_OWNED_STR(cache_file_name("sessions:o/r"), "sessions%3Ao%2Fr");

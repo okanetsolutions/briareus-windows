@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import shutil
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from check_structure import check, condition_findings, tokens
+from extract_presentation import extract, units
 
 
 CHECKER = Path(__file__).resolve().parents[1] / "scripts/check_structure.py"
@@ -86,7 +88,7 @@ class StructureRules(unittest.TestCase):
         self.assertTrue(self.errors(short + short, old=long))
 
     def test_presentation_size_allows_only_existing_debt(self):
-        for path in ["app/screen_new.c", "app/project_files.c", "app/forge_site.c"]:
+        for path in ["app/screen_new.c", "app/project_files.c", "app/forge_site.c", "app/forge_site_editor.c"]:
             with self.subTest(path=path):
                 self.assertEqual([], self.errors("\n" * 300, path=path))
                 self.assertTrue(self.errors("\n" * 301, path=path))
@@ -171,8 +173,8 @@ class GitIntegration(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "fixture")
 
-    def run_check(self, base="main"):
-        return subprocess.run([sys.executable, str(CHECKER), base], cwd=self.root, capture_output=True, text=True)
+    def run_check(self, base="main", *options):
+        return subprocess.run([sys.executable, str(CHECKER), base, *options], cwd=self.root, capture_output=True, text=True)
 
     def test_clean_branch_passes(self):
         result = self.run_check()
@@ -251,6 +253,19 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(1, result.returncode)
         self.assertIn("bypasses store", result.stderr)
+
+    def test_audit_reports_unchanged_debt_and_clears_after_repair(self):
+        self.write("app/screen_legacy.c", "void f(void) { api_call(c); }\n" + "\n" * 300)
+        self.commit()
+        self.assertEqual(0, self.run_check("HEAD").returncode)
+        result = self.run_check("HEAD", "--audit")
+        self.assertEqual(1, result.returncode)
+        self.assertIn("presentation file has 301 lines", result.stderr)
+        self.assertIn("api_call bypasses store", result.stderr)
+        self.write("app/screen_legacy.c", "void f(void) { store_call(c); }\n")
+        result = self.run_check("HEAD", "--audit")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Full-tree structure audit passed", result.stdout)
 
     def test_untracked_source_is_checked(self):
         self.write("app/untracked.c", "void f(void) { WinHttpOpen(c); }\n")
@@ -590,6 +605,46 @@ class GitIntegration(unittest.TestCase):
         result = self.run_check("parent")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(1, self.run_check("main").returncode)
+
+
+
+
+class PresentationExtraction(unittest.TestCase):
+    def test_extracted_components_preserve_calls_constants_and_state(self):
+        compiler = shutil.which("cc")
+        if not compiler:
+            self.skipTest("native C compiler unavailable")
+        source = """#include <stddef.h>
+typedef struct { int value; } State;
+static const struct { int amount, advance; } STEPS[] = { { 3, 0 }, { 5, 0 }, };
+enum { STEP_COUNT = sizeof STEPS / sizeof *STEPS };
+static int advance(State *state) {
+    for (size_t i = 0; i < STEP_COUNT; i++) state->value += STEPS[i].amount;
+    return state->value;
+}
+int answer(void) { State state = { 29 }; return advance(&state) + STEPS[0].amount + STEPS[0].advance; }
+"""
+        output = extract("app/screen_counter.c", source, {"advance": ["advance"]})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path, text in output.items():
+                (root / Path(path).name).write_text(text)
+            (root / "main.c").write_text("int answer(void); int main(void) { return answer() == 40 ? 0 : 1; }\n")
+            executable = root / "fixture"
+            subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", *map(str, root.glob("*.c")), "-o", str(executable)], check=True, capture_output=True, text=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_extractor_rejects_incomplete_or_ambiguous_plans(self):
+        source = "int a(void) { return 1; }\nint b(void) { return 2; }\n"
+        with self.assertRaisesRegex(ValueError, "duplicate function assignment"):
+            extract("app/screen_x.c", source, {"one": ["a"], "two": ["a"]})
+        with self.assertRaisesRegex(ValueError, "unknown functions"):
+            extract("app/screen_x.c", source, {"one": ["missing"]})
+        with self.assertRaisesRegex(ValueError, "cohesive smaller component"):
+            extract("app/screen_x.c", "int a(void) {\n" + "\n" * 301 + "return 1; }\n", {})
+        with self.assertRaisesRegex(ValueError, "conditional source"):
+            units("#if FEATURE\nint a;\n#endif\n")
 
 
 if __name__ == "__main__":

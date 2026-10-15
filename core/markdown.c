@@ -289,6 +289,14 @@ static const char *find_close(const char *p, const char *end, const char *marker
     return NULL;
 }
 
+static bool triple_emphasis_open(const char *text, const char *p, const char *end) {
+    char marker = *p;
+    if (marker != '*' && marker != '_') return false;
+    if (marker == '_' && p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_')) return false;
+    if (end - p <= 3) return false;
+    return p[1] == marker && p[2] == marker && !isspace((unsigned char)p[3]);
+}
+
 static void parse_inline(Spans *out, const char *text, size_t len, unsigned flags) {
     const char *p = text, *end = text + len;
     Str plain; str_init(&plain);
@@ -334,7 +342,7 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             }
             str_append(&plain, p, ticks); p += ticks; continue;
         }
-        if ((c == '*' || (c == '_' && !(p > text && (isalnum((unsigned char)p[-1]) || p[-1] == '_')))) && p + 3 < end && p[1] == c && p[2] == c && !isspace((unsigned char)p[3])) {
+        if (triple_emphasis_open(text, p, end)) {
             const char *close = find_close(p + 3, end, c == '*' ? "***" : "___");
             if (close && close > p + 3) {
                 FLUSH();
@@ -431,4 +439,27 @@ char *md_plain(const char *text) {
     for (size_t i = 0; i < n; i++) str_appendz(&s, spans[i].text);
     md_spans_free(spans, n);
     return str_detach(&s);
+}
+
+/// What GitHub shows of a description: without HTML comments and raw HTML lines (bots' badges and footers), code blocks kept whole.
+char *visible_markdown(const char *body) {
+    Str bare; str_init(&bare);
+    for (const char *p = body; *p;) {
+        if (str_has_prefix(p, "<!--")) { const char *end = strstr(p + 4, "-->"); if (!end) break; p = end + 3; continue; }
+        str_appendf(&bare, "%c", *p++);
+    }
+    Str out; str_init(&out);
+    bool fenced = false;
+    for (const char *p = bare.data ? bare.data : ""; *p;) {
+        const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
+        char *line = xstrndup(p, n), *t = str_trim(line);
+        if (str_has_prefix(t, "```")) fenced = !fenced;
+        if (fenced || str_has_prefix(t, "```") || *t != '<') str_appendf(&out, "%s\n", line);
+        free(t); free(line);
+        p = e ? e + 1 : p + n;
+    }
+    str_free(&bare);
+    char *result = str_trim(out.data ? out.data : "");
+    str_free(&out);
+    return result;
 }

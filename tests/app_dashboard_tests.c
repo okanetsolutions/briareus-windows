@@ -1,179 +1,274 @@
 #include "screens.h"
 #include "suites.h"
 #include "test.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
-static Request pending[8];
-static int call_count;
-static ULONGLONG quota_ticks;
-static ULONGLONG test_ticks(void) { return quota_ticks; }
-static void changed(Pane *pane) { (void)pane; }
-static Request *test_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
-    (void)timeout_ms;
-    Request *r = &pending[call_count++];
-    r->operation = xstrdup(operation); r->args = args; r->owner = owner; r->done = done;
-    r->tag = tag; r->slot = slot; r->client = g_store.client; *slot = r;
-    return r;
-}
-static void test_cancel(Request **slot) {
-    if (*slot) { (*slot)->cancelled = true; (*slot)->slot = NULL; *slot = NULL; }
-}
-Screen *test_dashboard_new(void);
-#define dashboard_screen_new test_dashboard_new
-#define store_call test_call
-#define request_cancel test_cancel
-#define pane_relayout changed
-#define pane_header_changed changed
-#define GetTickCount64 test_ticks
-#include "../app/screen_dashboard.c"
-#undef GetTickCount64
-#undef dashboard_screen_new
-#undef store_call
-#undef request_cancel
-#undef pane_relayout
-#undef pane_header_changed
-
-static Route routes[] = {
+static Route ROUTES[] = {
     { "GET", "/usage/all", "admin" },
     { "GET", "/settings/providers", "admin" },
     { "GET", "/settings/providers/{id}/status", "admin" },
 };
-static void fixture(DashboardScreen *s) {
-    memset(s, 0, sizeof *s); memset(&g_store, 0, sizeof g_store);
-    memset(pending, 0, sizeof pending); call_count = 0; quota_ticks = 1000;
-    g_store.client = (ApiClient *)pending; g_store.has_device = true; g_store.device.permission = "admin";
-    g_store.routes = routes; g_store.route_count = sizeof routes / sizeof *routes;
+static const char *LEDGER = "{\"turns\":0,\"period\":\"month\",\"month\":\"2026-10\"}";
+static const char *ACCOUNTS = "{\"providers\":[{\"id\":7,\"label\":\"Work\",\"binary\":\"codex\"}]}";
+static const char *STATUS = "{\"status\":{\"auth\":{\"email\":\"work@example.com\"},\"usage\":{\"windows\":[{\"label\":\"fixture-window\",\"usedPct\":25}]}}}";
+enum { LEDGER_READ, ACCOUNTS_READ, STATUS_READ, READ_COUNT, RECORD_CAP = 64 };
+typedef struct {
+    const char *accounts, *status, *second_status, *retry, *second_retry, *block_path;
+    int accounts_code, status_code, second_code;
+    volatile LONG count[READ_COUNT], recorded;
+    char *urls[RECORD_CAP];
+    bool reads[RECORD_CAP];
+    int block_kind;
+    HANDLE entered, resume;
+} DashboardStub;
+static HWND dispatcher;
+static Pane *pane;
+static UINT poll_timer;
+static int delivered;
+
+static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
+    const void *body, size_t bytes, int timeout, int *status, char **type, char **retry,
+    char **response, size_t *len, char **error) {
+    (void)headers; (void)body; (void)timeout;
+    DashboardStub *stub = ctx;
+    int kind = strstr(url, "/usage/all") ? LEDGER_READ : strstr(url, "/status") ? STATUS_READ : ACCOUNTS_READ;
+    LONG sequence = InterlockedIncrement(&stub->count[kind]);
+    LONG record = InterlockedIncrement(&stub->recorded) - 1;
+    if (record < RECORD_CAP) {
+        stub->urls[record] = xstrdup(url);
+        stub->reads[record] = str_eq(method, "GET") && bytes == 0;
+    }
+    const char *answer = LEDGER;
+    *status = 200; *error = NULL;
+    if (kind == ACCOUNTS_READ) { answer = stub->accounts ? stub->accounts : ACCOUNTS; *status = stub->accounts_code ? stub->accounts_code : 200; }
+    if (kind == STATUS_READ) {
+        bool second = strstr(url, "/8/status") != NULL;
+        answer = second && stub->second_status ? stub->second_status : stub->status ? stub->status : STATUS;
+        int code = second ? stub->second_code : stub->status_code;
+        if (code) *status = code;
+    }
+    *type = xstrdup("application/json");
+    const char *delay = strstr(url, "/8/status") && stub->second_retry ? stub->second_retry : stub->retry ? stub->retry : "300";
+    *retry = kind != LEDGER_READ && *status == 429 ? xstrdup(delay) : NULL;
+    // Own the response before blocking: the next generation may replace the fixture on the UI thread.
+    *response = xstrdup(answer); *len = strlen(*response);
+    bool held = stub->block_path ? strstr(url, stub->block_path) != NULL : sequence == 1;
+    if (stub->entered && kind == stub->block_kind && held) {
+        SetEvent(stub->entered); WaitForSingleObject(stub->resume, 10000);
+    }
+    return true;
 }
-static void cleanup(DashboardScreen *s) {
-    quotas_cancel(s);
-    json_free(s->accounts); free(s->status_reqs); free(s->accounts_error);
-    json_free(s->data); free(s->data_key);
-    for (int f = 0; f < F_COUNT; f++) picks_clear(s, (FilterId)f);
-    for (int i = 0; i < call_count; i++) { json_free(pending[i].args); free(pending[i].operation); }
-    memset(&g_store, 0, sizeof g_store);
+static void pump(int expected) {
+    int received = 0;
+    ULONGLONG end = GetTickCount64() + 10000;
+    while (received < expected && GetTickCount64() < end) {
+        MSG msg;
+        while (PeekMessageW(&msg, dispatcher, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) {
+            store_handle_message(msg.message, msg.wParam, msg.lParam); received++; delivered++;
+        }
+        if (received < expected) Sleep(1);
+    }
+    CHECK_INT(received, expected);
 }
-static void reply_retry(int index, const char *body, bool ok, double retry_after) {
-    Request *r = &pending[index]; r->ok = ok; r->result = json_parsez(body);
-    if (r->slot) { *r->slot = NULL; r->slot = NULL; }
-    api_error_init(&r->error);
-    if (!ok) api_error_set(&r->error, retry_after >= 0 ? API_HTTP : API_NETWORK,
-                           retry_after >= 0 ? 429 : 0, "Quota request failed", retry_after);
-    r->done(r->owner, r); json_free(r->result); r->result = NULL; api_error_clear(&r->error);
+static void poll(Screen *screen) { screen->vt->timer(screen, poll_timer); }
+static void first_poll(Screen *screen) {
+    ULONGLONG end = GetTickCount64() + 10000;
+    MSG msg;
+    while (GetTickCount64() < end) {
+        if (PeekMessageW(&msg, pane_hwnd(pane), WM_TIMER, WM_TIMER, PM_REMOVE)) {
+            poll_timer = (UINT)msg.wParam; poll(screen); return;
+        }
+        Sleep(1);
+    }
+    CHECK(false);
 }
-static void reply(int index, const char *body, bool ok) { reply_retry(index, body, ok, -1); }
-static bool contains(const Doc *doc, const char *text) {
-    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].text && strstr(doc->items[i].text, text)) return true;
-    return false;
+static Screen *setup(DashboardStub *stub, const char *permission, size_t route_count) {
+    cache_remove_all(g_store.cache);
+    g_store.has_device = true; g_store.device.permission = (char *)permission;
+    g_store.routes = ROUTES; g_store.route_count = route_count; g_store.active = true;
+    delivered = 0;
+    ServerAddress address; ApiError error; api_error_init(&error);
+    CHECK(server_address_parse("https://example.com", &address));
+    g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &error);
+    CHECK(g_store.client != NULL); server_address_free(&address); api_error_clear(&error);
+    api_client_set_transport(g_store.client, transport, stub);
+    Screen *screen = dashboard_screen_new(); pane_set_root(pane, screen); first_poll(screen);
+    return screen;
+}
+static void block(DashboardStub *stub, int kind) {
+    stub->block_kind = kind;
+    stub->entered = CreateEventW(NULL, TRUE, FALSE, NULL); stub->resume = CreateEventW(NULL, TRUE, FALSE, NULL);
+    CHECK(stub->entered != NULL); CHECK(stub->resume != NULL);
+}
+static void await_block(DashboardStub *stub) { CHECK_INT(WaitForSingleObject(stub->entered, 10000), WAIT_OBJECT_0); }
+static void draw(Screen *screen, Doc *doc, int width) {
+    doc_begin(doc, NULL, width); screen->vt->layout(screen, doc); doc_end(doc);
+}
+static const char *text_with(const Doc *doc, const char *fixture) {
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].text && strstr(doc->items[i].text, fixture)) return doc->items[i].text;
+    return NULL;
+}
+static void check_percent(const Doc *doc, const char *fixture, int expected) {
+    const char *text = text_with(doc, fixture); CHECK(text != NULL);
+    if (!text) return;
+    const char *percent = strchr(text, '%');
+    if (expected < 0) { CHECK(percent == NULL); return; }
+    CHECK(percent != NULL);
+    if (!percent) return;
+    const char *number = percent;
+    while (number > text && isdigit((unsigned char)number[-1])) number--;
+    CHECK(number < percent); CHECK_INT(atoi(number), expected);
+}
+static void check_url(const DashboardStub *stub, const char *url) {
+    int matches = 0;
+    for (LONG i = 0; i < stub->recorded && i < RECORD_CAP; i++) if (str_eq(stub->urls[i], url)) matches++;
+    CHECK_INT(matches, 1);
+}
+static void cleanup(DashboardStub *stub, Doc *doc) {
+    pane_set_root(pane, NULL); doc_free(doc);
+    CHECK_INT(delivered, stub->recorded);
+    for (LONG i = 0; i < stub->recorded && i < RECORD_CAP; i++) { CHECK(stub->reads[i]); free(stub->urls[i]); }
+    CHECK(stub->recorded <= RECORD_CAP);
+    api_client_release(g_store.client); g_store.client = NULL;
+    if (stub->entered) CloseHandle(stub->entered);
+    if (stub->resume) CloseHandle(stub->resume);
 }
 static void test_remaining_values(void) {
-    static const struct { const char *json, *expected; } cases[] = {
-        { "{\"usedPct\":25}", "75% remaining" },
-        { "{\"usedPct\":100}", "0% remaining" },
-        { "{\"usedPct\":0}", "100% remaining" },
-        { "{\"usedPct\":120}", "0% remaining" },
-        { "{\"usedPct\":-10}", "100% remaining" },
-        { "{\"usedPct\":null}", "Usage unavailable" },
-        { "{\"usedPct\":\"25\"}", "Usage unavailable" },
-        { "{}", "Usage unavailable" },
-    };
-    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        Json *window = json_parsez(cases[i].json);
-        CHECK_OWNED_STR(quota_text(window), cases[i].expected); json_free(window);
-    }
-    Json *window = json_object(); json_set_num(window, "usedPct", NAN);
-    CHECK_OWNED_STR(quota_text(window), "Usage unavailable"); json_free(window);
+    DashboardStub stub = {0};
+    stub.status = "{\"status\":{\"usage\":{\"windows\":["
+        "{\"label\":\"partial-fixture\",\"usedPct\":25},{\"label\":\"exhausted-fixture\",\"usedPct\":100},"
+        "{\"label\":\"unused-fixture\",\"usedPct\":0},{\"label\":\"over-fixture\",\"usedPct\":120},"
+        "{\"label\":\"under-fixture\",\"usedPct\":-10},{\"label\":\"null-fixture\",\"usedPct\":null},"
+        "{\"label\":\"string-fixture\",\"usedPct\":\"25\"},{\"label\":\"missing-fixture\"}]}}}";
+    Screen *screen = setup(&stub, "admin", 3); pump(3); Doc doc; doc_init(&doc); draw(screen, &doc, 600);
+    check_percent(&doc, "partial-fixture", 75); check_percent(&doc, "exhausted-fixture", 0);
+    check_percent(&doc, "unused-fixture", 100); check_percent(&doc, "over-fixture", 0);
+    check_percent(&doc, "under-fixture", 100); check_percent(&doc, "null-fixture", -1);
+    check_percent(&doc, "string-fixture", -1); check_percent(&doc, "missing-fixture", -1);
+    cleanup(&stub, &doc);
 }
-static void test_account_loading_and_layout(void) {
-    DashboardScreen s; fixture(&s);
-    quotas_load(&s, false); quotas_load(&s, false); CHECK_INT(call_count, 1);
-    CHECK_STR(pending[0].operation, "settings_providers");
-    reply(0, "{\"providers\":[{\"id\":7,\"label\":\"Work\",\"binary\":\"codex\"},{\"id\":8,\"label\":\"Personal\",\"binary\":\"claude\",\"active\":false}]}", true);
-    CHECK_INT(call_count, 3); CHECK_STR(pending[1].operation, "provider_status");
-    CHECK_INT(json_int_or(json_get(pending[1].args, "id"), 0), 7);
-    CHECK_INT(json_int_or(json_get(pending[2].args, "id"), 0), 8);
-    CHECK(json_is_null(json_get(pending[1].args, "fresh")));
-    reply(2, "{}", false);
-    reply(1, "{\"status\":{\"auth\":{\"email\":\"work@example.com\",\"plan\":\"pro\"},\"usage\":{\"windows\":[{\"label\":\"5 hours\",\"usedPct\":25,\"resetsAt\":\"2030-10-12T19:00:00Z\"},{\"label\":\"7 days\",\"usedPct\":100}]}}}", true);
-    s.data = json_parsez("{\"turns\":0,\"period\":\"month\",\"month\":\"2026-10\"}"); s.data_key = query_key(&s);
+static void test_account_loading(void) {
+    DashboardStub stub = {0}; block(&stub, ACCOUNTS_READ);
+    stub.accounts = "{\"providers\":[{\"id\":7,\"label\":\"Work\"},{\"id\":8,\"label\":\"Personal\",\"active\":false},{\"id\":0}]}";
+    stub.second_code = 404;
+    Screen *screen = setup(&stub, "admin", 3); await_block(&stub); pump(1);
+    poll(screen); pump(1); poll(screen); pump(1); CHECK_INT(stub.count[ACCOUNTS_READ], 1);
+    SetEvent(stub.resume); pump(3);
+    CHECK_INT(stub.count[STATUS_READ], 2);
+    check_url(&stub, "https://example.com/api/v1/settings/providers");
+    check_url(&stub, "https://example.com/api/v1/settings/providers/7/status");
+    check_url(&stub, "https://example.com/api/v1/settings/providers/8/status");
+    Doc doc; doc_init(&doc);
     for (int width = 360; width <= 1600; width += 620) {
-        Doc doc; doc_init(&doc); doc_begin(&doc, NULL, width); dashboard_layout(&s.base, &doc);
-        CHECK(contains(&doc, "Usage remaining per account")); CHECK(contains(&doc, "work@example.com"));
-        CHECK(contains(&doc, "5 hours: 75% remaining")); CHECK(contains(&doc, "resets "));
-        CHECK(contains(&doc, "7 days: 0% remaining")); CHECK(contains(&doc, "Personal"));
-        CHECK(contains(&doc, "disabled")); CHECK(contains(&doc, "Quota request failed"));
-        CHECK(contains(&doc, "No usage recorded")); doc_free(&doc);
+        draw(screen, &doc, width); CHECK(text_with(&doc, "work@example.com") != NULL);
+        CHECK(text_with(&doc, "Personal") != NULL); check_percent(&doc, "fixture-window", 75);
     }
-    quotas_load(&s, true); CHECK_INT(call_count, 4);
-    reply(3, "{\"providers\":[{\"id\":9,\"label\":\"Replacement\"}]}", true);
-    CHECK_INT(call_count, 5); CHECK_INT(json_int_or(json_get(pending[4].args, "fresh"), 0), 1);
-    CHECK_INT(json_count(s.accounts), 1);
-    dashboard_visible(&s.base, false); CHECK(pending[4].cancelled); CHECK(!quotas_busy(&s));
-    cleanup(&s);
+    cleanup(&stub, &doc);
 }
 static void test_unavailable_and_permissions(void) {
-    DashboardScreen s; fixture(&s);
-    g_store.device.permission = "read"; quotas_load(&s, false); CHECK_INT(call_count, 0);
-    g_store.device.permission = "admin"; g_store.route_count = 1; quotas_load(&s, false); CHECK_INT(call_count, 0);
-    g_store.route_count = sizeof routes / sizeof *routes;
-    quotas_load(&s, false); reply(0, "{}", true); CHECK(s.accounts_error != NULL); CHECK(s.accounts == NULL);
-    quotas_load(&s, false); reply(1, "{\"providers\":[{\"id\":1}]}", true);
-    CHECK(s.accounts_error == NULL); reply(2, "{\"status\":{\"usage\":null}}", true);
-    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 600); quotas_layout(&s, &doc, 0, 600);
-    CHECK(contains(&doc, "Usage unavailable for this account")); CHECK(!contains(&doc, "100% remaining")); doc_free(&doc);
-    quotas_load(&s, false); reply(3, "{\"providers\":[]}", true);
-    doc_init(&doc); doc_begin(&doc, NULL, 600); quotas_layout(&s, &doc, 0, 600);
-    CHECK(contains(&doc, "No provider accounts configured")); doc_free(&doc);
-    cleanup(&s);
+    for (int restricted = 0; restricted < 2; restricted++) {
+        DashboardStub stub = {0}; Screen *screen = setup(&stub, restricted ? "admin" : "read", restricted ? 2 : 3);
+        if (restricted) pump(1);
+        CHECK_INT(stub.count[ACCOUNTS_READ], 0); CHECK_INT(stub.count[STATUS_READ], 0);
+        CHECK_INT(stub.count[LEDGER_READ], restricted);
+        Doc doc; doc_init(&doc); draw(screen, &doc, 600); CHECK(text_with(&doc, "work@example.com") == NULL);
+        cleanup(&stub, &doc);
+    }
+    DashboardStub stub = {0}; stub.accounts = "{}";
+    Screen *screen = setup(&stub, "admin", 3); pump(2); CHECK_INT(stub.count[STATUS_READ], 0);
+    stub.accounts = ACCOUNTS; stub.status = "{\"status\":{\"auth\":{\"email\":\"missing@example.com\"},\"usage\":null}}";
+    poll(screen); pump(3); Doc doc; doc_init(&doc); draw(screen, &doc, 600);
+    CHECK(text_with(&doc, "missing@example.com") != NULL);
+    const char *quota = text_with(&doc, "Quota:"); CHECK(!quota || strchr(quota, '%') == NULL);
+    const char *invalid_status[] = { "{}", "{\"status\":{\"usage\":{\"windows\":[{\"usedPct\":1e999}]}}}" };
+    for (size_t i = 0; i < sizeof invalid_status / sizeof *invalid_status; i++) {
+        stub.status = invalid_status[i]; poll(screen); pump(3); draw(screen, &doc, 600);
+        CHECK(text_with(&doc, "Work") != NULL);
+        quota = text_with(&doc, "Quota:"); CHECK(!quota || strchr(quota, '%') == NULL);
+    }
+    stub.accounts = "{\"providers\":[]}"; poll(screen); pump(2); draw(screen, &doc, 600);
+    CHECK_INT(stub.count[STATUS_READ], 3); CHECK(text_with(&doc, "missing@example.com") == NULL);
+    cleanup(&stub, &doc);
+}
+static void test_hidden_cancels_reads(void) {
+    for (int kind = ACCOUNTS_READ; kind <= STATUS_READ; kind++) {
+        DashboardStub stub = {0}; block(&stub, kind);
+        Screen *screen = setup(&stub, "admin", 3); pump(kind == ACCOUNTS_READ ? 1 : 2); await_block(&stub);
+        screen->vt->visible(screen, false); SetEvent(stub.resume); pump(1);
+        CHECK_INT(stub.count[STATUS_READ], kind == STATUS_READ);
+        Doc doc; doc_init(&doc); draw(screen, &doc, 600); CHECK(text_with(&doc, "work@example.com") == NULL);
+        poll(screen); CHECK_INT(stub.count[LEDGER_READ], 1);
+        screen->vt->visible(screen, true); first_poll(screen); pump(3); draw(screen, &doc, 600);
+        CHECK(text_with(&doc, "work@example.com") != NULL); check_percent(&doc, "fixture-window", 75);
+        cleanup(&stub, &doc);
+    }
+}
+static void test_fresh_refresh_during_reads(void) {
+    for (int kind = ACCOUNTS_READ; kind <= STATUS_READ; kind++) {
+        DashboardStub stub = {0}; block(&stub, kind);
+        Screen *screen = setup(&stub, "admin", 3); pump(kind == ACCOUNTS_READ ? 1 : 2); await_block(&stub);
+        stub.accounts = "{\"providers\":[{\"id\":3}]}";
+        stub.status = "{\"status\":{\"auth\":{\"email\":\"replacement@example.com\"},\"usage\":{\"windows\":[{\"label\":\"replacement-window\",\"usedPct\":10}]}}}";
+        screen->vt->refresh(screen); pump(3);
+        check_url(&stub, "https://example.com/api/v1/settings/providers/3/status?fresh=1");
+        SetEvent(stub.resume); pump(1);
+        CHECK_INT(stub.count[STATUS_READ], kind == ACCOUNTS_READ ? 1 : 2);
+        Doc doc; doc_init(&doc); draw(screen, &doc, 600);
+        CHECK(text_with(&doc, "replacement@example.com") != NULL); CHECK(text_with(&doc, "work@example.com") == NULL);
+        check_percent(&doc, "replacement-window", 90);
+        cleanup(&stub, &doc);
+    }
 }
 static void test_quota_retry_after(void) {
-    for (int status = 0; status < 2; status++) {
-        DashboardScreen s; fixture(&s);
-        quotas_load(&s, false);
-        if (status) {
-            reply(0, "{\"providers\":[{\"id\":1},{\"id\":2},{\"id\":3}]}", true);
-            reply_retry(1, "{}", false, 300);
-            reply_retry(2, "{}", false, 30);
-            reply(3, "{\"status\":{}}", true);
-        } else reply_retry(0, "{}", false, 300);
-        int quota_calls = call_count;
-        pick_add(&s, F_MODEL, "test-model");
-        load(&s); reply(quota_calls, "{}", true);
-        quota_ticks += 60000;
-        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 1);
-        quota_ticks = 300999;
-        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 1);
-        quota_ticks = 301000;
-        quotas_load(&s, false); CHECK_INT(call_count, quota_calls + 2);
-        CHECK_STR(pending[quota_calls + 1].operation, "settings_providers");
-        cleanup(&s);
+    for (int status_failure = 0; status_failure < 3; status_failure++) {
+        DashboardStub stub = {0};
+        if (status_failure) {
+            block(&stub, STATUS_READ); stub.block_path = "/8/status";
+            stub.accounts = "{\"providers\":[{\"id\":7},{\"id\":8}]}";
+            stub.status_code = 429; stub.second_status = STATUS;
+            if (status_failure == 2) { stub.second_code = 429; stub.second_retry = "0.25"; }
+        } else stub.accounts_code = 429;
+        Screen *screen = setup(&stub, "admin", 3);
+        if (status_failure) { pump(3); await_block(&stub); SetEvent(stub.resume); pump(1); }
+        else pump(2);
+        if (status_failure == 2) Sleep(300); // A shorter later failure must not replace the first deadline.
+        LONG accounts = stub.count[ACCOUNTS_READ], statuses = stub.count[STATUS_READ];
+        for (int i = 0; i < 3; i++) { poll(screen); pump(1); }
+        CHECK_INT(stub.count[ACCOUNTS_READ], accounts); CHECK_INT(stub.count[STATUS_READ], statuses);
+        screen->vt->visible(screen, false); screen->vt->visible(screen, true); first_poll(screen); pump(1);
+        CHECK_INT(stub.count[ACCOUNTS_READ], accounts);
+        // Explicit refresh can request fresh quotas despite a periodic-read cooldown.
+        stub.accounts_code = 0; stub.status_code = 0; stub.second_code = 0; stub.block_path = NULL; screen->vt->refresh(screen); pump(status_failure ? 4 : 3);
+        Doc doc; doc_init(&doc); draw(screen, &doc, 600); CHECK(text_with(&doc, "work@example.com") != NULL);
+        cleanup(&stub, &doc);
     }
 }
-static void test_fresh_refresh_during_quota_reads(void) {
-    for (int status = 0; status < 2; status++) {
-        DashboardScreen s; fixture(&s);
-        quotas_load(&s, false);
-        if (status) reply(0, "{\"providers\":[{\"id\":1},{\"id\":2}]}", true);
-        int old_calls = call_count;
-        dashboard_refresh(&s.base);
-        CHECK_INT(call_count, old_calls + 2);
-        for (int i = status ? 1 : 0; i < old_calls; i++) {
-            CHECK(pending[i].cancelled); CHECK(pending[i].slot == NULL);
-        }
-        CHECK_STR(pending[old_calls + 1].operation, "settings_providers");
-        reply(old_calls + 1, "{\"providers\":[{\"id\":3}]}", true);
-        CHECK_INT(call_count, old_calls + 3);
-        CHECK_STR(pending[old_calls + 2].operation, "provider_status");
-        CHECK_INT(json_int_or(json_get(pending[old_calls + 2].args, "fresh"), 0), 1);
-        CHECK_INT(json_int_or(json_get(pending[old_calls + 2].args, "id"), 0), 3);
-        cleanup(&s);
-    }
+static void test_quota_cooldown_expiry(void) {
+    DashboardStub stub = {0}; stub.accounts_code = 429; stub.retry = "0.25";
+    Screen *screen = setup(&stub, "admin", 3); pump(2);
+    // Use the real clock, with a short transport deadline, rather than changing screen internals.
+    Sleep(300); stub.accounts_code = 0; poll(screen); pump(3);
+    CHECK_INT(stub.count[ACCOUNTS_READ], 2); CHECK_INT(stub.count[STATUS_READ], 1);
+    Doc doc; doc_init(&doc); draw(screen, &doc, 600); check_percent(&doc, "fixture-window", 75);
+    cleanup(&stub, &doc);
 }
 void app_dashboard_tests(void) {
     if (!theme.canvas) theme_init();
+    dispatcher = CreateWindowExW(0, L"STATIC", L"Dashboard dispatcher", 0, 0, 0, 10, 10,
+        NULL, NULL, GetModuleHandleW(NULL), NULL);
+    CHECK(dispatcher != NULL); pane = pane_create(dispatcher, false); CHECK(pane_hwnd(pane) != NULL);
+    wchar_t directory[MAX_PATH]; GetTempPathW(MAX_PATH, directory); wcscat(directory, L"briareus-dashboard-tests");
+    memset(&g_store, 0, sizeof g_store); g_store.hwnd = dispatcher; g_store.cache = cache_new(directory);
     test_run("Dashboard quota percentages distinguish missing data from full allowance", test_remaining_values);
-    test_run("Dashboard reads each account and renders quota windows without ledger activity", test_account_loading_and_layout);
-    test_run("Dashboard quota reads respect permissions and show unavailable or empty accounts", test_unavailable_and_permissions);
-    test_run("Dashboard quota cooldown survives ledger success and other account responses", test_quota_retry_after);
-    test_run("Dashboard fresh refresh restarts pending account and status reads", test_fresh_refresh_during_quota_reads);
+    test_run("Dashboard reads each valid account once while ledger polls continue", test_account_loading);
+    test_run("Dashboard quota reads respect permissions and recover from malformed or empty accounts", test_unavailable_and_permissions);
+    test_run("Dashboard hiding discards in-flight account and status responses", test_hidden_cancels_reads);
+    test_run("Dashboard fresh refresh replaces pending account and status reads", test_fresh_refresh_during_reads);
+    test_run("Dashboard quota cooldown survives successful ledger reads and visibility changes", test_quota_retry_after);
+    test_run("Dashboard quota reads resume when Retry-After expires", test_quota_cooldown_expiry);
+    pane_destroy(pane); DestroyWindow(dispatcher);
+    cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory);
+    memset(&g_store, 0, sizeof g_store);
 }

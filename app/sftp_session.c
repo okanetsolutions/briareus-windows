@@ -344,11 +344,11 @@ static void finish(SftpSession *s) {
         if (why) set_status(s, xstrfmt("Could not %s %s: %s", verbs[c->kind], sftp_basename(c->path), why), true);
         else if (c->kind == C_RENAME) set_status(s, xstrfmt("Renamed %s to %s", sftp_basename(c->path), sftp_basename(c->path2)), false);
         else set_status(s, xstrfmt("%s %s", done[c->kind], c->path), false);
-        free(why);
-        if (!why && (c->kind == C_RM || c->kind == C_RMDIR || c->kind == C_RENAME) && s->selected && sftp_path_within(s->selected, c->path)) {
+        if (!why && c->kind != C_MKDIR && s->selected && sftp_path_within(s->selected, c->path)) {
             char *parent = sftp_parent(c->path);
             free(s->selected); s->selected = c->kind == C_RENAME ? xstrdup(c->path2) : parent; if (c->kind == C_RENAME) free(parent);
         }
+        free(why);
         char *parent = sftp_parent(c->path);
         relist(s, parent);
         if (c->kind == C_RENAME) { char *to = sftp_parent(c->path2); if (!str_eq(to, parent)) relist(s, to); free(to); }

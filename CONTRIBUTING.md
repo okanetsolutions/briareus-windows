@@ -17,7 +17,7 @@ mingw32-make test
 
 Core behavior is covered by `tests/core_*tests.c`, called from `tests/core_tests.c`, with HTTP stubbed through the client's pluggable transport. App helpers are covered by `tests/app_*tests.c`, called from `tests/app_tests.c`. New behavior needs meaningful coverage in the owning suite; static copy, styling and layout changes need no new tests. Read [the testing skill](.agents/skills/testing-best-practices/SKILL.md) for harness registration, assertions and cleanup.
 
-Run `make rules` before delivery. This uses Python 3 and Git to check new structure violations and core changes missing a test delta, without requiring a Windows compiler. Use `make rules RULES_BASE=<parent-ref>` for a stacked branch. The checks include their own regression tests and run in a separate Linux CI job. Normal app builds do not require Python. See [the check reference](.ai/rules/checks.md) for limits and source provenance.
+Run `make rules` before delivery. This uses Python 3 and Git to check existing and new structure violations and core changes missing a test delta, without requiring a Windows compiler. Use `make rules RULES_BASE=<parent-ref>` for a stacked branch. The checks include their own regression tests and run in a separate Linux CI job. Normal app builds do not require Python. See [the check reference](.ai/rules/checks.md) for limits and source provenance.
 
 The same build and tests run in CI for every pull request, with both GCC and MSVC, and every check must pass:
 
