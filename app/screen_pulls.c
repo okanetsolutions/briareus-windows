@@ -52,6 +52,9 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (board_tab_action(s->board_tab, action, arg, pt)) return;
     if (project_files_action(s->files, action, arg, pt)) return;
     switch (action) {
+    case ACT_FILTER_CHECKS:
+        s->pull_filter.hide_failing_checks = !s->pull_filter.hide_failing_checks; s->has_opening = false;
+        screen_pulls_filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break;
     case ACT_FILTER_STACK:
         s->hide_later_stacked = !s->hide_later_stacked; s->has_opening = false;
         screen_pulls_filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break;

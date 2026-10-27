@@ -443,6 +443,30 @@ static char *options(const BoardFilter *f, FilterKind kind, const BoardRow *rows
     filter_options_free(o, n);
     return s.data ? str_detach(&s) : xstrdup("");
 }
+static void test_failing_checks_filter_keeps_unfinished_and_absent_checks(void) {
+    Rows r; rows_load(&r,
+        "[{\"number\":1,\"author\":\"Ana\",\"checks\":\"failure\"},"
+        "{\"number\":2,\"author\":\"Bo\",\"checks\":\"error\"},"
+        "{\"number\":3,\"author\":\"Ana\",\"checks\":\"success\"},"
+        "{\"number\":4,\"author\":\"Bo\",\"checks\":\"pending\"},"
+        "{\"number\":5,\"author\":\"Bo\",\"checks\":\"expected\"},"
+        "{\"number\":6,\"author\":\"Ana\"},"
+        "{\"number\":7,\"checks\":null},{\"number\":8,\"checks\":\"unknown\"}]");
+    BoardFilter f, copy; board_filter_init(&f);
+    CHECK_OWNED_STR(passing_numbers(&f, &r, -1), "1,2,3,4,5,6,7,8");
+    f.hide_failing_checks = true; CHECK(board_filter_is_on(&f));
+    CHECK_OWNED_STR(passing_numbers(&f, &r, -1), "3,4,5,6,7,8");
+    CHECK_OWNED_STR(options(&f, FILTER_AUTHOR, r.rows, r.count), "ana=Ana 2,bo=Bo 2");
+    board_filter_copy(&copy, &f); CHECK(board_filter_equal(&copy, &f));
+    f.hide_failing_checks = false; CHECK(!board_filter_equal(&copy, &f));
+    board_filter_set(&copy, FILTER_AUTHOR, "Ana");
+    CHECK_OWNED_STR(passing_numbers(&copy, &r, -1), "3,6");
+    CHECK_OWNED_STR(passing_numbers(&copy, &r, FILTER_AUTHOR), "3,4,5,6,7,8");
+    IssueSummary issue = {0}; BoardRow row = issue_board_row(&issue);
+    CHECK(!row.checks_failed); CHECK(board_filter_passes(&copy, &row, FILTER_AUTHOR));
+    board_filter_free(&f); board_filter_init(&f); CHECK(!board_filter_is_on(&f));
+    board_filter_free(&copy); board_filter_free(&f); rows_free(&r);
+}
 static void test_board_filters_pass_rows_folding_case(void) {
     Rows r; rows_load(&r, filter_pulls);
     BoardFilter f; board_filter_init(&f);
@@ -1401,6 +1425,7 @@ void board_tests(void) {
     test_run("board rows carry what the pickers filter on", test_board_rows_carry_what_the_pickers_filter_on);
     test_run("board filters keep their picks folded", test_board_filters_keep_their_picks_folded);
     test_run("board filter copies compare equal and are independent", test_board_filter_copies_compare_equal_and_are_independent);
+    test_run("failing checks filter preserves unfinished checks and picker counts", test_failing_checks_filter_keeps_unfinished_and_absent_checks);
     test_run("board filters pass rows folding case", test_board_filters_pass_rows_folding_case);
     test_run("board filter options are counted against the other pickers", test_board_filter_options_are_counted_against_the_other_pickers);
     test_run("a pick the others empty still lists itself", test_a_pick_the_others_empty_still_lists_itself);
