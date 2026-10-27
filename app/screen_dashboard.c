@@ -13,13 +13,8 @@ static void dashboard_refresh(Screen *base);
 static void dashboard_activated(Screen *base, bool active);
 static void dashboard_destroy(Screen *base);
 
-const screen_dashboard_PERIODS_type screen_dashboard_PERIODS[] = {
-    { "month", "This month" }, { "prev", "Last month" }, { "all", "All time" },
-    { "today", "Today" }, { "7d", "Last 7 days" }, { "30d", "Last 30 days" },
-};
-
-// The window is a preference, kept while the app runs; the filters are not, so a fresh visit shows everything.
-int screen_dashboard_g_period = 0;
+// The window is remembered while the app runs; each screen owns its active query.
+UsageWindow screen_dashboard_preference;
 
 static void usage_done(void *owner, Request *req) {
     DashboardScreen *s = owner;
@@ -28,7 +23,8 @@ static void usage_done(void *owner, Request *req) {
         s->data = req->result; req->result = NULL;
         s->data_key = json_serialize(req->args, true);
         if (json_is_object(json_get(s->data, "options"))) { json_free(s->options); s->options = json_clone(json_get(s->data, "options")); }
-        if (!screen_dashboard_any_pick(s)) { char *key = xstrfmt("usage:%s", screen_dashboard_PERIODS[screen_dashboard_g_period].id); cache_store(g_store.cache, s->data, key); free(key); }
+        const char *key = usage_query_cache_key(req->args);
+        if (key) cache_store(g_store.cache, s->data, key);
         set_string(&s->error, NULL);
     } else {
         char *text = request_error_or_unexpected(req);
@@ -52,9 +48,11 @@ void screen_dashboard_repick(DashboardScreen *s) {
 }
 
 static void restore(DashboardScreen *s) {
-    char *key = xstrfmt("usage:%s", screen_dashboard_PERIODS[screen_dashboard_g_period].id);
+    Json *args = usage_window_args(&s->window);
+    const char *key = usage_query_cache_key(args);
+    json_free(args);
+    if (!key) return;
     Json *saved = cache_value(g_store.cache, key);
-    free(key);
     if (!json_is_object(saved)) { json_free(saved); return; }
     s->data = saved; s->data_key = screen_dashboard_query_key(s);
     if (json_is_object(json_get(saved, "options"))) s->options = json_clone(json_get(saved, "options"));
@@ -97,7 +95,7 @@ static void dashboard_layout(Screen *base, Doc *doc) {
     if (s->error) { doc_notice(doc, x, w, s->error); doc_space(doc, px(10)); }
     if (!screen_dashboard_count_of(u, "turns")) {
         // An empty window still lists the projects, at zero: "which projects ran nothing?" is the question left.
-        char *over = screen_dashboard_window_name(u);
+        char *over = screen_dashboard_window_name(u, &s->window);
         char *line = xstrfmt("No usage recorded in %s%s.", over, screen_dashboard_any_pick(s) ? " for these filters" : "");
         doc_space(doc, px(18));
         doc_text(doc, x, w, line, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK);
@@ -135,7 +133,7 @@ static void dashboard_header(Screen *base, HeaderInfo *info) {
     if (u) {
         // A filter is said in the subtitle as well as in its picker: these totals are a slice, and this line says which.
         Str sub; str_init(&sub);
-        char *over = screen_dashboard_window_name(u);
+        char *over = screen_dashboard_window_name(u, &s->window);
         str_appendz(&sub, over); free(over);
         bool picked = false;
         for (int f = 0; f < F_COUNT; f++) {
@@ -156,7 +154,8 @@ static void dashboard_header(Screen *base, HeaderInfo *info) {
     }
     if (!store_supports("usage_all")) return;
     HeaderButton *b = &info->buttons[info->button_count++];
-    snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", screen_dashboard_PERIODS[screen_dashboard_g_period].label);
+    char *label = usage_window_label(&s->window);
+    snprintf(b->label, sizeof b->label, "%s \xE2\x96\xBE", label); free(label);
     b->glyph = 0xE787; b->action = ACT_PERIOD; b->enabled = true; b->tip = "The window every number on this page is over";
     HeaderButton *r = &info->buttons[info->button_count++];
     r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req; r->tip = "Read the usage ledger again";
@@ -239,6 +238,7 @@ static const ScreenVTable dashboard_vt = {
 Screen *dashboard_screen_new(void) {
     DashboardScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &dashboard_vt; s->base.id = xstrdup("dashboard");
+    s->window = screen_dashboard_preference;
     restore(s);
     return &s->base;
 }

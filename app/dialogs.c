@@ -689,3 +689,63 @@ bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body
     EditItemState s = { caption, title, body };
     return modal_box(IDD_EDIT_ITEM, owner, edit_item_proc, (LPARAM)&s) == IDOK;
 }
+
+// MARK: - Usage calendar days
+
+typedef struct { UsageRange value; } UsageRangeState;
+
+static bool usage_range_read(HWND dialog, UsageRange *range) {
+    char *from = control_text(dialog, IDC_USAGE_FROM), *to = control_text(dialog, IDC_USAGE_TO);
+    bool valid = usage_range_make(from, to, range);
+    free(from); free(to);
+    return valid;
+}
+
+static void usage_range_update(HWND dialog) {
+    UsageRange range;
+    bool valid = usage_range_read(dialog, &range);
+    EnableWindow(GetDlgItem(dialog, IDOK), valid);
+    set_control_text(dialog, IDC_HINT, valid ? "" : "Enter valid days spanning at most 366 inclusive days.");
+}
+
+static INT_PTR CALLBACK usage_range_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
+    UsageRangeState *s = (UsageRangeState *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    switch (msg) {
+    case WM_INITDIALOG:
+        s = (UsageRangeState *)lp; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
+        dialog_theme(dialog);
+        dialog_prepare_edit(dialog, IDC_USAGE_FROM); dialog_prepare_edit(dialog, IDC_USAGE_TO);
+        SendMessageW(dialog, DM_SETDEFID, IDOK, 0);
+        set_control_text(dialog, IDC_USAGE_FROM, s->value.from); set_control_text(dialog, IDC_USAGE_TO, s->value.to);
+        usage_range_update(dialog);
+        SetFocus(GetDlgItem(dialog, IDC_USAGE_FROM));
+        SendDlgItemMessageW(dialog, IDC_USAGE_FROM, EM_SETSEL, 0, -1);
+        return FALSE;
+    case WM_CTLCOLORSTATIC: return dialog_static_color(dialog, wp, lp, theme.secondary);
+    case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN: return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_USAGE_FROM, IDC_USAGE_TO }; dialog_paint_frames(dialog, ids, 2); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDOK) ? TRUE : FALSE;
+    case WM_COMMAND:
+        if (!s) return FALSE;
+        switch (LOWORD(wp)) {
+        case IDC_USAGE_FROM: case IDC_USAGE_TO:
+            if (HIWORD(wp) == EN_CHANGE) usage_range_update(dialog);
+            else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, LOWORD(wp));
+            return TRUE;
+        case IDOK:
+            if (usage_range_read(dialog, &s->value)) EndDialog(dialog, IDOK);
+            return TRUE;
+        case IDCANCEL: EndDialog(dialog, IDCANCEL); return TRUE;
+        }
+        return FALSE;
+    case WM_CLOSE: EndDialog(dialog, IDCANCEL); return TRUE;
+    }
+    return FALSE;
+}
+
+bool dialog_usage_range(HWND owner, UsageRange *range) {
+    UsageRangeState s = { *range };
+    if (modal_box(IDD_USAGE_RANGE, owner, usage_range_proc, (LPARAM)&s) != IDOK) return false;
+    *range = s.value;
+    return true;
+}

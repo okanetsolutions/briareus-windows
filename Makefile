@@ -57,7 +57,7 @@ $(BUILD)/core_tests.exe: $(CORE_OBJ) $(CORE_TEST_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(CORE_LIBS)
 
 # The app's objects, its WinMain included, under a console main of the tests' own: the shared helpers run without a window.
-$(BUILD)/app_tests.exe: $(CORE_OBJ) $(APP_OBJ) $(APP_TEST_OBJ)
+$(BUILD)/app_tests.exe: $(CORE_OBJ) $(APP_OBJ) $(APP_TEST_OBJ) $(RES)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) $(APP_LIBS)
 
 test: $(BUILD)/core_tests.exe $(BUILD)/app_tests.exe

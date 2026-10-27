@@ -1,4 +1,6 @@
 #include "screen_dashboard_internal.h"
+#include "dialogs.h"
+#include <time.h>
 
 static void pick_add(DashboardScreen *s, FilterId f, const char *key);
 static void pick_remove(DashboardScreen *s, FilterId f, const char *key);
@@ -76,8 +78,7 @@ char *screen_dashboard_picks_label(DashboardScreen *s, FilterId f) {
 }
 
 Json *screen_dashboard_query_args(DashboardScreen *s) {
-    Json *args = json_object();
-    json_set_str(args, "period", screen_dashboard_PERIODS[screen_dashboard_g_period].id);
+    Json *args = usage_window_args(&s->window);
     for (int f = 0; f < F_COUNT; f++) {
         if (!s->pick_count[f]) continue;
         if (!FILTERS[f].multi) { json_set_str(args, FILTERS[f].param, s->picks[f][0]); continue; }
@@ -112,15 +113,27 @@ char *screen_dashboard_filter_button_text(DashboardScreen *s, FilterId f) {
 
 void screen_dashboard_pick_period(DashboardScreen *s, POINT pt) {
     HMENU menu = CreatePopupMenu();
-    for (int i = 0; i < PERIOD_COUNT; i++) {
-        wchar_t *w = utf8_to_wide(screen_dashboard_PERIODS[i].label);
-        AppendMenuW(menu, MF_STRING | (i == screen_dashboard_g_period ? MF_CHECKED : 0), (UINT_PTR)(1 + i), w);
+    for (int i = 0; i < USAGE_PERIOD_COUNT; i++) {
+        wchar_t *w = utf8_to_wide(usage_period_labels[i]);
+        AppendMenuW(menu, MF_STRING | (i == s->window.period ? MF_CHECKED : 0), (UINT_PTR)(1 + i), w);
         free(w);
     }
     int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL);
     DestroyMenu(menu);
-    if (chosen < 1 || chosen - 1 == screen_dashboard_g_period) return;
-    screen_dashboard_g_period = chosen - 1;
+    if (chosen == USAGE_CUSTOM + 1) {
+        UsageRange range = s->window.range;
+        if (!*range.from) {
+            time_t now = time(NULL);
+            struct tm *local = localtime(&now);
+            char today[11];
+            if (!local || !strftime(today, sizeof today, "%Y-%m-%d", local)) return;
+            if (!usage_range_last_week(today, &range)) return;
+        }
+        if (dialog_usage_range(pane_hwnd(s->base.pane), &range)) screen_dashboard_apply_range(s, &range);
+        return;
+    }
+    if (!usage_window_set_period(&s->window, chosen - 1)) return;
+    screen_dashboard_preference = s->window;
     screen_dashboard_repick(s);
 }
 
@@ -154,4 +167,12 @@ void screen_dashboard_pick_filter(DashboardScreen *s, FilterId f, POINT pt) {
         else { if (screen_dashboard_is_picked(s, f, key)) return; screen_dashboard_picks_clear(s, f); pick_add(s, f, key); }
     } else return;
     screen_dashboard_repick(s);
+}
+
+bool screen_dashboard_apply_range(DashboardScreen *s, const UsageRange *range) {
+    if (!usage_window_set_range(&s->window, range)) return false;
+    screen_dashboard_preference = s->window;
+    // Applying even the same days reads again; custom ranges are never restored from cache.
+    screen_dashboard_repick(s);
+    return true;
 }

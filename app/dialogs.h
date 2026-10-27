@@ -2,6 +2,7 @@
 #ifndef BRIAREUS_DIALOGS_H
 #define BRIAREUS_DIALOGS_H
 #include "board.h"
+#include "usage.h"
 #include "models.h"
 #include <windows.h>
 #include <stdbool.h>
@@ -23,6 +24,8 @@ bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_
 /// An issue's or pull request's title and description, edited from `*title` and `*body`; true with both on Save, which
 /// a blank title keeps disabled.
 bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body);
+/// Two inclusive YYYY-MM-DD days; only Apply replaces range, Cancel leaves it untouched.
+bool dialog_usage_range(HWND owner, UsageRange *range);
 /// Applies the theme to a dialog and its controls.
 void dialog_theme(HWND dialog);
 /// Paints dialog backgrounds and static text in the theme; call from WM_CTLCOLOR* handlers.
