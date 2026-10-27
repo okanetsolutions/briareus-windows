@@ -84,7 +84,8 @@ static const char *reply_error(int status) {
     case 404: return "The message or mailbox is no longer available. Refresh mail.";
     case 409: return "The mailbox changed or needs sign-in. Refresh its status in Settings > Mail.";
     case 429: return "Mail is rate limited. Wait for the cooldown before sending again.";
-    default: return "The reply may have been sent. Sync the mailbox and check Sent before confirming reconciliation here.";
+    case 0: return "The reply may have been sent. Sync the mailbox and check Sent before confirming reconciliation here.";
+    default: return "The server refused the reply. Review the draft and mailbox status before trying again.";
     }
 }
 

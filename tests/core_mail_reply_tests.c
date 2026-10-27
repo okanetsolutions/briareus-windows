@@ -92,6 +92,27 @@ static void outcomes(void) {
     json_free(accepted); api_error_clear(&e); mail_replies_free(&drafts); CHECK(drafts == NULL);
 }
 
+static void refusal_guidance(void) {
+    MailReply *drafts = NULL, *d = mail_reply_find(&drafts, "7:first", true);
+    free(d->text); d->text = xstrdup("answer");
+    ApiError e; api_error_init(&e);
+    CHECK(mail_reply_begin(d, 100)); api_error_set(&e, API_HTTP, 502, NULL, -1);
+    mail_reply_finish(d, false, false, NULL, &e, 100);
+    CHECK(d->uncertain); CHECK(d->error != NULL);
+    const char *uncertain_error = d->error;
+    CHECK(mail_reply_reconcile(d));
+    const int statuses[] = {422, 451};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        CHECK(mail_reply_begin(d, 100)); api_error_set(&e, API_HTTP, statuses[i], NULL, -1);
+        mail_reply_finish(d, false, false, NULL, &e, 100);
+        CHECK(!d->uncertain); CHECK(!d->sent); CHECK_STR(d->text, "answer");
+        CHECK(d->error != NULL); CHECK(!str_eq(d->error, uncertain_error));
+        CHECK(!mail_reply_reconcile(d));
+    }
+    CHECK(mail_reply_begin(d, 100));
+    api_error_clear(&e); mail_replies_free(&drafts);
+}
+
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
     const void *bytes, size_t size, int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
     (void)headers; (void)timeout; (void)error; int *calls = ctx; (*calls)++;
@@ -117,5 +138,6 @@ void core_mail_reply_tests(void) {
     test_run("mail replies gate writable providers and distinguish account replacement", writable_identity);
     test_run("mail replies accept omitted access and reject explicit malformed access", parsed_access);
     test_run("mail replies preserve drafts, cooldowns and uncertain interlocks", outcomes);
+    test_run("mail reply refusals use distinct guidance without reconciliation", refusal_guidance);
     test_run("mail reply wire route encodes original identity and sends text only", wire);
 }
