@@ -16,11 +16,12 @@
 
 // MARK: - What both sidebar screens draw
 
-enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_MAIL };
+enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_MAIL, ACT_STATUS };
 
-enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 3 };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };
 
 extern size_t screen_projects_g_waiting;
+extern size_t screen_projects_g_status;
 // review rounds waiting for a decision, the ⚑ badge
 
 typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_MAIL } StripMark;
