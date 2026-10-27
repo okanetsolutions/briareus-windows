@@ -101,7 +101,8 @@ static void layout_connection(FormScreen *s, Doc *doc, int x, int w) {
         screen_provider_settings_headline(s, doc, x, w);
         doc_space(doc, px(12));
         bool supported = store_supports(str_eq(s->binary, "claude") ? "provider_login_start" : "provider_login");
-        doc_button(doc, x, 0, s->req_login ? "Logging in\xE2\x80\xA6" : "Log in", BUTTON_BORDERED, ACT_LOGIN, 0, supported && !s->req_login);
+        doc_button(doc, x, 0, s->req_login ? "Logging in\xE2\x80\xA6" : "Log in", BUTTON_BORDERED, ACT_LOGIN, 0, supported && !s->req_login &&
+            (!str_eq(s->binary, "codex") || (json_is_object(s->status) && !s->req_status)));
         doc_space(doc, px(10));
         if (s->device_code) {
             // codex's confirm page asks for the code its hidden CLI printed.

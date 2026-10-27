@@ -119,6 +119,22 @@ static void test_projects_all_navigation_and_capability(void) {
     doc_free(&doc); finish();
 }
 
+static void test_project_counts_save_live_scope_when_project_cache_is_stale(void) {
+    reset(); save("projects", "[]");
+    char *name = cache_file_name("projects"); wchar_t *wide = utf8_to_wide(name); free(name);
+    wchar_t dir[MAX_PATH], path[MAX_PATH]; GetTempPathW(MAX_PATH, dir);
+    swprintf(path, MAX_PATH, L"%lsbriareus-projects-tests\\%ls", dir, wide); free(wide);
+    HANDLE lock = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    Screen *root = projects_screen_new(); pane_set_root(pane, root);
+    root->vt->refresh(root); drain(2);
+    Json *saved = cache_value(g_store.cache, "projects"); CHECK_INT(json_count(saved), 0); json_free(saved);
+    check_saved("sessions", 3, "a");
+    check_saved("sessions:o/one", 1, "a"); check_saved("sessions:o/two", 1, "b");
+    screen_projects_recount(pane);
+    CloseHandle(lock); finish();
+}
+
 static void test_all_restores_cache_preserves_errors_and_accepts_empty(void) {
     reset();
     SessionsScreen *s = open_sessions(NULL); drain(1);
@@ -175,6 +191,7 @@ void app_projects_tests(void) {
     pane_set_root(pane, projects_screen_new()); pane_push(pane, sessions_screen_new(NULL)); pane_set_root(pane, NULL);
     test_run("all and project sessions use distinct request and cache scopes", test_all_and_project_requests_use_separate_scopes);
     test_run("projects opens all sessions and gates it by capability", test_projects_all_navigation_and_capability);
+    test_run("project counts save live scope alongside aggregate sessions when project cache is stale", test_project_counts_save_live_scope_when_project_cache_is_stale);
     test_run("all sessions restores cached rows and handles errors and empty results", test_all_restores_cache_preserves_errors_and_accepts_empty);
     test_run("deleting sessions clears aggregate and project caches", test_delete_updates_aggregate_and_project_caches);
     test_run("all sessions discards hidden and destroyed request completions", test_hidden_and_destroyed_all_discard_completions);

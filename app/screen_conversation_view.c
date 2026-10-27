@@ -109,10 +109,12 @@ void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     }
     const Json *triage = session_held_triage(screen_conversation_session(s));
     if (triage && store_supports("complete_findings")) { doc_space(doc, px(14)); screen_conversation_layout_triage(s, doc, x, w, triage); }
-    if (session_is_active(screen_conversation_session(s))) {
+    char *working = session_working_text(screen_conversation_session(s), &s->transcript, working_verb(s->tick));
+    if (working) {
         doc_space(doc, px(12));
-        int wi = doc_custom(doc, x, w, px(24), screen_conversation_paint_working, s, NULL, 0, 0);
+        int wi = doc_custom(doc, x, w, px(24), screen_conversation_paint_working, s, NULL, ACTION_TIP, 0);
         doc_item(doc, wi)->id = 2;
+        doc_item(doc, wi)->tip = working;
     }
     doc_space(doc, px(30));
     RECT anchor = { x, doc->y, x + w, doc->y + 1 };
@@ -173,6 +175,7 @@ void screen_conversation_conversation_header(Screen *base, HeaderInfo *info) {
     if (store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
     bool can = !s->busy && !s->uncertain;
     bool closed = str_eq(session_status(ss), "closed");
+    if (store_supports("session_stats")) header_button(info, 0xE9D9, "Resources", ACT_MENU_ITEM + MENU_RESOURCES, true, false);
     if (browser_offered()) {
         bool running = false, on = browser_session_on(ss->raw, &running);
         header_button(info, 0xE774, on && running ? "\xF0\x9F\x8C\x90 Browser \xE2\x97\x8F" : "\xF0\x9F\x8C\x90 Browser", ACT_MENU_ITEM + MENU_BROWSER, true, false);
@@ -198,6 +201,7 @@ void screen_conversation_menu_choice(ConversationScreen *s, int chosen) {
     case MENU_PULL: { Project p = { xstrdup(repo), NULL }; app_push_from(&s->base, pull_detail_screen_new(&p, number, NULL, NULL)); project_free(&p); break; }
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
+    case MENU_RESOURCES: if (store_supports("session_stats")) app_push_from(&s->base, resources_screen_new(ss)); break;
     case MENU_WEBHOOK: app_push_from(&s->base, webhook_screen_new(ss)); break;
     case MENU_LOOP_OFF:
     case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); screen_conversation_mutate(s, "review_loop", extra); break; }
@@ -217,7 +221,7 @@ void screen_conversation_menu_choice(ConversationScreen *s, int chosen) {
 
 void screen_conversation_conversation_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_WEBHOOK) { screen_conversation_menu_choice(s, action - ACT_MENU_ITEM); return; }
+    if (action > ACT_MENU_ITEM && action <= ACT_MENU_ITEM + MENU_RESOURCES) { screen_conversation_menu_choice(s, action - ACT_MENU_ITEM); return; }
     switch (action) {
     case ACT_ANSWER: {
         int seq = (int)(arg >> 8), index = (int)(arg & 0xFF);

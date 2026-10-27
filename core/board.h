@@ -74,7 +74,14 @@ void issue_summary_free(IssueSummary *issue);
 bool issue_is_epic(const IssueSummary *issue);
 IssueSummary *issue_summaries_parse(const Json *array, size_t *count);
 void issue_summaries_free(IssueSummary *issues, size_t count);
-typedef struct { size_t index; int depth; } IssueRow;
+typedef struct { size_t index; int depth; size_t children; } IssueRow;
+/// Board-lifetime issue numbers; owned storage, scoped by the board's repository.
+typedef struct { int *numbers; size_t count; } IssueFolds;
+bool issue_folds_contains(const IssueFolds *folds, int number);
+void issue_folds_toggle(IssueFolds *folds, int number);
+void issue_folds_free(IssueFolds *folds);
+/// Compacts nested rows in place, returning their visible count; preserves pre-fold child counts.
+size_t issues_folded(IssueRow *rows, size_t count, const IssueSummary *issues, const IssueFolds *folds);
 /// Sub-issues drawn under their epic, depth first, each with how deep it sits.
 /// Only a parent on the list itself nests its children; a cycle leaves its rows flat.
 IssueRow *issues_nested(const IssueSummary *issues, size_t count, const char *repo, size_t *row_count);
@@ -101,6 +108,7 @@ typedef struct {
     const Reviewer *reviewers; size_t reviewer_count;
     char *const *assignees; size_t assignee_count;
     const PullLabel *labels; size_t label_count;
+    bool checks_failed;   // false for issues
 } BoardRow;
 BoardRow pull_board_row(const PullSummary *pull);
 BoardRow issue_board_row(const IssueSummary *issue);
@@ -109,7 +117,7 @@ BoardRow issue_board_row(const IssueSummary *issue);
 #define PROJECT_NO_ASSIGNEE "-"
 typedef enum { FILTER_AUTHOR, FILTER_REVIEWER, FILTER_ASSIGNEE, FILTER_LABEL, FILTER_KIND_COUNT } FilterKind;
 /// One author, reviewer, assignee and label the board is narrowed to; empty means all. Values are kept folded.
-typedef struct { char *author, *reviewer, *assignee, *label; } BoardFilter;
+typedef struct { char *author, *reviewer, *assignee, *label; bool hide_failing_checks; } BoardFilter;
 typedef struct { char *value, *text; int count; } FilterOption;
 void board_filter_init(BoardFilter *filter);
 void board_filter_free(BoardFilter *filter);

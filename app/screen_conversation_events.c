@@ -109,13 +109,12 @@ void screen_conversation_paint_queued_box(Doc *doc, Item *it, Canvas *cv, const 
 
 void screen_conversation_paint_working(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ConversationScreen *s = it->data;
-    const char *status = session_status(screen_conversation_session(s));
-    const char *verb = str_eq(status, "queued") ? "Queued" : (str_eq(status, "preparing") || str_eq(status, "starting")) ? "Starting up" : working_verb(s->tick);
+    char *text = session_working_text(screen_conversation_session(s), &s->transcript, working_verb(s->tick));
+    if (!text) return;
     RECT g = { rc->left, rc->top, rc->left + px(16), rc->bottom };
     draw_textw(cv, working_glyph(s->tick), &g, FONT_BODY_SEMIBOLD, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    char *text = xstrfmt("%s\xE2\x80\xA6", verb);
     RECT t = { rc->left + px(24), rc->top, rc->right, rc->bottom };
-    draw_text(cv, text, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(cv, text, &t, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     free(text);
 }
 

@@ -1,5 +1,5 @@
 // Exercise the real screen refresh/visibility/activation and request completion paths.
-#include "screens.h"
+#include "screen_pulls_internal.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
@@ -9,7 +9,7 @@
 #include <commctrl.h>
 
 static Pane *pane;
-static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies;
+static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies, files_calls, comments_calls;
 static int list_status;
 static const char *list_body, *retry_header;
 static bool network_fail, reject_fresh;
@@ -29,6 +29,12 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         if (retry_header) *retry_after = xstrdup(retry_header);
         if (hold) { SetEvent(entered); WaitForSingleObject(hold, 5000); }
         if (network_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
+    } else if (strstr(url, "/files?")) {
+        InterlockedIncrement(&files_calls); *status = 200;
+        payload = "{\"pr\":{\"headSha\":\"abc\"},\"files\":[]}";
+    } else if (strstr(url, "/comments?")) {
+        InterlockedIncrement(&comments_calls); *status = 200;
+        payload = "{\"comments\":[{\"body\":\"Timeline marker\",\"author\":\"reviewer\"}]}";
     } else if (strstr(url, "/pulls/")) {
         InterlockedIncrement(&pull_calls); *status = 200;
         payload = "{\"pr\":{\"number\":1,\"title\":\"Pull detail\",\"state\":\"open\",\"body\":\"Description\"}}";
@@ -65,6 +71,7 @@ static void next_account(void) {
 static void reset(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache);
     list_calls = session_calls = detail_calls = pull_calls = fresh_calls = replies = 0;
+    files_calls = comments_calls = 0;
     list_status = 200; retry_header = NULL; network_fail = reject_fresh = false;
     list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Keep this row\"}],\"issues\":[],\"syncedAt\":\"2026-10-07T12:00:00.000Z\"}";
     g_store.routes = routes; g_store.route_count = 2; next_account();
@@ -191,6 +198,111 @@ static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
     s = board(); s->vt->refresh(s); drain(2);
     CHECK(layout_contains(s, "Later in stack"));
     pane_set_root(pane, NULL);
+}
+static void test_failing_checks_filter_persists_per_repo_and_combines_with_stacks(void) {
+    reset();
+    list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Failed PR\",\"checks\":\"failure\"},"
+        "{\"number\":2,\"title\":\"Error PR\",\"checks\":\"error\"},"
+        "{\"number\":3,\"title\":\"Pending PR\",\"checks\":\"pending\"},"
+        "{\"number\":4,\"title\":\"Passing PR\",\"checks\":\"success\"},"
+        "{\"number\":5,\"title\":\"No checks PR\"},"
+        "{\"number\":6,\"title\":\"Later PR\",\"stack\":{\"position\":2,\"total\":2}}],"
+        "\"issues\":[{\"number\":10,\"title\":\"Visible issue\"}]}";
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    CHECK(layout_contains(s, "Failed PR")); click_header(s, "Hide failing checks");
+    CHECK(!layout_contains(s, "Failed PR")); CHECK(!layout_contains(s, "Error PR"));
+    CHECK(layout_contains(s, "Pending PR")); CHECK(layout_contains(s, "Passing PR"));
+    CHECK(layout_contains(s, "No checks PR")); CHECK(layout_contains(s, "Showing 4 of 6"));
+    click_header(s, "Hide later stacked PRs");
+    CHECK(!layout_contains(s, "Later PR")); CHECK(layout_contains(s, "Showing 3 of 6"));
+    Json *saved = cache_value(g_store.cache, "pulls-filters:o/r");
+    CHECK(json_bool_is(json_get(json_get(saved, "pulls"), "hideFailingChecks"), true)); json_free(saved);
+    s = board(); s->vt->refresh(s); drain(2);
+    CHECK(!layout_contains(s, "Failed PR")); CHECK(!layout_contains(s, "Later PR"));
+    HeaderInfo h = header(s);
+    CHECK(h.button_count <= HEADER_BUTTONS);
+    for (int i = 0; i < h.button_count; i++) if (str_eq(h.buttons[i].label, "Show failing checks")) {
+        CHECK(h.buttons[i].glyph != 0); CHECK(h.buttons[i].tip != NULL);
+    }
+    // Another repository starts without this repository's saved picks.
+    Project p = project(); p.repo = "o/other";
+    Screen *other = pulls_screen_new(&p); pane_set_root(pane, other); other->vt->refresh(other); drain(2);
+    CHECK(layout_contains(other, "Failed PR"));
+    s = board(); s->vt->refresh(s); drain(2);
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    bool cleared = false;
+    for (size_t i = 0; i < d.count; i++) if (str_eq(d.items[i].text, "Clear filters")) {
+        s->vt->action(s, d.items[i].action, d.items[i].arg, (POINT){0}); cleared = true; break;
+    }
+    doc_free(&d); CHECK(cleared); CHECK(layout_contains(s, "Failed PR")); CHECK(layout_contains(s, "Later PR"));
+    s = board(); s->vt->refresh(s); drain(2); CHECK(layout_contains(s, "Failed PR"));
+    click_header(s, "Hide failing checks"); click_header(s, "Show failing checks"); CHECK(layout_contains(s, "Error PR"));
+    pane_set_root(pane, NULL);
+}
+static void click_issue_control(Screen *s, int action, int number) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    bool clicked = false;
+    for (size_t i = 0; i < d.count; i++) {
+        Item *it = &d.items[i];
+        if (it->action != action || (action == ACT_FOLD_ISSUE && it->arg != number)) continue;
+        if (action == ACT_OPEN_ISSUE && ((PullsScreen *)s)->issues[it->arg].number != number) continue;
+        // Hit-test the actual control, including the overlapping issue row.
+        int hit = doc_hit(&d, (it->rc.left + it->rc.right) / 2, (it->rc.top + it->rc.bottom) / 2);
+        CHECK(hit >= 0);
+        if (hit >= 0) {
+            CHECK_INT(d.items[hit].action, action);
+            if (action == ACT_OPEN_ISSUE) CHECK_INT(((PullsScreen *)s)->issues[d.items[hit].arg].number, number);
+            s->vt->action(s, d.items[hit].action, d.items[hit].arg, (POINT){0});
+        }
+        clicked = true; break;
+    }
+    CHECK(clicked); doc_free(&d);
+}
+static void test_issue_folding_controls_and_board_lifetime(void) {
+    Pane *original = pane;
+    Project fixture = project();
+    pane = detached_open(pulls_screen_new(&fixture), NULL, false);
+    CHECK(pane != NULL);
+    reset();
+    list_body = "{\"pulls\":[],\"issues\":[{\"number\":1,\"title\":\"Epic root\",\"subIssues\":{\"total\":3}},"
+        "{\"number\":2,\"title\":\"Nested epic\",\"parent\":{\"number\":1}},"
+        "{\"number\":3,\"title\":\"Grandchild\",\"labels\":[\"match\"],\"parent\":{\"number\":2}},"
+        "{\"number\":4,\"title\":\"Standalone\",\"subIssues\":{\"total\":8}}]}";
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(s, "Grandchild"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 2); CHECK_INT(pane_depth(pane), 1);
+    CHECK(!layout_contains(s, "Grandchild")); CHECK(layout_contains(s, "Nested epic"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 1); CHECK(!layout_contains(s, "Nested epic"));
+    CHECK(layout_contains(s, "Standalone"));
+    s->vt->action(s, ACT_TAB, TAB_PULLS, (POINT){0});
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    // A refresh reorders the source rows; folds follow issue identity, not their former indices.
+    list_body = "{\"pulls\":[],\"issues\":[{\"number\":4,\"title\":\"Standalone\",\"subIssues\":{\"total\":8}},"
+        "{\"number\":3,\"title\":\"Grandchild\",\"labels\":[\"match\"],\"parent\":{\"number\":2}},"
+        "{\"number\":2,\"title\":\"Nested epic\",\"parent\":{\"number\":1}},"
+        "{\"number\":1,\"title\":\"Epic root\",\"subIssues\":{\"total\":3}}]}";
+    s->vt->refresh(s); drain(2); CHECK(!layout_contains(s, "Nested epic"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 1);
+    CHECK(layout_contains(s, "Nested epic")); CHECK(!layout_contains(s, "Grandchild"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 2); CHECK(layout_contains(s, "Grandchild"));
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == ACT_FOLD_ISSUE) CHECK(d.items[i].arg != 4);
+    doc_free(&d);
+    click_issue_control(s, ACT_OPEN_ISSUE, 1); CHECK_INT(pane_depth(pane), 2);
+    CHECK_STR(pane_top(pane)->id, "issue:o/r#1"); pane_pop(pane);
+    click_issue_control(s, ACT_FOLD_ISSUE, 1);
+    Project p = project(); p.repo = "o/other";
+    Screen *other = pulls_screen_new(&p); pane_push(pane, other); other->vt->refresh(other); drain(2);
+    other->vt->action(other, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(other, "Grandchild")); pane_pop(pane);
+    CHECK(!layout_contains(s, "Nested epic"));
+    // Filtering away a folded ancestor keeps the matching child as a root.
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "match");
+    CHECK(!layout_contains(s, "Epic root")); CHECK(layout_contains(s, "Grandchild"));
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "");
+    CHECK(!layout_contains(s, "Nested epic"));
+    DestroyWindow(GetAncestor(pane_hwnd(pane), GA_ROOT)); pane = original;
 }
 static void test_cached_sync_and_error_recovery_transitions(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
@@ -518,6 +630,81 @@ static void test_pull_refresh_invalidates_inflight_rows(void) {
     CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
     pane_set_root(pane, NULL);
 }
+static bool layout_has_action(Screen *s, int action) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
+    bool found = false;
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action) found = true;
+    doc_free(&d); return found;
+}
+static void select_pull_tab(Screen *s, const char *title) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
+    int action = 0; intptr_t arg = 0;
+    for (size_t i = 0; i < d.count; i++) if (str_eq(d.items[i].tip, title)) {
+        action = d.items[i].action; arg = d.items[i].arg; break;
+    }
+    CHECK_INT(action, ACT_PR_TAB); doc_free(&d);
+    if (action) s->vt->action(s, action, arg, (POINT){0});
+}
+static void test_pull_tabs_keep_destinations_and_summary(void) {
+    reset();
+    static Route tab_routes[] = {
+        { "GET", "/pulls/{pr}/files", "read" }, { "GET", "/pulls/{pr}/comments", "read" },
+        { "GET", "/pulls/{pr}/findings", "read" }, { "POST", "/pulls/{pr}/merge", "write" }
+    };
+    g_store.routes = tab_routes; g_store.route_count = sizeof tab_routes / sizeof *tab_routes;
+    Project p = project(); Screen *base = pull_detail_screen_new(&p, 1, NULL, NULL);
+    PullScreen *s = (PullScreen *)base; pane_set_root(pane, base);
+    json_free(s->pr);
+    s->pr = json_parsez("{\"number\":1,\"state\":\"open\",\"body\":\"Body marker\","
+        "\"commits\":9,\"commitList\":[{\"sha\":\"abc\"}],\"headRef\":\"feature\",\"baseRef\":\"main\","
+        "\"headSha\":\"abc\",\"checks\":{\"passed\":3,\"pending\":2,\"failed\":1,\"runs\":[{\"name\":\"CI\"}]}}");
+    json_free(s->findings); s->findings = json_parsez("[{\"key\":\"f1\",\"title\":\"Finding marker\"}]");
+    Json *sessions = json_parsez("{\"sessions\":[{\"id\":\"run1\",\"status\":\"completed\",\"title\":\"Session marker\"}]}");
+    CHECK(sessions_parse(sessions, &s->runs, &s->run_count)); CHECK_INT(s->run_count, 1); json_free(sessions);
+    s->runs_read = true; s->run_url = xstrdup("https://preview.example");
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); base->vt->layout(base, &d);
+    size_t tabs = 0, counts = 0; bool commits = false;
+    for (size_t i = 0; i < d.count; i++) {
+        Item *it = &d.items[i];
+        if (it->action == ACT_PR_TAB) {
+            CHECK(it->arg != 4 && it->arg != 5); tabs++;
+        }
+        if (it->paint == screen_pulls_paint_counts) {
+            CountsData *cd = it->data;
+            CHECK_INT(cd->passed, 3); CHECK_INT(cd->pending, 2); CHECK_INT(cd->failed, 1);
+            CHECK_INT(it->action, 0); CHECK(!it->hand); counts++;
+        }
+        if (it->free_data == screen_pulls_flow_free) {
+            FlowData *f = it->data;
+            for (size_t k = 0; k + 1 < f->count; k++)
+                if (str_eq(f->runs[k].text, "9 ") && str_eq(f->runs[k + 1].text, "commits ")) commits = true;
+        }
+    }
+    CHECK_INT(tabs, 5); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
+    CHECK(layout_contains(base, "Body marker"));
+    CHECK_INT(files_calls, 0); CHECK_INT(comments_calls, 0);
+    select_pull_tab(base, "Conversation"); drain(1);
+    CHECK_INT(comments_calls, 1); CHECK(layout_contains(base, "Timeline marker"));
+    CHECK(!layout_contains(base, "Body marker"));
+    select_pull_tab(base, "Files changed"); drain(1);
+    CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
+    CHECK(!layout_contains(base, "Timeline marker"));
+    select_pull_tab(base, "Findings");
+    CHECK(layout_contains(base, "Finding marker")); CHECK(layout_has_action(base, ACT_FINDING_TOGGLE));
+    select_pull_tab(base, "Sessions");
+    CHECK(layout_has_action(base, ACT_OPEN_RUN)); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
+    select_pull_tab(base, "Run");
+    CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
+    const intptr_t retired[] = { 4, 5, -1, 8, INTPTR_MAX };
+    for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) {
+        base->vt->action(base, ACT_PR_TAB, retired[i], (POINT){0});
+        CHECK_INT(s->tab, PR_TAB_BODY); CHECK(layout_contains(base, "Body marker"));
+        CHECK(!layout_has_action(base, ACT_WEB_BROWSER));
+    }
+    select_pull_tab(base, "Findings");
+    select_pull_tab(base, "PR Body"); CHECK(layout_contains(base, "Body marker"));
+    pane_set_root(pane, NULL);
+}
 void app_pulls_tests(void) {
     theme_init();
     HWND parent = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -532,8 +719,14 @@ void app_pulls_tests(void) {
     api_client_set_transport(g_store.client, transport, NULL);
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
+    Project fold_project = project();
+    Pane *warm = detached_open(pulls_screen_new(&fold_project), NULL, false);
+    CHECK(warm != NULL); DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
+    test_run("pull tabs preserve destinations, lazy reads and passive summary counts", test_pull_tabs_keep_destinations_and_summary);
     test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
+    test_run("pulls failing checks filter persists per repository and clears", test_failing_checks_filter_persists_per_repo_and_combines_with_stacks);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
+    test_run("issue folding controls and board lifetime", test_issue_folding_controls_and_board_lifetime);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);

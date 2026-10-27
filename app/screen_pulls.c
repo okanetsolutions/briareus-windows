@@ -37,6 +37,7 @@ static void pulls_destroy(Screen *base) {
     board_tab_free(s->board_tab);
     project_files_free(s->files);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
+    issue_folds_free(&s->issue_folds);
     project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
     screen_release(base);
 }
@@ -52,6 +53,9 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (board_tab_action(s->board_tab, action, arg, pt)) return;
     if (project_files_action(s->files, action, arg, pt)) return;
     switch (action) {
+    case ACT_FILTER_CHECKS:
+        s->pull_filter.hide_failing_checks = !s->pull_filter.hide_failing_checks; s->has_opening = false;
+        screen_pulls_filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break;
     case ACT_FILTER_STACK:
         s->hide_later_stacked = !s->hide_later_stacked; s->has_opening = false;
         screen_pulls_filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break;
@@ -83,6 +87,8 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (has_stack) stack_position_free(&stack);
         break;
     }
+    case ACT_FOLD_ISSUE:
+        issue_folds_toggle(&s->issue_folds, (int)arg); pane_relayout(base->pane); break;
     case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &s->issues[arg])); break;
     case ACT_PULL_ACTION: {
         size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;

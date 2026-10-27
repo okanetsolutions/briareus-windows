@@ -3,8 +3,8 @@
 #define BRIAREUS_RESOURCE_H
 
 // The version, once: the resource script reads it for the executable's properties, the app draws it in the sidebar.
-#define APP_VERSION_COMMAS      1,133,0,0
-#define APP_VERSION_STRING      "1.133.0"
+#define APP_VERSION_COMMAS      1,145,0,0
+#define APP_VERSION_STRING      "1.145.0"
 
 #define IDI_APP                 101
 #define IDR_MANIFEST            2
@@ -58,6 +58,10 @@
 #define IDC_EDIT_BODY           702
 #define IDC_EDIT_TITLE_LABEL    703
 #define IDC_EDIT_BODY_LABEL     704
+
+#define IDD_USAGE_RANGE         800
+#define IDC_USAGE_FROM          801
+#define IDC_USAGE_TO            802
 
 #define IDS_APP_TITLE           1000
 

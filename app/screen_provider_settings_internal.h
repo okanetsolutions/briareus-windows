@@ -2,6 +2,7 @@
 #define BRIAREUS_SCREEN_PROVIDER_SETTINGS_INTERNAL_H
 #include "screens.h"
 #include "str.h"
+#include "provider_status.h"
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +46,7 @@ typedef struct {
     char *status_error;
     bool status_fresh;     // the read under way was asked with `fresh`
     char *test_result; bool test_failed;
+    Json *login_from;      // owned auth snapshot at the start of the current device login
     char *device_code;     // codex's code to type on its confirm page
     bool code_wanted;      // a claude login waits for the code its authorization page shows
     int login_wait;        // the next of LOGIN_WAITS_MS
@@ -88,6 +90,7 @@ void screen_provider_settings_pick_binary(FormScreen *s, POINT pt);
 void screen_provider_settings_pick_mode(FormScreen *s, POINT pt);
 void screen_provider_settings_load_status(FormScreen *s, bool fresh);
 void screen_provider_settings_login_start(FormScreen *s);
+void screen_provider_settings_cancel_login(FormScreen *s);
 void screen_provider_settings_login_finish(FormScreen *s);
 void screen_provider_settings_test_endpoint(FormScreen *s);
 void screen_provider_settings_form_save(FormScreen *s);

@@ -65,6 +65,8 @@ typedef struct ScreenVTable {
     bool detachable;
     /// Ctrl+F searches this screen's rendered document, including from child controls.
     bool searchable;
+    /// Also deliver visible(false/true) when the top screen's pane or window hides/reappears.
+    bool effective_visibility;
 } ScreenVTable;
 
 struct Screen {
@@ -78,6 +80,8 @@ void pane_destroy(Pane *pane);
 HWND pane_hwnd(Pane *pane);
 void pane_set_bounds(Pane *pane, const RECT *rc);
 void pane_show(Pane *pane, bool shown);
+// Forward top-level show/hide and minimize/restore transitions to the visible screen.
+void pane_window_visibility(HWND window, bool shown);
 bool pane_is_sidebar(Pane *pane);
 
 void pane_push(Pane *pane, Screen *screen);

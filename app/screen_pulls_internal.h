@@ -15,7 +15,7 @@
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE };
 
 enum { ACT_SSH_BASE = 1100 };
 
@@ -50,6 +50,7 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
+    IssueFolds issue_folds; // Session-only, retained while this repository board lives.
     int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_FILES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
@@ -86,7 +87,7 @@ enum { EDIT_ASSIGN_ME = 1, EDIT_ASSIGNEES, EDIT_LOGIN };
 
 enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
-    ACT_START_ACTION, ACT_OPEN_RUN, ACT_CHECK_URL, ACT_COMMIT_URL, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
+    ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
@@ -96,7 +97,8 @@ enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
 
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
 
-enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_COMMITS, PR_TAB_CHECKS, PR_TAB_FINDINGS, PR_TAB_RUN };
+// Keep existing IDs: retired Commits (4) and Checks (5) fall back to PR Body.
+enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_FINDINGS = 6, PR_TAB_RUN };
 
 typedef struct { const char *op, *field; } screen_pulls_conv_feeds_type;
 extern const screen_pulls_conv_feeds_type screen_pulls_conv_feeds[CONV_FEEDS];
@@ -156,7 +158,6 @@ typedef struct {
 } PullScreen;
 
 extern const char *const screen_pulls_decision_ids[4];
-typedef struct { wchar_t glyph; COLORREF color; char *name, *result; } CheckData;
 
 typedef struct { int passed, failed, pending; } CountsData;
 
@@ -251,8 +252,6 @@ void screen_pulls_issue_projects_load(PullScreen *s);
 void screen_pulls_sessions_done_pull(void *owner, Request *req);
 void screen_pulls_pull_load(PullScreen *s);
 bool screen_pulls_finding_open(PullScreen *s, int i);
-void screen_pulls_check_free(void *p);
-void screen_pulls_paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_paint_counts(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 int screen_pulls_section_box(Doc *doc, int w);
 Col screen_pulls_col_make(int x, int w);
@@ -275,8 +274,6 @@ void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c);
 int screen_pulls_comment_begin(Doc *doc, Col c, CommentHeadData *h, int action, intptr_t arg, int *ix, int *iw);
 void screen_pulls_layout_description(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_layout_conversation(PullScreen *s, Doc *doc, Col c);
-void screen_pulls_layout_checks(PullScreen *s, Doc *doc, Col c);
-void screen_pulls_layout_commit_list(PullScreen *s, Doc *doc, Col c);
 size_t screen_pulls_findings_unfixed(PullScreen *s);
 size_t screen_pulls_findings_to_fix(PullScreen *s);
 bool screen_pulls_solve_findings_offered(PullScreen *s);

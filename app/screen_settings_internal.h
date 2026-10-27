@@ -1,5 +1,6 @@
 #ifndef BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
 #define BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
+#include "project_settings.h"
 #include "meeting.h"
 #include "mcp.h"
 #include "screens.h"
@@ -62,7 +63,7 @@ enum {
     F_REPO, F_LABEL, F_ENABLED, F_MAIL_TOOLS, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT, F_DB_POOL, F_DB_RESTORE,
-    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_BABYSIT, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
     F_BUDGET, F_IS_SELF,
     F_ENV,
     F_RUN, F_PROFILES,
@@ -99,6 +100,7 @@ typedef struct {
     bool clipped[F_COUNT];
     int lines[F_COUNT];    // a long box's lines, which it grows to show, as the dashboard's textareas do
     bool bools[F_COUNT];
+    ProjectBabysit babysit;
     RuntimePick picks[R_COUNT];
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
@@ -286,4 +288,5 @@ void screen_settings_forge_toggle_repo(ForgeForm *s, size_t index);
 void screen_settings_forge_save(ForgeForm *s);
 Screen *screen_settings_forge_settings_screen_new(const Json *row, const Json *defaults);
 
+bool screen_settings_field_bool(FormScreen *s, int f);
 #endif

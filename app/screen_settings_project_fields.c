@@ -33,7 +33,8 @@ bool screen_settings_row_has(FormScreen *s, const char *key) {
     return false;
 }
 
-bool screen_settings_field_offered(FormScreen *s, int f) { return screen_settings_row_has(s, screen_settings_FIELDS[f].key); }
+bool screen_settings_field_offered(FormScreen *s, int f) { return f == F_BABYSIT ? s->babysit.supported : screen_settings_row_has(s, screen_settings_FIELDS[f].key); }
+bool screen_settings_field_bool(FormScreen *s, int f) { return f == F_BABYSIT ? s->babysit.on : s->bools[f]; }
 
 bool screen_settings_field_enabled(FormScreen *s, int f) { return f != F_DB_RESTORE || s->bools[F_DB_POOL]; }
 
@@ -90,6 +91,7 @@ static void read_picks(FormScreen *s) { for (int r = 0; r < R_COUNT; r++) screen
 /// Fills every field from `s->row`. The edits only once they exist; the flags and pickers at once.
 void screen_settings_form_fill(FormScreen *s) {
     for (int f = 0; f < F_COUNT; f++) if (!screen_settings_is_edit(f)) s->bools[f] = json_bool_is(json_get(s->row, screen_settings_FIELDS[f].key), true);
+    s->babysit = project_babysit_read(s->row);
     read_picks(s);
     s->filling = true;
     for (int f = 0; f < F_COUNT; f++) {
@@ -112,7 +114,7 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab) {
     for (size_t i = 0; i < sizeof server_keys / sizeof *server_keys; i++) json_object_remove(body, server_keys[i]);
     for (int f = 0; f < F_COUNT; f++) {
         const char *key = screen_settings_FIELDS[f].key;
-        if (!screen_settings_field_offered(s, f)) continue;
+        if (f == F_BABYSIT || !screen_settings_field_offered(s, f)) continue;
         if (screen_settings_FIELDS[f].kind == K_BOOL) { json_set_bool(body, key, s->bools[f]); continue; }
         if (!s->edits[f]) continue;
         char *text = screen_settings_edit_text(s->edits[f]);
@@ -161,6 +163,7 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab) {
         }
         free(text);
     }
+    project_babysit_write(&s->babysit, body);
     char *repo = str_trim(json_str(json_get(body, "repo")) ? json_str(json_get(body, "repo")) : "");
     bool repo_ok = *repo && strchr(repo, '/') && repo[0] != '/' && repo[strlen(repo) - 1] != '/';
     free(repo);

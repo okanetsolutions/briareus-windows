@@ -1,4 +1,5 @@
 #include "screen_projects_internal.h"
+#include "session_cache.h"
 
 typedef struct {
     Screen base;
@@ -35,6 +36,7 @@ static void projects_activated(Screen *base, bool active);
 // WhatsApp, dashboard, findings; Mail joins them when the server offers it
 
 size_t screen_projects_g_waiting;
+size_t screen_projects_g_status;
 
 /// What the saved lists say about each project's conversations, before the server is asked.
 static void projects_count(ProjectsScreen *s) {
@@ -63,6 +65,7 @@ static void projects_count(ProjectsScreen *s) {
         json_free(list);
     }
     screen_projects_g_waiting = findings_waiting(s->projects, s->count);
+    screen_projects_g_status = status_waiting(s->projects, s->count);
 }
 
 static void projects_show(ProjectsScreen *s, const Json *value) {
@@ -80,6 +83,8 @@ static void count_done(void *owner, Request *req) {
         Session *items; size_t n;
         if (sessions_parse(req->result, &items, &n)) {
             screen_projects_cache_all_sessions(items, n);
+            // Preserve counts for live projects even when their cached snapshot is stale.
+            session_cache_save(s->projects, s->count, items, n);
             sessions_free(items, n);
         }
     }
@@ -116,17 +121,18 @@ static void projects_load(ProjectsScreen *s) {
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->req);
 }
 
-void projects_recount_findings(void) {
-    Pane *sidebar = app_sidebar_pane();
-    if (!sidebar) return;
-    Screen *root = pane_root(sidebar);
+void screen_projects_recount(Pane *sidebar) {
+    Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
+    // Recount sessions against the current project list; disk may still contain an older snapshot.
     projects_count(s);
     pane_relayout(root->pane);
     Screen *top = pane_top(root->pane);
     if (top != root) pane_relayout(top->pane);
 }
+
+void projects_recount_findings(void) { screen_projects_recount(app_sidebar_pane()); }
 
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;

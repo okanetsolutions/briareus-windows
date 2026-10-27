@@ -125,7 +125,12 @@ static void test_a_client_means_connected(void) {
     CHECK(store_connected());
     // A connection without a device record allows nothing yet.
     CHECK(!store_supports("sessions"));
-    api_client_release(client);
+    g_store.status_detail_retry_until = (double)GetTickCount64() + 120000;
+    g_store.status_message_retry_until = (double)GetTickCount64() + 120000;
+    store_shutdown();
+    CHECK(!store_connected());
+    CHECK(g_store.status_detail_retry_until == 0);
+    CHECK(g_store.status_message_retry_until == 0);
     server_address_free(&address);
     api_error_clear(&e);
     store_reset();

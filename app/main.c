@@ -402,7 +402,9 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         media_start(hwnd);
         updater_start();
         return 0;
+    case WM_SHOWWINDOW: pane_window_visibility(hwnd, wp != 0); break;
     case WM_SIZE:
+        pane_window_visibility(hwnd, wp != SIZE_MINIMIZED);
         // A conversation in a window of its own keeps going while the main window is minimized.
         if (wp == SIZE_MINIMIZED) set_active(detached_any_shown());
         else { set_active(GetForegroundWindow() == hwnd || g_store.active); layout(); }

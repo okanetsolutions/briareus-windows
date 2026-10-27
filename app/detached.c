@@ -49,7 +49,8 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         pane_set_titles_window(w->pane);
         pane_set_move_button(w->pane, 0xE90D, "Back to the main window", post_dock, w);
         return 0;
-    case WM_SIZE: if (w && w->pane && wp != SIZE_MINIMIZED) { RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc); } return 0;
+    case WM_SHOWWINDOW: pane_window_visibility(hwnd, wp != 0); break;
+    case WM_SIZE: pane_window_visibility(hwnd, wp != SIZE_MINIMIZED); if (w && w->pane && wp != SIZE_MINIMIZED) { RECT rc; GetClientRect(hwnd, &rc); pane_set_bounds(w->pane, &rc); } return 0;
     case WM_ERASEBKGND: return 1;
     case WM_ACTIVATE:
         // Keys go back to where they went before the window lost the foreground: a composer, a page, or the pane.

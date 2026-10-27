@@ -1,6 +1,12 @@
 // Each suite file runs its own tests through test_run; the two programs' main functions call the suites in turn.
 #ifndef BRIAREUS_SUITES_H
 #define BRIAREUS_SUITES_H
+void core_stats_tests(void);
+void core_server_stats_tests(void);
+void app_resources_tests(void);
+void app_server_resources_tests(void);
+void core_session_overview_tests(void);
+void app_status_tests(void);
 
 // core_tests.exe
 void str_tests(void);
@@ -31,6 +37,7 @@ void pull_conversation_tests(void);
 void app_find_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);
+void app_sidebar_tests(void);
 void app_store_tests(void);
 void app_contract_tests(void);
 void app_sql_tests(void);
@@ -42,4 +49,11 @@ void app_mail_consent_tests(void);
 void app_pulls_tests(void);
 void app_projects_tests(void);
 
+void webhook_tests(void);
+void app_webhook_tests(void);
+void provider_status_tests(void);
+void session_working_tests(void);
+void app_conversation_tests(void);
+void app_provider_settings_tests(void);
+void app_project_settings_tests(void);
 #endif

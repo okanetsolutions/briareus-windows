@@ -16,6 +16,9 @@ typedef struct {
     ULONGLONG mail_retry_until;        // inbox cooldown survives navigation, cleared with the client
     int mail_failures;
     double home_retry_until[4];        // Smart home read cooldowns survive navigation, cleared with the client
+    double status_detail_retry_until, status_message_retry_until; // Status cooldowns survive navigation, cleared with the client
+    Json *resources_retries;           // session/permission-scoped read deadlines, owned; cleared with client
+    Json *status_uncertain;            // owned repo:session interlocks, cleared with the client
     bool home_uncertain;               // unresolved command outcome survives Smart home navigation
     bool has_device; Device device;
     Route *routes; size_t route_count;   // what the server lists in its OpenAPI document
@@ -66,6 +69,9 @@ struct Request {
     void *owner; RequestDone done; int tag; intptr_t arg;
     Request **slot;                                    // cleared when the request finishes or is cancelled
     bool cancelled;
+    bool auth_checked;                 // completion finalizer applied its own connection/device auth scope
+    // UI-thread finalizer runs even after cancellation; context must outlive the screen and be freed here.
+    void *completion_ctx; RequestDone completed;
     ApiClient *client;
 };
 
@@ -84,7 +90,7 @@ bool store_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiError *e
 void store_stream_cancel(StoreStream *stream);
 void store_stream_free(StoreStream *stream);
 
-/// Drops the request in the slot: its answer is discarded, and the slot is cleared.
+/// Clears the slot and skips the owner callback; an independent completion finalizer still runs.
 void request_cancel(Request **slot);
 /// The user-facing text of a failed request.
 char *request_error_text(const Request *req);

@@ -860,6 +860,9 @@ static void test_json_round_trips(void) {
 }
 
 int main(void) {
+    core_stats_tests();
+    core_server_stats_tests();
+    core_session_overview_tests();
     struct { const char *name; void (*fn)(void); } tests[] = {
         { "normalizes origin and API path", test_normalizes_origin_and_api_path },
         { "HTTPS scheme and host preserve accepted characters", test_https_scheme_and_host_characters },
@@ -898,6 +901,7 @@ int main(void) {
         { "JSON round trips", test_json_round_trips },
     };
     for (size_t i = 0; i < sizeof tests / sizeof *tests; i++) test_run(tests[i].name, tests[i].fn);
+    webhook_tests();
     str_tests();
     json_tests();
     markdown_tests();
@@ -918,6 +922,8 @@ int main(void) {
     mail_inbox_tests();
     repo_index_tests();
     usage_tests();
+    provider_status_tests();
+    session_working_tests();
     pull_conversation_tests();
     return test_summary();
 }

@@ -352,6 +352,46 @@ static void test_issues_in_a_cycle_are_each_drawn_once(void) {
                                 "{\"number\":5,\"parent\":{\"number\":2}}]", "o/r"),
                     "9:0,1:0,2:1,5:2");
 }
+static void check_folded(const char *text, const char *repo, IssueFolds *folds, const char *expected) {
+    Json *j = json_parsez(text); size_t n, rn;
+    IssueSummary *issues = issue_summaries_parse(j, &n);
+    IssueRow *rows = issues_nested(issues, n, repo, &rn);
+    rn = issues_folded(rows, rn, issues, folds);
+    Str out; str_init(&out);
+    for (size_t i = 0; i < rn; i++) str_appendf(&out, "%s%d:%d:%zu", i ? "," : "", issues[rows[i].index].number, rows[i].depth, rows[i].children);
+    CHECK_STR(out.data ? out.data : "", expected);
+    str_free(&out); free(rows); issue_summaries_free(issues, n); json_free(j);
+}
+static void test_epic_folds_preserve_nested_choices(void) {
+    const char *tree = "[{\"number\":1},{\"number\":2,\"parent\":{\"number\":1}},{\"number\":3,\"parent\":{\"number\":2}},"
+        "{\"number\":4,\"parent\":{\"number\":1}},{\"number\":5},{\"number\":6,\"parent\":{\"number\":5}}]";
+    IssueFolds f = {0};
+    check_folded(tree, "o/r", &f, "1:0:2,2:1:1,3:2:0,4:1:0,5:0:1,6:1:0");
+    issue_folds_toggle(&f, 2); issue_folds_toggle(&f, 1);
+    check_folded(tree, "o/r", &f, "1:0:2,5:0:1,6:1:0");
+    issue_folds_toggle(&f, 1);
+    check_folded(tree, "o/r", &f, "1:0:2,2:1:1,4:1:0,5:0:1,6:1:0");
+    issue_folds_toggle(&f, 5);
+    check_folded(tree, "o/r", &f, "1:0:2,2:1:1,4:1:0,5:0:1");
+    issue_folds_toggle(&f, 2); issue_folds_toggle(&f, 5);
+    issue_folds_toggle(&f, 3); issue_folds_toggle(&f, 99);
+    check_folded(tree, "o/r", &f, "1:0:2,2:1:1,3:2:0,4:1:0,5:0:1,6:1:0");
+    issue_folds_free(&f); CHECK_INT(f.count, 0); CHECK(f.numbers == NULL);
+}
+static void test_epic_folds_missing_foreign_and_cyclic_parents(void) {
+    IssueFolds f = {0}; issue_folds_toggle(&f, 1);
+    // The filtered list has no parent 1: matching descendants and standalone rows stay visible, with fresh depths.
+    check_folded("[{\"number\":3,\"parent\":{\"number\":2}},{\"number\":2,\"parent\":{\"number\":1}},{\"number\":7}]",
+        "o/r", &f, "2:0:1,3:1:0,7:0:0");
+    check_folded("[{\"number\":1,\"subIssues\":{\"total\":10}},{\"number\":2,\"parent\":{\"number\":1,\"repo\":\"other/repo\"}}]",
+        "o/r", &f, "1:0:0,2:0:0");
+    check_folded("[{\"number\":1},{\"number\":2,\"parent\":{\"number\":1,\"repo\":\"O/R\"}}]", "o/r", &f, "1:0:1");
+    check_folded("[{\"number\":9},{\"number\":1,\"parent\":{\"number\":2}},{\"number\":2,\"parent\":{\"number\":1}},{\"number\":5,\"parent\":{\"number\":2}}]",
+        "o/r", &f, "9:0:0,1:0:1");
+    issue_folds_toggle(&f, 1);
+    check_folded("[{\"number\":1,\"parent\":{\"number\":2}},{\"number\":2,\"parent\":{\"number\":1}}]", "o/r", &f, "1:0:1,2:1:0");
+    check_folded("[]", "o/r", &f, ""); issue_folds_free(&f);
+}
 static void test_issue_prompts_name_the_issue_its_epic_and_how_to_close_it(void) {
     IssueSummary i;
     CHECK(issue_of("{\"number\":20,\"title\":\"Child\"}", &i));
@@ -442,6 +482,30 @@ static char *options(const BoardFilter *f, FilterKind kind, const BoardRow *rows
     for (size_t i = 0; i < n; i++) str_appendf(&s, "%s%s=%s %d", i ? "," : "", o[i].value, o[i].text, o[i].count);
     filter_options_free(o, n);
     return s.data ? str_detach(&s) : xstrdup("");
+}
+static void test_failing_checks_filter_keeps_unfinished_and_absent_checks(void) {
+    Rows r; rows_load(&r,
+        "[{\"number\":1,\"author\":\"Ana\",\"checks\":\"failure\"},"
+        "{\"number\":2,\"author\":\"Bo\",\"checks\":\"error\"},"
+        "{\"number\":3,\"author\":\"Ana\",\"checks\":\"success\"},"
+        "{\"number\":4,\"author\":\"Bo\",\"checks\":\"pending\"},"
+        "{\"number\":5,\"author\":\"Bo\",\"checks\":\"expected\"},"
+        "{\"number\":6,\"author\":\"Ana\"},"
+        "{\"number\":7,\"checks\":null},{\"number\":8,\"checks\":\"unknown\"}]");
+    BoardFilter f, copy; board_filter_init(&f);
+    CHECK_OWNED_STR(passing_numbers(&f, &r, -1), "1,2,3,4,5,6,7,8");
+    f.hide_failing_checks = true; CHECK(board_filter_is_on(&f));
+    CHECK_OWNED_STR(passing_numbers(&f, &r, -1), "3,4,5,6,7,8");
+    CHECK_OWNED_STR(options(&f, FILTER_AUTHOR, r.rows, r.count), "ana=Ana 2,bo=Bo 2");
+    board_filter_copy(&copy, &f); CHECK(board_filter_equal(&copy, &f));
+    f.hide_failing_checks = false; CHECK(!board_filter_equal(&copy, &f));
+    board_filter_set(&copy, FILTER_AUTHOR, "Ana");
+    CHECK_OWNED_STR(passing_numbers(&copy, &r, -1), "3,6");
+    CHECK_OWNED_STR(passing_numbers(&copy, &r, FILTER_AUTHOR), "3,4,5,6,7,8");
+    IssueSummary issue = {0}; BoardRow row = issue_board_row(&issue);
+    CHECK(!row.checks_failed); CHECK(board_filter_passes(&copy, &row, FILTER_AUTHOR));
+    board_filter_free(&f); board_filter_init(&f); CHECK(!board_filter_is_on(&f));
+    board_filter_free(&copy); board_filter_free(&f); rows_free(&r);
 }
 static void test_board_filters_pass_rows_folding_case(void) {
     Rows r; rows_load(&r, filter_pulls);
@@ -617,7 +681,7 @@ static void test_errands_are_offered_for_the_state_a_pull_request_is_in(void) {
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"conflicting\"}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"Has-Conflicts\"]}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"error\"}", 0), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
-    // A run still going has nothing to fix; a count of failed checks from the Checks tab outweighs the summary.
+    // A run still going has nothing to fix; the pull detail count of failed checks outweighs the summary.
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"pending\"}", 0), always);
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"success\"}", 2), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1}", -1), always);
@@ -1397,10 +1461,13 @@ void board_tests(void) {
     test_run("pulls find by number", test_pulls_find_by_number);
     test_run("issues nest depth first under epics on the list", test_issues_nest_depth_first_under_epics_on_the_list);
     test_run("issues in a cycle are each drawn once", test_issues_in_a_cycle_are_each_drawn_once);
+    test_run("epic folds preserve nested choices", test_epic_folds_preserve_nested_choices);
+    test_run("epic folds respect missing foreign and cyclic parents", test_epic_folds_missing_foreign_and_cyclic_parents);
     test_run("issue prompts name the issue, its epic and how to close it", test_issue_prompts_name_the_issue_its_epic_and_how_to_close_it);
     test_run("board rows carry what the pickers filter on", test_board_rows_carry_what_the_pickers_filter_on);
     test_run("board filters keep their picks folded", test_board_filters_keep_their_picks_folded);
     test_run("board filter copies compare equal and are independent", test_board_filter_copies_compare_equal_and_are_independent);
+    test_run("failing checks filter preserves unfinished checks and picker counts", test_failing_checks_filter_keeps_unfinished_and_absent_checks);
     test_run("board filters pass rows folding case", test_board_filters_pass_rows_folding_case);
     test_run("board filter options are counted against the other pickers", test_board_filter_options_are_counted_against_the_other_pickers);
     test_run("a pick the others empty still lists itself", test_a_pick_the_others_empty_still_lists_itself);

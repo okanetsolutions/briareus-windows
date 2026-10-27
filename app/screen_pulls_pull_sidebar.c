@@ -81,7 +81,7 @@ static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
     doc_text(doc, c.x, c.w, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
 }
 
-/// The checks as counts only: passed, pending and failed; the row opens the Checks tab for the individual runs.
+/// The checks as counts only: passed, pending and failed.
 static void side_checks(PullScreen *s, Doc *doc, Col c, int *count) {
     if (json_is_null(s->pr)) return;
     const Json *checks = json_get(s->pr, "checks");
@@ -89,8 +89,8 @@ static void side_checks(PullScreen *s, Doc *doc, Col c, int *count) {
     if (!json_count(json_get(checks, "runs"))) { doc_text(doc, c.x, c.w, "No checks reported", FONT_CAPTION, theme.secondary, DT_SINGLELINE); return; }
     CountsData *cd = xcalloc(1, sizeof *cd);
     cd->passed = json_int_or(json_get(checks, "passed"), 0); cd->pending = json_int_or(json_get(checks, "pending"), 0); cd->failed = json_int_or(json_get(checks, "failed"), 0);
-    int i = doc_custom(doc, c.x, c.w, px(22), screen_pulls_paint_counts, cd, free, s->tab == PR_TAB_CHECKS ? 0 : ACT_PR_TAB, PR_TAB_CHECKS);
-    doc_item(doc, i)->hover_fill = false; doc_item(doc, i)->hand = s->tab != PR_TAB_CHECKS;
+    int i = doc_custom(doc, c.x, c.w, px(22), screen_pulls_paint_counts, cd, free, 0, 0);
+    doc_item(doc, i)->hover_fill = false;
 }
 
 static void side_reviewer(Doc *doc, Col c, const char *user, const BadgeSpec *badge, const char *state) {

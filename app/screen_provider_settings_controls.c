@@ -119,6 +119,7 @@ void screen_provider_settings_pick_binary(FormScreen *s, POINT pt) {
     for (size_t i = 0; i < BINARY_COUNT; i++) append_item(m, (UINT)i + 1, screen_provider_settings_BINARIES[i].title, str_eq(screen_provider_settings_BINARIES[i].id, s->binary));
     int chosen = popup_menu(s, m, pt);
     if (chosen < 1 || chosen > BINARY_COUNT || str_eq(screen_provider_settings_BINARIES[chosen - 1].id, s->binary)) return;
+    screen_provider_settings_cancel_login(s);
     set_string(&s->binary, screen_provider_settings_BINARIES[chosen - 1].id);
     // Another CLI's login flow and probe verdict say nothing about this one.
     set_string(&s->test_result, NULL); set_string(&s->device_code, NULL); s->code_wanted = false;
@@ -133,6 +134,7 @@ void screen_provider_settings_pick_mode(FormScreen *s, POINT pt) {
     int chosen = popup_menu(s, m, pt);
     if (!chosen || (chosen == 2) == s->token) return;
     // Switching to Login drops the endpoint and its token when saved; switching back brings back what the boxes hold.
+    screen_provider_settings_cancel_login(s);
     s->token = chosen == 2;
     set_string(&s->test_result, NULL);
     screen_provider_settings_form_changed(s);

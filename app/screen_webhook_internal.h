@@ -2,6 +2,7 @@
 #define BRIAREUS_SCREEN_WEBHOOK_INTERNAL_H
 #include "screens.h"
 #include "str.h"
+#include "webhook.h"
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,11 +12,8 @@
 // the turns it starts run under, the second webhook that takes the operator's own instructions, and the URLs and keys a
 // sender needs, with Rotate key to end the old ones. An admin token's, read and written through /sessions/{id}/webhook.
 
-enum { F_PER_HOUR, F_MAX_TURNS, F_COUNT };
+enum { F_PER_HOUR = WEBHOOK_PER_HOUR, F_MAX_TURNS = WEBHOOK_MAX_TURNS, F_COUNT = WEBHOOK_FIELD_COUNT };
 
-typedef struct { const char *label, *hint; int min, max; } FieldDef;
-
-extern const FieldDef screen_webhook_FIELDS[F_COUNT];
 enum { T_ARMED, T_INSTRUCTIONS, T_SSH, T_COUNT };
 
 extern const char *const screen_webhook_TOGGLE_KEYS[T_COUNT];

@@ -30,10 +30,12 @@ BoardRow *screen_pulls_rows_of(PullsScreen *s, size_t *count) {
 static Json *filter_json(const BoardFilter *f) {
     Json *j = json_object();
     for (int k = 0; k < FILTER_KIND_COUNT; k++) { const char *v = board_filter_get(f, (FilterKind)k); if (!str_empty(v)) json_set_str(j, filter_kind_name((FilterKind)k), v); }
+    json_set_bool(j, "hideFailingChecks", f->hide_failing_checks);
     return j;
 }
 
 static void filter_read(BoardFilter *f, const Json *j) {
+    f->hide_failing_checks = json_bool_is(json_get(j, "hideFailingChecks"), true);
     for (int k = 0; k < FILTER_KIND_COUNT; k++) { const char *v = json_str(json_get(j, filter_kind_name((FilterKind)k))); if (v) board_filter_set(f, (FilterKind)k, v); }
 }
 
@@ -139,6 +141,10 @@ void screen_pulls_pulls_header(Screen *base, HeaderInfo *info) {
             snprintf(b->label, sizeof b->label, "%s", s->hide_later_stacked ? "Show later stacked PRs" : "Hide later stacked PRs");
             b->glyph = 0xE71C; b->action = ACT_FILTER_STACK; b->enabled = s->loaded;
             b->tip = "Hide or show stacked pull requests after position 1; keep standalone pull requests visible";
+            b = &info->buttons[info->button_count++];
+            snprintf(b->label, sizeof b->label, "%s", f->hide_failing_checks ? "Show failing checks" : "Hide failing checks");
+            b->glyph = 0xEA39; b->action = ACT_FILTER_CHECKS; b->enabled = s->loaded;
+            b->tip = f->hide_failing_checks ? "Show pull requests with failing checks" : "Hide pull requests with failing checks; keep passing, pending and absent checks visible";
         }
     }
     HeaderButton *r = &info->buttons[info->button_count++]; r->glyph = 0xE72C; r->action = ACT_REFRESH; r->enabled = !s->req && store_supports("pulls") && time(NULL) >= pulls_retry_deadline(s->project.repo); r->tip = "Refresh the list (the server may return cached data)";

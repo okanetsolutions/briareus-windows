@@ -14,7 +14,11 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB:
         if (arg == PR_TAB_RUN) { screen_pulls_run_open(s); break; }
-        s->tab = (int)arg;
+        switch (arg) {
+        case PR_TAB_BODY: case PR_TAB_CONVERSATION: case PR_TAB_SESSIONS: case PR_TAB_FILES: case PR_TAB_FINDINGS:
+            s->tab = (int)arg; break;
+        default: s->tab = PR_TAB_BODY; break;
+        }
         if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
         if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s);
         pane_relayout(base->pane); pane_header_changed(base->pane);
@@ -44,8 +48,6 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         break;
     }
     case ACT_FINDING_URL: open_web_url(json_str(json_get(json_at(s->findings, (size_t)arg), "url"))); break;
-    case ACT_CHECK_URL: open_web_url(json_str(json_get(json_at(json_get(json_get(s->pr, "checks"), "runs"), (size_t)arg), "url"))); break;
-    case ACT_COMMIT_URL: open_web_url(json_str(json_get(json_at(json_get(s->pr, "commitList"), (size_t)arg), "url"))); break;
     case ACT_ISSUE_URL: {
         // An issue of this repository opens here, which reads the rest itself; any other on GitHub.
         const PullSummary *row = screen_pulls_board_row(s);

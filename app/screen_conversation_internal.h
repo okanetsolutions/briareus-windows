@@ -5,6 +5,7 @@
 #include "meeting.h"
 #include "screens.h"
 #include "str.h"
+#include "session_working.h"
 #include "voice.h"
 #include <commctrl.h>
 #include <stdio.h>
@@ -25,7 +26,7 @@ enum { ID_COMPOSER = 301 };
 
 enum { TAG_REFRESH = 1, TAG_MUTATE = 2 };
 
-enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER, MENU_WEBHOOK };
+enum { MENU_CHANGES = 1, MENU_PULL, MENU_LOOP_ON, MENU_LOOP_OFF, MENU_RENAME, MENU_STOP, MENU_CLOSE, MENU_REOPEN, MENU_DELETE, MENU_COPY, MENU_BROWSER, MENU_WEBHOOK, MENU_RESOURCES };
 
 typedef struct {
     Screen base;

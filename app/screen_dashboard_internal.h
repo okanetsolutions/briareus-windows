@@ -27,13 +27,10 @@ enum { MENU_CAP = 60 };
 
 typedef enum { F_PROJECT, F_MODEL, F_ACTIVITY, F_PROVIDER, F_ACCOUNT, F_SESSION, F_COUNT } FilterId;
 
-typedef struct { const char *id, *label; } screen_dashboard_PERIODS_type;
-extern const screen_dashboard_PERIODS_type screen_dashboard_PERIODS[6];
-enum { PERIOD_COUNT = sizeof screen_dashboard_PERIODS / sizeof *screen_dashboard_PERIODS };
-
-extern int screen_dashboard_g_period;
+extern UsageWindow screen_dashboard_preference;
 typedef struct {
     Screen base;
+    UsageWindow window;
     Json *data;                       // the payload on screen
     char *data_key;                   // the query it answered: a pick shows the loader until its own answer lands
     Json *options;                    // what the pickers offer, from the last payload: the whole window's, never the pick's
@@ -91,7 +88,7 @@ char *screen_dashboard_cost_or_dash(const Json *u);
 char *screen_dashboard_cost_note(const Json *u);
 char *screen_dashboard_duration_or_dash(double ms);
 char *screen_dashboard_bucket_name(const char *key, bool month);
-char *screen_dashboard_window_name(const Json *u);
+char *screen_dashboard_window_name(const Json *u, const UsageWindow *window);
 char *screen_dashboard_model_label(const Json *m);
 bool screen_dashboard_any_pick(DashboardScreen *s);
 bool screen_dashboard_is_picked(DashboardScreen *s, FilterId f, const char *key);
@@ -119,6 +116,7 @@ void screen_dashboard_project_card(DashboardScreen *s, Doc *doc, int x, int w, c
 void screen_dashboard_simple_card(DashboardScreen *s, Doc *doc, int x, int w, const Json *u, FilterId f);
 void screen_dashboard_insights(Doc *doc, int x, int w, const Json *u);
 char *screen_dashboard_filter_button_text(DashboardScreen *s, FilterId f);
+bool screen_dashboard_apply_range(DashboardScreen *s, const UsageRange *range);
 void screen_dashboard_pick_period(DashboardScreen *s, POINT pt);
 void screen_dashboard_pick_filter(DashboardScreen *s, FilterId f, POINT pt);
 Screen *dashboard_screen_new(void);
