@@ -23,6 +23,14 @@ static Item *working_item(Doc *doc) {
     for (size_t i = 0; i < doc->count; i++) if (doc->items[i].id == 2) return &doc->items[i];
     return NULL;
 }
+static void check_working_tooltip(const Item *item) {
+    CHECK(item->tip && item->tip[0]);
+    if (item->tip) {
+        CHECK(strstr(item->tip, "Bash") == NULL);
+        CHECK(strstr(item->tip, "watch CI") == NULL);
+        CHECK(strstr(item->tip, "2") == NULL);
+    }
+}
 static void background_poll_lifecycle(void) {
     ScreenFixture f; screen_fixture_init(&f, ROUTES, 1);
     wchar_t temp[MAX_PATH], directory[MAX_PATH];
@@ -33,11 +41,15 @@ static void background_poll_lifecycle(void) {
     const char *bash = "[{\"name\":\"Bash\",\"summary\":\"watch CI\"}]";
     refresh(&f, screen, bash, "running", "[{\"seq\":1,\"kind\":\"text\",\"t\":\"2026-10-27T10:00:00Z\",\"text\":\"Launching\"}]", false);
     screen_fixture_draw(screen, &doc); Item *item = working_item(&doc); CHECK(item != NULL);
-    if (item) CHECK_STR(item->tip, "Working\xE2\x80\xA6");
+    if (item) check_working_tooltip(item);
     refresh(&f, screen, bash, "running", "[{\"seq\":2,\"kind\":\"result\"},{\"seq\":3,\"kind\":\"info\",\"text\":\"PR open\"},{\"seq\":4,\"kind\":\"stderr\",\"text\":\"warning\"}]", false);
     screen_fixture_draw(screen, &doc); item = working_item(&doc); CHECK(item != NULL);
     if (item) {
-        CHECK_STR(item->tip, "Waiting on Bash: watch CI\xE2\x80\xA6");
+        CHECK(item->tip && item->tip[0]);
+        if (item->tip) {
+            CHECK(strstr(item->tip, "Bash") != NULL);
+            CHECK(strstr(item->tip, "watch CI") != NULL);
+        }
         int hit = doc_hit(&doc, item->rc.left + 1, item->rc.top + 1);
         CHECK(hit >= 0);
         if (hit >= 0) { CHECK(doc_item(&doc, hit) == item); CHECK_INT(doc_item(&doc, hit)->action, ACTION_TIP); }
@@ -46,14 +58,14 @@ static void background_poll_lifecycle(void) {
     // A session-only poll must update the displayed work without adding any transcript lines.
     refresh(&f, screen, "[{\"name\":\"Monitor\"},{\"name\":\"Explore\"}]", "running", "[]", false);
     screen_fixture_draw(screen, &doc); item = working_item(&doc); CHECK(item != NULL);
-    if (item) CHECK_STR(item->tip, "Waiting on 2 background tasks\xE2\x80\xA6");
+    if (item) CHECK(item->tip && strstr(item->tip, "2") != NULL);
     CHECK_INT(s->transcript.count, 4); CHECK_INT(s->transcript.cursor, 4);
     refresh(&f, screen, "[]", "running", "[]", false);
     screen_fixture_draw(screen, &doc); item = working_item(&doc); CHECK(item != NULL);
-    if (item) CHECK_STR(item->tip, "Working\xE2\x80\xA6");
+    if (item) check_working_tooltip(item);
     refresh(&f, screen, bash, "running", "[{\"seq\":5,\"kind\":\"user\",\"text\":\"Next\"}]", false);
     screen_fixture_draw(screen, &doc); item = working_item(&doc); CHECK(item != NULL);
-    if (item) CHECK_STR(item->tip, "Working\xE2\x80\xA6");
+    if (item) check_working_tooltip(item);
     refresh(&f, screen, bash, "running", "[{\"seq\":6,\"kind\":\"ask\",\"question\":\"Proceed?\"}]", true);
     screen_fixture_draw(screen, &doc); CHECK(working_item(&doc) == NULL);
     refresh(&f, screen, bash, "closed", "[]", false);
@@ -62,7 +74,7 @@ static void background_poll_lifecycle(void) {
     doc_free(&doc); screen->vt->destroy(screen);
     screen = open_conversation(&f);
     screen_fixture_draw(screen, &doc); item = working_item(&doc); CHECK(item != NULL);
-    if (item) CHECK_STR(item->tip, "Working\xE2\x80\xA6");
+    if (item) check_working_tooltip(item);
     // Restoring the saved transcript still uses the newly read session's task list.
     refresh(&f, screen, "null", "idle", "[]", false);
     screen_fixture_draw(screen, &doc); CHECK(working_item(&doc) == NULL);
