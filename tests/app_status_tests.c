@@ -304,6 +304,41 @@ static void test_delayed_detail_preserves_shared_events(void) {
     CHECK(transcript_pending_question(&reopened) == NULL);
     transcript_free(&reopened); cleanup(&stub);
 }
+static void test_transcript_persistence_retry(void) {
+    for (int empty = 0; empty < 2; empty++) {
+        Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+        wchar_t directory[MAX_PATH]; GetTempPathW(MAX_PATH, directory); wcscat(directory, L"briareus-status-tests");
+        char *name = cache_file_name("transcript:wait");
+        wchar_t *wide = utf8_to_wide(name); free(name);
+        wchar_t path[MAX_PATH]; swprintf(path, MAX_PATH, L"%ls\\%ls", directory, wide); free(wide);
+        HANDLE lock = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        CHECK(lock != INVALID_HANDLE_VALUE);
+        stub.answer = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
+            "\"events\":[{\"seq\":2,\"kind\":\"user\",\"text\":\"First answer\"},{\"seq\":3,\"kind\":\"ask\",\"text\":\"Next ask\"}]}";
+        s->next_question = 0; status_questions_next(s); pump(1);
+        CHECK_INT(s->cards[card(s, "wait")]->transcript.cursor, 3);
+        Json *saved = cache_lines(g_store.cache, "transcript:wait"); CHECK_INT(json_count(saved), 1); json_free(saved);
+        stub.answer = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},\"events\":[]}";
+        s->next_question = 0; status_questions_next(s); pump(1);
+        CHECK_STR(stub.read_url, "https://example.com/api/v1/sessions/wait?since=3");
+        CloseHandle(lock);
+        // Recovery must retain a newer event written by another view as well as the failed batch.
+        Json *newer = json_parsez("[{\"seq\":6,\"kind\":\"user\",\"text\":\"Concurrent answer\"}]");
+        CHECK(cache_append(g_store.cache, newer, "transcript:wait")); json_free(newer);
+        if (!empty) stub.answer = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
+            "\"events\":[{\"seq\":4,\"kind\":\"user\",\"text\":\"Later answer\"},{\"seq\":5,\"kind\":\"ask\",\"text\":\"Later ask\"}]}";
+        s->next_question = 0; status_questions_next(s); pump(1);
+        saved = cache_lines(g_store.cache, "transcript:wait");
+        Transcript reopened = {0}; transcript_append(&reopened, saved); json_free(saved);
+        CHECK_INT(reopened.count, empty ? 4 : 6); CHECK_INT(reopened.cursor, 6);
+        CHECK_INT(reopened.events[1].seq, 2); CHECK_STR(reopened.events[1].text, "First answer");
+        CHECK_INT(reopened.events[2].seq, 3); CHECK_STR(reopened.events[2].text, "Next ask");
+        CHECK_STR(reopened.events[reopened.count - 1].text, "Concurrent answer");
+        if (!empty) { CHECK_INT(reopened.events[3].seq, 4); CHECK_INT(reopened.events[4].seq, 5); }
+        CHECK(transcript_pending_question(&reopened) == NULL);
+        transcript_free(&reopened); cleanup(&stub);
+    }
+}
 static void test_reply_keyboard(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     ShowWindow(dispatcher, SW_SHOWNA);
@@ -311,6 +346,11 @@ static void test_reply_keyboard(void) {
     Doc doc; doc_init(&doc); draw(s, &doc);
     RECT content = pane_content_rect(pane); status_place(&s->base, &content, 0);
     StatusCard *c = s->cards[card(s, "wait")]; CHECK(c->edit != NULL);
+    HWND edit = c->edit; int dpi = theme_dpi();
+    theme_set_dpi(dpi * 2); status_place(&s->base, &content, 0);
+    CHECK(c->edit == edit); CHECK((HFONT)SendMessageW(edit, WM_GETFONT, 0, 0) == font(FONT_BODY));
+    theme_set_dpi(dpi); status_place(&s->base, &content, 0);
+    CHECK((HFONT)SendMessageW(edit, WM_GETFONT, 0, 0) == font(FONT_BODY));
     SetWindowTextW(c->edit, L"Keyboard fixture");
     SendMessageW(c->edit, WM_KEYDOWN, VK_TAB, 0); CHECK(GetFocus() == pane_hwnd(pane));
     SetFocus(c->edit); SendMessageW(c->edit, WM_KEYDOWN, VK_ESCAPE, 0); CHECK(GetFocus() == pane_hwnd(pane));
@@ -355,7 +395,8 @@ void app_status_tests(void) {
     test_run("Status findings replace an answered question preview", test_findings_replace_question_preview);
     test_run("Status detail Retry-After pauses scans and send preflights across polls", test_detail_retry_after);
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
-    test_run("Status reply edit handles submit, focus escape, tab and refresh", test_reply_keyboard);
+    test_run("Status retries failed transcript batches with later or empty reads", test_transcript_persistence_retry);
+    test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);
     test_run("Status held findings open their conversation and teardown cancels reads", test_held_navigation_and_teardown);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }

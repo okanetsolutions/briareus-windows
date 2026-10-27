@@ -31,7 +31,11 @@ static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
     const Event *pending = transcript_pending_question(&c->transcript);
     if (pending && !json_equal(pending->raw, c->answered_question)) c->answered = false;
     char *key = xstrfmt("transcript:%s", session_id(&c->session));
-    cache_append(g_store.cache, events, key); free(key);
+    // Retry the whole unsaved batch before any later events can advance the saved log.
+    if (!c->unsaved_events) c->unsaved_events = json_array();
+    for (size_t i = 0; i < json_count(events); i++) json_array_push(c->unsaved_events, json_clone(json_at(events, i)));
+    if (cache_append(g_store.cache, c->unsaved_events, key)) { json_free(c->unsaved_events); c->unsaved_events = NULL; }
+    free(key);
     c->confirmed = true;
     set_string(&c->read_error, NULL);
     return true;

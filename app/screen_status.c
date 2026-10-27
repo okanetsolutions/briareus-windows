@@ -146,7 +146,7 @@ static void destroy(Screen *base) {
     for (size_t i = 0; i < s->card_count; i++) {
         StatusCard *c = s->cards[i];
         if (c->edit) DestroyWindow(c->edit);
-        session_free(&c->session); json_free(c->identity); json_free(c->answered_question); transcript_free(&c->transcript); free(c->draft); free(c->error); free(c->read_error); free(c);
+        session_free(&c->session); json_free(c->identity); json_free(c->answered_question); json_free(c->unsaved_events); transcript_free(&c->transcript); free(c->draft); free(c->error); free(c->read_error); free(c);
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);

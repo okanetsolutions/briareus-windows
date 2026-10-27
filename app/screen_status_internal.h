@@ -12,6 +12,7 @@ enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_R
 typedef struct {
     Session session;
     Json *identity, *answered_question;
+    Json *unsaved_events; // retained until the entire append succeeds
     Transcript transcript;
     bool present, confirmed, uncertain, answered, laid;
     char *draft, *error, *read_error;

@@ -96,7 +96,7 @@ static void ensure_edit(StatusScreen *s, StatusCard *c) {
     SetWindowSubclass(c->edit, reply_proc, 0, (DWORD_PTR)s);
     theme_apply_control(c->edit);
     SendMessageW(c->edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply");
-    SendMessageW(c->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE); SendMessageW(c->edit, EM_SETLIMITTEXT, 100000, 0);
+    SendMessageW(c->edit, EM_SETLIMITTEXT, 100000, 0);
     wchar_t *text = utf8_to_wide(c->draft ? c->draft : ""); SetWindowTextW(c->edit, text); free(text);
 }
 void status_place(Screen *base, const RECT *content, int scroll_y) {
@@ -107,6 +107,7 @@ void status_place(Screen *base, const RECT *content, int scroll_y) {
         bool show = status_current(s) && s->shown && c->laid && store_supports("message");
         if (show) ensure_edit(s, c);
         if (!c->edit) continue;
+        SendMessageW(c->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
         SetParent(c->edit, pane_hwnd(base->pane)); EnableWindow(c->edit, status_can_answer(s, c));
         RECT r = c->rect, visible; OffsetRect(&r, content->left + margin, content->top - scroll_y);
         if (!show || !IntersectRect(&visible, &r, content)) { ShowWindow(c->edit, SW_HIDE); continue; }
