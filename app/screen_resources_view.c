@@ -19,6 +19,7 @@ static void process_rows(ResourcesScreen *s, Doc *doc, int w) {
 }
 void resources_layout(Screen *base, Doc *doc) {
     ResourcesScreen *s = (ResourcesScreen *)base; int w = doc->width;
+    if (s->kind == RESOURCE_SERVER) { server_resources_layout(base, doc); return; }
     doc_space(doc, px(12));
     if (!resources_current(s)) {
         doc_empty_state(doc, 0, w, 0xE9D9, "Resources unavailable", "This connection or token no longer supports this session's resources."); return;
