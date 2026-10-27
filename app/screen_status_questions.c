@@ -21,8 +21,8 @@ void status_set_uncertain(StatusScreen *s, StatusCard *c, bool uncertain) {
 bool status_can_answer(StatusScreen *s, StatusCard *c) {
     if (!status_current(s) || !s->shown || !c->present || !c->confirmed) return false;
     if (s->write || s->check_read || status_uncertain(s, c) || c->answered) return false;
-    if ((double)GetTickCount64() < s->detail_retry_until) return false;
-    if ((double)GetTickCount64() < s->message_retry_until) return false;
+    if ((double)GetTickCount64() < g_store.status_detail_retry_until) return false;
+    if ((double)GetTickCount64() < g_store.status_message_retry_until) return false;
     return session_state(&c->session) == SESSION_WAITING && transcript_pending_question(&c->transcript) && store_supports("message");
 }
 void status_cancel_questions(StatusScreen *s) {
@@ -30,14 +30,15 @@ void status_cancel_questions(StatusScreen *s) {
     for (size_t i = 0; i < s->card_count; i++) s->cards[i]->confirmed = false;
 }
 static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
+    if (!status_current(s)) return false;
     if (!req->ok && req->error.retry_after > 0) {
         double until = (double)GetTickCount64() + req->error.retry_after * 1000;
-        if (until > s->detail_retry_until) s->detail_retry_until = until;
+        if (until > g_store.status_detail_retry_until) g_store.status_detail_retry_until = until;
     }
     c->confirmed = false;
     // A read can change what a still-rendered button means before the deferred repaint.
     s->action_first = s->action_next; s->action_count = 0;
-    if (!status_current(s) || !c->present || !req->ok) return false;
+    if (!c->present || !req->ok) return false;
     Session session;
     if (!session_parse(json_get(req->result, "session"), &session)) { set_string(&c->read_error, "Could not confirm the current question."); return false; }
     Json *identity = session_question_identity(&session);
@@ -67,7 +68,7 @@ static void question_done(void *owner, Request *req) {
 }
 void status_questions_next(StatusScreen *s) {
     if (!s->shown || !status_current(s) || s->question_read || !store_supports("session")) return;
-    if ((double)GetTickCount64() < s->detail_retry_until) return;
+    if ((double)GetTickCount64() < g_store.status_detail_retry_until) return;
     while (s->next_question < s->card_count) {
         size_t index = s->next_question++; StatusCard *c = s->cards[index];
         if (!c->present || session_state(&c->session) != SESSION_WAITING) continue;
@@ -93,7 +94,7 @@ static void write_done(void *owner, Request *req) {
         request_error_into(&c->error, req); status_set_uncertain(s, c, request_outcome_unknown(req));
         if (req->error.retry_after > 0) {
             double until = (double)GetTickCount64() + req->error.retry_after * 1000;
-            if (until > s->message_retry_until) s->message_retry_until = until;
+            if (until > g_store.status_message_retry_until) g_store.status_message_retry_until = until;
         }
     }
     status_load(s); pane_relayout(s->base.pane);

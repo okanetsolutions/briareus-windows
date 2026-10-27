@@ -71,6 +71,7 @@ static StatusScreen *setup(Stub *stub, const char *permission, size_t route_coun
     Screen *screen = status_screen_new(); pane_set_root(pane, screen); return (StatusScreen *)screen;
 }
 static void cleanup(Stub *stub) {
+    g_store.status_detail_retry_until = 0; g_store.status_message_retry_until = 0;
     pane_set_root(pane, NULL); json_free(g_store.status_uncertain); g_store.status_uncertain = NULL; api_client_release(g_store.client); g_store.client = NULL;
     free(stub->body); free(stub->url); free(stub->method); free(stub->read_url);
     if (stub->entered) CloseHandle(stub->entered);
@@ -287,19 +288,28 @@ static void test_detail_retry_after(void) {
     stub.sessions = "[{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
         "{\"id\":\"later\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true}]";
     StatusScreen *s = setup(&stub, "manage", 4); pump(3);
-    CHECK(s->detail_retry_until > (double)GetTickCount64() + 119000); CHECK(s->question_read == NULL);
-    double deadline = s->detail_retry_until;
+    CHECK(g_store.status_detail_retry_until > (double)GetTickCount64() + 119000); CHECK(s->question_read == NULL);
+    double deadline = g_store.status_detail_retry_until;
     status_load(s); pump(2); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 1);
-    CHECK(s->detail_retry_until == deadline);
+    CHECK(g_store.status_detail_retry_until == deadline);
     s->base.vt->refresh(&s->base); pump(2); CHECK_INT(stub.reads, 1);
-    stub.read_status = 0; stub.retry_after = NULL; s->detail_retry_until = (double)GetTickCount64();
+    pane_set_root(pane, NULL);
+    s = (StatusScreen *)status_screen_new(); pane_set_root(pane, &s->base); pump(2);
+    CHECK(g_store.status_detail_retry_until == deadline); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 1);
+    status_send(s, card(s, "wait"), "blocked after reopening"); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 0);
+    stub.read_status = 0; stub.retry_after = NULL; g_store.status_detail_retry_until = (double)GetTickCount64();
     status_questions_next(s); pump(2); CHECK_INT(stub.reads, 3);
     // A throttled send preflight also holds both manual sends and the background scan.
     stub.read_status = 429; stub.retry_after = "120";
     status_send(s, card(s, "wait"), "retain"); pump(1);
-    CHECK_INT(stub.writes, 0); CHECK(s->detail_retry_until > (double)GetTickCount64() + 119000);
+    CHECK_INT(stub.writes, 0); CHECK(g_store.status_detail_retry_until > (double)GetTickCount64() + 119000);
     status_send(s, card(s, "wait"), "retain"); CHECK(s->check_read == NULL);
     status_load(s); pump(2); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 4);
+    deadline = g_store.status_detail_retry_until;
+    pane_set_root(pane, NULL);
+    s = (StatusScreen *)status_screen_new(); pane_set_root(pane, &s->base); pump(2);
+    CHECK(g_store.status_detail_retry_until == deadline); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 4);
+    status_send(s, card(s, "wait"), "blocked after preflight refusal"); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 0);
     cleanup(&stub);
 }
 static void test_message_retry_after(void) {
@@ -310,19 +320,25 @@ static void test_message_retry_after(void) {
     status_send(s, index, c->draft); pump(5);
     CHECK_INT(stub.writes, 1); CHECK(!status_uncertain(s, c)); CHECK(c->error != NULL);
     CHECK_STR(c->draft, "retain reply"); CHECK(c->confirmed);
-    CHECK(s->message_retry_until > (double)GetTickCount64() + 119000);
-    double deadline = s->message_retry_until;
+    CHECK(g_store.status_message_retry_until > (double)GetTickCount64() + 119000);
+    double deadline = g_store.status_message_retry_until;
     CHECK(!status_can_answer(s, c));
     status_send(s, index, c->draft); CHECK(s->check_read == NULL);
     status_load(s); pump(3);
     s->base.vt->refresh(&s->base); pump(3);
     s->base.vt->visible(&s->base, false); s->base.vt->visible(&s->base, true); pump(3);
-    CHECK(s->message_retry_until == deadline); CHECK(c->confirmed);
+    CHECK(g_store.status_message_retry_until == deadline); CHECK(c->confirmed);
     CHECK(!status_can_answer(s, c)); CHECK_STR(c->draft, "retain reply");
+    status_send(s, index, c->draft); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 1);
+    pane_set_root(pane, NULL);
+    s = (StatusScreen *)status_screen_new(); pane_set_root(pane, &s->base); pump(3);
+    index = card(s, "wait"); c = s->cards[index]; set_string(&c->draft, "explicit retry");
+    CHECK(g_store.status_message_retry_until == deadline); CHECK(c->confirmed); CHECK(!status_uncertain(s, c));
+    CHECK(!status_can_answer(s, c));
     status_send(s, index, c->draft); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 1);
     // Expiring the deadline permits an explicit retry, without automatically resending.
     stub.write_status = 0; stub.write_retry_after = NULL;
-    s->message_retry_until = (double)GetTickCount64();
+    g_store.status_message_retry_until = (double)GetTickCount64();
     CHECK(status_can_answer(s, c)); CHECK_INT(stub.writes, 1);
     status_send(s, index, c->draft); pump(5);
     CHECK_INT(stub.writes, 2); CHECK(c->answered); CHECK_STR(c->draft, "");
@@ -483,8 +499,8 @@ void app_status_tests(void) {
     test_run("Status polling cancels reads for changed identities", test_poll_invalidates_changed_reads);
     test_run("Status live snapshots survive failed cache writes and remain scoped", test_live_snapshot_without_cache_write);
     test_run("Status findings replace an answered question preview", test_findings_replace_question_preview);
-    test_run("Status detail Retry-After pauses scans and send preflights across polls", test_detail_retry_after);
-    test_run("Status message Retry-After blocks replies across polls and refresh until expiry", test_message_retry_after);
+    test_run("Status detail Retry-After pauses scans and preflights across polls and reopening", test_detail_retry_after);
+    test_run("Status message Retry-After blocks replies across refresh and reopening until expiry", test_message_retry_after);
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
     test_run("Status retries failed transcript batches with later or empty reads", test_transcript_persistence_retry);
     test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);

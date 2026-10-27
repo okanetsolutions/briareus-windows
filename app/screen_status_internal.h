@@ -34,7 +34,6 @@ typedef struct {
     Json *send_question, *send_identity;
     char *send_text, *error;
     Poller poller;
-    double detail_retry_until, message_retry_until;
     bool loaded, shown;
 } StatusScreen;
 bool status_current(StatusScreen *s);
