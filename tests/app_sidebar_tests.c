@@ -94,8 +94,16 @@ static void check_scroll_inputs(Pane *pane, int row_action) {
     int row = action_item(doc, row_action, 0);
     CHECK_INT(doc->items[row].rc.right, doc->width);
     int row_y = doc->items[row].rc.top;
+    RECT page_view = pane_content_rect(pane);
+    int previous_bottom = page_view.bottom - page_view.top;
     SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_NEXT, 0); draw(pane);
     CHECK(pane_scroll_y(pane) > 0); check_strip(pane);
+    CHECK_INT(previous_bottom - (pane_scroll_y(pane) + doc->pin_bottom), px(40));
+    int first_page = pane_scroll_y(pane);
+    SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_NEXT, 0); draw(pane);
+    CHECK_INT(pane_scroll_y(pane), first_page * 2);
+    SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_PRIOR, 0); draw(pane);
+    CHECK_INT(pane_scroll_y(pane), first_page);
     CHECK_INT(doc->items[row].rc.top, row_y);
     // Scrolled rows under the fixed band must not intercept its controls or its padding.
     CHECK_INT(doc_hit(doc, px(1), pane_scroll_y(pane) + px(50)), -1);
@@ -113,6 +121,19 @@ static void check_scroll_inputs(Pane *pane, int row_action) {
     pane_scroll_to_top(pane); draw(pane);
     CHECK_INT(doc_hit(doc, px(20), doc->items[row].rc.top + 1), row);
 }
+static void check_short_paging(Pane *pane) {
+    pane_scroll_to_top(pane); resize(pane, 320, 300);
+    RECT view = pane_content_rect(pane);
+    int chrome = px(300) - (view.bottom - view.top);
+    RECT bounds = { 0, 0, px(320), chrome + pane_doc(pane)->pin_bottom + px(20) };
+    pane_set_bounds(pane, &bounds); draw(pane); view = pane_content_rect(pane);
+    int visible = view.bottom - view.top - pane_doc(pane)->pin_bottom;
+    CHECK(visible > 0 && visible < px(40));
+    SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_NEXT, 0); draw(pane);
+    CHECK_INT(pane_scroll_y(pane), 1);
+    SendMessageW(pane_hwnd(pane), WM_KEYDOWN, VK_PRIOR, 0); draw(pane);
+    CHECK_INT(pane_scroll_y(pane), 0);
+}
 static void check_resizes(Pane *pane) {
     int widths[] = { 240, 480 };
     for (size_t i = 0; i < sizeof widths / sizeof *widths; i++) {
@@ -126,7 +147,7 @@ static void check_resizes(Pane *pane) {
 }
 static void test_project_sidebar(void) {
     ScreenFixture f; start(&f); Screen *s = load_projects(&f);
-    check_scroll_inputs(f.pane, ACT_OPEN_PROJECT); check_resizes(f.pane);
+    check_scroll_inputs(f.pane, ACT_OPEN_PROJECT); check_short_paging(f.pane); check_resizes(f.pane);
     resize(f.pane, 320, 300); wheel(f.pane, -WHEEL_DELTA);
     Doc *doc = pane_doc(f.pane); int row = action_item(doc, ACT_OPEN_PROJECT, 2);
     click(f.pane, item_center(f.pane, row));
@@ -137,7 +158,7 @@ static void test_project_sidebar(void) {
 }
 static void test_session_sidebar(void) {
     ScreenFixture f; start(&f); Screen *s = new_sessions(); pane_set_root(f.pane, s);
-    check_scroll_inputs(f.pane, ACT_PICK); check_resizes(f.pane);
+    check_scroll_inputs(f.pane, ACT_PICK); check_short_paging(f.pane); check_resizes(f.pane);
     theme_set_dpi(144); pane_relayout(f.pane);
     resize(f.pane, 320, 300); wheel(f.pane, -WHEEL_DELTA); check_strip(f.pane);
     Doc *doc = pane_doc(f.pane); int row = action_item(doc, ACT_PICK, 0);

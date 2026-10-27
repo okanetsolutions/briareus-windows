@@ -991,7 +991,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (ctrl && wp == 'A') { select_all(p); return 0; }
         if (wp == VK_ESCAPE && doc_has_selection(&p->doc)) { clear_selection(p); return 0; }
         RECT content = pane_content_rect(p);
-        int page = content.bottom - content.top - px(40);
+        int page = max(1, content.bottom - content.top - p->doc.pin_bottom - px(40));
         switch (wp) {
         case VK_PRIOR: set_scroll(p, p->scroll_y - page); return 0;
         case VK_NEXT: set_scroll(p, p->scroll_y + page); return 0;
