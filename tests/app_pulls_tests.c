@@ -192,6 +192,46 @@ static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
     CHECK(layout_contains(s, "Later in stack"));
     pane_set_root(pane, NULL);
 }
+static void test_failing_checks_filter_persists_per_repo_and_combines_with_stacks(void) {
+    reset();
+    list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Failed PR\",\"checks\":\"failure\"},"
+        "{\"number\":2,\"title\":\"Error PR\",\"checks\":\"error\"},"
+        "{\"number\":3,\"title\":\"Pending PR\",\"checks\":\"pending\"},"
+        "{\"number\":4,\"title\":\"Passing PR\",\"checks\":\"success\"},"
+        "{\"number\":5,\"title\":\"No checks PR\"},"
+        "{\"number\":6,\"title\":\"Later PR\",\"stack\":{\"position\":2,\"total\":2}}],"
+        "\"issues\":[{\"number\":10,\"title\":\"Visible issue\"}]}";
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    CHECK(layout_contains(s, "Failed PR")); click_header(s, "Hide failing checks");
+    CHECK(!layout_contains(s, "Failed PR")); CHECK(!layout_contains(s, "Error PR"));
+    CHECK(layout_contains(s, "Pending PR")); CHECK(layout_contains(s, "Passing PR"));
+    CHECK(layout_contains(s, "No checks PR")); CHECK(layout_contains(s, "Showing 4 of 6"));
+    click_header(s, "Hide later stacked PRs");
+    CHECK(!layout_contains(s, "Later PR")); CHECK(layout_contains(s, "Showing 3 of 6"));
+    Json *saved = cache_value(g_store.cache, "pulls-filters:o/r");
+    CHECK(json_bool_is(json_get(json_get(saved, "pulls"), "hideFailingChecks"), true)); json_free(saved);
+    s = board(); s->vt->refresh(s); drain(2);
+    CHECK(!layout_contains(s, "Failed PR")); CHECK(!layout_contains(s, "Later PR"));
+    HeaderInfo h = header(s);
+    CHECK(h.button_count <= HEADER_BUTTONS);
+    for (int i = 0; i < h.button_count; i++) if (str_eq(h.buttons[i].label, "Show failing checks")) {
+        CHECK(h.buttons[i].glyph != 0); CHECK(h.buttons[i].tip != NULL);
+    }
+    // Another repository starts without this repository's saved picks.
+    Project p = project(); p.repo = "o/other";
+    Screen *other = pulls_screen_new(&p); pane_set_root(pane, other); other->vt->refresh(other); drain(2);
+    CHECK(layout_contains(other, "Failed PR"));
+    s = board(); s->vt->refresh(s); drain(2);
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    bool cleared = false;
+    for (size_t i = 0; i < d.count; i++) if (str_eq(d.items[i].text, "Clear filters")) {
+        s->vt->action(s, d.items[i].action, d.items[i].arg, (POINT){0}); cleared = true; break;
+    }
+    doc_free(&d); CHECK(cleared); CHECK(layout_contains(s, "Failed PR")); CHECK(layout_contains(s, "Later PR"));
+    s = board(); s->vt->refresh(s); drain(2); CHECK(layout_contains(s, "Failed PR"));
+    click_header(s, "Hide failing checks"); click_header(s, "Show failing checks"); CHECK(layout_contains(s, "Error PR"));
+    pane_set_root(pane, NULL);
+}
 static void test_cached_sync_and_error_recovery_transitions(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
     HeaderInfo before = header(s);
@@ -533,6 +573,7 @@ void app_pulls_tests(void) {
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
     test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
+    test_run("pulls failing checks filter persists per repository and clears", test_failing_checks_filter_persists_per_repo_and_combines_with_stacks);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);

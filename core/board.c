@@ -240,11 +240,11 @@ const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number
 // MARK: - Filters
 
 BoardRow pull_board_row(const PullSummary *p) {
-    BoardRow row = { p->author, p->reviewers, p->reviewer_count, p->assignees, p->assignee_count, p->labels, p->label_count };
+    BoardRow row = { p->author, p->reviewers, p->reviewer_count, p->assignees, p->assignee_count, p->labels, p->label_count, pull_checks_failed(p) };
     return row;
 }
 BoardRow issue_board_row(const IssueSummary *i) {
-    BoardRow row = { i->author, NULL, 0, i->assignees, i->assignee_count, i->labels, i->label_count };
+    BoardRow row = { i->author, NULL, 0, i->assignees, i->assignee_count, i->labels, i->label_count, false };
     return row;
 }
 
@@ -256,16 +256,16 @@ const char *filter_kind_name(FilterKind kind) {
     default: return "label";
     }
 }
-void board_filter_init(BoardFilter *f) { f->author = xstrdup(""); f->reviewer = xstrdup(""); f->assignee = xstrdup(""); f->label = xstrdup(""); }
+void board_filter_init(BoardFilter *f) { f->author = xstrdup(""); f->reviewer = xstrdup(""); f->assignee = xstrdup(""); f->label = xstrdup(""); f->hide_failing_checks = false; }
 void board_filter_free(BoardFilter *f) { if (!f) return; free(f->author); free(f->reviewer); free(f->assignee); free(f->label); memset(f, 0, sizeof *f); }
-void board_filter_copy(BoardFilter *into, const BoardFilter *from) { into->author = xstrdup(from->author); into->reviewer = xstrdup(from->reviewer); into->assignee = xstrdup(from->assignee); into->label = xstrdup(from->label); }
-bool board_filter_equal(const BoardFilter *a, const BoardFilter *b) { return str_eq(a->author, b->author) && str_eq(a->reviewer, b->reviewer) && str_eq(a->assignee, b->assignee) && str_eq(a->label, b->label); }
+void board_filter_copy(BoardFilter *into, const BoardFilter *from) { into->author = xstrdup(from->author); into->reviewer = xstrdup(from->reviewer); into->assignee = xstrdup(from->assignee); into->label = xstrdup(from->label); into->hide_failing_checks = from->hide_failing_checks; }
+bool board_filter_equal(const BoardFilter *a, const BoardFilter *b) { return a->hide_failing_checks == b->hide_failing_checks && str_eq(a->author, b->author) && str_eq(a->reviewer, b->reviewer) && str_eq(a->assignee, b->assignee) && str_eq(a->label, b->label); }
 void board_filter_opening(BoardFilter *f, const char *author, const BoardRow *rows, size_t count) {
     board_filter_init(f);
     if (str_empty(author)) return;
     for (size_t i = 0; i < count; i++) if (fold_eq(rows[i].author, author)) { free(f->author); f->author = str_fold(author); return; }
 }
-bool board_filter_is_on(const BoardFilter *f) { return !(str_empty(f->author) && str_empty(f->reviewer) && str_empty(f->assignee) && str_empty(f->label)); }
+bool board_filter_is_on(const BoardFilter *f) { return f->hide_failing_checks || !(str_empty(f->author) && str_empty(f->reviewer) && str_empty(f->assignee) && str_empty(f->label)); }
 static char **filter_slot(BoardFilter *f, FilterKind kind) {
     switch (kind) {
     case FILTER_AUTHOR: return &f->author;
@@ -291,6 +291,7 @@ static size_t carried(FilterKind kind, const BoardRow *row, const char **out, si
 }
 #define MAX_CARRIED 256
 bool board_filter_passes(const BoardFilter *f, const BoardRow *row, int skipping) {
+    if (f->hide_failing_checks && row->checks_failed) return false;
     for (int kind = 0; kind < FILTER_KIND_COUNT; kind++) {
         if (kind == skipping) continue;
         const char *pick = board_filter_get(f, (FilterKind)kind);
