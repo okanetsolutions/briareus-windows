@@ -659,8 +659,8 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
         "\"commits\":9,\"commitList\":[{\"sha\":\"abc\"}],\"headRef\":\"feature\",\"baseRef\":\"main\","
         "\"headSha\":\"abc\",\"checks\":{\"passed\":3,\"pending\":2,\"failed\":1,\"runs\":[{\"name\":\"CI\"}]}}");
     json_free(s->findings); s->findings = json_parsez("[{\"key\":\"f1\",\"title\":\"Finding marker\"}]");
-    Json *sessions = json_parsez("{\"sessions\":[{\"id\":\"run1\",\"title\":\"Session marker\"}]}");
-    CHECK(sessions_parse(sessions, &s->runs, &s->run_count)); json_free(sessions);
+    Json *sessions = json_parsez("{\"sessions\":[{\"id\":\"run1\",\"status\":\"completed\",\"title\":\"Session marker\"}]}");
+    CHECK(sessions_parse(sessions, &s->runs, &s->run_count)); CHECK_INT(s->run_count, 1); json_free(sessions);
     s->runs_read = true; s->run_url = xstrdup("https://preview.example");
     Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); base->vt->layout(base, &d);
     size_t tabs = 0, counts = 0; bool commits = false;
