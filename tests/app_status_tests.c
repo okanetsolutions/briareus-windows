@@ -189,7 +189,7 @@ static void test_held_navigation_and_teardown(void) {
     s->base.vt->action(&s->base, STATUS_OPEN, open, (POINT){0});
     Screen *top = pane_top(window); CHECK(top != &s->base); CHECK_STR(top->id, "conversation:held");
     // The conversation's normal read is cancelled when its owning pane is destroyed.
-    doc_free(&doc); detached_close(window); cleanup(&stub);
+    doc_free(&doc); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); cleanup(&stub);
 
     memset(&stub, 0, sizeof stub); block(&stub, false); s = setup(&stub, "manage", 4); pump(2);
     CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0); pane_set_root(pane, NULL); SetEvent(stub.resume); pump(1); cleanup(&stub);
@@ -203,7 +203,7 @@ void app_status_tests(void) {
     // Pane stack capacity and the detached-window registry outlive individual tests, as in the pull-screen fixture.
     pane_set_root(pane, status_screen_new()); pane_set_root(pane, NULL);
     Pane *warm = detached_open(status_screen_new(), NULL, false); CHECK(warm != NULL);
-    if (warm) detached_close(warm);
+    if (warm) DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
     test_run("Status option/text sends use message contract and suppress duplicates", test_option_and_text_wire);
     test_run("Status respects catalog/token and rejects changed questions and stale actions", test_permissions_and_changed_ask);
     test_run("Status refreshes counts, isolates badges and rejects pre-paint stale actions", test_refresh_and_cached_questions);
