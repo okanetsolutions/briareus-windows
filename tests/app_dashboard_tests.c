@@ -1,4 +1,6 @@
-#include "screens.h"
+#include "screen_dashboard_internal.h"
+#include "dialogs.h"
+#include "resource.h"
 #include "suites.h"
 #include "test.h"
 #include <ctype.h>
@@ -15,7 +17,7 @@ static const char *ACCOUNTS = "{\"providers\":[{\"id\":7,\"label\":\"Work\",\"bi
 static const char *STATUS = "{\"status\":{\"auth\":{\"email\":\"work@example.com\"},\"usage\":{\"windows\":[{\"label\":\"fixture-window\",\"usedPct\":25}]}}}";
 enum { LEDGER_READ, ACCOUNTS_READ, STATUS_READ, READ_COUNT, RECORD_CAP = 64 };
 typedef struct {
-    const char *accounts, *status, *second_status, *retry, *second_retry, *block_path;
+    const char *ledger, *accounts, *status, *second_status, *retry, *second_retry, *block_path;
     int accounts_code, status_code, second_code;
     volatile LONG count[READ_COUNT], recorded;
     char *urls[RECORD_CAP];
@@ -40,7 +42,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         stub->urls[record] = xstrdup(url);
         stub->reads[record] = str_eq(method, "GET") && bytes == 0;
     }
-    const char *answer = LEDGER;
+    const char *answer = stub->ledger ? stub->ledger : LEDGER;
     *status = 200; *error = NULL;
     if (kind == ACCOUNTS_READ) { answer = stub->accounts ? stub->accounts : ACCOUNTS; *status = stub->accounts_code ? stub->accounts_code : 200; }
     if (kind == STATUS_READ) {
@@ -89,6 +91,7 @@ static Screen *setup(DashboardStub *stub, const char *permission, size_t route_c
     g_store.has_device = true; g_store.device.permission = (char *)permission;
     g_store.routes = ROUTES; g_store.route_count = route_count; g_store.active = true;
     delivered = 0;
+    screen_dashboard_preference = (UsageWindow){0};
     ServerAddress address; ApiError error; api_error_init(&error);
     CHECK(server_address_parse("https://example.com", &address));
     g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &error);
@@ -254,6 +257,69 @@ static void test_quota_cooldown_expiry(void) {
     Doc doc; doc_init(&doc); draw(screen, &doc, 600); check_percent(&doc, "fixture-window", 75);
     cleanup(&stub, &doc);
 }
+static void test_custom_ranges_lifecycle(void) {
+    DashboardStub stub = {0};
+    Screen *screen = setup(&stub, "admin", 1); pump(1);
+    DashboardScreen *s = (DashboardScreen *)screen;
+    UsageRange a = { "2026-03-07", "2026-03-09" }, b = { "2024-02-29", "2024-02-29" };
+    Json *saved = cache_value(g_store.cache, "usage:month"); CHECK(saved != NULL); json_free(saved);
+    LONG reads = stub.count[LEDGER_READ];
+    CHECK(!screen_dashboard_apply_range(s, NULL)); CHECK_INT(stub.count[LEDGER_READ], reads);
+    CHECK_INT(s->window.period, 0); CHECK(screen_dashboard_shown(s) != NULL);
+    block(&stub, LEDGER_READ); stub.block_path = "from=2026-03-07";
+    stub.ledger = "{\"turns\":111,\"period\":\"custom\"}";
+    CHECK(screen_dashboard_apply_range(s, &a)); await_block(&stub); CHECK(screen_dashboard_shown(s) == NULL);
+    stub.ledger = "{\"turns\":222,\"period\":\"custom\",\"comparison\":{\"totalTokens\":1}}";
+    CHECK(screen_dashboard_apply_range(s, &b)); pump(1);
+    CHECK_INT(json_int_or(json_get(screen_dashboard_shown(s), "turns"), 0), 222);
+    SetEvent(stub.resume); pump(1);
+    CHECK_INT(json_int_or(json_get(screen_dashboard_shown(s), "turns"), 0), 222);
+    CHECK(usage_comparison(screen_dashboard_shown(s)).present);
+    check_url(&stub, "https://example.com/api/v1/usage/all?period=custom&from=2026-03-07&to=2026-03-09");
+    check_url(&stub, "https://example.com/api/v1/usage/all?period=custom&from=2024-02-29&to=2024-02-29");
+    saved = cache_value(g_store.cache, "usage:month"); CHECK_INT(json_int_or(json_get(saved, "turns"), -1), 0); json_free(saved);
+    saved = cache_value(g_store.cache, "usage:custom"); CHECK(saved == NULL); json_free(saved);
+    CHECK(screen_dashboard_apply_range(s, &b)); pump(1); CHECK_INT(stub.count[LEDGER_READ], reads + 3);
+    screen_dashboard_pick_only(s, F_ACCOUNT, "7"); screen_dashboard_repick(s); pump(1);
+    check_url(&stub, "https://example.com/api/v1/usage/all?period=custom&from=2024-02-29&to=2024-02-29&account=7");
+    Doc doc; doc_init(&doc);
+    // A newly opened view remembers the days but must not restore a custom payload.
+    pane_set_root(pane, NULL); screen = dashboard_screen_new(); s = (DashboardScreen *)screen;
+    pane_set_root(pane, screen); CHECK(screen_dashboard_shown(s) == NULL); first_poll(screen); pump(1);
+    CHECK_INT(s->window.period, USAGE_CUSTOM); CHECK_STR(s->window.range.from, "2024-02-29");
+    // Navigation destroys a pending range owner; its late answer must be discarded.
+    ResetEvent(stub.entered); ResetEvent(stub.resume);
+    CHECK(screen_dashboard_apply_range(s, &a)); await_block(&stub);
+    pane_set_root(pane, NULL); SetEvent(stub.resume); pump(1);
+    cleanup(&stub, &doc); screen_dashboard_preference = (UsageWindow){0};
+}
+
+static bool dialog_apply;
+static int dialog_seen;
+static VOID CALLBACK range_dialog_tick(HWND window, UINT msg, UINT_PTR timer, DWORD time) {
+    (void)window; (void)msg; (void)time;
+    HWND dialog = GetActiveWindow();
+    if (!GetDlgItem(dialog, IDC_USAGE_FROM)) return;
+    KillTimer(NULL, timer); dialog_seen++;
+    SetDlgItemTextW(dialog, IDC_USAGE_FROM, L"2024-02-30");
+    CHECK(!IsWindowEnabled(GetDlgItem(dialog, IDOK)));
+    SetDlgItemTextW(dialog, IDC_USAGE_FROM, L"2024-12-31");
+    SetDlgItemTextW(dialog, IDC_USAGE_TO, L"2024-01-01");
+    CHECK(IsWindowEnabled(GetDlgItem(dialog, IDOK)));
+    PostMessageW(dialog, WM_COMMAND, dialog_apply ? IDOK : IDCANCEL, 0);
+}
+static void test_range_dialog(void) {
+    for (int apply = 0; apply < 2; apply++) {
+        UsageRange range = { "2026-08-03", "2026-08-09" };
+        dialog_apply = apply != 0; dialog_seen = 0;
+        UINT_PTR timer = SetTimer(NULL, 0, 10, range_dialog_tick); CHECK(timer != 0);
+        bool accepted = dialog_usage_range(NULL, &range); KillTimer(NULL, timer);
+        CHECK_INT(dialog_seen, 1); CHECK_INT(accepted, apply);
+        CHECK_STR(range.from, apply ? "2024-01-01" : "2026-08-03");
+        CHECK_STR(range.to, apply ? "2024-12-31" : "2026-08-09");
+    }
+}
+
 void app_dashboard_tests(void) {
     if (!theme.canvas) theme_init();
     dispatcher = CreateWindowExW(0, L"STATIC", L"Dashboard dispatcher", 0, 0, 0, 10, 10,
@@ -261,6 +327,8 @@ void app_dashboard_tests(void) {
     CHECK(dispatcher != NULL); pane = pane_create(dispatcher, false); CHECK(pane_hwnd(pane) != NULL);
     wchar_t directory[MAX_PATH]; GetTempPathW(MAX_PATH, directory); wcscat(directory, L"briareus-dashboard-tests");
     memset(&g_store, 0, sizeof g_store); g_store.hwnd = dispatcher; g_store.cache = cache_new(directory);
+    test_run("Usage date dialog validates days and preserves Cancel", test_range_dialog);
+    test_run("Dashboard custom ranges read fresh, isolate caches and discard stale or destroyed owners", test_custom_ranges_lifecycle);
     test_run("Dashboard quota percentages distinguish missing data from full allowance", test_remaining_values);
     test_run("Dashboard reads each valid account once while ledger polls continue", test_account_loading);
     test_run("Dashboard quota reads respect permissions and recover from malformed or empty accounts", test_unavailable_and_permissions);

@@ -59,6 +59,10 @@
 #define IDC_EDIT_TITLE_LABEL    703
 #define IDC_EDIT_BODY_LABEL     704
 
+#define IDD_USAGE_RANGE         800
+#define IDC_USAGE_FROM          801
+#define IDC_USAGE_TO            802
+
 #define IDS_APP_TITLE           1000
 
 #endif

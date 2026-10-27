@@ -78,13 +78,13 @@ static char *month_name(const char *key) {
 }
 
 /// What the window is called: the server's month by its own calendar, all time, or the span of its buckets.
-char *screen_dashboard_window_name(const Json *u) {
+char *screen_dashboard_window_name(const Json *u, const UsageWindow *window) {
     const char *period = json_str(json_get(u, "period"));
     if (str_eq(period, "all")) return xstrdup("all time");
     if (str_eq(period, "month") || str_eq(period, "prev")) return month_name(json_str(json_get(u, "month")));
     const Json *buckets = json_get(u, "buckets");
     size_t n = json_count(buckets);
-    if (!n) return xstrdup(screen_dashboard_PERIODS[screen_dashboard_g_period].label);
+    if (!n || window->period == USAGE_CUSTOM) return usage_window_label(window);
     char *a = screen_dashboard_bucket_name(json_str(json_get(json_at(buckets, 0), "date")), false);
     char *b = screen_dashboard_bucket_name(json_str(json_get(json_at(buckets, n - 1), "date")), false);
     char *out = str_eq(a, b) ? xstrdup(a) : xstrfmt("%s \xE2\x80\x93 %s", a, b);

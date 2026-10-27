@@ -1,4 +1,7 @@
 #include "usage.h"
+#include "str.h"
+#include <stdlib.h>
+#include <string.h>
 #include "suites.h"
 #include "test.h"
 
@@ -95,7 +98,76 @@ static void test_pricing_coverage(void) {
     }
 }
 
+static void test_calendar_ranges(void) {
+    static const struct { const char *a, *b, *from, *to; } cases[] = {
+        { "2026-08-03", "2026-08-09", "2026-08-03", "2026-08-09" },
+        { "2026-08-09", "2026-08-03", "2026-08-03", "2026-08-09" },
+        { "2024-02-29", "2024-02-29", "2024-02-29", "2024-02-29" },
+        { "2024-01-01", "2024-12-31", "2024-01-01", "2024-12-31" },
+        { "2026-01-01", "2027-01-01", "2026-01-01", "2027-01-01" },
+        { "2026-12-31", "2027-01-02", "2026-12-31", "2027-01-02" },
+        { "2026-03-07", "2026-03-09", "2026-03-07", "2026-03-09" },
+        { "2026-10-31", "2026-11-02", "2026-10-31", "2026-11-02" },
+        { "2000-02-29", "2000-03-01", "2000-02-29", "2000-03-01" },
+        { "0100-01-01", "0100-01-01", "0100-01-01", "0100-01-01" },
+        { "9999-12-31", "9999-12-31", "9999-12-31", "9999-12-31" }
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        UsageRange r;
+        CHECK(usage_range_make(cases[i].a, cases[i].b, &r));
+        CHECK_STR(r.from, cases[i].from); CHECK_STR(r.to, cases[i].to);
+    }
+    static const char *const invalid[] = {
+        "2023-02-29", "1900-02-29", "2026-04-31", "2026-00-01", "2026-13-01", "2026-01-00",
+        "2026-01-32", "2026-1-01", "2026-01-1", "2026-01-01x", "2026-01-01T00:00:00Z",
+        "0000-01-01", "0099-12-31", "10000-01-01", "-001-01-01", "202a-01-01", "", NULL
+    };
+    UsageRange r = { "2026-01-01", "2026-01-02" };
+    for (size_t i = 0; i < sizeof invalid / sizeof *invalid; i++) {
+        CHECK(!usage_range_make(invalid[i], "2026-01-01", &r));
+        CHECK(!usage_range_make("2026-01-01", invalid[i], &r));
+        CHECK_STR(r.from, "2026-01-01"); CHECK_STR(r.to, "2026-01-02");
+    }
+    CHECK(!usage_range_make("2024-01-01", "2025-01-01", &r));
+    CHECK(!usage_range_make("2027-01-02", "2026-01-01", &r));
+    CHECK(usage_range_last_week("2024-03-02", &r)); CHECK_STR(r.from, "2024-02-25"); CHECK_STR(r.to, "2024-03-02");
+    CHECK(usage_range_last_week("2026-01-02", &r)); CHECK_STR(r.from, "2025-12-27");
+    CHECK(usage_range_last_week("2026-03-10", &r)); CHECK_STR(r.from, "2026-03-04");
+    CHECK(!usage_range_last_week("bad", &r)); CHECK(!usage_range_last_week("0100-01-01", &r));
+}
+
+static void test_custom_query(void) {
+    UsageWindow w = {0};
+    Json *args = usage_window_args(&w); CHECK_STR(usage_query_cache_key(args), "usage:month"); json_free(args);
+    UsageRange r = { "2026-08-09", "2026-08-03" };
+    CHECK(usage_window_set_range(&w, &r)); CHECK_INT(w.period, USAGE_CUSTOM);
+    CHECK_STR(w.range.from, "2026-08-03"); CHECK_STR(w.range.to, "2026-08-09");
+    args = usage_window_args(&w);
+    CHECK_STR(json_str(json_get(args, "period")), "custom");
+    CHECK_STR(json_str(json_get(args, "from")), "2026-08-03"); CHECK_STR(json_str(json_get(args, "to")), "2026-08-09");
+    CHECK(usage_query_cache_key(args) == NULL); json_free(args);
+    char *label = usage_window_label(&w); CHECK(strstr(label, "2026-08-03") != NULL); CHECK(strstr(label, "2026-08-09") != NULL); free(label);
+    CHECK(!usage_window_set_range(&w, NULL)); CHECK(!usage_window_set_period(&w, -1));
+    CHECK(!usage_window_set_period(&w, USAGE_CUSTOM)); CHECK(!usage_window_set_period(&w, USAGE_PERIOD_COUNT));
+    r = (UsageRange){ "bad", "2026-08-03" }; CHECK(!usage_window_set_range(&w, &r)); CHECK_INT(w.period, USAGE_CUSTOM);
+    for (int i = 0; i < USAGE_CUSTOM; i++) {
+        CHECK(usage_window_set_period(&w, i)); CHECK(!usage_window_set_period(&w, i));
+        args = usage_window_args(&w); CHECK_INT(json_count(args), 1); CHECK(usage_query_cache_key(args) != NULL);
+        CHECK_STR(json_str(json_get(args, "period")), usage_period_ids[i]);
+        CHECK_STR(w.range.from, "2026-08-03");
+        label = usage_window_label(&w); CHECK_STR(label, usage_period_labels[i]); free(label);
+        json_set_str(args, "account", "7"); CHECK(usage_query_cache_key(args) == NULL); json_free(args);
+    }
+    r = w.range; CHECK(usage_window_set_range(&w, &r)); CHECK_STR(w.range.to, "2026-08-09");
+    r = (UsageRange){ "2024-02-29", "2024-02-29" }; CHECK(usage_window_set_range(&w, &r));
+    label = usage_window_label(&w); CHECK_STR(label, "2024-02-29"); free(label);
+    CHECK(usage_query_cache_key(NULL) == NULL);
+    args = json_parsez("{\"period\":\"invalid\"}"); CHECK(usage_query_cache_key(args) == NULL); json_free(args);
+}
+
 void usage_tests(void) {
+    test_run("usage custom ranges count strict Gregorian calendar days including DST and leap boundaries", test_calendar_ranges);
+    test_run("usage custom queries retain dates while isolating preset caches and cancellation", test_custom_query);
     test_run("usage comparison preserves its window and elapsed-time marker", test_comparison_presence_and_metadata);
     test_run("usage comparison needs numeric values in both windows", test_comparison_missing_numbers);
     test_run("usage comparison distinguishes unchanged zero from new usage", test_zero_previous_usage);
