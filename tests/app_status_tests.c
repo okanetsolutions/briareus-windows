@@ -89,6 +89,15 @@ static intptr_t item_arg(Doc *doc, int action, const char *text) {
     for (size_t i = 0; i < doc->count; i++) if (doc->items[i].action == action && str_eq(doc->items[i].text, text)) return doc->items[i].arg;
     CHECK(false); return -1;
 }
+static intptr_t card_action_arg(StatusScreen *s, Doc *doc, int action, size_t index) {
+    for (size_t i = 0; i < doc->count; i++) {
+        Item *item = &doc->items[i];
+        if (item->action != action || item->arg < s->action_first) continue;
+        size_t offset = (size_t)(item->arg - s->action_first);
+        if (offset < s->action_count && s->actions[offset].card == index) return item->arg;
+    }
+    CHECK(false); return -1;
+}
 static void test_option_and_text_wire(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     CHECK_INT(s->overview.waiting_count, 2); CHECK_INT(s->overview.working_count, 1); CHECK_INT(stub.reads, 1);
@@ -124,7 +133,7 @@ static void test_permissions_and_changed_ask(void) {
     status_send(s, index, s->cards[index]->draft); pump(1); CHECK_INT(stub.writes, 0); CHECK_STR(s->cards[index]->draft, "keep me"); CHECK(s->cards[index]->error != NULL);
     CHECK_INT(transcript_pending_question(&s->cards[index]->transcript)->seq, 3);
     // A queued action from the previous layout cannot address the replacement ask.
-    Doc doc; doc_init(&doc); draw(s, &doc); intptr_t old = item_arg(&doc, STATUS_SEND, "Send reply"); draw(s, &doc);
+    Doc doc; doc_init(&doc); draw(s, &doc); intptr_t old = card_action_arg(s, &doc, STATUS_SEND, index); draw(s, &doc);
     s->base.vt->action(&s->base, STATUS_SEND, old, (POINT){0}); CHECK(s->check_read == NULL);
     doc_free(&doc); cleanup(&stub);
 }
@@ -392,7 +401,7 @@ static void test_held_navigation_and_teardown(void) {
     Screen *moved = pane_take_root(pane);
     Pane *window = detached_open(moved, NULL, false); CHECK(window != NULL); pump(3);
     Doc doc; doc_init(&doc); draw(s, &doc);
-    intptr_t open = item_arg(&doc, STATUS_OPEN, "Decide findings →");
+    intptr_t open = card_action_arg(s, &doc, STATUS_OPEN, card(s, "held"));
     s->base.vt->action(&s->base, STATUS_OPEN, open, (POINT){0});
     Screen *top = pane_top(window); CHECK(top != &s->base); CHECK_STR(top->id, "conversation:held");
     // The conversation's normal read is cancelled when its owning pane is destroyed.
