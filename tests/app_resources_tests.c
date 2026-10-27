@@ -122,6 +122,22 @@ static void retry_across_reopen(void) {
     CHECK(r->poller.base_ms > 2000000000); s->vt->refresh(s); CHECK(r->read == NULL);
     s->vt->destroy(s); clear(&f);
 }
+static void concurrent_success_preserves_cooldown(void) {
+    Fixture f; init(&f);
+    Screen *a = create(&f, "s1"), *b = create(&f, "s1");
+    f.steps[0].status = 429; f.steps[0].retry = "120";
+    a->vt->visible(a, true); entered(&f, 0);
+    b->vt->visible(b, true); entered(&f, 1);
+    complete(&f, 0);
+    ResourcesScreen *first = (ResourcesScreen *)a, *second = (ResourcesScreen *)b;
+    double until = resources_retry_until(first); CHECK(until > (double)time(NULL));
+    complete(&f, 1); CHECK(second->loaded); CHECK(resources_retry_until(second) == until);
+    a->vt->refresh(a); b->vt->refresh(b); CHECK(first->read == NULL); CHECK(second->read == NULL);
+    a->vt->visible(a, false); a->vt->visible(a, true); CHECK(first->read == NULL);
+    expire(first); b->vt->timer(b, RESOURCES_POLL); complete(&f, 2); CHECK(second->fresh);
+    CHECK(resources_retry_until(second) == 0);
+    a->vt->destroy(a); b->vt->destroy(b); clear(&f);
+}
 static void cancellation_and_isolation(void) {
     Fixture f; init(&f); Screen *a = create(&f, "s1"); ResourcesScreen *r = (ResourcesScreen *)a;
     a->vt->visible(a, true); entered(&f, 0); a->vt->visible(a, false); CHECK(r->read == NULL);
@@ -162,5 +178,6 @@ void app_resources_tests(void) {
     test_run("Resources header action honors capability and read-token navigation", gating_and_navigation);
     test_run("Resources polling coalesces reads, retains stale data and recovers partial/closed sessions", polling_recovery_and_empty);
     test_run("Resources Retry-After survives refresh hide and recreation", retry_across_reopen);
+    test_run("Resources preexisting success preserves a concurrent Retry-After", concurrent_success_preserves_cooldown);
     test_run("Resources cancel stale owners and isolate server permission and session snapshots", cancellation_and_isolation);
 }

@@ -24,7 +24,10 @@ static void read_done(void *owner, Request *req) {
         session_stats_free(&s->reading); s->reading = next;
         s->loaded = s->fresh = true; s->received_at = (double)time(NULL);
         set_string(&s->error, NULL);
-        json_object_remove(g_store.resources_retries, s->retry_key);
+        // A success already in flight cannot erase another screen's newer Retry-After.
+        Json *cooldown = (Json *)json_get(g_store.resources_retries, s->retry_key);
+        if (resources_retry_until(s) > (double)time(NULL)) json_set_num(cooldown, "failures", 0);
+        else json_object_remove(g_store.resources_retries, s->retry_key);
     } else {
         s->fresh = false;
         // A project permission refusal must not keep private figures on screen.
