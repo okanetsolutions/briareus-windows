@@ -200,6 +200,10 @@ void app_status_tests(void) {
     pane = pane_create(dispatcher, false);
     wchar_t directory[MAX_PATH]; GetTempPathW(MAX_PATH, directory); wcscat(directory, L"briareus-status-tests");
     memset(&g_store, 0, sizeof g_store); g_store.hwnd = dispatcher; g_store.cache = cache_new(directory);
+    // Pane stack capacity and the detached-window registry outlive individual tests, as in the pull-screen fixture.
+    pane_set_root(pane, status_screen_new()); pane_set_root(pane, NULL);
+    Pane *warm = detached_open(status_screen_new(), NULL, false); CHECK(warm != NULL);
+    if (warm) detached_close(warm);
     test_run("Status option/text sends use message contract and suppress duplicates", test_option_and_text_wire);
     test_run("Status respects catalog/token and rejects changed questions and stale actions", test_permissions_and_changed_ask);
     test_run("Status refreshes counts, isolates badges and rejects pre-paint stale actions", test_refresh_and_cached_questions);
