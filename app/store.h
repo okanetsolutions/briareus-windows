@@ -69,6 +69,7 @@ struct Request {
     void *owner; RequestDone done; int tag; intptr_t arg;
     Request **slot;                                    // cleared when the request finishes or is cancelled
     bool cancelled;
+    bool auth_checked;                 // completion finalizer applied its own connection/device auth scope
     // UI-thread finalizer runs even after cancellation; context must outlive the screen and be freed here.
     void *completion_ctx; RequestDone completed;
     ApiClient *client;

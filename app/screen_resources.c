@@ -17,54 +17,84 @@ static void schedule(ResourcesScreen *s) {
     poller_set_base(&s->poller, delay);
     poller_finished(&s->poller, false, -1);
 }
+static double refusal_epoch(const char *key) {
+    return json_num_or(json_get(json_get(g_store.resources_retries, key), "epoch"), 0);
+}
+static void clear_figures(ResourcesScreen *s) {
+    session_stats_free(&s->reading); s->loaded = s->fresh = false;
+    if (s->base.pane) pane_relayout(s->base.pane);
+}
+void resources_discard_revoked(ResourcesScreen *s) {
+    double epoch = refusal_epoch(s->retry_key);
+    if (s->reading_epoch == epoch) return;
+    clear_figures(s); s->reading_epoch = epoch;
+}
 static void record_failure(const char *key, Request *req) {
-    if (req->error.status == 403 || req->error.status == 404) {
-        // Only visit registered live screens, never the cancelled request's owner.
-        for (ResourcesScreen *s = screens; s; s = s->next) {
-            if (s->client != req->client || !str_eq(s->retry_key, key)) continue;
-            session_stats_free(&s->reading); s->loaded = s->fresh = false;
-            if (s->base.pane) pane_relayout(s->base.pane);
-        }
-    }
+    bool refused = req->error.status == 403 || req->error.status == 404;
     const Json *entry = json_get(g_store.resources_retries, key);
     int failures = json_int_or(json_get(entry, "failures"), 0);
     if (failures < 6) failures++;
+    double epoch = refusal_epoch(key) + (refused ? 1 : 0);
     double previous = json_num_or(json_get(entry, "until"), 0);
     double retry = req->error.retry_after;
     if (req->error.status == 429 && retry < 0) retry = 60;
     double until = stats_retry_deadline((double)time(NULL), previous, failures, retry);
     Json *cooldown = json_object(); json_set_num(cooldown, "until", until); json_set_num(cooldown, "failures", failures);
+    json_set_num(cooldown, "epoch", epoch);
     if (!g_store.resources_retries) g_store.resources_retries = json_object();
     json_object_set(g_store.resources_retries, key, cooldown);
+    if (!refused) return;
+    // Registered live views share the refusal, including hidden and detached views.
+    for (ResourcesScreen *s = screens; s; s = s->next) {
+        if (s->client != req->client || !str_eq(s->retry_key, key)) continue;
+        resources_discard_revoked(s);
+        request_error_into(&s->error, req);
+    }
 }
-typedef struct { Json *device; char *key; } ReadCompletion;
+typedef struct { Json *device; char *key; double epoch; } ReadCompletion;
 static void read_completed(void *ctx, Request *req) {
     ReadCompletion *completion = ctx;
-    // Navigation may free the screen while HTTP is still running. Only retain scoped metadata.
-    if (req->cancelled && !req->ok && req->client == g_store.client && store_supports("session_stats")) {
-        Json *device = device_json(&g_store.device);
-        if (json_equal(device, completion->device)) record_failure(completion->key, req);
-        json_free(device);
+    // The metadata belongs to the request, never to its possibly destroyed UI owner.
+    req->auth_checked = true;
+    bool current = req->client == g_store.client && g_store.has_device;
+    Json *device = current ? device_json(&g_store.device) : NULL;
+    current = current && json_equal(device, completion->device);
+    json_free(device);
+    if (current) {
+        if (!req->ok && api_error_unauthorized(&req->error)) {
+            // A token refusal applies to this connection; project refusals stay session-scoped.
+            for (ResourcesScreen *s = screens; s; s = s->next) {
+                if (s->client != req->client) continue;
+                clear_figures(s); poller_stop(&s->poller); request_cancel(&s->read);
+            }
+            store_invalidate_credentials(&req->error);
+        } else if (req->cancelled && !req->ok) record_failure(completion->key, req);
+        else if (req->ok) req->arg = completion->epoch != refusal_epoch(completion->key);
     }
     json_free(completion->device); free(completion->key); free(completion);
+    req->completion_ctx = NULL;
 }
 static void read_done(void *owner, Request *req) {
     ResourcesScreen *s = owner;
     if (!s->shown || !resources_current(s)) return;
+    resources_discard_revoked(s);
+    // The finalizer compares the request's start epoch before releasing its metadata.
+    if (req->arg) { schedule(s); pane_relayout(s->base.pane); return; }
     SessionStats next = {0};
     bool ok = req->ok && session_stats_parse(req->result, session_id(&s->session), &next);
     if (ok) {
         session_stats_free(&s->reading); s->reading = next;
-        s->loaded = s->fresh = true; s->received_at = (double)time(NULL);
+        s->loaded = s->fresh = true; s->reading_epoch = refusal_epoch(s->retry_key); s->received_at = (double)time(NULL);
         set_string(&s->error, NULL);
         // A success already in flight cannot erase another screen's newer Retry-After.
         Json *cooldown = (Json *)json_get(g_store.resources_retries, s->retry_key);
         if (resources_retry_until(s) > (double)time(NULL)) json_set_num(cooldown, "failures", 0);
-        else json_object_remove(g_store.resources_retries, s->retry_key);
+        else {
+            // Keep the epoch after recovery so older in-flight successes remain obsolete.
+            json_object_remove(cooldown, "until"); json_object_remove(cooldown, "failures");
+        }
     } else {
         s->fresh = false;
-        // A project permission refusal must not keep private figures on screen.
-        if (req->error.status == 403 || req->error.status == 404) { session_stats_free(&s->reading); s->loaded = false; }
         char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error);
         record_failure(s->retry_key, req);
     }
@@ -72,11 +102,13 @@ static void read_done(void *owner, Request *req) {
 }
 static void load(ResourcesScreen *s) {
     if (!s->shown || !g_store.active || !resources_current(s) || s->read) return;
+    resources_discard_revoked(s);
     if (resources_retry_until(s) > (double)time(NULL)) { schedule(s); return; }
     Json *args = json_object(); json_set_str(args, "sessionId", session_id(&s->session));
     Request *req = store_call("session_stats", args, 0, s, read_done, 0, &s->read);
     ReadCompletion *completion = xcalloc(1, sizeof *completion);
     completion->device = json_clone(s->device); completion->key = xstrdup(s->retry_key);
+    completion->epoch = refusal_epoch(s->retry_key);
     req->completion_ctx = completion; req->completed = read_completed;
 }
 static void visible(Screen *base, bool shown) {

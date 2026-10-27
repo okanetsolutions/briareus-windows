@@ -376,7 +376,7 @@ void store_handle_message(UINT msg, WPARAM wp, LPARAM lp) {
         if (r->completed) r->completed(r->completion_ctx, r);
         if (r->cancelled) { request_free(r); return; }
         if (r->slot) *r->slot = NULL;
-        if (!r->ok && api_error_unauthorized(&r->error) && r->client == g_store.client) store_invalidate_credentials(&r->error);
+        if (!r->auth_checked && !r->ok && api_error_unauthorized(&r->error) && r->client == g_store.client) store_invalidate_credentials(&r->error);
         if (r->done) r->done(r->owner, r);
         request_free(r);
     } else if (msg == WM_APP_ASYNC_DONE) {

@@ -23,6 +23,7 @@ void resources_layout(Screen *base, Doc *doc) {
     if (!resources_current(s)) {
         doc_empty_state(doc, 0, w, 0xE9D9, "Resources unavailable", "This connection or token no longer supports this session's resources."); return;
     }
+    resources_discard_revoked(s);
     if (s->error) doc_notice(doc, 0, w, s->error);
     double until = resources_retry_until(s);
     bool paused = until > (double)time(NULL);

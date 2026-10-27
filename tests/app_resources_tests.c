@@ -1,4 +1,5 @@
 #include "screen_fixture.h"
+#include "credentials.h"
 #include "screen_resources_internal.h"
 #include "screen_conversation_internal.h"
 #include "suites.h"
@@ -193,7 +194,10 @@ static void cancelled_refusal_clears_retained_figures(void) {
         pane_show(f.screen.pane, true); entered(&f, 4); complete(&f, 3);
         screen_fixture_draw(s, &doc);
         CHECK(!r->loaded); CHECK(r->reading.history == NULL); CHECK(!r->reading.total.memory.present);
-        complete(&f, 4); CHECK(r->loaded && r->fresh);
+        complete(&f, 4); CHECK(!r->loaded && !r->fresh);
+        screen_fixture_draw(s, &doc);
+        CHECK(r->reading.history == NULL); CHECK(!r->reading.total.memory.present);
+        CHECK(resources_retry_until(r) > (double)time(NULL));
         // Subsequent successful reads recover fresh data after the refusal.
         expire(r); s->vt->refresh(s); complete(&f, 5); screen_fixture_draw(s, &doc);
         CHECK(r->loaded && r->fresh); CHECK(r->reading.history_count > 0);
@@ -225,6 +229,126 @@ static void cancelled_refusal_scope_and_destroyed_owner(void) {
     CHECK(o->loaded && o->fresh); CHECK_INT(o->reading.total.memory.value, 77);
     s->vt->destroy(s); sibling->vt->destroy(sibling); other->vt->destroy(other); doc_free(&doc); clear(&f);
 }
+static void overlapping_refusal_invalidates_all_views(void) {
+    const int statuses[] = {403, 404};
+    for (int i = 0; i < 2; i++) {
+        Fixture f; init(&f);
+        Screen *a = create(&f, "s1"), *b = create(&f, "s1"), *hidden = create(&f, "s1");
+        ResourcesScreen *first = (ResourcesScreen *)a, *second = (ResourcesScreen *)b, *retained = (ResourcesScreen *)hidden;
+        a->vt->visible(a, true); complete(&f, 0);
+        b->vt->visible(b, true); complete(&f, 1);
+        hidden->vt->visible(hidden, true); complete(&f, 2); hidden->vt->visible(hidden, false);
+        // Keep a real detached sibling alive with a success waiting behind the refusal.
+        b->vt->visible(b, false);
+        Pane *window = detached_open(b, NULL, false); CHECK(window != NULL); entered(&f, 3);
+        f.steps[4].status = statuses[i]; f.steps[4].retry = "3600";
+        a->vt->refresh(a); entered(&f, 4); a->vt->visible(a, false);
+        a->vt->visible(a, true); entered(&f, 5);
+        complete(&f, 4);
+        CHECK(!first->loaded); CHECK(!second->loaded); CHECK(!retained->loaded);
+        CHECK(retained->reading.history == NULL); CHECK(!retained->reading.total.memory.present);
+        complete(&f, 5); complete(&f, 3);
+        CHECK(!first->loaded && !first->fresh); CHECK(!second->loaded && !second->fresh);
+        CHECK(first->reading.history == NULL); CHECK(second->reading.history == NULL);
+        hidden->vt->visible(hidden, true); CHECK(retained->read == NULL);
+        Doc doc; doc_init(&doc); screen_fixture_draw(a, &doc); screen_fixture_draw(b, &doc); screen_fixture_draw(hidden, &doc);
+        CHECK(!retained->loaded); CHECK_INT(f.calls, 6);
+        CHECK(resources_retry_until(first) >= (double)time(NULL) + 3598);
+        expire(first);
+        // A later authorized response may recover; its epoch must survive that success.
+        a->vt->refresh(a); entered(&f, 6);
+        b->vt->refresh(b); entered(&f, 7);
+        f.steps[8].status = statuses[i]; f.steps[8].retry = "3600";
+        hidden->vt->refresh(hidden); entered(&f, 8); hidden->vt->destroy(hidden); complete(&f, 8);
+        complete(&f, 6); CHECK(!first->loaded);
+        expire(first); a->vt->refresh(a); complete(&f, 9); CHECK(first->loaded && first->fresh);
+        complete(&f, 7); CHECK(!second->loaded && !second->fresh);
+        CHECK(first->loaded && first->fresh); // A stale sibling cannot erase legitimate recovery.
+        a->vt->destroy(a); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); doc_free(&doc); clear(&f);
+    }
+}
+static const char *AUTH_ORIGIN = "https://resources-auth-tests.invalid";
+static const char *OTHER_ORIGIN = "https://resources-other-auth-tests.invalid";
+static const char *AUTH_TOKEN = "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+static void auth_init(Fixture *f) {
+    init(f);
+    // Real auth invalidation frees Store's device/routes/client and removes its scoped credential/cache.
+    g_store.device = (Device){.id = xstrdup("device-one"), .label = xstrdup("Resources auth test"), .permission = xstrdup("read")};
+    g_store.routes = routes_copy(ROUTES, 1);
+    api_client_retain(g_store.client); // Store owns a reference separate from the fixture.
+    g_store.server = xstrdup(AUTH_ORIGIN);
+    wchar_t temp[MAX_PATH], directory[MAX_PATH];
+    CHECK(GetTempPathW(MAX_PATH, temp) != 0); CHECK(GetTempFileNameW(temp, L"rsa", 0, directory) != 0);
+    DeleteFileW(directory); CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
+    Json *private = json_object(); json_set_num(private, "memoryBytes", 4000);
+    CHECK(cache_store(g_store.cache, private, "resource-auth-private")); json_free(private);
+    CHECK(credentials_save(AUTH_TOKEN, AUTH_ORIGIN)); CHECK(credentials_save(AUTH_TOKEN, OTHER_ORIGIN));
+}
+static void auth_clear(Fixture *f) {
+    if (g_store.client) api_client_release(g_store.client);
+    if (g_store.has_device) device_free(&g_store.device);
+    routes_free(g_store.routes, g_store.route_count);
+    cache_remove_all(g_store.cache); cache_free(g_store.cache);
+    free(g_store.server); free(g_store.connection_error);
+    CHECK(credentials_remove(AUTH_ORIGIN)); CHECK(credentials_remove(OTHER_ORIGIN));
+    clear(f);
+}
+static void cancelled_unauthorized_invalidates_credentials(void) {
+    for (int destroyed = 0; destroyed < 2; destroyed++) {
+        Fixture f; auth_init(&f);
+        Screen *a = create(&f, "s1"), *b = create(&f, "s1");
+        ResourcesScreen *first = (ResourcesScreen *)a, *second = (ResourcesScreen *)b;
+        a->vt->visible(a, true); complete(&f, 0);
+        b->vt->visible(b, true); complete(&f, 1);
+        f.steps[2].status = 401; f.steps[2].retry = "3600";
+        a->vt->refresh(a); entered(&f, 2); a->vt->visible(a, false);
+        if (destroyed) a->vt->destroy(a);
+        // Another already-pending success cannot bring figures back after credential invalidation.
+        b->vt->refresh(b); entered(&f, 3); complete(&f, 2);
+        CHECK(g_store.client == NULL); CHECK(!g_store.has_device); CHECK(g_store.routes == NULL);
+        CHECK(!second->loaded && !second->fresh); CHECK(second->reading.history == NULL); CHECK(!second->poller.running);
+        complete(&f, 3); CHECK(!second->loaded);
+        bool failed = false; char *token = credentials_read(AUTH_ORIGIN, &failed); CHECK(!failed); CHECK(token == NULL); free(token);
+        CHECK_OWNED_STR(credentials_read(OTHER_ORIGIN, &failed), AUTH_TOKEN); CHECK(!failed);
+        Json *saved = cache_value(g_store.cache, "resource-auth-private"); CHECK(saved == NULL); json_free(saved);
+        Doc doc; doc_init(&doc); screen_fixture_draw(b, &doc);
+        if (!destroyed) {
+            a->vt->visible(a, true); screen_fixture_draw(a, &doc);
+            CHECK(!first->loaded); CHECK(first->reading.history == NULL); CHECK(first->read == NULL);
+            a->vt->destroy(a);
+        }
+        b->vt->destroy(b); doc_free(&doc); auth_clear(&f);
+    }
+}
+static void unauthorized_completion_scope(void) {
+    // A changed device must be protected even for an uncancelled read (Store's ordinary auth fallback).
+    for (int changed_device = 0; changed_device < 2; changed_device++) {
+        Fixture f; auth_init(&f); Screen *a = create(&f, "s1");
+        a->vt->visible(a, true); complete(&f, 0);
+        f.steps[1].status = 401; f.steps[1].retry = "3600";
+        a->vt->refresh(a); entered(&f, 1);
+        ApiClient *old_store_client = g_store.client;
+        if (changed_device) set_string(&g_store.device.id, "device-two");
+        else {
+            a->vt->visible(a, false); a->vt->destroy(a); a = NULL;
+            ServerAddress address; ApiError error; api_error_init(&error); CHECK(server_address_parse(OTHER_ORIGIN, &address));
+            g_store.client = api_client_new(&address, AUTH_TOKEN, &error); server_address_free(&address); api_error_clear(&error);
+            set_string(&g_store.server, OTHER_ORIGIN);
+        }
+        ApiClient *replacement = g_store.client;
+        complete(&f, 1);
+        CHECK(g_store.client == replacement); CHECK(g_store.has_device);
+        CHECK_STR(g_store.device.id, changed_device ? "device-two" : "device-one");
+        bool failed = false;
+        CHECK_OWNED_STR(credentials_read(AUTH_ORIGIN, &failed), AUTH_TOKEN); CHECK(!failed);
+        CHECK_OWNED_STR(credentials_read(OTHER_ORIGIN, &failed), AUTH_TOKEN); CHECK(!failed);
+        Json *saved = cache_value(g_store.cache, "resource-auth-private"); CHECK(saved != NULL); json_free(saved);
+        if (a) a->vt->destroy(a);
+        if (!changed_device) api_client_release(old_store_client);
+        auth_clear(&f);
+    }
+}
+
 static void concurrent_success_preserves_cooldown(void) {
     Fixture f; init(&f);
     Screen *a = create(&f, "s1"), *b = create(&f, "s1");
@@ -285,6 +409,9 @@ void app_resources_tests(void) {
     test_run("Resources pane hide and detached minimize stop polling and resume on reveal", pane_and_window_visibility);
     test_run("Resources cancelled 403 and 404 clear metrics and history before reveal or layout", cancelled_refusal_clears_retained_figures);
     test_run("Resources cancelled refusals preserve scope and survive owner destruction", cancelled_refusal_scope_and_destroyed_owner);
+    test_run("Resources refusal epochs reject overlapping successes in live detached and hidden views", overlapping_refusal_invalidates_all_views);
+    test_run("Resources cancelled 401 clears credentials cache and surviving figures after navigation", cancelled_unauthorized_invalidates_credentials);
+    test_run("Resources old-client and changed-device 401 cannot invalidate replacement credentials", unauthorized_completion_scope);
     test_run("Resources preexisting success preserves a concurrent Retry-After", concurrent_success_preserves_cooldown);
     test_run("Resources cancel stale owners and isolate server permission and session snapshots", cancellation_and_isolation);
 }
