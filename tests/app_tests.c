@@ -3,6 +3,7 @@
 #include "test.h"
 
 int main(void) {
+    app_webhook_tests();
     app_format_tests();
     app_common_tests();
     app_find_tests();

@@ -898,6 +898,7 @@ int main(void) {
         { "JSON round trips", test_json_round_trips },
     };
     for (size_t i = 0; i < sizeof tests / sizeof *tests; i++) test_run(tests[i].name, tests[i].fn);
+    webhook_tests();
     str_tests();
     json_tests();
     markdown_tests();
