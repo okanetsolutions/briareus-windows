@@ -109,10 +109,12 @@ void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     }
     const Json *triage = session_held_triage(screen_conversation_session(s));
     if (triage && store_supports("complete_findings")) { doc_space(doc, px(14)); screen_conversation_layout_triage(s, doc, x, w, triage); }
-    if (session_is_active(screen_conversation_session(s))) {
+    char *working = session_working_text(screen_conversation_session(s), &s->transcript, working_verb(s->tick));
+    if (working) {
         doc_space(doc, px(12));
         int wi = doc_custom(doc, x, w, px(24), screen_conversation_paint_working, s, NULL, 0, 0);
         doc_item(doc, wi)->id = 2;
+        doc_item(doc, wi)->tip = working;
     }
     doc_space(doc, px(30));
     RECT anchor = { x, doc->y, x + w, doc->y + 1 };

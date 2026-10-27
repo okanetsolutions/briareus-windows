@@ -920,6 +920,7 @@ int main(void) {
     repo_index_tests();
     usage_tests();
     provider_status_tests();
+    session_working_tests();
     pull_conversation_tests();
     return test_summary();
 }

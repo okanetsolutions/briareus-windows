@@ -5,6 +5,7 @@
 #include "meeting.h"
 #include "screens.h"
 #include "str.h"
+#include "session_working.h"
 #include "voice.h"
 #include <commctrl.h>
 #include <stdio.h>
