@@ -210,10 +210,12 @@ void screen_pulls_pulls_layout(Screen *base, Doc *doc) {
             size_t vn = 0;
             for (size_t i = 0; i < s->issue_count; i++) if (board_filter_passes(filter, &rows[i], -1)) { visible[vn] = s->issues[i]; map[vn] = i; vn++; }
             size_t nn; IssueRow *nested = issues_nested(visible, vn, s->project.repo, &nn);
+            nn = issues_folded(nested, nn, visible, &s->issue_folds);
             for (size_t k = 0; k < nn; k++) {
                 int depth = nested[k].depth > 4 ? 4 : nested[k].depth;
                 int indent = depth * px(18);
-                doc_issue_row(doc, indent, w - indent, &s->issues[map[nested[k].index]], s->project.repo, depth > 0, ACT_OPEN_ISSUE, (intptr_t)map[nested[k].index]);
+                doc_issue_row_foldable(doc, indent, w - indent, &s->issues[map[nested[k].index]], s->project.repo, depth > 0, ACT_OPEN_ISSUE, (intptr_t)map[nested[k].index],
+                    nested[k].children ? ACT_FOLD_ISSUE : 0, issue_folds_contains(&s->issue_folds, visible[nested[k].index].number));
                 doc_space(doc, px(8));
             }
             free(nested); free(map); free(visible);

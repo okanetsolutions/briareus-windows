@@ -172,8 +172,13 @@ static int parent_of(const Nest *n, const IssueSummary *issue) {
 static void draw(Nest *n, size_t index, int depth) {
     if (n->drawn[index]) return;
     n->drawn[index] = true;
-    n->rows[n->row_count].index = index; n->rows[n->row_count].depth = depth; n->row_count++;
-    for (size_t i = 0; i < n->count; i++) if (parent_of(n, &n->issues[i]) == n->issues[index].number) draw(n, i, depth + 1);
+    size_t at = n->row_count++;
+    n->rows[at].index = index; n->rows[at].depth = depth;
+    for (size_t i = 0; i < n->count; i++) {
+        if (n->drawn[i] || parent_of(n, &n->issues[i]) != n->issues[index].number) continue;
+        n->rows[at].children++;
+        draw(n, i, depth + 1);
+    }
 }
 IssueRow *issues_nested(const IssueSummary *issues, size_t count, const char *repo, size_t *row_count) {
     Nest n = { issues, count, repo, xcalloc(count, sizeof(IssueRow)), 0, xcalloc(count, sizeof(bool)) };
@@ -182,6 +187,30 @@ IssueRow *issues_nested(const IssueSummary *issues, size_t count, const char *re
     free(n.drawn);
     *row_count = n.row_count;
     return n.rows;
+}
+bool issue_folds_contains(const IssueFolds *folds, int number) {
+    for (size_t i = 0; i < folds->count; i++) if (folds->numbers[i] == number) return true;
+    return false;
+}
+void issue_folds_toggle(IssueFolds *folds, int number) {
+    for (size_t i = 0; i < folds->count; i++) if (folds->numbers[i] == number) {
+        memmove(&folds->numbers[i], &folds->numbers[i + 1], (folds->count - i - 1) * sizeof(int));
+        folds->count--; return;
+    }
+    folds->numbers = xrealloc(folds->numbers, (folds->count + 1) * sizeof(int));
+    folds->numbers[folds->count++] = number;
+}
+void issue_folds_free(IssueFolds *folds) { free(folds->numbers); memset(folds, 0, sizeof *folds); }
+size_t issues_folded(IssueRow *rows, size_t count, const IssueSummary *issues, const IssueFolds *folds) {
+    size_t out = 0;
+    int hiding = -1;
+    for (size_t i = 0; i < count; i++) {
+        IssueRow row = rows[i];
+        if (hiding >= 0 && row.depth > hiding) continue;
+        hiding = row.children && issue_folds_contains(folds, issues[row.index].number) ? row.depth : -1;
+        rows[out++] = row;
+    }
+    return out;
 }
 char *issue_prompt(const IssueSummary *issue, const char *repo) {
     Str s; str_init(&s);

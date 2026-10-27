@@ -1,5 +1,5 @@
 // Exercise the real screen refresh/visibility/activation and request completion paths.
-#include "screens.h"
+#include "screen_pulls_internal.h"
 #include "str.h"
 #include "suites.h"
 #include "test.h"
@@ -231,6 +231,71 @@ static void test_failing_checks_filter_persists_per_repo_and_combines_with_stack
     s = board(); s->vt->refresh(s); drain(2); CHECK(layout_contains(s, "Failed PR"));
     click_header(s, "Hide failing checks"); click_header(s, "Show failing checks"); CHECK(layout_contains(s, "Error PR"));
     pane_set_root(pane, NULL);
+}
+static void click_issue_control(Screen *s, int action, int number) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    bool clicked = false;
+    for (size_t i = 0; i < d.count; i++) {
+        Item *it = &d.items[i];
+        if (it->action != action || (action == ACT_FOLD_ISSUE && it->arg != number)) continue;
+        if (action == ACT_OPEN_ISSUE && ((PullsScreen *)s)->issues[it->arg].number != number) continue;
+        // Hit-test the actual control, including the overlapping issue row.
+        int hit = doc_hit(&d, (it->rc.left + it->rc.right) / 2, (it->rc.top + it->rc.bottom) / 2);
+        CHECK(hit >= 0);
+        if (hit >= 0) {
+            CHECK_INT(d.items[hit].action, action);
+            if (action == ACT_OPEN_ISSUE) CHECK_INT(((PullsScreen *)s)->issues[d.items[hit].arg].number, number);
+            s->vt->action(s, d.items[hit].action, d.items[hit].arg, (POINT){0});
+        }
+        clicked = true; break;
+    }
+    CHECK(clicked); doc_free(&d);
+}
+static void test_issue_folding_controls_and_board_lifetime(void) {
+    Pane *original = pane;
+    Project fixture = project();
+    pane = detached_open(pulls_screen_new(&fixture), NULL, false);
+    CHECK(pane != NULL);
+    reset();
+    list_body = "{\"pulls\":[],\"issues\":[{\"number\":1,\"title\":\"Epic root\",\"subIssues\":{\"total\":3}},"
+        "{\"number\":2,\"title\":\"Nested epic\",\"parent\":{\"number\":1}},"
+        "{\"number\":3,\"title\":\"Grandchild\",\"labels\":[\"match\"],\"parent\":{\"number\":2}},"
+        "{\"number\":4,\"title\":\"Standalone\",\"subIssues\":{\"total\":8}}]}";
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(s, "Grandchild"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 2); CHECK_INT(pane_depth(pane), 1);
+    CHECK(!layout_contains(s, "Grandchild")); CHECK(layout_contains(s, "Nested epic"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 1); CHECK(!layout_contains(s, "Nested epic"));
+    CHECK(layout_contains(s, "Standalone"));
+    s->vt->action(s, ACT_TAB, TAB_PULLS, (POINT){0});
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    // A refresh reorders the source rows; folds follow issue identity, not their former indices.
+    list_body = "{\"pulls\":[],\"issues\":[{\"number\":4,\"title\":\"Standalone\",\"subIssues\":{\"total\":8}},"
+        "{\"number\":3,\"title\":\"Grandchild\",\"labels\":[\"match\"],\"parent\":{\"number\":2}},"
+        "{\"number\":2,\"title\":\"Nested epic\",\"parent\":{\"number\":1}},"
+        "{\"number\":1,\"title\":\"Epic root\",\"subIssues\":{\"total\":3}}]}";
+    s->vt->refresh(s); drain(2); CHECK(!layout_contains(s, "Nested epic"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 1);
+    CHECK(layout_contains(s, "Nested epic")); CHECK(!layout_contains(s, "Grandchild"));
+    click_issue_control(s, ACT_FOLD_ISSUE, 2); CHECK(layout_contains(s, "Grandchild"));
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == ACT_FOLD_ISSUE) CHECK(d.items[i].arg != 4);
+    doc_free(&d);
+    click_issue_control(s, ACT_OPEN_ISSUE, 1); CHECK_INT(pane_depth(pane), 2);
+    CHECK_STR(pane_top(pane)->id, "issue:o/r#1"); pane_pop(pane);
+    click_issue_control(s, ACT_FOLD_ISSUE, 1);
+    Project p = project(); p.repo = "o/other";
+    Screen *other = pulls_screen_new(&p); pane_push(pane, other); other->vt->refresh(other); drain(2);
+    other->vt->action(other, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(other, "Grandchild")); pane_pop(pane);
+    CHECK(!layout_contains(s, "Nested epic"));
+    // Filtering away a folded ancestor keeps the matching child as a root.
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "match");
+    CHECK(!layout_contains(s, "Epic root")); CHECK(layout_contains(s, "Grandchild"));
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "");
+    CHECK(!layout_contains(s, "Nested epic"));
+    DestroyWindow(GetAncestor(pane_hwnd(pane), GA_ROOT)); pane = original;
 }
 static void test_cached_sync_and_error_recovery_transitions(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
@@ -572,9 +637,13 @@ void app_pulls_tests(void) {
     api_client_set_transport(g_store.client, transport, NULL);
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
+    Project fold_project = project();
+    Pane *warm = detached_open(pulls_screen_new(&fold_project), NULL, false);
+    CHECK(warm != NULL); DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
     test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
     test_run("pulls failing checks filter persists per repository and clears", test_failing_checks_filter_persists_per_repo_and_combines_with_stacks);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
+    test_run("issue folding controls and board lifetime", test_issue_folding_controls_and_board_lifetime);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);
