@@ -2,6 +2,7 @@
 #ifndef BRIAREUS_STORE_H
 #define BRIAREUS_STORE_H
 #include "api.h"
+#include "mail_reply.h"
 #include "cache.h"
 #include "models.h"
 #include <windows.h>
@@ -15,6 +16,7 @@ typedef struct {
     ApiClient *client;                 // NULL until paired
     ULONGLONG mail_retry_until;        // inbox cooldown survives navigation, cleared with the client
     int mail_failures;
+    MailReply *mail_replies;           // owned connection-scoped drafts and send interlocks
     double home_retry_until[4];        // Smart home read cooldowns survive navigation, cleared with the client
     double status_detail_retry_until, status_message_retry_until; // Status cooldowns survive navigation, cleared with the client
     Json *resources_retries;           // session/permission-scoped read deadlines, owned; cleared with client

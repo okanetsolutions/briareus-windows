@@ -73,6 +73,7 @@ void screen_mail_inbox_layout(Screen *base, Doc *doc) {
     s->focus_y = -1; s->open_y = -1; s->reader_y = -1; s->reader_block_y = -1; s->reader_blocks = 0; s->reader_block_first = false; s->stacked = false;
     s->reader_body_y = s->reader_body_bottom = -1;
     doc_space(doc, px(12));
+    if (s->mail_client && s->mail_client != g_store.client) screen_mail_inbox_clear_private(s);
     if (!mail_inbox_offered()) { screen_mail_inbox_clear_private(s); doc_notice(doc, x, w, "Mail needs an Admin token and the deployed account and message-list routes."); return; }
     if (!store_supports("mail_message")) screen_mail_inbox_clear_selection(s);
     bool available = screen_mail_inbox_ready(s);

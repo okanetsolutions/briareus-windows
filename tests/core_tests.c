@@ -919,6 +919,7 @@ int main(void) {
     update_tests();
     repo_tests();
     mail_tests();
+    core_mail_reply_tests();
     mail_inbox_tests();
     repo_index_tests();
     usage_tests();

@@ -17,7 +17,7 @@
 
 enum { ACT_ACCOUNT = 1900, ACT_Q, ACT_LABEL, ACT_THREAD, ACT_UNREAD, ACT_INBOX, ACT_STARRED,
        ACT_RESET, ACT_MORE, ACT_SELECT, ACT_CLOSE, ACT_PROVIDER, ACT_RETRY_LIST, ACT_RETRY_BODY, ACT_RETRY_ACCOUNTS,
-       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER, ACT_DELETE };
+       ACT_MENU, ACT_KIND, ACT_GROUP, ACT_SYNC, ACT_DELETE_PROVIDER, ACT_DELETE, ACT_REPLY, ACT_REPLY_SEND, ACT_REPLY_CANCEL, ACT_REPLY_RECONCILE };
 
 enum { TIMER_INBOX = 1910 };
 
@@ -29,11 +29,12 @@ enum { GROUP_THREADS, GROUP_EACH };
 
 typedef struct {
     Screen base;
+    ApiClient *mail_client; // retained identity of the loaded mailbox data
     MailAccounts accounts;
     MailMessages messages;
     MailMessage body;
     MailFilter filter;
-    Request *account_read, *list_read, *body_read, *deletion;
+    Request *account_read, *list_read, *body_read, *deletion, *reply;
     char *selected_id, *account_error, *list_error, *body_error, *notice, *limit_note;
     int selected_account, generation, kind, group, menu, focus_message, focus_y, open_y, chrome_bottom, scroll_seen, reader_y, reader_block_y, reader_blocks;
     // The opened block's last layout, so a later page can add only the height inserted above it. page_follow is 1 to
@@ -54,6 +55,11 @@ typedef struct { char *shown; bool on, accent, caret; } ChipData;
 
 typedef struct { char initials[3]; bool mine; } Avatar;
 
+MailReply *screen_mail_reply_draft(Inbox *s, bool create);
+bool screen_mail_reply_allowed(Inbox *s);
+void screen_mail_reply_action(Inbox *s, int act);
+void screen_mail_reply_layout(Inbox *s, Doc *doc, int x, int w);
+void screen_mail_reply_cancel(Inbox *s);
 bool mail_inbox_offered(void);
 bool mail_inbox_result_current(bool shown, int generation, const Request *r);
 void screen_mail_inbox_text_set(char **slot, const char *text);

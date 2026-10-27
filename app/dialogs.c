@@ -1,4 +1,5 @@
 #include "dialogs.h"
+#include "mail_reply.h"
 #include "canvas.h"
 #include "resource.h"
 #include "screens.h"
@@ -748,4 +749,55 @@ bool dialog_usage_range(HWND owner, UsageRange *range) {
     if (modal_box(IDD_USAGE_RANGE, owner, usage_range_proc, (LPARAM)&s) != IDOK) return false;
     *range = s.value;
     return true;
+}
+
+// MARK: - Plain-text mail draft
+
+typedef struct { const char *context; char **text; } MailDraftDialog;
+static void mail_draft_update(HWND dialog) {
+    char *text = control_text(dialog, IDC_INPUT);
+    Json *body = mail_reply_body(text);
+    set_control_text(dialog, IDC_RECORDING, body ? "Plain text, ready to send from the reader." : "Use nonempty text, at most 100000 UTF-16 characters.");
+    json_free(body); free(text);
+}
+static INT_PTR CALLBACK mail_draft_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) {
+    MailDraftDialog *s = (MailDraftDialog *)GetWindowLongPtrW(dialog, GWLP_USERDATA);
+    switch (msg) {
+    case WM_INITDIALOG:
+        s = (MailDraftDialog *)lp; SetWindowLongPtrW(dialog, GWLP_USERDATA, lp);
+        dialog_theme(dialog); dialog_prepare_edit(dialog, IDC_INPUT);
+        SetWindowTextW(dialog, L"Mail reply draft");
+        set_control_text(dialog, IDC_HINT, "Plain-text reply; review recipient and thread before sending.");
+        set_control_text(dialog, IDC_NOTE, s->context);
+        set_control_text(dialog, IDC_START, "Save draft");
+        ShowWindow(GetDlgItem(dialog, IDC_MIC), SW_HIDE);
+        SendDlgItemMessageW(dialog, IDC_INPUT, EM_SETLIMITTEXT, 200000, 0);
+        set_control_text(dialog, IDC_INPUT, *s->text);
+        mail_draft_update(dialog);
+        SendMessageW(dialog, DM_SETDEFID, IDC_START, 0);
+        SetFocus(GetDlgItem(dialog, IDC_INPUT)); return FALSE;
+    case WM_CTLCOLORSTATIC: case WM_CTLCOLORDLG: case WM_CTLCOLOREDIT: case WM_CTLCOLORBTN:
+        return dialog_ctl_color(dialog, msg, wp, lp);
+    case WM_PAINT: { static const int ids[] = { IDC_INPUT }; dialog_paint_frames(dialog, ids, 1); return TRUE; }
+    case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDC_START) ? TRUE : FALSE;
+    case WM_COMMAND:
+        if (!s) return FALSE;
+        if (LOWORD(wp) == IDC_INPUT) {
+            if (HIWORD(wp) == EN_CHANGE) mail_draft_update(dialog);
+            else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, IDC_INPUT);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDC_START) {
+            char *text = control_text(dialog, IDC_INPUT); free(*s->text); *s->text = text;
+            EndDialog(dialog, IDOK); return TRUE;
+        }
+        if (LOWORD(wp) == IDCANCEL) { EndDialog(dialog, IDCANCEL); return TRUE; }
+        return FALSE;
+    case WM_CLOSE: EndDialog(dialog, IDCANCEL); return TRUE;
+    }
+    return FALSE;
+}
+bool dialog_mail_reply(HWND owner, const char *context, char **text) {
+    MailDraftDialog s = { context, text };
+    return modal_box(IDD_ACTION_INPUT, owner, mail_draft_proc, (LPARAM)&s) == IDOK;
 }

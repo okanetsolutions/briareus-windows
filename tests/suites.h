@@ -25,6 +25,8 @@ void meet_tests(void);
 void mcp_tests(void);
 void update_tests(void);
 void repo_tests(void);
+void core_mail_reply_tests(void);
+void app_mail_reply_tests(void);
 void mail_tests(void);
 void mail_inbox_tests(void);
 void app_mail_inbox_tests(void);
