@@ -71,6 +71,8 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// Global waiting questions, held findings and working/ready counts.
 Screen *status_screen_new(void);
+/// Session-specific, read-only resource figures; reads only while visible.
+Screen *resources_screen_new(const Session *session);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
 /// WhatsApp Web in the detail pane; the screen's id is "whatsapp".
