@@ -8,6 +8,8 @@ static Screen *open_conversation(ScreenFixture *f) {
     Session session = {0}; session.raw = json_parsez("{\"id\":\"background-test\",\"status\":\"running\"}");
     Screen *screen = conversation_screen_new(&session); session_free(&session);
     if (!f->pane) screen_fixture_pane(f, screen); else screen->pane = f->pane;
+    screen->vt->visible(screen, true);
+    CHECK(((ConversationScreen *)screen)->composer != NULL);
     return screen;
 }
 static void refresh(ScreenFixture *f, Screen *screen, const char *tasks, const char *status, const char *events, bool question) {
