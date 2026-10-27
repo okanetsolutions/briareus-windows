@@ -918,6 +918,7 @@ int main(void) {
     mail_inbox_tests();
     repo_index_tests();
     usage_tests();
+    provider_status_tests();
     pull_conversation_tests();
     return test_summary();
 }

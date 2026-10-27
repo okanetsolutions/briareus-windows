@@ -129,7 +129,7 @@ static void form_destroy(Screen *base) {
     request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_status);
     request_cancel(&s->req_login); request_cancel(&s->req_test);
     for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
-    json_free(s->row); json_free(s->status);
+    json_free(s->row); json_free(s->status); json_free(s->login_from);
     free(s->binary); free(s->status_error); free(s->test_result); free(s->device_code); free(s->error);
     screen_release(base);
 }
