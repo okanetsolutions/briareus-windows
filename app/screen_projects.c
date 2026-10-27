@@ -114,7 +114,10 @@ void projects_recount_findings(void) {
     Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
-    projects_count(s);
+    // A global screen may have refreshed the accessible project list as well as its sessions.
+    Json *saved = cache_value(g_store.cache, "projects");
+    if (saved) projects_show(s, saved); else projects_count(s);
+    json_free(saved);
     pane_relayout(root->pane);
     Screen *top = pane_top(root->pane);
     if (top != root) pane_relayout(top->pane);
