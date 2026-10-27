@@ -21,5 +21,6 @@ typedef struct {
     double received_at;
 } ResourcesScreen;
 bool resources_current(ResourcesScreen *s);
+double resources_retry_until(ResourcesScreen *s);
 void resources_layout(Screen *base, Doc *doc);
 #endif

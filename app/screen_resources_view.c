@@ -24,8 +24,15 @@ void resources_layout(Screen *base, Doc *doc) {
         doc_empty_state(doc, 0, w, 0xE9D9, "Resources unavailable", "This connection or token no longer supports this session's resources."); return;
     }
     if (s->error) doc_notice(doc, 0, w, s->error);
+    double until = resources_retry_until(s);
+    bool paused = until > (double)time(NULL);
+    if (paused) {
+        char *at = stats_time((StatNumber){until * 1000, true});
+        char *text = xstrfmt("Reads paused until %s", at);
+        doc_text(doc, 0, w, text, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(at); free(text);
+    }
     if (!s->loaded) {
-        if (!s->error) doc_loading(doc, 0, w, "Loading resources…");
+        if (!s->error && !paused) doc_loading(doc, 0, w, "Loading resources…");
         return;
     }
     char *read = stats_time((StatNumber){s->received_at * 1000, true});

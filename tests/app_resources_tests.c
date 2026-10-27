@@ -97,6 +97,12 @@ static void polling_recovery_and_empty(void) {
     screen_fixture_draw(s, &doc);
     // A not-open response keeps following: an idle/stopped session can later sample or reopen.
     s->vt->timer(s, RESOURCES_POLL); complete(&f, 5); CHECK(r->reading.open);
+    f.steps[6].status = 403;
+    s->vt->refresh(s); complete(&f, 6); CHECK(!r->loaded); CHECK(r->reading.history == NULL); CHECK(!r->reading.open); expire(r);
+    s->vt->refresh(s); complete(&f, 7); CHECK(r->loaded);
+    // Session visibility refusals use 404, including access revoked on the same token.
+    f.steps[8].status = 404;
+    s->vt->refresh(s); complete(&f, 8); CHECK(!r->loaded); CHECK(!r->reading.total.memory.present); CHECK(r->reading.history == NULL);
     s->vt->visible(s, false); CHECK(!r->poller.running); s->vt->refresh(s); CHECK(r->read == NULL);
     doc_free(&doc); s->vt->destroy(s); clear(&f);
 }

@@ -7,9 +7,9 @@ bool resources_current(ResourcesScreen *s) {
     bool same = json_equal(device, s->device); json_free(device);
     return same;
 }
-static double retry_until(ResourcesScreen *s) { return json_num_or(json_get(json_get(g_store.resources_retries, s->retry_key), "until"), 0); }
+double resources_retry_until(ResourcesScreen *s) { return json_num_or(json_get(json_get(g_store.resources_retries, s->retry_key), "until"), 0); }
 static void schedule(ResourcesScreen *s) {
-    double remaining = retry_until(s) - (double)time(NULL);
+    double remaining = resources_retry_until(s) - (double)time(NULL);
     // Keep Poller's backoff arithmetic away from a very large Retry-After value.
     int delay = remaining > 0 ? (int)fmin(2147483000.0, ceil(remaining * 1000)) : stats_poll_ms(s->loaded ? &s->reading.host : NULL);
     poller_set_base(&s->poller, delay);
@@ -28,7 +28,7 @@ static void read_done(void *owner, Request *req) {
     } else {
         s->fresh = false;
         // A project permission refusal must not keep private figures on screen.
-        if (req->error.status == 403) { session_stats_free(&s->reading); s->loaded = false; }
+        if (req->error.status == 403 || req->error.status == 404) { session_stats_free(&s->reading); s->loaded = false; }
         char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error);
         const Json *entry = json_get(g_store.resources_retries, s->retry_key);
         int failures = json_int_or(json_get(entry, "failures"), 0);
@@ -45,7 +45,7 @@ static void read_done(void *owner, Request *req) {
 }
 static void load(ResourcesScreen *s) {
     if (!s->shown || !g_store.active || !resources_current(s) || s->read) return;
-    if (retry_until(s) > (double)time(NULL)) { schedule(s); return; }
+    if (resources_retry_until(s) > (double)time(NULL)) { schedule(s); return; }
     Json *args = json_object(); json_set_str(args, "sessionId", session_id(&s->session));
     store_call("session_stats", args, 0, s, read_done, 0, &s->read);
 }

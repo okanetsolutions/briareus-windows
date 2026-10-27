@@ -18,7 +18,7 @@ Core derives the tiles, normalized shares, tones and two series. Last-hour histo
 
 ## Request ownership
 
-Each screen retains its originating client, device permission snapshot and session. One pending read coalesces refresh/poll requests. Navigation/hiding/destruction cancels that slot; completions for another connection or device scope cannot update the screen. In-memory readings stay with their screen, never in a shared response cache. Errors preserve last successful data with explicit stale state, except 403 clears private figures. A changed connection/token scope hides old data.
+Each screen retains its originating client, device permission snapshot and session. One pending read coalesces refresh/poll requests. Navigation/hiding/destruction cancels that slot; completions for another connection or device scope cannot update the screen. In-memory readings stay with their screen, never in a shared response cache. Errors preserve last successful data with explicit stale state, except 403/404 clears private figures (the server hides inaccessible sessions with 404). A changed connection/token scope hides old data.
 
 One existing Poller reads only while visible and active: initially every five seconds, then the host interval, at least two seconds. Failures back off; a 429 without Retry-After waits at least a minute. Session/device-scoped absolute deadlines live in Store for the connection lifetime, survive refresh/hide/recreation without relying on disk-cache writes, and are cleared when the client is dropped. Large deadlines are preserved while individual timer waits stay representable. There are no per-chart/process timers or additional requests.
 
