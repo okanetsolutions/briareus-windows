@@ -86,7 +86,7 @@ bool usage_range_last_week(const char *today, UsageRange *out) {
         if (--m == 0) { m = 12; y--; }
         d = month_days(y, m);
     }
-    char first[11];
+    char first[40];
     snprintf(first, sizeof first, "%04d-%02d-%02d", y, m, d);
     return usage_range_make(first, today, out);
 }
