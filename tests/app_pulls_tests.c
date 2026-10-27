@@ -8,7 +8,7 @@
 #include <string.h>
 #include <commctrl.h>
 
-static Pane *pane, *fold_pane;
+static Pane *pane;
 static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies;
 static int list_status;
 static const char *list_body, *retry_header;
@@ -252,7 +252,10 @@ static void click_issue_control(Screen *s, int action, int number) {
     CHECK(clicked); doc_free(&d);
 }
 static void test_issue_folding_controls_and_board_lifetime(void) {
-    Pane *original = pane; pane = fold_pane;
+    Pane *original = pane;
+    Project fixture = project();
+    pane = detached_open(pulls_screen_new(&fixture), NULL, false);
+    CHECK(pane != NULL);
     reset();
     list_body = "{\"pulls\":[],\"issues\":[{\"number\":1,\"title\":\"Epic root\",\"subIssues\":{\"total\":3}},"
         "{\"number\":2,\"title\":\"Nested epic\",\"parent\":{\"number\":1}},"
@@ -292,7 +295,7 @@ static void test_issue_folding_controls_and_board_lifetime(void) {
     CHECK(!layout_contains(s, "Epic root")); CHECK(layout_contains(s, "Grandchild"));
     board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "");
     CHECK(!layout_contains(s, "Nested epic"));
-    pane_set_root(pane, NULL); pane = original;
+    DestroyWindow(GetAncestor(pane_hwnd(pane), GA_ROOT)); pane = original;
 }
 static void test_cached_sync_and_error_recovery_transitions(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
@@ -635,8 +638,8 @@ void app_pulls_tests(void) {
     // The pane retains its screen-stack capacity between tests; allocate that fixture before leak checkpoints.
     board(); pane_set_root(pane, NULL);
     Project fold_project = project();
-    fold_pane = detached_open(pulls_screen_new(&fold_project), NULL, false);
-    CHECK(fold_pane != NULL); pane_set_root(fold_pane, NULL);
+    Pane *warm = detached_open(pulls_screen_new(&fold_project), NULL, false);
+    CHECK(warm != NULL); DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
     test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
     test_run("pulls failing checks filter persists per repository and clears", test_failing_checks_filter_persists_per_repo_and_combines_with_stacks);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);
@@ -656,7 +659,7 @@ void app_pulls_tests(void) {
     test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
     test_run("pulls saved cooldown survives cache invalidation", test_saved_deadline_survives_cache_invalidation);
     test_run("pull refresh invalidates in-flight rows", test_pull_refresh_invalidates_inflight_rows);
-    DestroyWindow(GetAncestor(pane_hwnd(fold_pane), GA_ROOT)); pane_destroy(pane); DestroyWindow(parent);
+    pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&e);
     memset(&g_store, 0, sizeof g_store);
