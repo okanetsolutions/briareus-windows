@@ -86,7 +86,7 @@ static void independent_drafts_and_cancel(void) {
     cleanup(s, &doc, &f);
 }
 static void uncertain_reopen_reconcile(void) {
-    const int statuses[] = {502, 0, 200};
+    const int statuses[] = {502, 408, 0, 200};
     for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
         ScreenFixture f; Doc doc; Inbox *s = setup(&f, &doc); MailReply *d = draft(s, "uncertain draft");
         f.write_status = statuses[i]; f.fail_write = statuses[i] == 0; f.write_response = "{\"status\":\"queued\"}";

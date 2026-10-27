@@ -102,7 +102,7 @@ void mail_reply_finish(MailReply *d, bool cancelled, bool ok, const Json *answer
     if (!cancelled && accepted) {
         free(d->text); d->text = xstrdup(""); d->sent = true; d->open = false; d->error = NULL; return;
     }
-    d->uncertain = cancelled || ok || !api_error_is_refusal(e);
+    d->uncertain = cancelled || ok || !api_error_is_refusal(e) || (e && e->status == 408);
     d->error = reply_error(d->uncertain ? 0 : e->status);
 }
 

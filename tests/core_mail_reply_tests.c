@@ -55,6 +55,8 @@ static void outcomes(void) {
     mail_reply_finish(d, true, true, accepted, &e, 90100); CHECK(d->uncertain); CHECK_STR(d->text, "answer");
     CHECK(mail_reply_reconcile(d)); CHECK(mail_reply_begin(d, 90100)); api_error_set(&e, API_NETWORK, 0, NULL, -1);
     mail_reply_finish(d, false, false, NULL, &e, 90100); CHECK(d->uncertain);
+    CHECK(mail_reply_reconcile(d)); CHECK(mail_reply_begin(d, 90100)); api_error_set(&e, API_HTTP, 408, NULL, -1);
+    mail_reply_finish(d, false, false, NULL, &e, 90100); CHECK(d->uncertain); CHECK_STR(d->text, "answer");
     CHECK(mail_reply_reconcile(d)); CHECK(mail_reply_begin(d, 90100));
     Json *wrong = json_parsez("{\"status\":\"accepted\",\"action\":\"send\"}");
     mail_reply_finish(d, false, true, wrong, &e, 90100); CHECK(d->uncertain); json_free(wrong);
