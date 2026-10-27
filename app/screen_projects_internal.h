@@ -41,7 +41,7 @@ enum { FOOT_BUTTON = 26 };
 
 // MARK: - Projects
 
-enum { ACT_OPEN_PROJECT = 1000 };
+enum { ACT_OPEN_PROJECT = 1000, ACT_ALL_SESSIONS };
 
 enum { TIMER_POLL = 1 };
 
@@ -52,6 +52,7 @@ enum { ACT_BACK = 1100, ACT_BOARD, ACT_OPEN_SESSION, ACT_PICK, ACT_SELECT_ALL, A
 typedef struct {
     Screen base;
     Project project;
+    bool all_projects;
     Session *sessions; size_t count;
     bool loaded;
     char *error;
@@ -75,7 +76,10 @@ void screen_projects_sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRect
 bool screen_projects_sidebar_common_action(Pane *pane, int action);
 void screen_projects_doc_project_row(Doc *doc, int w, const char *name, int count, bool busy, bool selected, bool chevron, int h, int action, intptr_t arg);
 void screen_projects_paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
-void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg);
+void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool show_repo, bool lit, bool select_mode, bool picked, int action, intptr_t arg);
+// Saves an aggregate list and the corresponding lists for cached projects.
+void screen_projects_cache_all_sessions(const Session *sessions, size_t count);
+void screen_projects_forget_cached_session(const char *repo, const char *id);
 void projects_recount_findings(void);
 Screen *projects_screen_new(void);
 const Project *projects_list(size_t *count);
@@ -89,6 +93,7 @@ bool screen_projects_sessions_footer_press(Screen *base, POINT pt);
 void screen_projects_sessions_footer_drag(Screen *base, POINT pt);
 bool screen_projects_sessions_footer_wheel(Screen *base, POINT pt, int delta);
 void screen_projects_sessions_footer_click(Screen *base, POINT pt);
+// NULL opens sessions across all projects; a supplied project is copied.
 Screen *sessions_screen_new(const Project *project);
 
 #endif

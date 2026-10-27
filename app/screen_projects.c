@@ -4,6 +4,7 @@ typedef struct {
     Screen base;
     Project *projects; size_t count;
     int *counts; bool *busy;   // per project: how many conversations, and whether one is working
+    int all_count; bool all_busy;
     bool loaded;
     char *error;
     Request *req, *req_sessions;
@@ -39,6 +40,15 @@ size_t screen_projects_g_waiting;
 static void projects_count(ProjectsScreen *s) {
     free(s->counts); free(s->busy);
     s->counts = xcalloc(s->count, sizeof *s->counts); s->busy = xcalloc(s->count, sizeof *s->busy);
+    s->all_count = 0; s->all_busy = false;
+    Json *all = cache_value(g_store.cache, "sessions");
+    Session *items; size_t count;
+    if (all && sessions_parse(all, &items, &count)) {
+        s->all_count = (int)count;
+        for (size_t i = 0; i < count; i++) if (session_is_active(&items[i])) s->all_busy = true;
+        sessions_free(items, count);
+    }
+    json_free(all);
     for (size_t i = 0; i < s->count; i++) {
         char *key = xstrfmt("sessions:%s", s->projects[i].repo);
         Json *list = cache_value(g_store.cache, key);
@@ -69,13 +79,7 @@ static void count_done(void *owner, Request *req) {
         // One list for every project the token can see; each project's own rows are saved under its key.
         Session *items; size_t n;
         if (sessions_parse(req->result, &items, &n)) {
-            for (size_t p = 0; p < s->count; p++) {
-                Json *list = json_array();
-                for (size_t k = 0; k < n; k++) if (str_eq(session_repo(&items[k]), s->projects[p].repo)) json_array_push(list, json_clone(items[k].raw));
-                char *key = xstrfmt("sessions:%s", s->projects[p].repo);
-                cache_store(g_store.cache, list, key);
-                json_free(list); free(key);
-            }
+            screen_projects_cache_all_sessions(items, n);
             sessions_free(items, n);
         }
     }
@@ -113,7 +117,9 @@ static void projects_load(ProjectsScreen *s) {
 }
 
 void projects_recount_findings(void) {
-    Screen *root = pane_root(app_sidebar_pane());
+    Pane *sidebar = app_sidebar_pane();
+    if (!sidebar) return;
+    Screen *root = pane_root(sidebar);
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
     projects_count(s);
@@ -135,6 +141,7 @@ static void projects_layout(Screen *base, Doc *doc) {
     screen_projects_sidebar_top(doc, w, pane_selected_id(base->pane));
     if (!store_can_manage()) { doc_text(doc, px(8), w - px(16), "\xF0\x9F\x94\x92 Read-only access", FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(8)); }
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
+    if (store_supports("sessions")) screen_projects_doc_project_row(doc, w, "All", s->all_count, s->all_busy, false, true, px(39), ACT_ALL_SESSIONS, 0);
     for (size_t i = 0; i < s->count; i++) {
         const Project *p = &s->projects[i];
         screen_projects_doc_project_row(doc, w, project_title(p), s->counts ? s->counts[i] : 0, s->busy ? s->busy[i] : false, false, true, px(39), ACT_OPEN_PROJECT, (intptr_t)i);
@@ -169,6 +176,7 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (screen_projects_sidebar_common_action(base->pane, action)) return;
     if (action == ACT_NEW) { app_show_detail(new_session_screen_new(NULL, s->projects, s->count)); return; }
+    if (action == ACT_ALL_SESSIONS && store_supports("sessions")) { pane_push(base->pane, sessions_screen_new(NULL)); return; }
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 
@@ -201,7 +209,8 @@ Screen *projects_screen_new(void) {
 }
 
 const Project *projects_list(size_t *count) {
-    Screen *root = pane_root(app_sidebar_pane());
+    Pane *sidebar = app_sidebar_pane();
+    Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) { *count = 0; return NULL; }
     ProjectsScreen *s = (ProjectsScreen *)root;
     *count = s->count;

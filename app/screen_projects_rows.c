@@ -6,7 +6,7 @@ typedef struct { char *name; int count; bool busy, selected, chevron; } ProjectR
 
 /// A conversation as the dashboard lists it: its mark, title, and a line of provider, branch, state and age.
 typedef struct {
-    char *title, *provider, *branch, *state, *ago, *pr_state;
+    char *title, *repo, *provider, *branch, *state, *ago, *pr_state;
     bool lit, select_mode, picked, orchestrator, zeus;
     int meta_h;
 } SessionRowData;
@@ -54,7 +54,7 @@ void screen_projects_paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *
     draw_text(cv, "All projects", &t, FONT_CAPTION, c, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
-static void session_row_free(void *p) { SessionRowData *d = p; free(d->title); free(d->provider); free(d->branch); free(d->state); free(d->ago); free(d->pr_state); free(d); }
+static void session_row_free(void *p) { SessionRowData *d = p; free(d->title); free(d->repo); free(d->provider); free(d->branch); free(d->state); free(d->ago); free(d->pr_state); free(d); }
 
 static int chip_w(Canvas *cv, const char *text) { return px(5) * 2 + text_width(cv, text, FONT_CAPTION2) + 2; }
 
@@ -116,6 +116,11 @@ static void paint_session_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT rects[4];
     meta_layout(cv, d, right - x, rects);
     int my = top + line_h + px(2);
+    if (d->repo) {
+        RECT r = { x, my, right, my + px(18) };
+        draw_text(cv, d->repo, &r, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        my += px(18);
+    }
     const char *branch = d->orchestrator ? (d->zeus ? "\xE2\x9A\xA1 zeus" : "\xF0\x9F\xA7\xAD orchestrator") : d->branch;
     const char *texts[4] = { d->provider, branch, d->state, d->ago };
     for (int i = 0; i < 4; i++) {
@@ -142,9 +147,10 @@ static char *session_age(const Session *s) {
     return format_relative(when);
 }
 
-void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg) {
+void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool show_repo, bool lit, bool select_mode, bool picked, int action, intptr_t arg) {
     SessionRowData *d = xcalloc(1, sizeof *d);
     d->title = xstrdup(session_display_title(s));
+    if (show_repo) d->repo = xstrdup(session_repo(s));
     d->provider = xstrdup(session_provider(s) ? session_provider(s) : "");
     d->branch = xstrdup(json_str_nonempty(json_get(s->raw, "branch")) ? json_str(json_get(s->raw, "branch")) : "");
     d->state = xstrdup(session_state(s)); d->ago = session_age(s);
@@ -157,6 +163,6 @@ void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s
     int x = px(8) + (select_mode ? px(13) + px(8) : 0) + px(16);
     RECT rects[4];
     d->meta_h = meta_layout(doc->cv, d, w - x - px(8), rects);
-    int h = px(7) + px(23) + px(2) + d->meta_h + px(7);
+    int h = px(7) + px(23) + px(2) + (d->repo ? px(18) : 0) + d->meta_h + px(7);
     doc_custom(doc, 0, w, h, paint_session_row, d, session_row_free, action, arg);
 }
