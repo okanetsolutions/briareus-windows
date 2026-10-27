@@ -15,6 +15,29 @@ static void schedule(ResourcesScreen *s) {
     poller_set_base(&s->poller, delay);
     poller_finished(&s->poller, false, -1);
 }
+static void record_failure(const char *key, Request *req) {
+    const Json *entry = json_get(g_store.resources_retries, key);
+    int failures = json_int_or(json_get(entry, "failures"), 0);
+    if (failures < 6) failures++;
+    double previous = json_num_or(json_get(entry, "until"), 0);
+    double retry = req->error.retry_after;
+    if (req->error.status == 429 && retry < 0) retry = 60;
+    double until = stats_retry_deadline((double)time(NULL), previous, failures, retry);
+    Json *cooldown = json_object(); json_set_num(cooldown, "until", until); json_set_num(cooldown, "failures", failures);
+    if (!g_store.resources_retries) g_store.resources_retries = json_object();
+    json_object_set(g_store.resources_retries, key, cooldown);
+}
+typedef struct { Json *device; char *key; } ReadCompletion;
+static void read_completed(void *ctx, Request *req) {
+    ReadCompletion *completion = ctx;
+    // Navigation may free the screen while HTTP is still running. Only retain scoped metadata.
+    if (req->cancelled && !req->ok && req->client == g_store.client && store_supports("session_stats")) {
+        Json *device = device_json(&g_store.device);
+        if (json_equal(device, completion->device)) record_failure(completion->key, req);
+        json_free(device);
+    }
+    json_free(completion->device); free(completion->key); free(completion);
+}
 static void read_done(void *owner, Request *req) {
     ResourcesScreen *s = owner;
     if (!s->shown || !resources_current(s)) return;
@@ -33,16 +56,7 @@ static void read_done(void *owner, Request *req) {
         // A project permission refusal must not keep private figures on screen.
         if (req->error.status == 403 || req->error.status == 404) { session_stats_free(&s->reading); s->loaded = false; }
         char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error);
-        const Json *entry = json_get(g_store.resources_retries, s->retry_key);
-        int failures = json_int_or(json_get(entry, "failures"), 0);
-        if (failures < 6) failures++;
-        double previous = json_num_or(json_get(entry, "until"), 0);
-        double retry = req->error.retry_after;
-        if (req->error.status == 429 && retry < 0) retry = 60;
-        double until = stats_retry_deadline((double)time(NULL), previous, failures, retry);
-        Json *cooldown = json_object(); json_set_num(cooldown, "until", until); json_set_num(cooldown, "failures", failures);
-        if (!g_store.resources_retries) g_store.resources_retries = json_object();
-        json_object_set(g_store.resources_retries, s->retry_key, cooldown);
+        record_failure(s->retry_key, req);
     }
     schedule(s); pane_relayout(s->base.pane);
 }
@@ -50,7 +64,10 @@ static void load(ResourcesScreen *s) {
     if (!s->shown || !g_store.active || !resources_current(s) || s->read) return;
     if (resources_retry_until(s) > (double)time(NULL)) { schedule(s); return; }
     Json *args = json_object(); json_set_str(args, "sessionId", session_id(&s->session));
-    store_call("session_stats", args, 0, s, read_done, 0, &s->read);
+    Request *req = store_call("session_stats", args, 0, s, read_done, 0, &s->read);
+    ReadCompletion *completion = xcalloc(1, sizeof *completion);
+    completion->device = json_clone(s->device); completion->key = xstrdup(s->retry_key);
+    req->completion_ctx = completion; req->completed = read_completed;
 }
 static void visible(Screen *base, bool shown) {
     ResourcesScreen *s = (ResourcesScreen *)base; s->shown = shown;

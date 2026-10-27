@@ -78,6 +78,8 @@ void pane_destroy(Pane *pane);
 HWND pane_hwnd(Pane *pane);
 void pane_set_bounds(Pane *pane, const RECT *rc);
 void pane_show(Pane *pane, bool shown);
+// Forward top-level show/hide and minimize/restore transitions to the visible screen.
+void pane_window_visibility(HWND window, bool shown);
 bool pane_is_sidebar(Pane *pane);
 
 void pane_push(Pane *pane, Screen *screen);

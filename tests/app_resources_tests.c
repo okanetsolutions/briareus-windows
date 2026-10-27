@@ -122,6 +122,53 @@ static void retry_across_reopen(void) {
     CHECK(r->poller.base_ms > 2000000000); s->vt->refresh(s); CHECK(r->read == NULL);
     s->vt->destroy(s); clear(&f);
 }
+static void cancelled_retry_after_navigation(void) {
+    Fixture f; init(&f);
+    f.steps[0].status = 429; f.steps[0].retry = "3600";
+    Screen *s = create(&f, "s1"); s->vt->visible(s, true); entered(&f, 0);
+    s->vt->destroy(s); // HTTP finishes after navigation has freed the UI owner.
+    complete(&f, 0);
+    s = create(&f, "s1"); ResourcesScreen *r = (ResourcesScreen *)s;
+    s->vt->visible(s, true); s->vt->refresh(s); s->vt->timer(s, RESOURCES_POLL);
+    CHECK(resources_retry_until(r) >= (double)time(NULL) + 3598);
+    CHECK(r->read == NULL); CHECK(!r->loaded); CHECK_INT(f.calls, 1);
+    expire(r); s->vt->refresh(s); entered(&f, 1);
+    f.steps[1].status = 429; f.steps[1].retry = "3600";
+    s->vt->destroy(s); g_store.device.permission = "manage"; complete(&f, 1);
+    g_store.device.permission = "read";
+    s = create(&f, "s1"); r = (ResourcesScreen *)s;
+    CHECK(resources_retry_until(r) < (double)time(NULL));
+    s->vt->visible(s, true); entered(&f, 2);
+    f.steps[2].status = 429; f.steps[2].retry = "3600";
+    s->vt->destroy(s);
+    ApiClient *original = g_store.client; g_store.client = NULL;
+    complete(&f, 2); g_store.client = original;
+    s = create(&f, "s1"); r = (ResourcesScreen *)s;
+    CHECK(resources_retry_until(r) < (double)time(NULL));
+    s->vt->visible(s, true); complete(&f, 3); CHECK(r->fresh);
+    s->vt->destroy(s); clear(&f);
+}
+static void pane_and_window_visibility(void) {
+    Fixture f; init(&f); Screen *s = create(&f, "s1"); ResourcesScreen *r = (ResourcesScreen *)s;
+    pane_show(f.screen.pane, false); pane_set_root(f.screen.pane, s);
+    CHECK(!r->shown); CHECK(!r->poller.running); CHECK(r->read == NULL);
+    pane_show(f.screen.pane, true); entered(&f, 0);
+    pane_show(f.screen.pane, false); CHECK(!r->shown); CHECK(!r->poller.running); CHECK(r->read == NULL);
+    complete(&f, 0); CHECK(!r->loaded);
+    s->vt->refresh(s); s->vt->timer(s, RESOURCES_POLL); CHECK_INT(f.calls, 1);
+    pane_show(f.screen.pane, true); complete(&f, 1); CHECK(r->fresh);
+    Pane *window = detached_open(pane_take_root(f.screen.pane), NULL, false);
+    CHECK(window != NULL); complete(&f, 2);
+    HWND hwnd = GetAncestor(pane_hwnd(window), GA_ROOT);
+    ShowWindow(hwnd, SW_MINIMIZE);
+    CHECK(!r->shown); CHECK(!r->poller.running); CHECK(!r->fresh);
+    s->vt->refresh(s); s->vt->timer(s, RESOURCES_POLL); CHECK(r->read == NULL); CHECK_INT(f.calls, 3);
+    ShowWindow(hwnd, SW_RESTORE); complete(&f, 3); CHECK(r->fresh); CHECK(r->poller.running);
+    ShowWindow(hwnd, SW_HIDE); CHECK(!r->shown); CHECK(!r->poller.running);
+    s->vt->refresh(s); CHECK(r->read == NULL); CHECK_INT(f.calls, 4);
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE); complete(&f, 4); CHECK(r->fresh);
+    DestroyWindow(hwnd); clear(&f);
+}
 static void concurrent_success_preserves_cooldown(void) {
     Fixture f; init(&f);
     Screen *a = create(&f, "s1"), *b = create(&f, "s1");
@@ -178,6 +225,8 @@ void app_resources_tests(void) {
     test_run("Resources header action honors capability and read-token navigation", gating_and_navigation);
     test_run("Resources polling coalesces reads, retains stale data and recovers partial/closed sessions", polling_recovery_and_empty);
     test_run("Resources Retry-After survives refresh hide and recreation", retry_across_reopen);
+    test_run("Resources cancelled 429 survives navigation with client and permission isolation", cancelled_retry_after_navigation);
+    test_run("Resources pane hide and detached minimize stop polling and resume on reveal", pane_and_window_visibility);
     test_run("Resources preexisting success preserves a concurrent Retry-After", concurrent_success_preserves_cooldown);
     test_run("Resources cancel stale owners and isolate server permission and session snapshots", cancellation_and_isolation);
 }

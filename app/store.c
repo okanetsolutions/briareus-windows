@@ -373,6 +373,7 @@ void store_handle_message(UINT msg, WPARAM wp, LPARAM lp) {
     (void)wp;
     if (msg == WM_APP_REQUEST_DONE) {
         Request *r = (Request *)lp;
+        if (r->completed) r->completed(r->completion_ctx, r);
         if (r->cancelled) { request_free(r); return; }
         if (r->slot) *r->slot = NULL;
         if (!r->ok && api_error_unauthorized(&r->error) && r->client == g_store.client) store_invalidate_credentials(&r->error);

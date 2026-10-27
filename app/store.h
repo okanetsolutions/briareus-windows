@@ -69,6 +69,8 @@ struct Request {
     void *owner; RequestDone done; int tag; intptr_t arg;
     Request **slot;                                    // cleared when the request finishes or is cancelled
     bool cancelled;
+    // UI-thread finalizer runs even after cancellation; context must outlive the screen and be freed here.
+    void *completion_ctx; RequestDone completed;
     ApiClient *client;
 };
 
@@ -87,7 +89,7 @@ bool store_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiError *e
 void store_stream_cancel(StoreStream *stream);
 void store_stream_free(StoreStream *stream);
 
-/// Drops the request in the slot: its answer is discarded, and the slot is cleared.
+/// Clears the slot and skips the owner callback; an independent completion finalizer still runs.
 void request_cancel(Request **slot);
 /// The user-facing text of a failed request.
 char *request_error_text(const Request *req);
