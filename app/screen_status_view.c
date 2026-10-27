@@ -65,9 +65,35 @@ void status_layout(Screen *base, Doc *doc) {
     if (s->loaded && !s->error && !s->missing && !s->overview.waiting_count && !s->overview.working_count) doc_text(doc, 0, w, "All quiet. Nothing is running and nothing waits for you.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
 }
 void status_controls_hide(StatusScreen *s) { for (size_t i = 0; i < s->card_count; i++) if (s->cards[i]->edit) ShowWindow(s->cards[i]->edit, SW_HIDE); }
+static LRESULT CALLBACK reply_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
+    StatusScreen *s = (StatusScreen *)ref;
+    if (msg == WM_KEYDOWN && wp == VK_RETURN) {
+        for (size_t i = 0; i < s->card_count; i++) if (s->cards[i]->edit == hwnd) {
+            status_send(s, i, s->cards[i]->draft); break;
+        }
+        return 0;
+    }
+    if (msg == WM_KEYDOWN && wp == VK_TAB) {
+        int step = (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1;
+        size_t current = 0;
+        while (current < s->card_count && s->cards[current]->edit != hwnd) current++;
+        for (size_t n = 1; n < s->card_count; n++) {
+            size_t i = step > 0 ? (current + n) % s->card_count : (current + s->card_count - n) % s->card_count;
+            HWND next = s->cards[i]->edit;
+            if (next && IsWindowVisible(next) && IsWindowEnabled(next)) { SetFocus(next); return 0; }
+        }
+        SetFocus(GetParent(hwnd)); return 0;
+    }
+    if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+    if (msg == WM_KEYDOWN && wp == VK_F5) { s->base.vt->refresh(&s->base); return 0; }
+    if (msg == WM_CHAR && (wp == VK_RETURN || wp == VK_TAB || wp == VK_ESCAPE)) return 0;
+    if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, reply_proc, id);
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
 static void ensure_edit(StatusScreen *s, StatusCard *c) {
     if (c->edit) return;
     c->edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
+    SetWindowSubclass(c->edit, reply_proc, 0, (DWORD_PTR)s);
     theme_apply_control(c->edit);
     SendMessageW(c->edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply");
     SendMessageW(c->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE); SendMessageW(c->edit, EM_SETLIMITTEXT, 100000, 0);

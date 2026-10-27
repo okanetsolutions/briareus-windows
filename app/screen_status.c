@@ -123,6 +123,7 @@ static void timer(Screen *base, UINT id) {
     StatusScreen *s = (StatusScreen *)base;
     if (!status_current(s)) { status_controls_hide(s); return; }
     if (!poller_fired(&s->poller, id)) return;
+    status_questions_next(s);
     if (s->projects_read || s->sessions_read) poller_finished(&s->poller, false, -1);
     else status_load(s);
 }

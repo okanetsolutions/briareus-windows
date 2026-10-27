@@ -78,6 +78,7 @@ void screen_projects_doc_project_row(Doc *doc, int w, const char *name, int coun
 void screen_projects_paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg);
 void projects_recount_findings(void);
+void screen_projects_recount(Pane *sidebar);
 Screen *projects_screen_new(void);
 const Project *projects_list(size_t *count);
 void sessions_forget(const char *repo, const char *id);

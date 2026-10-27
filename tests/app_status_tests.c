@@ -17,6 +17,7 @@ static const char *question = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo
 typedef struct {
     const char *sessions, *answer, *projects;
     int read_status, write_status;
+    const char *retry_after;
     volatile LONG reads, writes;
     char *body, *url, *method, *read_url;
     HANDLE entered, resume;
@@ -38,6 +39,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     else if (strstr(url, "/sessions/")) {
         detail = true; InterlockedIncrement(&stub->reads); set_string(&stub->read_url, url);
         answer = stub->answer ? stub->answer : question; if (stub->read_status) *status = stub->read_status;
+        if (stub->retry_after) *retry = xstrdup(stub->retry_after);
     } else answer = stub->sessions ? stub->sessions : lists;
     *response = xstrdup(answer); *len = strlen(answer);
     LeaveCriticalSection(&stub->lock);
@@ -265,6 +267,56 @@ static void test_findings_replace_question_preview(void) {
     }
     CHECK(current); CHECK(!obsolete); doc_free(&doc); cleanup(&stub);
 }
+static void test_detail_retry_after(void) {
+    Stub stub = {0}; stub.read_status = 429; stub.retry_after = "120";
+    stub.sessions = "[{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
+        "{\"id\":\"later\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true}]";
+    StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    CHECK(s->detail_retry_until > (double)GetTickCount64() + 119000); CHECK(s->question_read == NULL);
+    double deadline = s->detail_retry_until;
+    status_load(s); pump(2); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 1);
+    CHECK(s->detail_retry_until == deadline);
+    s->base.vt->refresh(&s->base); pump(2); CHECK_INT(stub.reads, 1);
+    stub.read_status = 0; stub.retry_after = NULL; s->detail_retry_until = (double)GetTickCount64();
+    status_questions_next(s); pump(2); CHECK_INT(stub.reads, 3);
+    // A throttled send preflight also holds both manual sends and the background scan.
+    stub.read_status = 429; stub.retry_after = "120";
+    status_send(s, card(s, "wait"), "retain"); pump(1);
+    CHECK_INT(stub.writes, 0); CHECK(s->detail_retry_until > (double)GetTickCount64() + 119000);
+    status_send(s, card(s, "wait"), "retain"); CHECK(s->check_read == NULL);
+    status_load(s); pump(2); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 4);
+    cleanup(&stub);
+}
+static void test_delayed_detail_preserves_shared_events(void) {
+    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    block(&stub, false); s->next_question = 0; status_questions_next(s);
+    CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
+    Json *newer = json_parsez("[{\"seq\":2,\"kind\":\"user\",\"text\":\"Concurrent answer\"}]");
+    CHECK(cache_append(g_store.cache, newer, "transcript:wait")); json_free(newer);
+    SetEvent(stub.resume); pump(1);
+    Json *saved = cache_lines(g_store.cache, "transcript:wait");
+    Transcript reopened = {0}; transcript_append(&reopened, saved); json_free(saved);
+    CHECK_INT(reopened.count, 2); CHECK_INT(reopened.cursor, 2);
+    CHECK_STR(reopened.events[1].text, "Concurrent answer");
+    CHECK(transcript_pending_question(&reopened) == NULL);
+    transcript_free(&reopened); cleanup(&stub);
+}
+static void test_reply_keyboard(void) {
+    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    ShowWindow(dispatcher, SW_SHOWNA);
+    RECT bounds = {0, 0, 700, 1200}; pane_set_bounds(pane, &bounds);
+    Doc doc; doc_init(&doc); draw(s, &doc);
+    RECT content = pane_content_rect(pane); status_place(&s->base, &content, 0);
+    StatusCard *c = s->cards[card(s, "wait")]; CHECK(c->edit != NULL);
+    SetWindowTextW(c->edit, L"Keyboard fixture");
+    SendMessageW(c->edit, WM_KEYDOWN, VK_TAB, 0); CHECK(GetFocus() == pane_hwnd(pane));
+    SetFocus(c->edit); SendMessageW(c->edit, WM_KEYDOWN, VK_ESCAPE, 0); CHECK(GetFocus() == pane_hwnd(pane));
+    SendMessageW(c->edit, WM_KEYDOWN, VK_RETURN, 0);
+    SendMessageW(c->edit, WM_CHAR, VK_RETURN, 0); pump(5); CHECK_INT(stub.writes, 1);
+    Json *body = json_parsez(stub.body); CHECK_STR(json_str(json_get(body, "text")), "Keyboard fixture"); json_free(body);
+    SendMessageW(c->edit, WM_KEYDOWN, VK_F5, 0); CHECK(s->projects_read != NULL); pump(3);
+    doc_free(&doc); cleanup(&stub); ShowWindow(dispatcher, SW_HIDE);
+}
 static void test_held_navigation_and_teardown(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     Screen *moved = pane_take_root(pane);
@@ -298,6 +350,9 @@ void app_status_tests(void) {
     test_run("Status polling cancels reads for changed identities", test_poll_invalidates_changed_reads);
     test_run("Status live snapshots survive failed cache writes and remain scoped", test_live_snapshot_without_cache_write);
     test_run("Status findings replace an answered question preview", test_findings_replace_question_preview);
+    test_run("Status detail Retry-After pauses scans and send preflights across polls", test_detail_retry_after);
+    test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
+    test_run("Status reply edit handles submit, focus escape, tab and refresh", test_reply_keyboard);
     test_run("Status held findings open their conversation and teardown cancels reads", test_held_navigation_and_teardown);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }

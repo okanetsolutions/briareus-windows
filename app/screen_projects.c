@@ -109,19 +109,18 @@ static void projects_load(ProjectsScreen *s) {
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->req);
 }
 
-void projects_recount_findings(void) {
-    Pane *sidebar = app_sidebar_pane();
+void screen_projects_recount(Pane *sidebar) {
     Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
-    // A global screen may have refreshed the accessible project list as well as its sessions.
-    Json *saved = cache_value(g_store.cache, "projects");
-    if (saved) projects_show(s, saved); else projects_count(s);
-    json_free(saved);
+    // Recount sessions against the current project list; disk may still contain an older snapshot.
+    projects_count(s);
     pane_relayout(root->pane);
     Screen *top = pane_top(root->pane);
     if (top != root) pane_relayout(top->pane);
 }
+
+void projects_recount_findings(void) { screen_projects_recount(app_sidebar_pane()); }
 
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;

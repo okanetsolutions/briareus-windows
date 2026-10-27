@@ -3,6 +3,7 @@
 bool status_can_answer(StatusScreen *s, StatusCard *c) {
     if (!status_current(s) || !s->shown || !c->present || !c->confirmed) return false;
     if (s->write || s->check_read || c->uncertain || c->answered) return false;
+    if ((double)GetTickCount64() < s->detail_retry_until) return false;
     return session_state(&c->session) == SESSION_WAITING && transcript_pending_question(&c->transcript) && store_supports("message");
 }
 void status_cancel_questions(StatusScreen *s) {
@@ -10,6 +11,10 @@ void status_cancel_questions(StatusScreen *s) {
     for (size_t i = 0; i < s->card_count; i++) s->cards[i]->confirmed = false;
 }
 static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
+    if (!req->ok && req->error.retry_after > 0) {
+        double until = (double)GetTickCount64() + req->error.retry_after * 1000;
+        if (until > s->detail_retry_until) s->detail_retry_until = until;
+    }
     c->confirmed = false;
     // A read can change what a still-rendered button means before the deferred repaint.
     s->action_first = s->action_next; s->action_count = 0;
@@ -26,7 +31,7 @@ static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
     const Event *pending = transcript_pending_question(&c->transcript);
     if (pending && !json_equal(pending->raw, c->answered_question)) c->answered = false;
     char *key = xstrfmt("transcript:%s", session_id(&c->session));
-    Json *all = transcript_json(&c->transcript); cache_replace(g_store.cache, all, key); json_free(all); free(key);
+    cache_append(g_store.cache, events, key); free(key);
     c->confirmed = true;
     set_string(&c->read_error, NULL);
     return true;
@@ -34,10 +39,12 @@ static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
 static void question_done(void *owner, Request *req) {
     StatusScreen *s = owner; StatusCard *c = s->cards[s->reading_card];
     if (!adopt(s, c, req) && !req->ok) request_error_into(&c->read_error, req);
+    if (!req->ok && req->error.retry_after > 0) s->next_question = s->reading_card;
     pane_relayout(s->base.pane); status_questions_next(s);
 }
 void status_questions_next(StatusScreen *s) {
     if (!s->shown || !status_current(s) || s->question_read || !store_supports("session")) return;
+    if ((double)GetTickCount64() < s->detail_retry_until) return;
     while (s->next_question < s->card_count) {
         size_t index = s->next_question++; StatusCard *c = s->cards[index];
         if (!c->present || session_state(&c->session) != SESSION_WAITING) continue;
