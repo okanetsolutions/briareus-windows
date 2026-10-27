@@ -26,7 +26,7 @@ void doc_free(Doc *doc) { clear_items(doc); free(doc->items); free(doc->regions)
 void doc_begin(Doc *doc, Canvas *cv, int width) {
     clear_items(doc);
     doc->cv = cv; doc->width = width; doc->y = 0; doc->content_width = width; doc->hover = -1; doc->pressed = -1;
-    doc->scroll_width = width;
+    doc->scroll_width = doc->full_width = width;
     doc->sticky_first = doc->sticky_last = 0; doc->sticky_limit = 0; doc->sticky_shift = 0;
     doc->pin_last = doc->pin_bottom = doc->pin_shift = 0;
     doc->regions_kept = doc->region_count; doc->region_count = 0;

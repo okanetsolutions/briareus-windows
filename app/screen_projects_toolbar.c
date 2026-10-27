@@ -72,6 +72,7 @@ static StripData *strip_button(Doc *doc, const RECT *rc, const char *text, bool 
 
 /// The strip; `selected` is the detail pane's root id, for the WhatsApp, Mail, 📊 and ⚑ switches' accent.
 void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
+    w = doc->full_width;
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
     bool mail = mail_inbox_offered() || mail_settings_offered();
@@ -94,6 +95,7 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
     doc_space(doc, px(14));
+    doc_pin(doc, (int)doc->count, doc->y);
 }
 
 static int player_height(void) {
