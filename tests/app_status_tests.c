@@ -17,7 +17,7 @@ static const char *question = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo
 typedef struct {
     const char *sessions, *answer, *projects;
     int read_status, write_status, blocked_read;
-    const char *retry_after;
+    const char *retry_after, *write_retry_after;
     volatile LONG reads, writes;
     char *body, *url, *method, *read_url;
     HANDLE entered, resume;
@@ -35,6 +35,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     if (write) {
         InterlockedIncrement(&stub->writes); free(stub->body); stub->body = xstrndup(body, bytes);
         set_string(&stub->url, url); set_string(&stub->method, method); if (stub->write_status) *status = stub->write_status;
+        if (stub->write_retry_after) *retry = xstrdup(stub->write_retry_after);
     } else if (strstr(url, "/projects")) answer = stub->projects ? stub->projects : "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
     else if (strstr(url, "/sessions/")) {
         detail = true; InterlockedIncrement(&stub->reads); set_string(&stub->read_url, url);
@@ -290,6 +291,32 @@ static void test_detail_retry_after(void) {
     status_load(s); pump(2); CHECK(s->question_read == NULL); CHECK_INT(stub.reads, 4);
     cleanup(&stub);
 }
+static void test_message_retry_after(void) {
+    Stub stub = {0}; stub.write_status = 429; stub.write_retry_after = "120";
+    StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    size_t index = card(s, "wait"); StatusCard *c = s->cards[index];
+    set_string(&c->draft, "retain reply");
+    status_send(s, index, c->draft); pump(5);
+    CHECK_INT(stub.writes, 1); CHECK(!c->uncertain); CHECK(c->error != NULL);
+    CHECK_STR(c->draft, "retain reply"); CHECK(c->confirmed);
+    CHECK(s->message_retry_until > (double)GetTickCount64() + 119000);
+    double deadline = s->message_retry_until;
+    CHECK(!status_can_answer(s, c));
+    status_send(s, index, c->draft); CHECK(s->check_read == NULL);
+    status_load(s); pump(3);
+    s->base.vt->refresh(&s->base); pump(3);
+    s->base.vt->visible(&s->base, false); s->base.vt->visible(&s->base, true); pump(3);
+    CHECK(s->message_retry_until == deadline); CHECK(c->confirmed);
+    CHECK(!status_can_answer(s, c)); CHECK_STR(c->draft, "retain reply");
+    status_send(s, index, c->draft); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 1);
+    // Expiring the deadline permits an explicit retry, without automatically resending.
+    stub.write_status = 0; stub.write_retry_after = NULL;
+    s->message_retry_until = (double)GetTickCount64();
+    CHECK(status_can_answer(s, c)); CHECK_INT(stub.writes, 1);
+    status_send(s, index, c->draft); pump(5);
+    CHECK_INT(stub.writes, 2); CHECK(c->answered); CHECK_STR(c->draft, "");
+    cleanup(&stub);
+}
 static void test_delayed_detail_preserves_shared_events(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     block(&stub, false); s->next_question = 0; status_questions_next(s);
@@ -394,6 +421,7 @@ void app_status_tests(void) {
     test_run("Status live snapshots survive failed cache writes and remain scoped", test_live_snapshot_without_cache_write);
     test_run("Status findings replace an answered question preview", test_findings_replace_question_preview);
     test_run("Status detail Retry-After pauses scans and send preflights across polls", test_detail_retry_after);
+    test_run("Status message Retry-After blocks replies across polls and refresh until expiry", test_message_retry_after);
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
     test_run("Status retries failed transcript batches with later or empty reads", test_transcript_persistence_retry);
     test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);

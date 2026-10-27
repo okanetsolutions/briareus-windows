@@ -4,6 +4,7 @@ bool status_can_answer(StatusScreen *s, StatusCard *c) {
     if (!status_current(s) || !s->shown || !c->present || !c->confirmed) return false;
     if (s->write || s->check_read || c->uncertain || c->answered) return false;
     if ((double)GetTickCount64() < s->detail_retry_until) return false;
+    if ((double)GetTickCount64() < s->message_retry_until) return false;
     return session_state(&c->session) == SESSION_WAITING && transcript_pending_question(&c->transcript) && store_supports("message");
 }
 void status_cancel_questions(StatusScreen *s) {
@@ -71,6 +72,10 @@ static void write_done(void *owner, Request *req) {
         free(trim); set_string(&c->error, NULL);
     } else {
         request_error_into(&c->error, req); c->uncertain = request_outcome_unknown(req);
+        if (req->error.retry_after > 0) {
+            double until = (double)GetTickCount64() + req->error.retry_after * 1000;
+            if (until > s->message_retry_until) s->message_retry_until = until;
+        }
     }
     status_load(s); pane_relayout(s->base.pane);
 }
