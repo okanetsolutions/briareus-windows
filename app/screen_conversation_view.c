@@ -112,7 +112,7 @@ void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     char *working = session_working_text(screen_conversation_session(s), &s->transcript, working_verb(s->tick));
     if (working) {
         doc_space(doc, px(12));
-        int wi = doc_custom(doc, x, w, px(24), screen_conversation_paint_working, s, NULL, 0, 0);
+        int wi = doc_custom(doc, x, w, px(24), screen_conversation_paint_working, s, NULL, ACTION_TIP, 0);
         doc_item(doc, wi)->id = 2;
         doc_item(doc, wi)->tip = working;
     }
