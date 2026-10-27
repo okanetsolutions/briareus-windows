@@ -64,7 +64,7 @@ static void busiest_and_known_records(void) {
     CHECK_INT(s.count, 3); CHECK_STR(s.items[0].id, "c"); CHECK_STR(s.items[1].id, "a"); CHECK_STR(s.items[2].id, "b");
     CHECK_STR(session_display_title(&s.items[0].record), "Fix build"); CHECK_STR(session_repo(&s.items[0].record), "one/repo");
     CHECK_STR(session_id(&s.items[1].record), "a"); CHECK_STR(session_display_title(&s.items[1].record), "a");
-    CHECK(json_get(s.items[1].record.raw, "repo") == NULL); CHECK(!s.items[2].figures.cpu.present);
+    CHECK(json_is_null(json_get(s.items[1].record.raw, "repo"))); CHECK(!s.items[2].figures.cpu.present);
     CHECK_INT(s.at_ms.value, 2000); open_stats_free(&s); session_free(&known[0]); session_free(&known[1]);
     j = json_parsez("{\"host\":{},\"sessions\":[{\"sessionId\":\"z\",\"cpuPercent\":0},{\"sessionId\":\"d\",\"cpuPercent\":0},{\"sessionId\":\"z\",\"cpuPercent\":9},{\"sessionId\":\"n\",\"cpuPercent\":-1}]}");
     CHECK(open_stats_parse(j, NULL, 0, &s)); CHECK_INT(s.count, 3); CHECK_STR(s.items[0].id, "d"); CHECK_STR(s.items[1].id, "z");

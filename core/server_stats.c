@@ -74,7 +74,9 @@ bool server_stats_parse(const Json *j, ServerStats *s) {
         StatsDisk *disk = &s->disks[s->disk_count++];
         *disk = (StatsDisk){xstrdup(label), metric(d, "totalBytes"), metric(d, "freeBytes"), metric(d, "usedBytes")};
         // Explicit invalid usedBytes is unavailable, never replaced with a plausible number.
-        if (!json_get(d, "usedBytes")) disk->used = stats_used(disk->total, disk->free_bytes);
+        bool has_used = false;
+        for (size_t k = 0; k < json_count(d); k++) if (str_eq(json_key(d, k), "usedBytes")) has_used = true;
+        if (!has_used) disk->used = stats_used(disk->total, disk->free_bytes);
     }
     history(s, json_get(j, "history")); return true;
 }

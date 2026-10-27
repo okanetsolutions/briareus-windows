@@ -128,6 +128,7 @@ static void timer(Screen *base, UINT id) {
 }
 static void refresh(Screen *base) {
     ResourcesScreen *s = (ResourcesScreen *)base;
+    if (!s->shown) return;
     // A refresh coalesces with an outstanding read, and cannot bypass the shared deadline.
     if (!resources_current(s)) { visible(base, false); return; }
     if (s->list) refresh(&s->list->base);

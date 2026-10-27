@@ -29,6 +29,8 @@ static void init(Fixture *f) {
     memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, ROUTES, 3); g_store.device.permission = "read";
     for (int r = 0; r < 2; r++) for (int i = 0; i < STEPS; i++)
         f->steps[r][i] = (Step){CreateEventW(NULL, TRUE, FALSE, NULL), CreateEventW(NULL, TRUE, FALSE, NULL), r ? OPEN_STATS_FIXTURE : SERVER_STATS_FIXTURE, NULL, 200};
+    wchar_t temp[MAX_PATH], directory[MAX_PATH]; CHECK(GetTempPathW(MAX_PATH, temp) != 0); CHECK(GetTempFileNameW(temp, L"srv", 0, directory) != 0);
+    DeleteFileW(directory); CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
     api_client_set_transport(f->screen.client, transport, f);
 }
 static void entered(Fixture *f, int r, int i) { CHECK_INT(WaitForSingleObject(f->steps[r][i].entered, 10000), WAIT_OBJECT_0); }
@@ -43,12 +45,14 @@ static Screen *create(Fixture *f) {
 static void clear(Fixture *f) {
     json_free(g_store.resources_retries); g_store.resources_retries = NULL;
     for (int r = 0; r < 2; r++) for (int i = 0; i < STEPS; i++) { CloseHandle(f->steps[r][i].entered); CloseHandle(f->steps[r][i].release); }
+    cache_remove_all(g_store.cache); cache_free(g_store.cache);
     screen_fixture_clear(&f->screen);
 }
 static void expire(ResourcesScreen *s) { json_set_num((Json *)json_get(g_store.resources_retries, s->retry_key), "until", (double)time(NULL) - 1); }
 static void gating_and_status_entry(void) {
     Fixture f; init(&f); Screen *status = status_screen_new();
     Pane *window = detached_open(status, NULL, false); CHECK(window != NULL);
+    screen_fixture_pump(&f.screen, 1); // Status projects route is unavailable in this catalog.
     HeaderInfo header = {0}; status->vt->header(status, &header);
     CHECK_INT(header.button_count, 1); CHECK_INT(header.buttons[0].action, STATUS_SERVER);
     g_store.route_count = 0; status->vt->action(status, STATUS_SERVER, 0, (POINT){0}); CHECK(pane_top(window) == status);
@@ -58,7 +62,7 @@ static void gating_and_status_entry(void) {
     g_store.device.permission = "read"; status->vt->action(status, STATUS_SERVER, 0, (POINT){0});
     Screen *s = pane_top(window); CHECK(s != status); complete(&f, 0, 0); complete(&f, 1, 0);
     CHECK(((ResourcesScreen *)s)->loaded); CHECK(((ResourcesScreen *)s)->list->loaded);
-    pane_pop(window); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); clear(&f);
+    DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); clear(&f);
     init(&f); g_store.route_count = 1; s = create(&f); s->vt->visible(s, true); complete(&f, 0, 0);
     CHECK_INT(f.calls[1], 0); CHECK(!((ResourcesScreen *)s)->list->loaded);
     Doc doc; doc_init(&doc); screen_fixture_draw(s, &doc); doc_free(&doc); s->vt->destroy(s); clear(&f);
@@ -92,8 +96,6 @@ static void independent_failure_recovery_and_polling(void) {
 }
 static void navigation_records_and_stale_actions(void) {
     Fixture f; init(&f);
-    wchar_t temp[MAX_PATH], directory[MAX_PATH]; CHECK(GetTempPathW(MAX_PATH, temp) != 0); CHECK(GetTempFileNameW(temp, L"srv", 0, directory) != 0);
-    DeleteFileW(directory); CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
     Json *projects = json_parsez("[{\"repo\":\"one/repo\",\"name\":\"One\"}]"); CHECK(cache_store(g_store.cache, projects, "projects")); json_free(projects);
     Json *sessions = json_parsez("[{\"id\":\"c\",\"repo\":\"one/repo\",\"title\":\"Saved name\",\"status\":\"idle\"}]");
     CHECK(cache_store(g_store.cache, sessions, "sessions:one/repo")); json_free(sessions);
@@ -112,7 +114,7 @@ static void navigation_records_and_stale_actions(void) {
     CHECK_STR(session_id(&((ResourcesScreen *)child)->session), "c"); CHECK_STR(session_repo(&((ResourcesScreen *)child)->session), "one/repo");
     CHECK_INT(f.session_calls, 1); CHECK(!r->poller.running && !r->list->poller.running);
     DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); doc_free(&doc);
-    cache_remove_all(g_store.cache); cache_free(g_store.cache); g_store.cache = NULL; clear(&f);
+    clear(&f);
 }
 static void route_cooldowns_survive_cancel_and_reopen(void) {
     Fixture f; init(&f); Screen *s = create(&f); ResourcesScreen *r = (ResourcesScreen *)s;
@@ -130,7 +132,7 @@ static void route_cooldowns_survive_cancel_and_reopen(void) {
 static void refused_generation_and_concurrent_recovery(void) {
     for (int route = 0; route < 2; route++) {
         Fixture f; init(&f); Screen *a = create(&f), *b = create(&f);
-        ResourcesScreen *ra = (ResourcesScreen *)a, *rb = (ResourcesScreen *)b;
+        ResourcesScreen *rb = (ResourcesScreen *)b;
         a->vt->visible(a, true); complete(&f, 0, 0); complete(&f, 1, 0);
         b->vt->visible(b, true); complete(&f, 0, 1); complete(&f, 1, 1);
         f.steps[route][2].answer = route ? "{\"host\":{},\"sessions\":[]}" : "{\"host\":{},\"process\":{},\"sessions\":{},\"disks\":[],\"history\":[]}";
@@ -141,18 +143,21 @@ static void refused_generation_and_concurrent_recovery(void) {
         ResourcesScreen *target = route ? rb->list : rb;
         CHECK(!target->loaded); CHECK(resources_retry_until(target) >= (double)time(NULL) + 3598);
         complete(&f, 1 - route, 2); CHECK((route ? rb : rb->list)->fresh);
-        expire(target); b->vt->refresh(b); entered(&f, 0, 4); entered(&f, 1, 4);
-        complete(&f, route, 4); CHECK(target->loaded && target->fresh);
-        complete(&f, route, 2); CHECK(target->loaded && target->fresh); // late stale success cannot replace fresh recovery
-        CHECK_INT(target->kind == RESOURCE_LIST ? target->sessions.count : target->server.disk_count, route ? 3 : 2);
-        complete(&f, 1 - route, 4);
+        expire(target); Screen *recovered = create(&f); recovered->vt->visible(recovered, true);
+        entered(&f, 0, 4); entered(&f, 1, 4);
+        ResourcesScreen *recovery = (ResourcesScreen *)recovered;
+        ResourcesScreen *fresh = route ? recovery->list : recovery;
+        complete(&f, route, 4); CHECK(fresh->loaded && fresh->fresh);
+        complete(&f, route, 2); CHECK(!target->loaded); CHECK(fresh->loaded && fresh->fresh);
+        CHECK_INT(fresh->kind == RESOURCE_LIST ? fresh->sessions.count : fresh->server.disk_count, route ? 3 : 2);
+        complete(&f, 1 - route, 4); recovered->vt->destroy(recovered);
         // A success begun before a refusal is rejected while figures remain cleared.
         b->vt->refresh(b); entered(&f, 0, 5); entered(&f, 1, 5);
-        a = create(&f); ra = (ResourcesScreen *)a; a->vt->visible(a, true); entered(&f, 0, 6); entered(&f, 1, 6);
+        a = create(&f); a->vt->visible(a, true); entered(&f, 0, 6); entered(&f, 1, 6);
         f.steps[route][6].status = 403; a->vt->destroy(a); complete(&f, route, 6); complete(&f, 1 - route, 6);
         CHECK(!target->loaded); complete(&f, route, 5); CHECK(!target->loaded); complete(&f, 1 - route, 5);
         CHECK((route ? rb : rb->list)->fresh);
-        (void)ra; b->vt->destroy(b); clear(&f);
+        b->vt->destroy(b); clear(&f);
     }
 }
 static void visibility_detach_and_scope(void) {
@@ -176,15 +181,13 @@ static void auth_init(Fixture *f) {
     init(f);
     g_store.device = (Device){.id = xstrdup("server-device"), .label = xstrdup("Server tests"), .permission = xstrdup("read")};
     g_store.routes = routes_copy(ROUTES, 3); api_client_retain(g_store.client); g_store.server = xstrdup(AUTH_ORIGIN);
-    wchar_t temp[MAX_PATH], directory[MAX_PATH]; CHECK(GetTempPathW(MAX_PATH, temp) != 0); CHECK(GetTempFileNameW(temp, L"sra", 0, directory) != 0);
-    DeleteFileW(directory); CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
     Json *private = json_object(); json_set_num(private, "memoryBytes", 99); CHECK(cache_store(g_store.cache, private, "server-private")); json_free(private);
     CHECK(credentials_save(AUTH_TOKEN, AUTH_ORIGIN));
 }
 static void auth_clear(Fixture *f) {
     if (g_store.client) api_client_release(g_store.client);
     if (g_store.has_device) device_free(&g_store.device);
-    routes_free(g_store.routes, g_store.route_count); cache_remove_all(g_store.cache); cache_free(g_store.cache);
+    routes_free(g_store.routes, g_store.route_count);
     free(g_store.server); free(g_store.connection_error); CHECK(credentials_remove(AUTH_ORIGIN)); clear(f);
 }
 static void cancelled_401_clears_all_resources(void) {

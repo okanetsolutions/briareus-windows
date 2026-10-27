@@ -16,7 +16,7 @@ bool resources_adopt(ResourcesScreen *s, const Json *answer) {
     }
     if (s->kind == RESOURCE_LIST) {
         Project *projects = NULL; size_t count = 0, known_count = 0, missing = 0;
-        Json *saved = cache_value(g_store.cache, "projects");
+        Json *saved = g_store.cache ? cache_value(g_store.cache, "projects") : NULL;
         projects_parse(saved, &projects, &count); json_free(saved);
         Session *known = session_cache_read(projects, count, &known_count, &missing);
         projects_free(projects, count);
