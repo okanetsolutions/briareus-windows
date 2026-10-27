@@ -1,6 +1,8 @@
 #include "screen_resources_internal.h"
 #include <math.h>
 
+static ResourcesScreen *screens;
+
 bool resources_current(ResourcesScreen *s) {
     if (s->client != g_store.client || !store_supports("session_stats")) return false;
     Json *device = device_json(&g_store.device);
@@ -16,6 +18,14 @@ static void schedule(ResourcesScreen *s) {
     poller_finished(&s->poller, false, -1);
 }
 static void record_failure(const char *key, Request *req) {
+    if (req->error.status == 403 || req->error.status == 404) {
+        // Only visit registered live screens, never the cancelled request's owner.
+        for (ResourcesScreen *s = screens; s; s = s->next) {
+            if (s->client != req->client || !str_eq(s->retry_key, key)) continue;
+            session_stats_free(&s->reading); s->loaded = s->fresh = false;
+            if (s->base.pane) pane_relayout(s->base.pane);
+        }
+    }
     const Json *entry = json_get(g_store.resources_retries, key);
     int failures = json_int_or(json_get(entry, "failures"), 0);
     if (failures < 6) failures++;
@@ -102,6 +112,9 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
 }
 static void destroy(Screen *base) {
     ResourcesScreen *s = (ResourcesScreen *)base; visible(base, false);
+    ResourcesScreen **slot = &screens;
+    while (*slot && *slot != s) slot = &(*slot)->next;
+    if (*slot) *slot = s->next;
     session_free(&s->session); session_stats_free(&s->reading); json_free(s->device);
     free(s->retry_key); free(s->error); api_client_release(s->client); screen_release(base);
 }
@@ -116,5 +129,6 @@ Screen *resources_screen_new(const Session *session) {
     s->retry_key = xstrfmt("%s:%s", scope, session_id(session)); free(scope);
     s->base.id = xstrfmt("resources:%s:%s", g_store.server ? g_store.server : "", s->retry_key);
     session_copy(&s->session, session);
+    s->next = screens; screens = s;
     return &s->base;
 }

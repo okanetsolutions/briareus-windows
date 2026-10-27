@@ -169,6 +169,62 @@ static void pane_and_window_visibility(void) {
     ShowWindow(hwnd, SW_SHOWNOACTIVATE); complete(&f, 4); CHECK(r->fresh);
     DestroyWindow(hwnd); clear(&f);
 }
+static void cancelled_refusal_clears_retained_figures(void) {
+    const int statuses[] = {403, 404};
+    for (int i = 0; i < 2; i++) {
+        Fixture f; init(&f); Screen *s = create(&f, "s1"); ResourcesScreen *r = (ResourcesScreen *)s;
+        pane_set_root(f.screen.pane, s); complete(&f, 0);
+        CHECK(r->loaded); CHECK(r->reading.total.memory.present); CHECK(r->reading.history_count > 0);
+        f.steps[1].status = statuses[i];
+        s->vt->refresh(s); entered(&f, 1); pane_show(f.screen.pane, false);
+        CHECK(r->read == NULL); complete(&f, 1);
+        CHECK(resources_retry_until(r) > (double)time(NULL));
+        pane_show(f.screen.pane, true);
+        CHECK(!r->loaded && !r->fresh); CHECK(!r->reading.total.memory.present);
+        CHECK(r->reading.history == NULL); CHECK_INT(r->reading.history_count, 0);
+        CHECK(r->read == NULL); CHECK_INT(f.calls, 2);
+        Doc doc; doc_init(&doc); screen_fixture_draw(s, &doc);
+        CHECK(!r->reading.open);
+        expire(r); s->vt->refresh(s); complete(&f, 2); CHECK(r->loaded && r->fresh);
+        CHECK(r->reading.history_count > 0);
+        // A refusal arriving after reveal must also clear retained data.
+        f.steps[3].status = statuses[i];
+        s->vt->refresh(s); entered(&f, 3); pane_show(f.screen.pane, false);
+        pane_show(f.screen.pane, true); entered(&f, 4); complete(&f, 3);
+        screen_fixture_draw(s, &doc);
+        CHECK(!r->loaded); CHECK(r->reading.history == NULL); CHECK(!r->reading.total.memory.present);
+        complete(&f, 4); CHECK(r->loaded && r->fresh);
+        // Subsequent successful reads recover fresh data after the refusal.
+        expire(r); s->vt->refresh(s); complete(&f, 5); screen_fixture_draw(s, &doc);
+        CHECK(r->loaded && r->fresh); CHECK(r->reading.history_count > 0);
+        doc_free(&doc); s = pane_take_root(f.screen.pane); s->vt->destroy(s); clear(&f);
+    }
+}
+static void cancelled_refusal_scope_and_destroyed_owner(void) {
+    Fixture f; init(&f); Screen *s = create(&f, "s1"); ResourcesScreen *r = (ResourcesScreen *)s;
+    s->vt->visible(s, true); complete(&f, 0);
+    f.steps[1].status = 403; s->vt->refresh(s); entered(&f, 1); s->vt->visible(s, false);
+    g_store.device.permission = "manage"; complete(&f, 1); g_store.device.permission = "read";
+    Doc doc; doc_init(&doc); screen_fixture_draw(s, &doc);
+    CHECK(r->loaded); CHECK(r->reading.history_count > 0);
+    s->vt->visible(s, true); entered(&f, 2); f.steps[2].status = 404; s->vt->visible(s, false);
+    ApiClient *original = g_store.client; g_store.client = NULL; complete(&f, 2); g_store.client = original;
+    screen_fixture_draw(s, &doc); CHECK(r->loaded); CHECK(r->reading.total.memory.present);
+    Screen *sibling = create(&f, "s1"); ResourcesScreen *retained = (ResourcesScreen *)sibling;
+    sibling->vt->visible(sibling, true); complete(&f, 3); CHECK(retained->loaded);
+    s->vt->visible(s, true); entered(&f, 4); f.steps[4].status = 404;
+    s->vt->destroy(s); complete(&f, 4); // Refusal metadata outlives the freed screen.
+    CHECK(!retained->loaded); CHECK(retained->reading.history == NULL);
+    s = create(&f, "s1"); r = (ResourcesScreen *)s;
+    s->vt->visible(s, true); screen_fixture_draw(s, &doc);
+    CHECK(!r->loaded); CHECK(r->read == NULL); CHECK(resources_retry_until(r) > (double)time(NULL));
+    Screen *other = create(&f, "other/session"); ResourcesScreen *o = (ResourcesScreen *)other;
+    f.steps[5].url = "https://example.com/api/v1/sessions/other%2Fsession/stats";
+    f.steps[5].answer = "{\"host\":{},\"stats\":{\"sessionId\":\"other/session\",\"memoryBytes\":77},\"history\":[]}";
+    other->vt->visible(other, true); complete(&f, 5); screen_fixture_draw(other, &doc);
+    CHECK(o->loaded && o->fresh); CHECK_INT(o->reading.total.memory.value, 77);
+    s->vt->destroy(s); sibling->vt->destroy(sibling); other->vt->destroy(other); doc_free(&doc); clear(&f);
+}
 static void concurrent_success_preserves_cooldown(void) {
     Fixture f; init(&f);
     Screen *a = create(&f, "s1"), *b = create(&f, "s1");
@@ -227,6 +283,8 @@ void app_resources_tests(void) {
     test_run("Resources Retry-After survives refresh hide and recreation", retry_across_reopen);
     test_run("Resources cancelled 429 survives navigation with client and permission isolation", cancelled_retry_after_navigation);
     test_run("Resources pane hide and detached minimize stop polling and resume on reveal", pane_and_window_visibility);
+    test_run("Resources cancelled 403 and 404 clear metrics and history before reveal or layout", cancelled_refusal_clears_retained_figures);
+    test_run("Resources cancelled refusals preserve scope and survive owner destruction", cancelled_refusal_scope_and_destroyed_owner);
     test_run("Resources preexisting success preserves a concurrent Retry-After", concurrent_success_preserves_cooldown);
     test_run("Resources cancel stale owners and isolate server permission and session snapshots", cancellation_and_isolation);
 }

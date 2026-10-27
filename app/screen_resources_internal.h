@@ -8,8 +8,9 @@
 #include <time.h>
 
 enum { RESOURCES_POLL = 1, RESOURCES_REFRESH = 1000 };
-typedef struct {
+typedef struct ResourcesScreen {
     Screen base;
+    struct ResourcesScreen *next;
     Session session;
     ApiClient *client;
     Json *device;
