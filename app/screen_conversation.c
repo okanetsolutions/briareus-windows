@@ -181,9 +181,19 @@ void conversation_session_op(const char *session_id_, const char *operation, Jso
     if (ours) screen_conversation_mutate((ConversationScreen *)top, operation, extra); else json_free(extra);
 }
 
+static void create_composer(ConversationScreen *s, HWND parent) {
+    s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
+    SendMessageW(s->composer, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
+    SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply\x2026");
+    SetWindowSubclass(s->composer, screen_conversation_composer_proc, ID_COMPOSER, (DWORD_PTR)s);
+    theme_apply_control(s->composer);
+    DragAcceptFiles(s->composer, TRUE);
+}
+
 static void conversation_visible(Screen *base, bool shown) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (shown) {
+        if (!s->composer) create_composer(s, pane_hwnd(base->pane));
         // The composer goes with the conversation into a window of its own, and back.
         if (GetParent(s->composer) != pane_hwnd(base->pane)) SetParent(s->composer, pane_hwnd(base->pane));
         show_panel(s);
@@ -250,13 +260,6 @@ Screen *conversation_screen_new(const Session *initial) {
     transcript_init(&s->transcript);
     s->composer_lines = 1; s->at_bottom = true;
     s->files = attach_list_new(&s->base, "message");
-    HWND parent = pane_hwnd(app_detail_pane());
-    s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
-    SendMessageW(s->composer, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
-    SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Reply\x2026");
-    SetWindowSubclass(s->composer, screen_conversation_composer_proc, ID_COMPOSER, (DWORD_PTR)s);
-    theme_apply_control(s->composer);
-    DragAcceptFiles(s->composer, TRUE);
     if (store_can_transcribe()) s->voice = voice_new(screen_conversation_voice_changed, s);
     return &s->base;
 }

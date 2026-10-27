@@ -44,6 +44,8 @@ void app_pulls_tests(void);
 void webhook_tests(void);
 void app_webhook_tests(void);
 void provider_status_tests(void);
+void session_working_tests(void);
+void app_conversation_tests(void);
 void app_provider_settings_tests(void);
 void app_project_settings_tests(void);
 #endif
