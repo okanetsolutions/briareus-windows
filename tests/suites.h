@@ -41,4 +41,6 @@ void app_mail_tests(void);
 void app_mail_consent_tests(void);
 void app_pulls_tests(void);
 
+void webhook_tests(void);
+void app_webhook_tests(void);
 #endif

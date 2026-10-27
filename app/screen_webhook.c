@@ -14,11 +14,6 @@ static void form_visible(Screen *base, bool shown);
 static void form_refresh(Screen *base);
 static bool form_can_leave(Screen *base);
 
-const FieldDef screen_webhook_FIELDS[F_COUNT] = {
-    [F_PER_HOUR] = { "Deliveries an hour", "Past it a sender is answered 429 with Retry-After. From 1 to 600.", 1, 600 },
-    [F_MAX_TURNS] = { "Turns in a row", "Turns deliveries may start with no word from you; past it the webhook pauses until you say anything here (or save this form). From 1 to 1000.", 1, 1000 },
-};
-
 const char *const screen_webhook_TOGGLE_KEYS[T_COUNT] = { "armed", "instructions", "sshUnattended" };
 
 const char *screen_webhook_hook_str(WebhookForm *s, const char *key) { return s->hook ? json_str_nonempty(json_get(s->hook, key)) : NULL; }
@@ -74,21 +69,18 @@ static void submit(WebhookForm *s, const char *operation, Json *body) {
 
 void screen_webhook_form_save(WebhookForm *s) {
     if (s->busy || !s->hook || !s->edits[F_PER_HOUR]) return;
-    Json *body = json_object();
-    for (int t = 0; t < T_COUNT; t++) json_set_bool(body, screen_webhook_TOGGLE_KEYS[t], s->toggles[t]);
-    static const char *const keys[F_COUNT] = { "perHour", "maxTurns" };
-    for (int f = 0; f < F_COUNT; f++) {
-        char *text = screen_webhook_edit_text(s->edits[f]), *trimmed = str_trim(text), *end = NULL;
-        long n = strtol(trimmed, &end, 10);
-        bool ok = *trimmed && end && !*end && n >= screen_webhook_FIELDS[f].min && n <= screen_webhook_FIELDS[f].max;
-        free(text); free(trimmed);
-        if (!ok) {
-            char *m = xstrfmt("%s must be a whole number from %d to %d.", screen_webhook_FIELDS[f].label, screen_webhook_FIELDS[f].min, screen_webhook_FIELDS[f].max);
-            show_message(s, m, false); free(m); json_free(body);
-            SetFocus(s->edits[f]);
-            return;
-        }
-        json_set_num(body, keys[f], (double)n);
+    char *texts[F_COUNT];
+    const char *caps[F_COUNT];
+    for (int f = 0; f < F_COUNT; f++) caps[f] = texts[f] = screen_webhook_edit_text(s->edits[f]);
+    WebhookField invalid;
+    Json *body = webhook_save(s->toggles[T_ARMED], s->toggles[T_INSTRUCTIONS], s->toggles[T_SSH], caps, &invalid);
+    for (int f = 0; f < F_COUNT; f++) free(texts[f]);
+    if (!body) {
+        const WebhookFieldDef *def = &webhook_fields[invalid];
+        char *m = xstrfmt("%s must be a whole number from %d to %d.", def->label, def->min, def->max);
+        show_message(s, m, false); free(m);
+        SetFocus(s->edits[invalid]);
+        return;
     }
     submit(s, "set_session_webhook", body);
 }

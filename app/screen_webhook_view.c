@@ -35,9 +35,10 @@ void screen_webhook_form_fill(WebhookForm *s) {
     for (int t = 0; t < T_COUNT; t++) s->toggles[t] = json_bool_is(json_get(s->hook, screen_webhook_TOGGLE_KEYS[t]), true);
     if (s->edits[F_PER_HOUR]) {
         s->filling = true;
-        char *a = xstrfmt("%d", json_int_or(json_get(s->hook, "perHour"), 30)), *b = xstrfmt("%d", json_int_or(json_get(s->hook, "maxTurns"), 10));
-        set_edit_text(s->edits[F_PER_HOUR], a); set_edit_text(s->edits[F_MAX_TURNS], b);
-        free(a); free(b);
+        for (int f = 0; f < F_COUNT; f++) {
+            char *text = webhook_field_text(s->hook, (WebhookField)f);
+            set_edit_text(s->edits[f], text); free(text);
+        }
         s->filling = false;
     }
     s->dirty = false;
@@ -52,7 +53,7 @@ static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 }
 
 static void field(WebhookForm *s, Doc *doc, int x, int w, int f) {
-    doc_field_label(doc, x, w, screen_webhook_FIELDS[f].label, theme.ink, screen_webhook_FIELDS[f].hint);
+    doc_field_label(doc, x, w, webhook_fields[f].label, theme.ink, webhook_fields[f].hint);
     doc_space(doc, px(6));
     int fh = edit_line_height(FONT_BODY), h = px(36);
     RECT box = { x, doc->y, x + w, doc->y + h };
