@@ -65,6 +65,8 @@ typedef struct ScreenVTable {
     bool detachable;
     /// Ctrl+F searches this screen's rendered document, including from child controls.
     bool searchable;
+    /// Also deliver visible(false/true) when the top screen's pane or window hides/reappears.
+    bool effective_visibility;
 } ScreenVTable;
 
 struct Screen {

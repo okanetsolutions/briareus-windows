@@ -107,7 +107,7 @@ static void destroy(Screen *base) {
 }
 static const ScreenVTable VT = {
     .destroy = destroy, .layout = resources_layout, .header = header, .action = action,
-    .visible = visible, .timer = timer, .refresh = refresh, .activated = activated, .detachable = true,
+    .visible = visible, .timer = timer, .refresh = refresh, .activated = activated, .detachable = true, .effective_visibility = true,
 };
 Screen *resources_screen_new(const Session *session) {
     ResourcesScreen *s = xcalloc(1, sizeof *s); s->base.vt = &VT;

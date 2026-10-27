@@ -107,7 +107,13 @@ static void set_visible(Screen *s, bool shown) { if (s && s->vt->visible) s->vt-
 static void visibility_changed(Pane *p, bool shown) {
     if (p->shown == shown) return;
     p->shown = shown;
-    set_visible(pane_top(p), shown);
+    Screen *s = pane_top(p);
+    if (s && s->vt->effective_visibility) set_visible(s, shown);
+}
+static void show_top(Pane *p) {
+    Screen *s = pane_top(p);
+    p->shown = IsWindowVisible(p->hwnd) && !IsIconic(GetAncestor(p->hwnd, GA_ROOT));
+    set_visible(s, s && s->vt->effective_visibility ? p->shown : true);
 }
 void pane_window_visibility(HWND window, bool shown) {
     for (size_t i = 0; i < pane_count; i++) {
@@ -126,7 +132,7 @@ void pane_push(Pane *p, Screen *s) {
     p->stack[p->depth++] = s;
     p->scroll_y = 0; p->scroll_x = 0; p->stick_bottom = false; p->show_bottom_button = false;
     doc_free(&p->doc); doc_init(&p->doc);
-    set_visible(s, p->shown);
+    show_top(p);
     pane_relayout(p);
 }
 static void destroy_top(Pane *p) {
@@ -141,10 +147,10 @@ void pane_pop(Pane *p) {
     destroy_top(p);
     p->scroll_y = 0; p->stick_bottom = false; p->show_bottom_button = false;
     doc_free(&p->doc); doc_init(&p->doc);
-    set_visible(p->stack[p->depth - 1], p->shown);
+    show_top(p);
     pane_relayout(p);
 }
-void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { set_visible(p->stack[0], p->shown); pane_relayout(p); } }
+void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { show_top(p); pane_relayout(p); } }
 Screen *pane_take_root(Pane *p) {
     if (p->depth != 1) return NULL;
     find_hide(p, false);
