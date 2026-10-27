@@ -15,7 +15,7 @@ bool mail_account_writable(const MailAccounts *accounts, int id) {
     const MailAccount *a = mail_account_find(accounts, id);
     if (!a || !str_eq(a->status, "connected") || a->read_only) return false;
     if (!mail_provider_available(accounts, a->provider)) return false;
-    return !a->access || !*a->access || str_eq(a->access, "manage");
+    return !a->access || str_eq(a->access, "manage");
 }
 
 char *mail_reply_key(const MailAccounts *accounts, const MailMessage *m) {

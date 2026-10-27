@@ -38,6 +38,31 @@ static void writable_identity(void) {
     CHECK(!mail_reply_same_account(account, &replacement)); free(key); mail_accounts_free(&a);
 }
 
+static void parsed_access(void) {
+    const struct { const char *field, *access; bool writable; } cases[] = {
+        {"", NULL, true},
+        {",\"access\":\"manage\"", "manage", true},
+        {",\"access\":\"read\"", "read", false},
+        {",\"access\":\"future\"", "future", false},
+        {",\"access\":\"\"", "", false},
+        {",\"access\":false", "", false},
+        {",\"access\":true", "", false},
+        {",\"access\":123", "", false},
+        {",\"access\":{}", "", false},
+        {",\"access\":[]", "", false},
+        {",\"access\":null", "", false},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        char *text = xstrfmt("{\"accounts\":[{\"id\":7,\"provider\":\"gmail\",\"email\":\"a@example.com\",\"status\":\"connected\"%s}],\"providers\":[\"gmail\"]}", cases[i].field);
+        Json *j = json_parsez(text); free(text);
+        MailAccounts a; CHECK(mail_accounts_parse(j, &a)); json_free(j);
+        CHECK_INT(a.count, 1);
+        if (a.count) CHECK_STR(a.accounts[0].access, cases[i].access);
+        CHECK(mail_account_writable(&a, 7) == cases[i].writable);
+        mail_accounts_free(&a);
+    }
+}
+
 static void outcomes(void) {
     MailReply *drafts = NULL, *d = mail_reply_find(&drafts, "7:first", true);
     CHECK(mail_reply_find(&drafts, NULL, true) == NULL); CHECK(mail_reply_find(&drafts, "absent", false) == NULL);
@@ -90,6 +115,7 @@ static void wire(void) {
 void core_mail_reply_tests(void) {
     test_run("mail replies validate JS Unicode length and preserve exact plain text", validation);
     test_run("mail replies gate writable providers and distinguish account replacement", writable_identity);
+    test_run("mail replies accept omitted access and reject explicit malformed access", parsed_access);
     test_run("mail replies preserve drafts, cooldowns and uncertain interlocks", outcomes);
     test_run("mail reply wire route encodes original identity and sends text only", wire);
 }

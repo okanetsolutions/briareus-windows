@@ -18,7 +18,9 @@ bool mail_account_parse(const Json *j, MailAccount *a) {
     if (!json_is_object(j) || id <= 0 || !provider || !email) return false;
     a->id = id; a->provider = xstrdup(provider); a->email = xstrdup(email);
     a->label = xstrdup(json_str(json_get(j, "label")));
-    a->access = xstrdup(json_str(json_get(j, "access")));
+    for (size_t i = 0; i < json_count(j); i++) {
+        if (str_eq(json_key(j, i), "access")) a->access = xstrdup(json_str_or(json_get(j, "access"), ""));
+    }
     a->read_only = str_eq(a->access, "read");
     a->status = xstrdup(json_str(json_get(j, "status")));
     a->last_sync_error = xstrdup(json_str(json_get(j, "lastSyncError")));
