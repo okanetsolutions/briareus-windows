@@ -21,16 +21,6 @@ static void paint_flow(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 
 bool screen_pulls_finding_open(PullScreen *s, int i) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == i) return true; return false; }
 
-void screen_pulls_check_free(void *p) { CheckData *d = p; free(d->name); free(d->result); free(d); }
-
-void screen_pulls_paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    CheckData *d = it->data;
-    RECT g = { rc->left, rc->top, rc->left + px(18), rc->bottom }; draw_glyph(cv, d->glyph, &g, FONT_ICON_SMALL, d->color);
-    int rw = text_width(cv, d->result, FONT_CALLOUT);
-    RECT n = { rc->left + px(22), rc->top, rc->right - rw - px(8), rc->bottom }; draw_text(cv, d->name, &n, FONT_CALLOUT, it->action ? theme.accent : theme.text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    RECT r = { rc->right - rw, rc->top, rc->right, rc->bottom }; draw_text(cv, d->result, &r, FONT_CALLOUT, theme.secondary, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-}
-
 void screen_pulls_paint_counts(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     CountsData *d = it->data;
     int x = rc->left;

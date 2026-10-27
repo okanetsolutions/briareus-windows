@@ -9,7 +9,7 @@
 #include <commctrl.h>
 
 static Pane *pane;
-static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies;
+static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies, files_calls, comments_calls;
 static int list_status;
 static const char *list_body, *retry_header;
 static bool network_fail, reject_fresh;
@@ -29,6 +29,12 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         if (retry_header) *retry_after = xstrdup(retry_header);
         if (hold) { SetEvent(entered); WaitForSingleObject(hold, 5000); }
         if (network_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
+    } else if (strstr(url, "/files?")) {
+        InterlockedIncrement(&files_calls); *status = 200;
+        payload = "{\"pr\":{\"headSha\":\"abc\"},\"files\":[]}";
+    } else if (strstr(url, "/comments?")) {
+        InterlockedIncrement(&comments_calls); *status = 200;
+        payload = "{\"comments\":[{\"body\":\"Timeline marker\",\"author\":\"reviewer\"}]}";
     } else if (strstr(url, "/pulls/")) {
         InterlockedIncrement(&pull_calls); *status = 200;
         payload = "{\"pr\":{\"number\":1,\"title\":\"Pull detail\",\"state\":\"open\",\"body\":\"Description\"}}";
@@ -65,6 +71,7 @@ static void next_account(void) {
 static void reset(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache);
     list_calls = session_calls = detail_calls = pull_calls = fresh_calls = replies = 0;
+    files_calls = comments_calls = 0;
     list_status = 200; retry_header = NULL; network_fail = reject_fresh = false;
     list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Keep this row\"}],\"issues\":[],\"syncedAt\":\"2026-10-07T12:00:00.000Z\"}";
     g_store.routes = routes; g_store.route_count = 2; next_account();
@@ -623,6 +630,71 @@ static void test_pull_refresh_invalidates_inflight_rows(void) {
     CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
     pane_set_root(pane, NULL);
 }
+static bool layout_has_action(Screen *s, int action) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
+    bool found = false;
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action) found = true;
+    doc_free(&d); return found;
+}
+static void test_pull_tabs_keep_destinations_and_summary(void) {
+    reset();
+    static Route tab_routes[] = {
+        { "GET", "/pulls/{pr}/files", "read" }, { "GET", "/pulls/{pr}/comments", "read" },
+        { "GET", "/pulls/{pr}/findings", "read" }, { "POST", "/pulls/{pr}/merge", "write" }
+    };
+    g_store.routes = tab_routes; g_store.route_count = sizeof tab_routes / sizeof *tab_routes;
+    Project p = project(); Screen *base = pull_detail_screen_new(&p, 1, NULL, NULL);
+    PullScreen *s = (PullScreen *)base; pane_set_root(pane, base);
+    json_free(s->pr);
+    s->pr = json_parsez("{\"number\":1,\"state\":\"open\",\"body\":\"Body marker\","
+        "\"commits\":9,\"commitList\":[{\"sha\":\"abc\"}],\"headRef\":\"feature\",\"baseRef\":\"main\","
+        "\"headSha\":\"abc\",\"checks\":{\"passed\":3,\"pending\":2,\"failed\":1,\"runs\":[{\"name\":\"CI\"}]}}");
+    json_free(s->findings); s->findings = json_parsez("[{\"key\":\"f1\",\"title\":\"Finding marker\"}]");
+    Json *sessions = json_parsez("{\"sessions\":[{\"id\":\"run1\",\"title\":\"Session marker\"}]}");
+    CHECK(sessions_parse(sessions, &s->runs, &s->run_count)); json_free(sessions);
+    s->runs_read = true; s->run_url = xstrdup("https://preview.example");
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); base->vt->layout(base, &d);
+    size_t tabs = 0, counts = 0; bool commits = false;
+    for (size_t i = 0; i < d.count; i++) {
+        Item *it = &d.items[i];
+        if (it->action == ACT_PR_TAB) {
+            CHECK(it->arg != 4 && it->arg != 5); tabs++;
+        }
+        if (it->paint == screen_pulls_paint_counts) {
+            CountsData *cd = it->data;
+            CHECK_INT(cd->passed, 3); CHECK_INT(cd->pending, 2); CHECK_INT(cd->failed, 1);
+            CHECK_INT(it->action, 0); CHECK(!it->hand); counts++;
+        }
+        if (it->free_data == screen_pulls_flow_free) {
+            FlowData *f = it->data;
+            for (size_t k = 0; k + 1 < f->count; k++)
+                if (str_eq(f->runs[k].text, "9 ") && str_eq(f->runs[k + 1].text, "commits ")) commits = true;
+        }
+    }
+    CHECK_INT(tabs, 5); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
+    CHECK(layout_contains(base, "Body marker"));
+    CHECK_INT(files_calls, 0); CHECK_INT(comments_calls, 0);
+    base->vt->action(base, ACT_PR_TAB, PR_TAB_CONVERSATION, (POINT){0}); drain(1);
+    CHECK_INT(comments_calls, 1); CHECK(layout_contains(base, "Timeline marker"));
+    CHECK(!layout_contains(base, "Body marker"));
+    base->vt->action(base, ACT_PR_TAB, PR_TAB_FILES, (POINT){0}); drain(1);
+    CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
+    CHECK(!layout_contains(base, "Timeline marker"));
+    base->vt->action(base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
+    CHECK(layout_contains(base, "Finding marker")); CHECK(layout_has_action(base, ACT_FINDING_TOGGLE));
+    base->vt->action(base, ACT_PR_TAB, PR_TAB_SESSIONS, (POINT){0});
+    CHECK(layout_has_action(base, ACT_OPEN_RUN)); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
+    base->vt->action(base, ACT_PR_TAB, PR_TAB_RUN, (POINT){0});
+    CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
+    const intptr_t retired[] = { 4, 5, -1, 8, INTPTR_MAX };
+    for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) {
+        base->vt->action(base, ACT_PR_TAB, retired[i], (POINT){0});
+        CHECK_INT(s->tab, PR_TAB_BODY); CHECK(layout_contains(base, "Body marker"));
+        CHECK(!layout_has_action(base, ACT_WEB_BROWSER));
+    }
+    CHECK_INT(json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), 1);
+    pane_set_root(pane, NULL);
+}
 void app_pulls_tests(void) {
     theme_init();
     HWND parent = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -640,6 +712,7 @@ void app_pulls_tests(void) {
     Project fold_project = project();
     Pane *warm = detached_open(pulls_screen_new(&fold_project), NULL, false);
     CHECK(warm != NULL); DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
+    test_run("pull tabs preserve destinations, lazy reads and passive summary counts", test_pull_tabs_keep_destinations_and_summary);
     test_run("header tooltips preserve document hover and hide on leave", test_header_tooltip_transitions);
     test_run("pulls failing checks filter persists per repository and clears", test_failing_checks_filter_persists_per_repo_and_combines_with_stacks);
     test_run("pulls stack filter saves, restores and clears", test_stack_filter_is_saved_and_keeps_next_prs);

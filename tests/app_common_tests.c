@@ -186,25 +186,6 @@ static void test_review_glyphs_and_colours(void) {
     CHECK_INT(review_glyph(REVIEW_NONE, &c), 0); CHECK_INT(c, theme.secondary);
 }
 
-static void test_check_glyphs_group_conclusions(void) {
-    ensure_theme();
-    COLORREF c = 0;
-    const char *green[] = { "success", "passed", "neutral", "skipped", "SUCCESS" };
-    for (size_t i = 0; i < 5; i++) { c = 0; CHECK_INT(check_glyph(green[i], &c), 0xE930); CHECK_INT(c, theme.success); }
-    const char *red[] = { "failure", "failed", "timed_out", "action_required", "error", "Failure" };
-    for (size_t i = 0; i < 6; i++) { c = 0; CHECK_INT(check_glyph(red[i], &c), 0xEA39); CHECK_INT(c, theme.danger); }
-    const char *grey[] = { "cancelled", "stale" };
-    for (size_t i = 0; i < 2; i++) { c = 0; CHECK_INT(check_glyph(grey[i], &c), 0xE738); CHECK_INT(c, theme.secondary); }
-}
-
-static void test_pending_or_unknown_checks_are_amber(void) {
-    ensure_theme();
-    COLORREF c = 0;
-    CHECK_INT(check_glyph("pending", &c), 0xE823); CHECK_INT(c, theme.warning);
-    CHECK_INT(check_glyph("in_progress", &c), 0xE823); CHECK_INT(c, theme.warning);
-    CHECK_INT(check_glyph(NULL, &c), 0xE823); CHECK_INT(c, theme.warning);
-}
-
 static void test_tool_glyphs_follow_the_tool_name(void) {
     CHECK_INT(tool_glyph("tool", "Bash", false), 0xE756);
     CHECK_INT(tool_glyph("tool", "shell_command", false), 0xE756);
@@ -567,8 +548,6 @@ void app_common_tests(void) {
     test_run("people lists logins up to a limit", test_people_lists_logins_up_to_a_limit);
     test_run("label colour is github's hex or secondary", test_label_colour_is_githubs_hex_or_secondary);
     test_run("review glyphs and colours", test_review_glyphs_and_colours);
-    test_run("check glyphs group conclusions", test_check_glyphs_group_conclusions);
-    test_run("pending or unknown checks are amber", test_pending_or_unknown_checks_are_amber);
     test_run("tool glyphs follow the tool name", test_tool_glyphs_follow_the_tool_name);
     test_run("tool glyph kind and errors come first", test_tool_glyph_kind_and_errors_come_first);
     test_run("pull badges in order", test_pull_badges_in_order);

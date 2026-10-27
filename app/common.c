@@ -174,16 +174,6 @@ wchar_t review_glyph(ReviewStatus status, COLORREF *color) {
     default: *color = theme.secondary; return 0;
     }
 }
-wchar_t check_glyph(const char *result, COLORREF *color) {
-    char *r = str_fold(result);
-    wchar_t g;
-    if (str_eq(r, "success") || str_eq(r, "passed") || str_eq(r, "neutral") || str_eq(r, "skipped")) { *color = theme.success; g = 0xE930; }
-    else if (str_eq(r, "failure") || str_eq(r, "failed") || str_eq(r, "timed_out") || str_eq(r, "action_required") || str_eq(r, "error")) { *color = theme.danger; g = 0xEA39; }
-    else if (str_eq(r, "cancelled") || str_eq(r, "stale")) { *color = theme.secondary; g = 0xE738; }
-    else { *color = theme.warning; g = 0xE823; }
-    free(r);
-    return g;
-}
 wchar_t tool_glyph(const char *kind, const char *name, bool is_error) {
     if (is_error) return 0xE7BA;
     if (str_eq(kind, "cmd")) return 0xE756;

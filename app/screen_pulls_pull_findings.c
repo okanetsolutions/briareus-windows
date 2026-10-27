@@ -4,45 +4,6 @@ static bool catalog_lists(const Json *catalog, const char *id);
 
 static const char *const decision_titles[] = { "Undecided", "Fix", "Optional", "Dismiss" };
 
-void screen_pulls_layout_checks(PullScreen *s, Doc *doc, Col c) {
-    int box = screen_pulls_col_box(doc, c);
-    CountsData *cd = xcalloc(1, sizeof *cd);
-    cd->passed = json_int_or(json_get(json_get(s->pr, "checks"), "passed"), 0); cd->failed = json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0); cd->pending = json_int_or(json_get(json_get(s->pr, "checks"), "pending"), 0);
-    doc_custom(doc, c.ix, c.iw, px(22), screen_pulls_paint_counts, cd, free, 0, 0);
-    const Json *runs = json_get(json_get(s->pr, "checks"), "runs");
-    for (size_t i = 0; i < json_count(runs); i++) {
-        const Json *check = json_at(runs, i);
-        screen_pulls_col_gap(doc, c);
-        const char *result = json_str(json_get(check, "conclusion")); if (!result) result = json_str(json_get(check, "status")); if (!result) result = "Pending";
-        CheckData *d = xcalloc(1, sizeof *d);
-        d->glyph = check_glyph(result, &d->color);
-        const char *name = json_str(json_get(check, "name")); d->name = xstrdup(name ? name : "Check");
-        char *spaced = str_replace(result, "_", " "); d->result = str_capitalized(spaced); free(spaced);
-        const char *curl = json_str(json_get(check, "url"));
-        doc_custom(doc, c.ix, c.iw, px(22), screen_pulls_paint_check, d, screen_pulls_check_free, safe_web_url(curl) ? ACT_CHECK_URL : 0, (intptr_t)i);
-    }
-    if (!json_count(runs)) { screen_pulls_col_gap(doc, c); doc_text(doc, c.ix, c.iw, "No checks reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE); }
-    doc_box_end(doc, box, px(12));
-}
-
-void screen_pulls_layout_commit_list(PullScreen *s, Doc *doc, Col c) {
-    const Json *commits = json_get(s->pr, "commitList");
-    int box = screen_pulls_col_box(doc, c);
-    for (size_t i = 0; i < json_count(commits); i++) {
-        const Json *cm = json_at(commits, i);
-        if (i) screen_pulls_col_gap(doc, c);
-        const char *sha = json_str(json_get(cm, "sha")); char *short_sha = xstrndup(sha ? sha : "", sha && strlen(sha) > 7 ? 7 : (sha ? strlen(sha) : 0));
-        int y = doc->y; int sw = text_width(doc->cv, short_sha, FONT_MONO_SMALL);
-        RECT sr = { c.ix + c.iw - sw, y, c.ix + c.iw, y + px(18) }; doc_text_at(doc, &sr, short_sha, FONT_MONO_SMALL, theme.secondary, DT_RIGHT | DT_SINGLELINE);
-        const char *message = json_str(json_get(cm, "message"));
-        int mi = doc_label(doc, c.ix, c.iw - sw - px(12), 0xE8EE, message ? message : "", FONT_CALLOUT, theme.text);
-        if (safe_web_url(json_str(json_get(cm, "url")))) { doc_item(doc, mi)->action = ACT_COMMIT_URL; doc_item(doc, mi)->arg = (intptr_t)i; doc_item(doc, mi)->hand = true; }
-        free(short_sha);
-    }
-    if (!json_count(commits)) doc_text(doc, c.ix, c.iw, "No commits reported", FONT_CALLOUT, theme.secondary, DT_SINGLELINE);
-    doc_box_end(doc, box, px(12));
-}
-
 /// The findings not yet fixed, and those among them the user marked fix.
 size_t screen_pulls_findings_unfixed(PullScreen *s) {
     size_t n = 0;

@@ -432,8 +432,6 @@ void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char
 void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue);
 /// A GitHub label's colour for the chips, or the secondary colour.
 COLORREF label_color(const PullLabel *label);
-/// The glyph for a check conclusion.
-wchar_t check_glyph(const char *result, COLORREF *color);
 wchar_t review_glyph(ReviewStatus status, COLORREF *color);
 /// The glyph a tool event shows, from its name.
 wchar_t tool_glyph(const char *kind, const char *name, bool is_error);
