@@ -1,4 +1,5 @@
 #include "screen_status_internal.h"
+#include <commctrl.h>
 
 intptr_t status_action_add(StatusScreen *s, size_t card, int option) {
     s->actions = xrealloc(s->actions, (s->action_count + 1) * sizeof *s->actions);

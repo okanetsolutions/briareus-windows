@@ -77,7 +77,7 @@ static void check_strip(Pane *pane) {
     Doc *doc = pane_doc(pane);
     CHECK(doc->pin_last > 0); CHECK_INT(doc->pin_bottom, px(56));
     CHECK_INT(doc->full_width, pane_content_width(pane));
-    int actions[] = { ACT_NEW, ACT_WHATSAPP, ACT_DASHBOARD, ACT_FINDINGS };
+    int actions[] = { ACT_NEW, ACT_WHATSAPP, ACT_STATUS, ACT_DASHBOARD, ACT_FINDINGS };
     for (size_t i = 0; i < sizeof actions / sizeof *actions; i++) {
         int index = action_item(doc, actions[i], 0); Item *it = &doc->items[index];
         CHECK(index < doc->pin_last);
