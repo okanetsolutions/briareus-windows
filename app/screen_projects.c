@@ -1,4 +1,5 @@
 #include "screen_projects_internal.h"
+#include "session_cache.h"
 
 typedef struct {
     Screen base;
@@ -34,6 +35,7 @@ static void projects_activated(Screen *base, bool active);
 // WhatsApp, dashboard, findings; Mail joins them when the server offers it
 
 size_t screen_projects_g_waiting;
+size_t screen_projects_g_status;
 
 /// What the saved lists say about each project's conversations, before the server is asked.
 static void projects_count(ProjectsScreen *s) {
@@ -53,6 +55,7 @@ static void projects_count(ProjectsScreen *s) {
         json_free(list);
     }
     screen_projects_g_waiting = findings_waiting(s->projects, s->count);
+    screen_projects_g_status = status_waiting(s->projects, s->count);
 }
 
 static void projects_show(ProjectsScreen *s, const Json *value) {
@@ -69,13 +72,7 @@ static void count_done(void *owner, Request *req) {
         // One list for every project the token can see; each project's own rows are saved under its key.
         Session *items; size_t n;
         if (sessions_parse(req->result, &items, &n)) {
-            for (size_t p = 0; p < s->count; p++) {
-                Json *list = json_array();
-                for (size_t k = 0; k < n; k++) if (str_eq(session_repo(&items[k]), s->projects[p].repo)) json_array_push(list, json_clone(items[k].raw));
-                char *key = xstrfmt("sessions:%s", s->projects[p].repo);
-                cache_store(g_store.cache, list, key);
-                json_free(list); free(key);
-            }
+            session_cache_save(s->projects, s->count, items, n);
             sessions_free(items, n);
         }
     }
@@ -112,15 +109,18 @@ static void projects_load(ProjectsScreen *s) {
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->req);
 }
 
-void projects_recount_findings(void) {
-    Screen *root = pane_root(app_sidebar_pane());
+void screen_projects_recount(Pane *sidebar) {
+    Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) return;
     ProjectsScreen *s = (ProjectsScreen *)root;
+    // Recount sessions against the current project list; disk may still contain an older snapshot.
     projects_count(s);
     pane_relayout(root->pane);
     Screen *top = pane_top(root->pane);
     if (top != root) pane_relayout(top->pane);
 }
+
+void projects_recount_findings(void) { screen_projects_recount(app_sidebar_pane()); }
 
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;
@@ -201,7 +201,8 @@ Screen *projects_screen_new(void) {
 }
 
 const Project *projects_list(size_t *count) {
-    Screen *root = pane_root(app_sidebar_pane());
+    Pane *sidebar = app_sidebar_pane();
+    Screen *root = sidebar ? pane_root(sidebar) : NULL;
     if (!root || root->vt->layout != projects_layout) { *count = 0; return NULL; }
     ProjectsScreen *s = (ProjectsScreen *)root;
     *count = s->count;

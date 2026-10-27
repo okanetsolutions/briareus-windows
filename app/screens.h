@@ -69,6 +69,8 @@ void conversation_session_op(const char *session_id, const char *operation, Json
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
 /// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
 Screen *findings_screen_new(void);
+/// Global waiting questions, held findings and working/ready counts.
+Screen *status_screen_new(void);
 /// What every project spent over a window, as the dashboard's 📊 home pane.
 Screen *dashboard_screen_new(void);
 /// WhatsApp Web in the detail pane; the screen's id is "whatsapp".

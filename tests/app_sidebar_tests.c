@@ -77,7 +77,7 @@ static void check_strip(Pane *pane) {
     Doc *doc = pane_doc(pane);
     CHECK(doc->pin_last > 0); CHECK_INT(doc->pin_bottom, px(56));
     CHECK_INT(doc->full_width, pane_content_width(pane));
-    int actions[] = { ACT_NEW, ACT_WHATSAPP, ACT_DASHBOARD, ACT_FINDINGS };
+    int actions[] = { ACT_NEW, ACT_WHATSAPP, ACT_STATUS, ACT_DASHBOARD, ACT_FINDINGS };
     for (size_t i = 0; i < sizeof actions / sizeof *actions; i++) {
         int index = action_item(doc, actions[i], 0); Item *it = &doc->items[index];
         CHECK(index < doc->pin_last);
@@ -156,6 +156,24 @@ static void test_project_sidebar(void) {
     CHECK(pane_top(f.pane) == s); CHECK_INT(pane_scroll_y(f.pane), 0); check_strip(f.pane);
     finish(&f);
 }
+static void test_recount_preserves_live_projects(void) {
+    ScreenFixture f; start(&f);
+    Json *old = json_parsez("[{\"repo\":\"old/repo\",\"name\":\"Old\"}]");
+    CHECK(cache_store(g_store.cache, old, "projects")); json_free(old);
+    char *name = cache_file_name("projects"); wchar_t *wide = utf8_to_wide(name); free(name);
+    wchar_t path[MAX_PATH]; swprintf(path, MAX_PATH, L"%ls\\%ls", cache_directory, wide); free(wide);
+    HANDLE lock = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    f.read_response = "[{\"repo\":\"old/repo\",\"name\":\"Old\"},{\"repo\":\"new/repo\",\"name\":\"New\"}]";
+    Screen *s = projects_screen_new(); pane_set_root(f.pane, s); s->vt->refresh(s); screen_fixture_pump(&f, 1);
+    Json *saved = cache_value(g_store.cache, "projects"); CHECK_INT(json_count(saved), 1); json_free(saved);
+    screen_projects_recount(f.pane);
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); s->vt->layout(s, &doc); doc_end(&doc);
+    size_t rows = 0;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_OPEN_PROJECT) rows++;
+    CHECK_INT(rows, 2);
+    doc_free(&doc); CloseHandle(lock); finish(&f);
+}
 static void test_session_sidebar(void) {
     ScreenFixture f; start(&f); Screen *s = new_sessions(); pane_set_root(f.pane, s);
     check_scroll_inputs(f.pane, ACT_PICK); check_short_paging(f.pane); check_resizes(f.pane);
@@ -177,5 +195,6 @@ static void test_session_sidebar(void) {
 void app_sidebar_tests(void) {
     screen_fixture_prepare();
     test_run("project sidebar pins actions above scrolling rows and survives navigation and resize (Swift #113)", test_project_sidebar);
+    test_run("sidebar recount preserves live projects when cache writes fail", test_recount_preserves_live_projects);
     test_run("session sidebar pins actions through wheel, keyboard, drag, DPI and selection changes (Swift #113)", test_session_sidebar);
 }

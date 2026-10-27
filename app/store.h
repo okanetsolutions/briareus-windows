@@ -16,6 +16,8 @@ typedef struct {
     ULONGLONG mail_retry_until;        // inbox cooldown survives navigation, cleared with the client
     int mail_failures;
     double home_retry_until[4];        // Smart home read cooldowns survive navigation, cleared with the client
+    double status_detail_retry_until, status_message_retry_until; // Status cooldowns survive navigation, cleared with the client
+    Json *status_uncertain;            // owned repo:session interlocks, cleared with the client
     bool home_uncertain;               // unresolved command outcome survives Smart home navigation
     bool has_device; Device device;
     Route *routes; size_t route_count;   // what the server lists in its OpenAPI document

@@ -90,6 +90,9 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
         doc_item(doc, (int)doc->count - 1)->tip = xstrdup("Mail");
         x += iw + gap;
     }
+    RECT sr = { x, y, x + iw, y + h }; strip_button(doc, &sr, "\xE2\x97\x89", false, (int)screen_projects_g_status, str_eq(selected, "status"), ACT_STATUS);
+    doc_item(doc, (int)doc->count - 1)->tip = xstrdup("Status");
+    x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
@@ -242,6 +245,7 @@ static void sign_out(void) {
 bool screen_projects_sidebar_common_action(Pane *pane, int action) {
     switch (action) {
     case ACT_MAIL: if (mail_inbox_offered() || mail_settings_offered()) app_show_detail(mail_inbox_offered() ? mail_screen_new() : mail_settings_screen_new()); return true;
+    case ACT_STATUS: app_show_detail(status_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
     case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
