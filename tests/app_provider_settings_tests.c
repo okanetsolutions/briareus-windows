@@ -74,6 +74,20 @@ static void pending_login_and_errors(void) {
     CHECK(f.form->error != NULL); CHECK(f.form->req_login == NULL);
     cleanup(&f);
 }
+static void picker_cancellation_preserves_initial_read(void) {
+    Form f; setup(&f, CONNECTED);
+    Request *initial = f.form->req_status; CHECK(initial != NULL);
+    // Both pickers cancel login activity on the way away and back.
+    screen_provider_settings_cancel_login(f.form);
+    screen_provider_settings_cancel_login(f.form);
+    CHECK(f.form->req_status == initial);
+    screen_provider_settings_login_start(f.form); CHECK(f.form->req_login == NULL);
+    screen_fixture_pump(&f.fixture, 1);
+    CHECK_STR(json_str(json_get(json_get(f.form->status, "auth"), "email")), "one@example.com");
+    CHECK_INT(f.fixture.reads, 1);
+    start(&f);
+    cleanup(&f);
+}
 static void cancelled_attempt(void) {
     Form f; setup(&f, CONNECTED); screen_fixture_pump(&f.fixture, 1); start(&f);
     f.fixture.block_read = true; ResetEvent(f.fixture.resume);
@@ -108,6 +122,7 @@ void app_provider_settings_tests(void) {
     test_run("provider first login clears code after connection", first_login);
     test_run("provider initial and previous reads gate new login", initial_and_previous_reads);
     test_run("provider pending login suppresses reads and handles errors", pending_login_and_errors);
+    test_run("provider picker cancellation preserves initial status read", picker_cancellation_preserves_initial_read);
     test_run("provider cancelled old attempt cannot clear current code", cancelled_attempt);
     test_run("provider teardown cancels pending status and login", teardown);
 }

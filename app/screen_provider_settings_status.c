@@ -184,7 +184,9 @@ static void login_done(void *owner, Request *req) {
 }
 
 void screen_provider_settings_cancel_login(FormScreen *s) {
-    request_cancel(&s->req_login); request_cancel(&s->req_status);
+    // Picker changes must preserve the initial read, but discard polls from a login attempt.
+    if (s->req_login || s->login_from || s->device_code || s->code_wanted) request_cancel(&s->req_status);
+    request_cancel(&s->req_login);
     if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_LOGIN);
     json_free(s->login_from); s->login_from = NULL;
     set_string(&s->device_code, NULL); s->code_wanted = false;
