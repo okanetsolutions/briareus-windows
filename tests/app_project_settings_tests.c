@@ -4,6 +4,7 @@
 #include "suites.h"
 
 static Route ROUTES[] = {
+    {"GET", "/settings/projects", "admin"},
     {"POST", "/settings/projects", "admin"}, {"PUT", "/settings/projects/{id}", "admin"},
 };
 typedef struct { ScreenFixture fixture; FormScreen *form; Doc doc; } Form;
@@ -71,12 +72,13 @@ static void test_create_clone_and_unsupported(void) {
             screen_settings_form_fill(f.form); CHECK(!screen_settings_tab_changed(f.form, T_REVIEW));
             if (mode == 0) screen_settings_set_edit_text(f.form->edits[F_REPO], "o/new");
         }
+        if (mode == 2) toggle(&f);
         // Clones carry the current body without an id, then clear only the unique repository.
         char *why = NULL; int tab = T_PROJECT;
         Json *copy = screen_settings_form_body(f.form, &why, &tab); CHECK(copy != NULL); CHECK(why == NULL);
         json_set_str(copy, "repo", "");
         FormScreen *clone = (FormScreen *)project_settings_screen_new(copy, NULL);
-        CHECK_INT(clone->babysit.supported, mode >= 2); CHECK_INT(clone->babysit.on, mode == 3);
+        CHECK_INT(clone->babysit.supported, mode >= 2); CHECK_INT(clone->babysit.on, mode >= 2);
         CHECK_INT(clone->id, 0); CHECK_STR(json_str(json_get(clone->row, "repo")), "");
         if (mode) CHECK_INT(json_int_or(json_get(clone->row, "unknown"), 0), 17);
         clone->base.vt->destroy(&clone->base); json_free(copy); free(why);
@@ -84,7 +86,7 @@ static void test_create_clone_and_unsupported(void) {
         screen_settings_form_save(f.form); screen_fixture_pump(&f.fixture, 1);
         CHECK_STR(f.fixture.method, "POST"); CHECK_STR(f.fixture.url, "https://example.com/api/v1/settings/projects");
         if (mode < 2) CHECK(json_is_null(json_get(f.fixture.body, "babysitPrs")));
-        else CHECK(json_bool_is(json_get(f.fixture.body, "babysitPrs"), mode == 3));
+        else CHECK(json_bool_is(json_get(f.fixture.body, "babysitPrs"), mode >= 2));
         CHECK_INT(f.form->id, 8); CHECK(!f.form->dirty);
         CHECK_INT(f.form->babysit.supported, mode >= 2); CHECK(!f.form->babysit.on);
         cleanup(&f); json_free(defaults);

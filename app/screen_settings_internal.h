@@ -1,6 +1,6 @@
-#include "project_settings.h"
 #ifndef BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
 #define BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
+#include "project_settings.h"
 #include "meeting.h"
 #include "mcp.h"
 #include "screens.h"
