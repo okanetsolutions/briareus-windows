@@ -364,12 +364,30 @@ void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue) {
     doc_custom(doc, x, w, font_height(doc->cv, FONT_CAPTION2) + px(4), paint_epic, d, free, 0, 0);
 }
 
-void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg) {
+typedef struct { bool folded; } IssueFoldData;
+static void paint_issue_fold(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    IssueFoldData *d = it->data;
+    COLORREF ink = doc_item_hovered(doc, it) ? theme.ink : theme.muted;
+    draw_glyph(cv, d->folded ? 0xE76C : 0xE70D, rc, FONT_ICON_SMALL, ink);
+}
+
+void doc_issue_row_foldable(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg, int fold_action, bool folded) {
     int box = doc_box_begin(doc, x, w, px(10), theme.raise, theme.line, px(12));
     int ix = x + px(12), iw = w - px(24);
+    int title_x = ix, title_w = iw, title_bottom = doc->y;
+    if (fold_action) {
+        int top = doc->y;
+        IssueFoldData *data = xcalloc(1, sizeof *data); data->folded = folded;
+        int at = doc_custom(doc, ix, px(24), px(24), paint_issue_fold, data, free, fold_action, issue->number);
+        Item *it = doc_item(doc, at);
+        it->tip = xstrdup(folded ? "Show sub-issues" : "Hide sub-issues");
+        title_x = it->rc.right + px(6); title_w = ix + iw - title_x; title_bottom = it->rc.bottom;
+        doc->y = top;
+    }
     char *title = xstrfmt("%s%s", issue_is_epic(issue) ? "\xE2\x97\x8E " : "", issue->title);
-    doc_text(doc, ix, iw, title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
+    doc_text(doc, title_x, title_w, title, FONT_BODY_SEMIBOLD, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
     free(title);
+    if (doc->y < title_bottom) doc->y = title_bottom;
     doc_space(doc, px(4));
     MetaData *d = xcalloc(1, sizeof *d);
     char *number = xstrfmt("#%d", issue->number); meta_add(d, number, theme.muted, false); free(number);
@@ -393,6 +411,10 @@ void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char
     for (size_t i = 0; i < issue->pull_count; i++) { doc_space(doc, px(4)); doc_linked_row(doc, ix, iw, &issue->pulls[i], repo, 0, 0); }
     doc_box_end(doc, box, px(10));
     doc_box_action(doc, box, action, arg);
+}
+
+void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg) {
+    doc_issue_row_foldable(doc, x, w, issue, repo, nested, action, arg, 0, false);
 }
 
 // MARK: - Tabs

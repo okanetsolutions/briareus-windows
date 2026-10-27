@@ -15,7 +15,7 @@
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE };
 
 enum { ACT_SSH_BASE = 1100 };
 
@@ -50,6 +50,7 @@ typedef struct {
     Json *board;
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
+    IssueFolds issue_folds; // Session-only, retained while this repository board lives.
     int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_FILES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab

@@ -425,6 +425,8 @@ void doc_linked_row_status(Doc *doc, int x, int w, const BoardLink *link, const 
 /// The row of a pull request on the board; `issue_status`, when given, holds the project Status of each issue it closes.
 void doc_pull_row(Doc *doc, int x, int w, const PullSummary *pull, const StackPosition *stack, const char *repo, const char *const *issue_status, int action, intptr_t arg, const ButtonSpec *buttons, size_t button_count, bool running);
 /// The row of an issue on the board.
+/// A separate title chevron dispatches fold_action with the stable issue number; zero omits it.
+void doc_issue_row_foldable(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg, int fold_action, bool folded);
 void doc_issue_row(Doc *doc, int x, int w, const IssueSummary *issue, const char *repo, bool nested, int action, intptr_t arg);
 /// An epic's bar of closed sub-issues against all of them, with "N/M done" after it.
 void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue);
