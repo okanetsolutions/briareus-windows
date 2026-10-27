@@ -58,9 +58,10 @@ static Screen *new_sessions(void) {
     for (int i = 0; i < 30; i++) {
         Json *row = json_object(); char id[16]; snprintf(id, sizeof id, "s%d", i);
         json_set_str(row, "id", id); json_set_str(row, "repo", "o/r"); json_set_str(row, "title", "Conversation");
+        json_set_str(row, "status", "idle");
         json_array_push(list, row);
     }
-    CHECK(sessions_parse(list, &s->sessions, &s->count)); json_free(list);
+    CHECK(sessions_parse(list, &s->sessions, &s->count)); CHECK_INT(s->count, 30); json_free(list);
     s->loaded = true; s->select_mode = true;
     return &s->base;
 }
