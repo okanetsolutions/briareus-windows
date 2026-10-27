@@ -1,8 +1,26 @@
 #include "screen_status_internal.h"
 
+bool status_uncertain(StatusScreen *s, StatusCard *c) {
+    if (!status_current(s)) return false;
+    char *key = xstrfmt("%s:%s", session_repo(&c->session), session_id(&c->session));
+    bool uncertain = json_bool_is(json_get(g_store.status_uncertain, key), true);
+    free(key); return uncertain;
+}
+void status_set_uncertain(StatusScreen *s, StatusCard *c, bool uncertain) {
+    if (!status_current(s)) return;
+    char *key = xstrfmt("%s:%s", session_repo(&c->session), session_id(&c->session));
+    if (uncertain) {
+        if (!g_store.status_uncertain) g_store.status_uncertain = json_object();
+        json_set_bool(g_store.status_uncertain, key, true);
+    } else {
+        json_object_remove(g_store.status_uncertain, key);
+        if (!json_count(g_store.status_uncertain)) { json_free(g_store.status_uncertain); g_store.status_uncertain = NULL; }
+    }
+    free(key);
+}
 bool status_can_answer(StatusScreen *s, StatusCard *c) {
     if (!status_current(s) || !s->shown || !c->present || !c->confirmed) return false;
-    if (s->write || s->check_read || c->uncertain || c->answered) return false;
+    if (s->write || s->check_read || status_uncertain(s, c) || c->answered) return false;
     if ((double)GetTickCount64() < s->detail_retry_until) return false;
     if ((double)GetTickCount64() < s->message_retry_until) return false;
     return session_state(&c->session) == SESSION_WAITING && transcript_pending_question(&c->transcript) && store_supports("message");
@@ -63,6 +81,7 @@ static void write_done(void *owner, Request *req) {
     if (!status_current(s)) return;
     c->confirmed = false;
     if (req->ok) {
+        status_set_uncertain(s, c, false);
         c->answered = true;
         json_free(c->answered_question); c->answered_question = json_clone(s->send_question);
         char *trim = str_trim(c->draft ? c->draft : "");
@@ -71,7 +90,7 @@ static void write_done(void *owner, Request *req) {
         }
         free(trim); set_string(&c->error, NULL);
     } else {
-        request_error_into(&c->error, req); c->uncertain = request_outcome_unknown(req);
+        request_error_into(&c->error, req); status_set_uncertain(s, c, request_outcome_unknown(req));
         if (req->error.retry_after > 0) {
             double until = (double)GetTickCount64() + req->error.retry_after * 1000;
             if (until > s->message_retry_until) s->message_retry_until = until;
@@ -94,6 +113,7 @@ static void check_done(void *owner, Request *req) {
     request_cancel(&s->question_read);
     Json *args = json_object(); json_set_str(args, "sessionId", session_id(&c->session)); json_set_str(args, "text", s->send_text);
     c->confirmed = false;
+    status_set_uncertain(s, c, true);
     store_call("message", args, 0, s, write_done, 0, &s->write); pane_relayout(s->base.pane);
 }
 void status_send(StatusScreen *s, size_t index, const char *text) {

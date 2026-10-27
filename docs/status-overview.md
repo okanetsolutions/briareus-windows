@@ -23,13 +23,16 @@ reads remain explicit, and unconfirmed cached questions cannot be answered.
 Inline answers require both the catalog route and token permission for `message`.
 Before sending an option or trimmed text, Status reads the session again and
 compares the ask's full event identity and turn identity. Rebuilt lists and question
-reads invalidate rendered actions immediately, before deferred paint. Changed asks
+reads invalidate rendered actions immediately, before deferred paint. Keyboard
+submission uses the rendered Send action and the same invalidation guard. Changed asks
 retain the draft and require a new action. Successful sends suppress repeats of
 that ask, while a new ask resets suppression even without optional timestamps.
 
 Writes are never retried automatically. Refusals retain drafts/errors; other errors
 and local cancellation of a send block further sends until the user checks the
-conversation and explicitly requests a refresh. The current server message route
+conversation and explicitly requests a refresh. Per-session send interlocks live
+with the connection, surviving Status destruction and reopening; replacing the
+connection clears them. The current server message route
 accepts text, without an atomic expected-question argument, so a server-side change
 between the confirmation read and write remains a transport limitation.
 

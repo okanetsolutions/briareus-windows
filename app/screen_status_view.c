@@ -32,11 +32,12 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int w) {
             if (label) doc_button(doc, pad, iw, label, BUTTON_BORDERED, STATUS_OPTION, status_action_add(s, index, (int)i), can);
         }
         c->laid = true; c->rect = (RECT){ pad, doc->y, pad + iw, doc->y + px(36) }; doc_space(doc, px(40));
-        doc_button(doc, pad, iw, "Send reply", BUTTON_PROMINENT, STATUS_SEND, status_action_add(s, index, -1), can && !str_empty(c->draft));
+        c->reply_action = status_action_add(s, index, -1);
+        doc_button(doc, pad, iw, "Send reply", BUTTON_PROMINENT, STATUS_SEND, c->reply_action, can && !str_empty(c->draft));
     }
     if (c->read_error) doc_notice(doc, pad, iw, c->read_error);
     if (c->error) doc_notice(doc, pad, iw, c->error);
-    if (c->uncertain) {
+    if (status_uncertain(s, c)) {
         doc_notice(doc, pad, iw, "The send outcome is unknown. Check the conversation before allowing another send.");
         doc_button(doc, pad, iw, "I checked the conversation; refresh", BUTTON_BORDERED, STATUS_RESOLVE, status_action_add(s, index, -1), !s->write && !s->check_read);
     }
@@ -69,7 +70,7 @@ static LRESULT CALLBACK reply_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
     StatusScreen *s = (StatusScreen *)ref;
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
         for (size_t i = 0; i < s->card_count; i++) if (s->cards[i]->edit == hwnd) {
-            status_send(s, i, s->cards[i]->draft); break;
+            s->base.vt->action(&s->base, STATUS_SEND, s->cards[i]->reply_action, (POINT){0}); break;
         }
         return 0;
     }

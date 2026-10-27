@@ -71,7 +71,7 @@ static StatusScreen *setup(Stub *stub, const char *permission, size_t route_coun
     Screen *screen = status_screen_new(); pane_set_root(pane, screen); return (StatusScreen *)screen;
 }
 static void cleanup(Stub *stub) {
-    pane_set_root(pane, NULL); api_client_release(g_store.client); g_store.client = NULL;
+    pane_set_root(pane, NULL); json_free(g_store.status_uncertain); g_store.status_uncertain = NULL; api_client_release(g_store.client); g_store.client = NULL;
     free(stub->body); free(stub->url); free(stub->method); free(stub->read_url);
     if (stub->entered) CloseHandle(stub->entered);
     if (stub->resume) CloseHandle(stub->resume);
@@ -170,7 +170,7 @@ static void test_failures_and_uncertainty(void) {
         size_t index = card(s, "wait"); set_string(&s->cards[index]->draft, "retain draft");
         status_send(s, index, s->cards[index]->draft); pump(5);
         CHECK_STR(s->cards[index]->draft, "retain draft"); CHECK(s->cards[index]->error != NULL);
-        CHECK_INT(s->cards[index]->uncertain, code == 500);
+        CHECK_INT(status_uncertain(s, s->cards[index]), code == 500);
         if (code == 500) { status_send(s, index, "retry"); CHECK_INT(stub.writes, 1); CHECK(s->check_read == NULL); }
         cleanup(&stub);
     }
@@ -187,7 +187,7 @@ static void test_cancel_and_isolation(void) {
     memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
     index = card(s, "wait"); block(&stub, true); status_send(s, index, "once"); pump(1);
     CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
-    s->base.vt->visible(&s->base, false); CHECK(s->cards[index]->uncertain); SetEvent(stub.resume); pump(1);
+    s->base.vt->visible(&s->base, false); CHECK(status_uncertain(s, s->cards[index])); SetEvent(stub.resume); pump(1);
     CHECK_INT(stub.writes, 1); cleanup(&stub);
 
     memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
@@ -196,7 +196,9 @@ static void test_cancel_and_isolation(void) {
     CHECK(server_address_parse("https://other.example.com", &address));
     g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &error);
     server_address_free(&address); api_error_clear(&error); CHECK(g_store.client != NULL);
-    CHECK(!status_current(s)); status_send(s, card(s, "wait"), "wrong server"); CHECK_INT(stub.writes, 0);
+    CHECK(!status_current(s));
+    status_set_uncertain(s, s->cards[card(s, "wait")], true); CHECK(g_store.status_uncertain == NULL);
+    status_send(s, card(s, "wait"), "wrong server"); CHECK_INT(stub.writes, 0);
     Doc doc; doc_init(&doc); draw(s, &doc); CHECK_INT(s->action_count, 0); doc_free(&doc);
     api_client_release(g_store.client); g_store.client = client;
     stub.projects = "[]"; s->base.vt->refresh(&s->base); pump(2);
@@ -306,7 +308,7 @@ static void test_message_retry_after(void) {
     size_t index = card(s, "wait"); StatusCard *c = s->cards[index];
     set_string(&c->draft, "retain reply");
     status_send(s, index, c->draft); pump(5);
-    CHECK_INT(stub.writes, 1); CHECK(!c->uncertain); CHECK(c->error != NULL);
+    CHECK_INT(stub.writes, 1); CHECK(!status_uncertain(s, c)); CHECK(c->error != NULL);
     CHECK_STR(c->draft, "retain reply"); CHECK(c->confirmed);
     CHECK(s->message_retry_until > (double)GetTickCount64() + 119000);
     double deadline = s->message_retry_until;
@@ -396,6 +398,58 @@ static void test_reply_keyboard(void) {
     SendMessageW(c->edit, WM_KEYDOWN, VK_F5, 0); CHECK(s->projects_read != NULL); pump(3);
     doc_free(&doc); cleanup(&stub); ShowWindow(dispatcher, SW_HIDE);
 }
+static void test_keyboard_rejects_unpainted_ask(void) {
+    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    RECT bounds = {0, 0, 700, 1200}; pane_set_bounds(pane, &bounds);
+    Doc doc; doc_init(&doc); draw(s, &doc);
+    RECT content = pane_content_rect(pane); status_place(&s->base, &content, 0);
+    StatusCard *c = s->cards[card(s, "wait")]; CHECK(c->edit != NULL);
+    SetWindowTextW(c->edit, L"Draft for original ask"); SetFocus(c->edit);
+    stub.answer = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
+        "\"events\":[{\"seq\":2,\"kind\":\"ask\",\"text\":\"Replacement fixture\"}]}";
+    s->next_question = 0; status_questions_next(s); pump(1);
+    CHECK_INT(transcript_pending_question(&c->transcript)->seq, 2);
+    CHECK(status_can_answer(s, c));
+    // Dispatch Enter before the deferred replacement layout.
+    SendMessageW(c->edit, WM_KEYDOWN, VK_RETURN, 0);
+    CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 0);
+    CHECK_STR(c->draft, "Draft for original ask");
+    draw(s, &doc); status_place(&s->base, &content, 0);
+    SendMessageW(c->edit, WM_KEYDOWN, VK_RETURN, 0); pump(5);
+    CHECK_INT(stub.writes, 1);
+    Json *body = json_parsez(stub.body); CHECK_STR(json_str(json_get(body, "text")), "Draft for original ask"); json_free(body);
+    doc_free(&doc); cleanup(&stub);
+}
+static void test_uncertainty_survives_reopen(void) {
+    for (int cancelled = 0; cancelled < 2; cancelled++) {
+        Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+        if (cancelled) block(&stub, true);
+        else stub.write_status = 500;
+        status_send(s, card(s, "wait"), "Original reply");
+        if (cancelled) {
+            pump(1); CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
+        } else pump(5);
+        // Replace the root, freeing the card and locally cancelling any outstanding POST.
+        pane_set_root(pane, NULL);
+        s = (StatusScreen *)status_screen_new(); pane_set_root(pane, &s->base); pump(3);
+        size_t index = card(s, "wait"); StatusCard *c = s->cards[index];
+        CHECK(c->confirmed); CHECK(status_uncertain(s, c)); CHECK(!status_can_answer(s, c));
+        CHECK(!status_uncertain(s, s->cards[card(s, "held")]));
+        status_send(s, index, "Duplicate"); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 1);
+        if (cancelled) {
+            SetEvent(stub.resume); pump(1); // discarded completion must not silently clear the interlock
+            CHECK(status_uncertain(s, c));
+        }
+        s->base.vt->refresh(&s->base); pump(3); CHECK(!status_can_answer(s, c));
+        Doc doc; doc_init(&doc); draw(s, &doc);
+        intptr_t resolve = card_action_arg(s, &doc, STATUS_RESOLVE, index);
+        s->base.vt->action(&s->base, STATUS_RESOLVE, resolve, (POINT){0}); pump(3);
+        CHECK(!status_uncertain(s, c)); CHECK(status_can_answer(s, c)); CHECK_INT(stub.writes, 1);
+        stub.write_status = 0;
+        status_send(s, index, "Explicit retry"); pump(5); CHECK_INT(stub.writes, 2);
+        doc_free(&doc); cleanup(&stub);
+    }
+}
 static void test_held_navigation_and_teardown(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     Screen *moved = pane_take_root(pane);
@@ -434,6 +488,8 @@ void app_status_tests(void) {
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
     test_run("Status retries failed transcript batches with later or empty reads", test_transcript_persistence_retry);
     test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);
+    test_run("Status keyboard rejects replacement asks until rendered", test_keyboard_rejects_unpainted_ask);
+    test_run("Status unknown send interlocks survive root replacement and refresh", test_uncertainty_survives_reopen);
     test_run("Status held findings open their conversation and teardown cancels reads", test_held_navigation_and_teardown);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }

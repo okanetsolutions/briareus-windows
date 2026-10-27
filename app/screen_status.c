@@ -111,7 +111,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
     if (action == STATUS_OPEN) { app_push_from(base, conversation_screen_new(&c->session)); return; }
     if (action == STATUS_RESOLVE) {
         // Explicit acknowledgement of an uncertain write never resends the draft.
-        c->uncertain = false; c->confirmed = false; set_string(&c->error, NULL); status_load(s); return;
+        status_set_uncertain(s, c, false); c->confirmed = false; set_string(&c->error, NULL); status_load(s); return;
     }
     const Event *question = transcript_pending_question(&c->transcript);
     if (action == STATUS_OPTION && question) {
@@ -132,7 +132,7 @@ static void visible(Screen *base, bool shown) {
     if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); }
     else {
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s);
-        if (s->write) { s->cards[s->sending_card]->uncertain = true; set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
+        if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
     }
 }

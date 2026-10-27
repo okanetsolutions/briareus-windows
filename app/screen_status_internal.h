@@ -14,9 +14,10 @@ typedef struct {
     Json *identity, *answered_question;
     Json *unsaved_events; // retained until the entire append succeeds
     Transcript transcript;
-    bool present, confirmed, uncertain, answered, laid;
+    bool present, confirmed, answered, laid;
     char *draft, *error, *read_error;
     HWND edit;
+    intptr_t reply_action; // rendered Send action, invalidated with the document
     RECT rect;
 } StatusCard;
 typedef struct { size_t card; int option; } StatusAction;
@@ -42,6 +43,8 @@ void status_load(StatusScreen *s);
 void status_questions_next(StatusScreen *s);
 void status_cancel_questions(StatusScreen *s);
 void status_send(StatusScreen *s, size_t card, const char *text);
+bool status_uncertain(StatusScreen *s, StatusCard *c);
+void status_set_uncertain(StatusScreen *s, StatusCard *c, bool uncertain);
 bool status_can_answer(StatusScreen *s, StatusCard *c);
 void status_layout(Screen *base, Doc *doc);
 void status_place(Screen *base, const RECT *content, int scroll_y);
