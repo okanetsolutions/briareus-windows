@@ -16,7 +16,7 @@ static const char *question = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo
     "\"events\":[{\"seq\":1,\"kind\":\"ask\",\"question\":\"Which fixture?\",\"options\":[{\"label\":\"First fixture\"},{\"label\":\"Second fixture\"}]}]}";
 typedef struct {
     const char *sessions, *answer, *projects;
-    int read_status, write_status;
+    int read_status, write_status, blocked_read;
     const char *retry_after;
     volatile LONG reads, writes;
     char *body, *url, *method, *read_url;
@@ -42,8 +42,9 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         if (stub->retry_after) *retry = xstrdup(stub->retry_after);
     } else answer = stub->sessions ? stub->sessions : lists;
     *response = xstrdup(answer); *len = strlen(answer);
+    bool block_detail = detail && (!stub->blocked_read || stub->reads == stub->blocked_read);
     LeaveCriticalSection(&stub->lock);
-    if (stub->entered && (stub->block_sessions ? !write && !detail && !strstr(url, "/projects") : stub->block_write ? write : detail)) { SetEvent(stub->entered); WaitForSingleObject(stub->resume, 10000); }
+    if (stub->entered && (stub->block_sessions ? !write && !detail && !strstr(url, "/projects") : stub->block_write ? write : block_detail)) { SetEvent(stub->entered); WaitForSingleObject(stub->resume, 10000); }
     return true;
 }
 static void pump(int expected) {
@@ -209,11 +210,13 @@ static void test_poll_preserves_reads_and_scan(void) {
     cleanup(&stub);
 
     memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
-    block(&stub, false); status_send(s, card(s, "wait"), "across poll");
+    block(&stub, false); stub.blocked_read = 2; status_send(s, card(s, "wait"), "across poll");
     CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0);
     Request *check = s->check_read;
-    status_load(s); pump(2); CHECK(s->check_read == check);
-    SetEvent(stub.resume); pump(6); CHECK_INT(stub.writes, 1);
+    // Let the poll's background detail finish before releasing the preflight. Otherwise its
+    // cancellation races scan completion and the following poll can need one fewer read.
+    status_load(s); pump(3); CHECK(s->check_read == check); CHECK(s->question_read == NULL);
+    SetEvent(stub.resume); pump(5); CHECK_INT(stub.writes, 1);
     cleanup(&stub);
 }
 static void test_poll_invalidates_changed_reads(void) {
