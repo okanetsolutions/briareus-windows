@@ -280,6 +280,7 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
 // with each parameter named after the argument that fills it. A route without a `{}` sends every argument in the query
 // (GET, DELETE) or the body (the rest).
 static const ApiRoute ROUTES[] = {
+    {"session_stats", "GET", "sessions/{sessionId}/stats", NULL, NULL, NULL},
     // Projects
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },

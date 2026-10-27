@@ -17,6 +17,7 @@ static void set_error_from(const ApiError *e) { char *t = api_error_description(
 static void drop_client(void) {
     if (g_store.client) { api_client_release(g_store.client); g_store.client = NULL; }
     g_store.status_detail_retry_until = 0; g_store.status_message_retry_until = 0;
+    json_free(g_store.resources_retries); g_store.resources_retries = NULL;
     json_free(g_store.status_uncertain); g_store.status_uncertain = NULL;
     g_store.home_uncertain = false;
     memset(g_store.home_retry_until, 0, sizeof g_store.home_retry_until);
@@ -372,9 +373,10 @@ void store_handle_message(UINT msg, WPARAM wp, LPARAM lp) {
     (void)wp;
     if (msg == WM_APP_REQUEST_DONE) {
         Request *r = (Request *)lp;
+        if (r->completed) r->completed(r->completion_ctx, r);
         if (r->cancelled) { request_free(r); return; }
         if (r->slot) *r->slot = NULL;
-        if (!r->ok && api_error_unauthorized(&r->error) && r->client == g_store.client) store_invalidate_credentials(&r->error);
+        if (!r->auth_checked && !r->ok && api_error_unauthorized(&r->error) && r->client == g_store.client) store_invalidate_credentials(&r->error);
         if (r->done) r->done(r->owner, r);
         request_free(r);
     } else if (msg == WM_APP_ASYNC_DONE) {

@@ -14,7 +14,7 @@
 
 struct Pane {
     HWND hwnd;
-    bool sidebar;
+    bool sidebar, shown;
     Screen **stack; size_t depth, cap;
     Doc doc;
     bool dirty;
@@ -79,6 +79,7 @@ Pane *pane_create(HWND parent, bool sidebar) {
     doc_init(&p->doc);
     // WS_CLIPSIBLINGS: a side panel's pane lies over the detail's, which must not paint through it.
     p->hwnd = CreateWindowExW(0, PANE_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), p);
+    p->shown = IsWindowVisible(p->hwnd) && !IsIconic(GetAncestor(p->hwnd, GA_ROOT));
     p->canvas = canvas_for_window(p->hwnd);
     all_panes = xrealloc(all_panes, (pane_count + 1) * sizeof *all_panes);
     all_panes[pane_count++] = p;
@@ -103,6 +104,25 @@ bool pane_is_sidebar(Pane *p) { return p->sidebar; }
 void screen_release(Screen *s) { if (!s) return; free(s->id); free(s); }
 
 static void set_visible(Screen *s, bool shown) { if (s && s->vt->visible) s->vt->visible(s, shown); }
+static void visibility_changed(Pane *p, bool shown) {
+    if (p->shown == shown) return;
+    p->shown = shown;
+    Screen *s = pane_top(p);
+    if (s && s->vt->effective_visibility) set_visible(s, shown);
+}
+static void show_top(Pane *p) {
+    Screen *s = pane_top(p);
+    p->shown = IsWindowVisible(p->hwnd) && !IsIconic(GetAncestor(p->hwnd, GA_ROOT));
+    set_visible(s, s && s->vt->effective_visibility ? p->shown : true);
+}
+void pane_window_visibility(HWND window, bool shown) {
+    for (size_t i = 0; i < pane_count; i++) {
+        Pane *p = all_panes[i];
+        if (GetAncestor(p->hwnd, GA_ROOT) != window) continue;
+        bool child_shown = (GetWindowLongPtrW(p->hwnd, GWL_STYLE) & WS_VISIBLE) != 0;
+        visibility_changed(p, shown && child_shown && !IsIconic(window));
+    }
+}
 
 void pane_push(Pane *p, Screen *s) {
     find_hide(p, false);
@@ -112,7 +132,7 @@ void pane_push(Pane *p, Screen *s) {
     p->stack[p->depth++] = s;
     p->scroll_y = 0; p->scroll_x = 0; p->stick_bottom = false; p->show_bottom_button = false;
     doc_free(&p->doc); doc_init(&p->doc);
-    set_visible(s, true);
+    show_top(p);
     pane_relayout(p);
 }
 static void destroy_top(Pane *p) {
@@ -127,10 +147,10 @@ void pane_pop(Pane *p) {
     destroy_top(p);
     p->scroll_y = 0; p->stick_bottom = false; p->show_bottom_button = false;
     doc_free(&p->doc); doc_init(&p->doc);
-    set_visible(p->stack[p->depth - 1], true);
+    show_top(p);
     pane_relayout(p);
 }
-void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { set_visible(p->stack[0], true); pane_relayout(p); } }
+void pane_pop_to_root(Pane *p) { while (p->depth > 1) destroy_top(p); if (p->depth) { show_top(p); pane_relayout(p); } }
 Screen *pane_take_root(Pane *p) {
     if (p->depth != 1) return NULL;
     find_hide(p, false);
@@ -907,6 +927,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         EnumChildWindows(hwnd, repaint_child, 0);
         return 0;
     }
+    case WM_SHOWWINDOW: visibility_changed(p, wp && IsWindowVisible(GetParent(hwnd)) && !IsIconic(GetAncestor(hwnd, GA_ROOT))); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_MOUSEMOVE: mouse_move(p, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), (wp & MK_LBUTTON) != 0); return 0;
