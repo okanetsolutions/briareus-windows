@@ -656,7 +656,7 @@ void app_pulls_tests(void) {
     test_run("pulls failed deadline write retains account/repository cooldown", test_failed_deadline_write_keeps_account_repository_cooldown);
     test_run("pulls saved cooldown survives cache invalidation", test_saved_deadline_survives_cache_invalidation);
     test_run("pull refresh invalidates in-flight rows", test_pull_refresh_invalidates_inflight_rows);
-    detached_close(fold_pane); pane_destroy(pane); DestroyWindow(parent);
+    DestroyWindow(GetAncestor(pane_hwnd(fold_pane), GA_ROOT)); pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&e);
     memset(&g_store, 0, sizeof g_store);
