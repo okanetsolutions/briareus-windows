@@ -5,6 +5,7 @@
 #include <windowsx.h>
 
 static Route routes[] = { { "GET", "/projects", "read" } };
+static wchar_t cache_directory[MAX_PATH];
 
 static void draw(Pane *pane) {
     RedrawWindow(pane_hwnd(pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
@@ -36,10 +37,17 @@ static void wheel(Pane *pane, int delta) {
 }
 static void start(ScreenFixture *f) {
     screen_fixture_init(f, routes, sizeof routes / sizeof *routes);
+    GetTempPathW(MAX_PATH, cache_directory); wcscat(cache_directory, L"briareus-sidebar-tests");
+    g_store.cache = cache_new(cache_directory); cache_remove_all(g_store.cache);
     f->parent = CreateWindowExW(0, L"STATIC", L"Sidebar scroll fixture", WS_POPUP,
         0, 0, 1000, 2400, NULL, NULL, GetModuleHandleW(NULL), NULL);
     CHECK(f->parent != NULL); f->pane = pane_create(f->parent, true);
     ShowWindow(f->parent, SW_SHOWNA);
+}
+static void finish(ScreenFixture *f) {
+    DiskCache *cache = g_store.cache;
+    screen_fixture_clear(f);
+    cache_remove_all(cache); cache_free(cache); RemoveDirectoryW(cache_directory);
 }
 static Screen *load_projects(ScreenFixture *f) {
     Str reply; str_init(&reply); str_appendz(&reply, "[");
@@ -108,7 +116,7 @@ static void check_scroll_inputs(Pane *pane, int row_action) {
 static void check_resizes(Pane *pane) {
     int widths[] = { 240, 480 };
     for (size_t i = 0; i < sizeof widths / sizeof *widths; i++) {
-        resize(pane, widths[i], 140); wheel(pane, -WHEEL_DELTA); check_strip(pane);
+        resize(pane, widths[i], 240); wheel(pane, -WHEEL_DELTA); check_strip(pane);
         CHECK(pane_scroll_y(pane) > 0);
         resize(pane, widths[i], 2200); check_strip(pane);
         CHECK_INT(pane_scroll_y(pane), 0);
@@ -125,7 +133,7 @@ static void test_project_sidebar(void) {
     CHECK(pane_top(f.pane) != s); CHECK_INT(pane_scroll_y(f.pane), 0); check_strip(f.pane);
     click(f.pane, item_center(f.pane, action_item(pane_doc(f.pane), ACT_BACK, 0)));
     CHECK(pane_top(f.pane) == s); CHECK_INT(pane_scroll_y(f.pane), 0); check_strip(f.pane);
-    screen_fixture_clear(&f);
+    finish(&f);
 }
 static void test_session_sidebar(void) {
     ScreenFixture f; start(&f); Screen *s = new_sessions(); pane_set_root(f.pane, s);
@@ -143,7 +151,7 @@ static void test_session_sidebar(void) {
     sessions_free(((SessionsScreen *)s)->sessions, ((SessionsScreen *)s)->count);
     ((SessionsScreen *)s)->sessions = NULL; ((SessionsScreen *)s)->count = 0;
     pane_relayout(f.pane); draw(f.pane); check_strip(f.pane); CHECK_INT(pane_scroll_y(f.pane), 0);
-    screen_fixture_clear(&f); theme_set_dpi(96);
+    finish(&f); theme_set_dpi(96);
 }
 void app_sidebar_tests(void) {
     screen_fixture_prepare();
