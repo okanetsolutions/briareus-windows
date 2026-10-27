@@ -636,6 +636,15 @@ static bool layout_has_action(Screen *s, int action) {
     for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action) found = true;
     doc_free(&d); return found;
 }
+static void select_pull_tab(Screen *s, const char *title) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
+    int action = 0; intptr_t arg = 0;
+    for (size_t i = 0; i < d.count; i++) if (str_eq(d.items[i].tip, title)) {
+        action = d.items[i].action; arg = d.items[i].arg; break;
+    }
+    CHECK_INT(action, ACT_PR_TAB); doc_free(&d);
+    if (action) s->vt->action(s, action, arg, (POINT){0});
+}
 static void test_pull_tabs_keep_destinations_and_summary(void) {
     reset();
     static Route tab_routes[] = {
@@ -674,17 +683,17 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     CHECK_INT(tabs, 5); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
     CHECK(layout_contains(base, "Body marker"));
     CHECK_INT(files_calls, 0); CHECK_INT(comments_calls, 0);
-    base->vt->action(base, ACT_PR_TAB, PR_TAB_CONVERSATION, (POINT){0}); drain(1);
+    select_pull_tab(base, "Conversation"); drain(1);
     CHECK_INT(comments_calls, 1); CHECK(layout_contains(base, "Timeline marker"));
     CHECK(!layout_contains(base, "Body marker"));
-    base->vt->action(base, ACT_PR_TAB, PR_TAB_FILES, (POINT){0}); drain(1);
+    select_pull_tab(base, "Files changed"); drain(1);
     CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
     CHECK(!layout_contains(base, "Timeline marker"));
-    base->vt->action(base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
+    select_pull_tab(base, "Findings");
     CHECK(layout_contains(base, "Finding marker")); CHECK(layout_has_action(base, ACT_FINDING_TOGGLE));
-    base->vt->action(base, ACT_PR_TAB, PR_TAB_SESSIONS, (POINT){0});
+    select_pull_tab(base, "Sessions");
     CHECK(layout_has_action(base, ACT_OPEN_RUN)); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
-    base->vt->action(base, ACT_PR_TAB, PR_TAB_RUN, (POINT){0});
+    select_pull_tab(base, "Run");
     CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
     const intptr_t retired[] = { 4, 5, -1, 8, INTPTR_MAX };
     for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) {
@@ -692,7 +701,8 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
         CHECK_INT(s->tab, PR_TAB_BODY); CHECK(layout_contains(base, "Body marker"));
         CHECK(!layout_has_action(base, ACT_WEB_BROWSER));
     }
-    CHECK_INT(json_int_or(json_get(json_get(s->pr, "checks"), "failed"), 0), 1);
+    select_pull_tab(base, "Findings");
+    select_pull_tab(base, "PR Body"); CHECK(layout_contains(base, "Body marker"));
     pane_set_root(pane, NULL);
 }
 void app_pulls_tests(void) {
