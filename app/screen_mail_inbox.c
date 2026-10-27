@@ -238,7 +238,7 @@ bool screen_mail_inbox_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     if (vk == VK_RETURN) { if (s->focus_message >= 0) screen_mail_inbox_action(base, ACT_SELECT, s->focus_message, (POINT){0}); return true; }
     if (vk == 'M') { screen_mail_inbox_open_provider(s); return true; }
     if (vk == 'A') { screen_mail_inbox_cycle_account(s); return true; }
-    if (vk == 'R') { if (store_supports("reply_mail_message")) screen_mail_reply_action(s, ACT_REPLY); else screen_mail_inbox_open_provider(s); return true; }
+    if (vk == 'R') { base->vt->action(base, screen_mail_reply_allowed(s) ? ACT_REPLY : ACT_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_DELETE) { screen_mail_inbox_action(base, store_supports("delete_mail_message") ? ACT_DELETE : ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_OEM_2) { screen_mail_inbox_edit_filter(s, ACT_Q); return true; }
     return false;

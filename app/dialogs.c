@@ -770,7 +770,6 @@ static INT_PTR CALLBACK mail_draft_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM
         set_control_text(dialog, IDC_HINT, "Plain-text reply; review recipient and thread before sending.");
         set_control_text(dialog, IDC_NOTE, s->context);
         set_control_text(dialog, IDC_START, "Save draft");
-        ShowWindow(GetDlgItem(dialog, IDC_MIC), SW_HIDE);
         SendDlgItemMessageW(dialog, IDC_INPUT, EM_SETLIMITTEXT, 200000, 0);
         set_control_text(dialog, IDC_INPUT, *s->text);
         mail_draft_update(dialog);
@@ -799,5 +798,5 @@ static INT_PTR CALLBACK mail_draft_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM
 }
 bool dialog_mail_reply(HWND owner, const char *context, char **text) {
     MailDraftDialog s = { context, text };
-    return modal_box(IDD_ACTION_INPUT, owner, mail_draft_proc, (LPARAM)&s) == IDOK;
+    return modal_box(IDD_MAIL_REPLY, owner, mail_draft_proc, (LPARAM)&s) == IDOK;
 }

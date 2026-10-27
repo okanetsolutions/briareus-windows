@@ -158,8 +158,27 @@ static void old_completion_cannot_touch_new_connection(void) {
     SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK_STR(d->text, "new connection draft"); CHECK(!d->sent); CHECK(!d->uncertain);
     g_store.client = f.client; api_client_release(replacement); doc_free(&doc); screen_fixture_clear(&f);
 }
+static int keyboard_action;
+static void record_keyboard_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)base; (void)arg; (void)pt;
+    keyboard_action = action;
+}
+static void reply_keyboard_eligibility(void) {
+    ScreenFixture f; Doc doc; Inbox *s = setup(&f, &doc);
+    const ScreenVTable *original = s->base.vt;
+    ScreenVTable recording = *original; recording.action = record_keyboard_action; s->base.vt = &recording;
+    keyboard_action = 0;
+    CHECK(s->base.vt->key(&s->base, 'R', false, false)); CHECK_INT(keyboard_action, ACT_REPLY);
+    s->accounts.accounts[0].read_only = true; keyboard_action = 0;
+    CHECK(s->base.vt->key(&s->base, 'R', false, false)); CHECK_INT(keyboard_action, ACT_PROVIDER);
+    s->accounts.accounts[0].read_only = false; g_store.route_count = 3; keyboard_action = 0;
+    CHECK(s->base.vt->key(&s->base, 'R', false, false)); CHECK_INT(keyboard_action, ACT_PROVIDER);
+    CHECK_INT(f.writes, 0); CHECK(screen_mail_reply_draft(s, false) == NULL);
+    s->base.vt = original; cleanup(s, &doc, &f);
+}
 void app_mail_reply_tests(void) {
     screen_fixture_prepare();
+    test_run("mail reply keyboard chooses native editor or provider by selected mailbox eligibility", reply_keyboard_eligibility);
     test_run("mail reply dialog saves plain text and Cancel preserves previous draft without sending", draft_dialog_never_sends);
     test_run("mail reply old completion cannot mutate replacement connection draft", old_completion_cannot_touch_new_connection);
     test_run("mail reply requires route admin and current writable provider; exact send blocks duplicates", gating_and_success);
