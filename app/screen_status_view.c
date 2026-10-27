@@ -20,7 +20,7 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int w) {
     StatusCard *c = s->cards[index];
     int pad = px(12), box = doc_box_begin(doc, 0, w, pad, theme.raise, theme.line, px(12));
     int iw = w - pad * 2; heading(s, doc, index, pad, iw); doc_space(doc, px(8));
-    const Event *question = transcript_pending_question(&c->transcript);
+    const Event *question = session_state(&c->session) == SESSION_WAITING ? transcript_pending_question(&c->transcript) : NULL;
     const char *text = question ? question->question ? question->question : question->text : json_str(json_get(c->session.raw, "lastText"));
     if (text) doc_text(doc, pad, iw, text, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
     if (session_state(&c->session) == SESSION_FINDINGS) {

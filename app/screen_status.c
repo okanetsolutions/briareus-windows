@@ -16,12 +16,17 @@ static StatusCard *card_for(StatusScreen *s, const Session *session) {
     s->cards = xrealloc(s->cards, (s->card_count + 1) * sizeof *s->cards); s->cards[s->card_count++] = c;
     return c;
 }
-void status_rebuild(StatusScreen *s) {
-    status_cancel_questions(s);
+static void invalidate_card(StatusScreen *s, StatusCard *c) {
+    c->confirmed = false;
+    if (s->question_read && s->cards[s->reading_card] == c) request_cancel(&s->question_read);
+    if (s->check_read && s->cards[s->sending_card] == c) {
+        request_cancel(&s->check_read);
+        set_string(&c->error, "The question changed or was answered. Your reply was not sent.");
+    }
+}
+static void rebuild_cards(StatusScreen *s) {
     s->action_first = s->action_next; s->action_count = 0;
-    for (size_t i = 0; i < s->card_count; i++) { s->cards[i]->present = false; s->cards[i]->confirmed = false; }
-    sessions_free(s->sessions, s->count);
-    s->sessions = session_cache_read(s->projects, s->project_count, &s->count, &s->missing);
+    for (size_t i = 0; i < s->card_count; i++) { s->cards[i]->present = false; }
     session_overview_free(&s->overview); s->overview = session_overview(s->sessions, s->count);
     for (size_t i = 0; i < s->count; i++) {
         const Session *session = &s->sessions[i];
@@ -30,24 +35,46 @@ void status_rebuild(StatusScreen *s) {
         StatusCard *c = card_for(s, session);
         Json *identity = session_question_identity(session);
         if (!json_equal(identity, c->identity)) {
+            invalidate_card(s, c);
             c->answered = false;
             // The saved transcript is still useful for its cursor; only a new server read may confirm the ask.
             json_free(c->identity); c->identity = identity;
         } else json_free(identity);
         session_free(&c->session); session_copy(&c->session, session); c->present = true;
     }
-    s->next_question = 0;
+    for (size_t i = 0; i < s->card_count; i++) if (!s->cards[i]->present) invalidate_card(s, s->cards[i]);
+    // Finish the current scan before starting another polling pass.
+    if (!s->question_read && s->next_question >= s->card_count) s->next_question = 0;
     if (s->base.pane) { pane_relayout(s->base.pane); pane_header_changed(s->base.pane); }
+}
+void status_rebuild(StatusScreen *s) {
+    sessions_free(s->sessions, s->count);
+    s->sessions = session_cache_read(s->projects, s->project_count, &s->count, &s->missing);
+    rebuild_cards(s);
+}
+static void live_snapshot(StatusScreen *s, const Session *items, size_t count, size_t missing) {
+    Session *scoped = NULL; size_t n = 0;
+    for (size_t i = 0; i < count; i++) {
+        for (size_t p = 0; p < s->project_count; p++) {
+            if (!str_eq(session_repo(&items[i]), s->projects[p].repo)) continue;
+            scoped = xrealloc(scoped, (n + 1) * sizeof *scoped);
+            session_copy(&scoped[n++], &items[i]); break;
+        }
+    }
+    sessions_free(s->sessions, s->count); s->sessions = scoped; s->count = n; s->missing = missing;
+    rebuild_cards(s);
 }
 static void sessions_done(void *owner, Request *req) {
     StatusScreen *s = owner;
     if (!status_current(s)) return;
     Session *items = NULL; size_t count = 0;
     bool ok = req->ok && sessions_parse(req->result, &items, &count);
-    if (ok) { session_cache_save(s->projects, s->project_count, items, count); set_string(&s->error, NULL); }
-    else { char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error); }
+    if (ok) {
+        session_cache_save(s->projects, s->project_count, items, count);
+        live_snapshot(s, items, count, 0); set_string(&s->error, NULL);
+    } else { char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error); }
     sessions_free(items, count);
-    s->loaded = true; status_rebuild(s); status_questions_next(s); projects_recount_findings();
+    s->loaded = true; pane_relayout(s->base.pane); status_questions_next(s); projects_recount_findings();
     poller_finished(&s->poller, !ok, req->error.retry_after);
 }
 static void projects_done(void *owner, Request *req) {
@@ -58,7 +85,7 @@ static void projects_done(void *owner, Request *req) {
         projects_free(s->projects, s->project_count); s->projects = items; s->project_count = count;
         cache_store(g_store.cache, req->result, "projects");
         // Drop inaccessible projects immediately, even when the following sessions request fails.
-        status_rebuild(s);
+        live_snapshot(s, s->sessions, s->count, s->missing);
         store_call("sessions", json_object(), 0, s, sessions_done, 0, &s->sessions_read);
     } else {
         char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error);
@@ -134,8 +161,6 @@ Screen *status_screen_new(void) {
     Json *saved = cache_value(g_store.cache, "projects");
     s->loaded = saved && projects_parse(saved, &s->projects, &s->project_count); json_free(saved);
     // Reads start on visibility.
-    s->sessions = session_cache_read(s->projects, s->project_count, &s->count, &s->missing);
-    s->overview = session_overview(s->sessions, s->count);
     status_rebuild(s);
     return &s->base;
 }

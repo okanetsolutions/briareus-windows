@@ -6,7 +6,7 @@ bool status_can_answer(StatusScreen *s, StatusCard *c) {
     return session_state(&c->session) == SESSION_WAITING && transcript_pending_question(&c->transcript) && store_supports("message");
 }
 void status_cancel_questions(StatusScreen *s) {
-    request_cancel(&s->question_read); request_cancel(&s->check_read);
+    request_cancel(&s->question_read); request_cancel(&s->check_read); s->next_question = 0;
     for (size_t i = 0; i < s->card_count; i++) s->cards[i]->confirmed = false;
 }
 static bool adopt(StatusScreen *s, StatusCard *c, Request *req) {
