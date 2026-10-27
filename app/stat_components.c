@@ -63,6 +63,7 @@ static void paint_series(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     for (size_t i = 0; i < s->count; i++) {
         StatsPoint p = s->points[i];
         if (!p.number.present) { previous = false; continue; }
+        if (i && s->gap_ms > 0 && p.at_ms - s->points[i - 1].at_ms > s->gap_ms) previous = false;
         double share = (p.at_ms - s->first_ms) / (s->last_ms - s->first_ms);
         int x = left + (int)(share * (right - left));
         int y = bottom - (int)(p.number.value / maximum * (bottom - top));

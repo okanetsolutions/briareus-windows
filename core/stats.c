@@ -1,24 +1,24 @@
-#include "stats.h"
+#include "stats_internal.h"
 #include "str.h"
 #include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-static StatNumber number(const Json *j, bool integer) {
+StatNumber stats_number(const Json *j, bool integer) {
     double n;
     if (!json_num(j, &n) || !isfinite(n) || n < 0) return (StatNumber){0};
     if (integer && (floor(n) != n || n > 9007199254740991.0)) return (StatNumber){0};
     return (StatNumber){n, true};
 }
-static StatNumber timestamp(const Json *j) {
-    StatNumber n = number(j, true);
+StatNumber stats_timestamp(const Json *j) {
+    StatNumber n = stats_number(j, true);
     // JavaScript Date's supported range; formatting never narrows this to a time_t.
     if (n.value <= 0 || n.value > 8640000000000000.0) n = (StatNumber){0};
     return n;
 }
-static ProcessStats figures(const Json *j) {
-    return (ProcessStats){number(json_get(j, "cpuPercent"), false), number(json_get(j, "memoryBytes"), true), number(json_get(j, "processes"), true)};
+ProcessStats stats_figures(const Json *j) {
+    return (ProcessStats){stats_number(json_get(j, "cpuPercent"), false), stats_number(json_get(j, "memoryBytes"), true), stats_number(json_get(j, "processes"), true)};
 }
 static int by_time(const void *a, const void *b) {
     double x = ((const StatsSample *)a)->at_ms, y = ((const StatsSample *)b)->at_ms;
@@ -34,27 +34,27 @@ bool session_stats_parse(const Json *answer, const char *session_id_, SessionSta
     if (!has_stats) return false;
     if (!json_is_null(s) && !json_is_object(s)) return false;
     if (json_is_object(s) && !str_eq(json_str_nonempty(json_get(s, "sessionId")), session_id_)) return false;
-    out->host = (StatsHost){number(json_get(host, "cpus"), true), number(json_get(host, "memoryBytes"), true), number(json_get(host, "intervalMs"), true)};
+    out->host = stats_host(host);
     out->open = json_is_object(s);
     if (!out->open) return true;
-    out->total = figures(s); out->at_ms = timestamp(json_get(s, "at"));
+    out->total = stats_figures(s); out->at_ms = stats_timestamp(json_get(s, "at"));
     const char *keys[] = {"agent", "serve", "browser"};
     for (int r = 0; r < STATS_ROLES; r++) {
         const Json *role = json_get(json_get(s, "roles"), keys[r]);
-        out->roles[r] = json_is_object(role); out->role[r] = figures(role);
+        out->roles[r] = json_is_object(role); out->role[r] = stats_figures(role);
     }
-    out->disk_bytes = number(json_get(json_get(s, "disk"), "bytes"), true);
-    out->disk_at_ms = timestamp(json_get(json_get(s, "disk"), "measuredAt"));
+    out->disk_bytes = stats_number(json_get(json_get(s, "disk"), "bytes"), true);
+    out->disk_at_ms = stats_timestamp(json_get(json_get(s, "disk"), "measuredAt"));
     double latest = out->at_ms.value;
     for (size_t i = 0; i < json_count(history); i++) {
-        StatNumber at = timestamp(json_get(json_at(history, i), "at"));
+        StatNumber at = stats_timestamp(json_get(json_at(history, i), "at"));
         if (at.present && at.value > latest) latest = at.value;
     }
     for (size_t i = 0; i < json_count(history); i++) {
-        const Json *sample = json_at(history, i); StatNumber at = timestamp(json_get(sample, "at"));
+        const Json *sample = json_at(history, i); StatNumber at = stats_timestamp(json_get(sample, "at"));
         if (!at.present || at.value < latest - 3600000) continue;
         out->history = xrealloc(out->history, (out->history_count + 1) * sizeof *out->history);
-        out->history[out->history_count++] = (StatsSample){at.value, figures(sample)};
+        out->history[out->history_count++] = (StatsSample){at.value, stats_figures(sample)};
     }
     if (out->history_count > 1) qsort(out->history, out->history_count, sizeof *out->history, by_time);
     // Duplicate timestamps cannot create a line or a zero-width chart interval.

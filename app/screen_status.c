@@ -99,10 +99,15 @@ void status_load(StatusScreen *s) {
 static void header(Screen *base, HeaderInfo *info) {
     StatusScreen *s = (StatusScreen *)base;
     snprintf(info->title, sizeof info->title, "\xE2\x97\x89 Status");
+    if (status_current(s) && store_supports("server_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D9, .action = STATUS_SERVER, .enabled = true, .tip = "Server resources"};
     if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%u waiting for you · %u working", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count);
 }
 static void action(Screen *base, int action, intptr_t arg, POINT point) {
     (void)point; StatusScreen *s = (StatusScreen *)base;
+    if (action == STATUS_SERVER) {
+        if (status_current(s) && store_supports("server_stats")) app_push_from(base, server_resources_screen_new());
+        return;
+    }
     if (!status_current(s) || arg < s->action_first || arg >= s->action_next) return;
     StatusAction a = s->actions[arg - s->action_first];
     if (a.card >= s->card_count) return;

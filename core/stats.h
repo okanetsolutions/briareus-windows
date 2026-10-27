@@ -42,7 +42,7 @@ typedef struct { double at_ms; StatNumber number; } StatsPoint;
 typedef struct {
     const char *title, *label; StatsUnit unit; int slot;
     StatsPoint *points; size_t count, valid_count;
-    double first_ms, last_ms, maximum; StatNumber latest;
+    double first_ms, last_ms, maximum, gap_ms; StatNumber latest;
 } StatsSeries;
 // Points keep missing metrics as gaps. CPU is in one-core percent, not machine percent.
 StatsSeries session_stats_series(const SessionStats *stats, StatsUnit unit);
