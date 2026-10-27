@@ -1,6 +1,6 @@
 #include "screen_pulls_internal.h"
 
-/// `tabnav`: Sessions, PR Body, Conversation, Files changed, Commits, Checks and Findings with their counts (doc_tab),
+/// `tabnav`: Sessions, PR Body, Conversation, Files changed and Findings with their counts (doc_tab),
 /// and the diffstat at the right.
 typedef struct { int additions, deletions; } DiffStatData;
 
@@ -140,7 +140,6 @@ const char *screen_pulls_run_target(PullScreen *s) { return s->run_session ? s->
 
 void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c) {
     int h = px(42), x = c.ix, y = doc->y, right = c.ix + c.iw;
-    bool loaded = !json_is_null(s->pr);
     double additions = 0, deletions = 0;
     bool has_diff = json_num(json_get(s->pr, "additions"), &additions) && json_num(json_get(s->pr, "deletions"), &deletions);
     DiffStatData *ds = NULL; int dsw = 0;
@@ -162,9 +161,6 @@ void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c) {
     // The files are a tab here, or GitHub's page when the server cannot list them.
     if (store_supports("pull_files")) doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, s->tab == PR_TAB_FILES, ACT_PR_TAB, PR_TAB_FILES);
     else if (safe_web_url(json_str(json_get(s->pr, "url")))) doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_OPEN_URL, 1);
-    int commits = pull_commit_count(s);
-    if (json_count(json_get(s->pr, "commitList"))) { snprintf(count, sizeof count, "%d", commits); doc_tab(doc, &x, &y, c.ix, right, h, 0xE8EE, "Commits", count, s->tab == PR_TAB_COMMITS, ACT_PR_TAB, PR_TAB_COMMITS); }
-    if (loaded) { snprintf(count, sizeof count, "%zu", json_count(json_get(json_get(s->pr, "checks"), "runs"))); doc_tab(doc, &x, &y, c.ix, right, h, 0xE9D5, "Checks", count, s->tab == PR_TAB_CHECKS, ACT_PR_TAB, PR_TAB_CHECKS); }
     if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); doc_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
     if (store_supports("serve_pull") || s->run_url) {
         // With run profiles, the tab names the one chosen and, once open, picks another.

@@ -681,7 +681,7 @@ static void test_errands_are_offered_for_the_state_a_pull_request_is_in(void) {
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"conflicting\"}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"labels\":[\"Has-Conflicts\"]}", 0), "run,review,solve-conflicts,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"error\"}", 0), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
-    // A run still going has nothing to fix; a count of failed checks from the Checks tab outweighs the summary.
+    // A run still going has nothing to fix; the pull detail count of failed checks outweighs the summary.
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"pending\"}", 0), always);
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"checks\":\"success\"}", 2), "run,review,fix-checks,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments");
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1}", -1), always);

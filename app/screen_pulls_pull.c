@@ -44,8 +44,6 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     switch (s->tab) {
     case PR_TAB_FILES: pull_files_layout(s->files, doc, c.x, c.w); break;
     case PR_TAB_CONVERSATION: screen_pulls_layout_conversation(s, doc, c); break;
-    case PR_TAB_COMMITS: screen_pulls_layout_commit_list(s, doc, c); break;
-    case PR_TAB_CHECKS: screen_pulls_layout_checks(s, doc, c); break;
     case PR_TAB_FINDINGS: screen_pulls_layout_findings(s, doc, c); break;
     case PR_TAB_SESSIONS: screen_pulls_layout_runs(s, doc, c); break;
     default:
