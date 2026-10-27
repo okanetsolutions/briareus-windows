@@ -26,7 +26,7 @@ static void history(ServerStats *s, const Json *samples) {
     for (int k = 0; k < 4; k++) {
         StatsSeries *line = &s->lines[k];
         *line = (StatsSeries){.title = titles[k], .label = labels[k], .unit = k < 2 ? STATS_PERCENT : STATS_BYTES, .slot = k % 2};
-        line->gap_ms = (double)stats_poll_ms(&s->host) * 2;
+        line->gap_ms = stats_history_gap_ms(&s->host);
         for (size_t i = 0; i < json_count(samples); i++) {
             const Json *j = json_at(samples, i); StatNumber at = stats_timestamp(json_get(j, "at"));
             if (!at.present || at.value < s->at_ms.value - 3600000) continue;

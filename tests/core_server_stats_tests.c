@@ -72,6 +72,31 @@ static void busiest_and_known_records(void) {
     j = json_parsez("{\"host\":{},\"sessions\":[]}"); CHECK(open_stats_parse(j, NULL, 0, &s)); CHECK_INT(s.count, 0); open_stats_free(&s); json_free(j);
     j = json_parsez("{\"host\":{}}"); CHECK(!open_stats_parse(j, NULL, 0, &s)); json_free(j);
 }
+static void sampling_gaps(void) {
+    const char *hosts[] = {"{\"intervalMs\":500}", "{\"intervalMs\":10000}", "{\"intervalMs\":3000000000}",
+        "{}", "{\"intervalMs\":null}", "{\"intervalMs\":0}", "{\"intervalMs\":-1}", "{\"intervalMs\":1.5}", "{\"intervalMs\":\"500\"}"};
+    const double gaps[] = {1000, 20000, 6000000000.0, 10000, 10000, 10000, 10000, 10000, 10000};
+    for (size_t i = 0; i < sizeof hosts / sizeof *hosts; i++) {
+        Json *j = json_parsez("{\"process\":{},\"sessions\":{},\"disks\":[],\"stats\":{\"sessionId\":\"s1\"},\"history\":["
+            "{\"at\":1000,\"hostCpuPercent\":20,\"cpuPercent\":10,\"memoryBytes\":10},"
+            "{\"at\":4000,\"hostCpuPercent\":30,\"cpuPercent\":20,\"memoryBytes\":20}]}");
+        json_object_set(j, "host", json_parsez(hosts[i]));
+        ServerStats server; SessionStats session;
+        CHECK(server_stats_parse(j, &server)); CHECK(session_stats_parse(j, "s1", &session));
+        for (int k = 0; k < 4; k++) CHECK(server.lines[k].gap_ms == gaps[i]);
+        for (int unit = STATS_PERCENT; unit <= STATS_BYTES; unit++) {
+            StatsSeries line = session_stats_series(&session, (StatsUnit)unit);
+            CHECK(line.gap_ms == gaps[i]); CHECK_INT(line.valid_count, 2);
+            if (i == 0) CHECK(line.points[1].at_ms - line.points[0].at_ms > line.gap_ms);
+            stats_series_free(&line);
+        }
+        if (i == 0) {
+            CHECK_INT(stats_poll_ms(&server.host), 2000); CHECK_INT(stats_poll_ms(&session.host), 2000);
+            CHECK(server.lines[0].points[1].at_ms - server.lines[0].points[0].at_ms > server.lines[0].gap_ms);
+        }
+        server_stats_free(&server); session_stats_free(&session); json_free(j);
+    }
+}
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
     const void *body, size_t bytes, int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
     (void)headers; (void)body; (void)bytes; (void)timeout; (void)error;
@@ -91,6 +116,7 @@ static void routes(void) {
 void core_server_stats_tests(void) {
     test_run("Server endpoint fixture derives machine process disk and history views", server_fixture);
     test_run("Server partial and malformed metrics preserve gaps zeros raw values and gauges", partial_invalid_and_history);
+    test_run("Server and session history gaps follow sampling cadence independently of polling limits", sampling_gaps);
     test_run("Open resources sort busiest with stable ties and retain saved navigation identity", busiest_and_known_records);
     test_run("Server resources named reads use exact API wire routes", routes);
 }

@@ -1,4 +1,4 @@
-#include "stats.h"
+#include "stats_internal.h"
 #include "str.h"
 #include <stdlib.h>
 
@@ -21,7 +21,7 @@ void stats_tiles_free(StatTile *tiles, size_t count) {
 }
 StatsSeries session_stats_series(const SessionStats *s, StatsUnit unit) {
     StatsSeries line = {.title = unit == STATS_PERCENT ? "CPU" : "Memory", .label = "Session", .unit = unit, .slot = unit == STATS_PERCENT ? 0 : 1};
-    line.gap_ms = (double)stats_poll_ms(&s->host) * 2;
+    line.gap_ms = stats_history_gap_ms(&s->host);
     line.count = s->history_count;
     if (!line.count) return line;
     line.points = xcalloc(line.count, sizeof *line.points);

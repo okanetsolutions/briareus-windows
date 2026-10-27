@@ -110,6 +110,10 @@ int stats_poll_ms(const StatsHost *host) {
     if (ms < 2000) return 2000;
     return ms > INT_MAX ? INT_MAX : (int)ms;
 }
+double stats_history_gap_ms(const StatsHost *host) {
+    StatNumber interval = host->interval_ms;
+    return available(interval) && interval.value > 0 ? interval.value * 2 : 10000;
+}
 double stats_retry_deadline(double now, double previous, int failures, double retry_after) {
     int capped = failures < 1 ? 1 : failures > 6 ? 6 : failures;
     double delay = pow(2, capped);
