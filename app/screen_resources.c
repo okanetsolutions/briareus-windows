@@ -18,7 +18,7 @@ static void schedule(ResourcesScreen *s) {
 static void read_done(void *owner, Request *req) {
     ResourcesScreen *s = owner;
     if (!s->shown || !resources_current(s)) return;
-    SessionStats next;
+    SessionStats next = {0};
     bool ok = req->ok && session_stats_parse(req->result, session_id(&s->session), &next);
     if (ok) {
         session_stats_free(&s->reading); s->reading = next;
