@@ -101,6 +101,7 @@ typedef struct {
     const Reviewer *reviewers; size_t reviewer_count;
     char *const *assignees; size_t assignee_count;
     const PullLabel *labels; size_t label_count;
+    bool checks_failed;   // false for issues
 } BoardRow;
 BoardRow pull_board_row(const PullSummary *pull);
 BoardRow issue_board_row(const IssueSummary *issue);
@@ -109,7 +110,7 @@ BoardRow issue_board_row(const IssueSummary *issue);
 #define PROJECT_NO_ASSIGNEE "-"
 typedef enum { FILTER_AUTHOR, FILTER_REVIEWER, FILTER_ASSIGNEE, FILTER_LABEL, FILTER_KIND_COUNT } FilterKind;
 /// One author, reviewer, assignee and label the board is narrowed to; empty means all. Values are kept folded.
-typedef struct { char *author, *reviewer, *assignee, *label; } BoardFilter;
+typedef struct { char *author, *reviewer, *assignee, *label; bool hide_failing_checks; } BoardFilter;
 typedef struct { char *value, *text; int count; } FilterOption;
 void board_filter_init(BoardFilter *filter);
 void board_filter_free(BoardFilter *filter);

@@ -145,13 +145,13 @@ static void status_done(void *owner, Request *req) {
         json_free(s->status); s->status = json_clone(json_get(req->result, "status"));
         set_string(&s->status_error, NULL);
         // A login that landed shows in the sidebar's own login tag.
-        if (json_bool_is(json_get(json_get(s->status, "auth"), "loggedIn"), true) && s->device_code) { set_string(&s->device_code, NULL); settings_providers_changed(false); }
+        if (s->device_code && provider_login_landed(s->login_from, s->status)) { set_string(&s->device_code, NULL); settings_providers_changed(false); }
     }
     pane_relayout(s->base.pane);
 }
 
 void screen_provider_settings_load_status(FormScreen *s, bool fresh) {
-    if (!s->id || !store_supports("provider_status")) return;
+    if (!s->id || s->req_login || !store_supports("provider_status")) return;
     request_cancel(&s->req_status);
     Json *args = json_object(); json_set_num(args, "id", s->id);
     if (fresh) json_set_num(args, "fresh", 1);
@@ -183,10 +183,24 @@ static void login_done(void *owner, Request *req) {
     if (s->focus_first >= 0 && s->edits[s->focus_first]) { int f = s->focus_first; s->focus_first = -1; SetFocus(s->edits[f]); }
 }
 
+void screen_provider_settings_cancel_login(FormScreen *s) {
+    // Picker changes must preserve the initial read, but discard polls from a login attempt.
+    if (s->req_login || s->login_from || s->device_code || s->code_wanted) request_cancel(&s->req_status);
+    request_cancel(&s->req_login);
+    if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_LOGIN);
+    json_free(s->login_from); s->login_from = NULL;
+    set_string(&s->device_code, NULL); s->code_wanted = false;
+}
+
 void screen_provider_settings_login_start(FormScreen *s) {
     if (!screen_provider_settings_can_log_in(s) || s->req_login) return;
+    // Wait for the initial read so a late old login cannot be mistaken for this attempt.
+    if (str_eq(s->binary, "codex") && (!json_is_object(s->status) || s->req_status)) return;
     const char *op = str_eq(s->binary, "claude") ? "provider_login_start" : "provider_login";
     if (!store_supports(op)) return;
+    request_cancel(&s->req_status);
+    if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_LOGIN);
+    json_free(s->login_from); s->login_from = json_clone(json_get(s->status, "auth"));
     set_string(&s->device_code, NULL); s->code_wanted = false;
     Json *args = json_object(); json_set_num(args, "id", s->id);
     store_call(op, args, 0, s, login_done, 0, &s->req_login);
