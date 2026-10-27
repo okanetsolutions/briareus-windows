@@ -42,6 +42,7 @@ struct Doc {
     Item *items; size_t count, cap;
     Canvas *cv;           // while laying out; NULL, since text is measured without one
     int width;            // content width
+    int full_width;       // content width before reserving a sidebar scrollbar, for fixed bands
     int scroll_width;     // column width whose right edge hosts the page scrollbar
     int y;                // the running cursor for stacked items
     int content_width;    // widest item, for horizontal scrolling

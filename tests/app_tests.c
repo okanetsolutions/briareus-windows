@@ -7,6 +7,7 @@ int main(void) {
     app_conversation_tests();
     app_format_tests();
     app_common_tests();
+    app_sidebar_tests();
     app_find_tests();
     app_store_tests();
     app_contract_tests();

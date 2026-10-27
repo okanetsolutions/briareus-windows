@@ -31,6 +31,7 @@ void pull_conversation_tests(void);
 void app_find_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);
+void app_sidebar_tests(void);
 void app_store_tests(void);
 void app_contract_tests(void);
 void app_sql_tests(void);
