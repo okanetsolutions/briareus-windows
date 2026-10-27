@@ -239,6 +239,7 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_REVIEW_AUTHOR] = { "reviewAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
+    [F_BABYSIT] = { "babysitPrs", K_BOOL, "Babysit pull requests" },
     [F_AUTO_LOOP] = { "autonomousReviewLoop", K_BOOL, "Autonomous review loop: fix every finding and review again" },
     [F_TEST_SHEET] = { "reviewTestSheet", K_BOOL, "Write a test sheet when the \xF0\x9F\x8E\xAC QA errand is started" },
     [F_TEST_RUN] = { "reviewTestRun", K_BOOL, "Execute the test sheet and record a video of each scenario" },

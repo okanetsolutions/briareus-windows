@@ -12,6 +12,7 @@ int main(void) {
     app_sql_tests();
     app_mcp_settings_tests();
     app_provider_settings_tests();
+    app_project_settings_tests();
     app_home_assistant_tests();
     app_dashboard_tests();
     app_mail_tests();

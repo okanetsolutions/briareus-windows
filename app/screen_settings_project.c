@@ -118,7 +118,11 @@ static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
         screen_settings_g_tab = (int)arg;
         pane_relayout(base->pane); pane_scroll_to_top(base->pane);
         break;
-    case ACT_TOGGLE: if (arg >= 0 && arg < F_COUNT) { s->bools[arg] = !s->bools[arg]; screen_settings_form_changed(s); pane_relayout(base->pane); } break;
+    case ACT_TOGGLE:
+        if (arg < 0 || arg >= F_COUNT || !screen_settings_field_offered(s, (int)arg)) break;
+        if (arg == F_BABYSIT) project_babysit_toggle(&s->babysit);
+        else s->bools[arg] = !s->bools[arg];
+        screen_settings_form_changed(s); pane_relayout(base->pane); break;
     case ACT_PICK: if (arg >= 0 && arg < R_COUNT * 3) screen_settings_pick(s, (int)arg / 3, (int)arg % 3, pt); break;
     case ACT_FOCUS: if (arg >= 0 && arg < F_COUNT && s->edits[arg] && screen_settings_field_enabled(s, (int)arg)) SetFocus(s->edits[arg]); break;
     }

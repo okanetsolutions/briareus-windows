@@ -1,6 +1,7 @@
 #include "suites.h"
 #include "test.h"
 #include "models.h"
+#include "project_settings.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -930,7 +931,33 @@ static void test_board_date_parse_rejects_what_is_not_a_timestamp(void) {
     time_t t; CHECK(board_date_parse("2016-12-31T23:59:60Z", &t)); CHECK_INT(t, 1483228800);
 }
 
+static void test_project_babysit_optional_state(void) {
+    static const char *const rows[] = { "{}", "{\"repo\":\"o/r\"}", "{\"babysitPrs\":false}", "{\"babysitPrs\":true}" };
+    for (size_t i = 0; i < 4; i++) {
+        Json *row = json_parsez(rows[i]);
+        ProjectBabysit state = project_babysit_read(row);
+        CHECK_INT(state.supported, i >= 2); CHECK_INT(state.on, i == 3);
+        CHECK(!project_babysit_changed(&state));
+        CHECK_INT(project_babysit_note(&state) != NULL, i == 3);
+        project_babysit_toggle(&state);
+        CHECK_INT(project_babysit_changed(&state), i >= 2);
+        Json *body = json_parsez("{\"repo\":\"o/r\",\"enabled\":true,\"autonomousReviewLoop\":true,\"isSelf\":true,\"babysitPrs\":true,\"unknown\":17}");
+        project_babysit_write(&state, body);
+        if (i < 2) CHECK(json_is_null(json_get(body, "babysitPrs")));
+        else CHECK(json_bool_is(json_get(body, "babysitPrs"), i == 2));
+        CHECK(json_bool_is(json_get(body, "enabled"), true));
+        CHECK(json_bool_is(json_get(body, "autonomousReviewLoop"), true));
+        CHECK(json_bool_is(json_get(body, "isSelf"), true));
+        CHECK_INT(json_int_or(json_get(body, "unknown"), 0), 17);
+        ProjectBabysit reopened = project_babysit_read(body);
+        CHECK_INT(reopened.on, state.on); CHECK(!project_babysit_changed(&reopened));
+        project_babysit_toggle(&state); CHECK(!project_babysit_changed(&state));
+        json_free(body); json_free(row);
+    }
+}
+
 void models_tests(void) {
+    test_run("project babysit capability, toggles and body preserve other fields", test_project_babysit_optional_state);
     test_run("device reads every field", test_device_reads_every_field);
     test_run("device rejects missing or mistyped fields", test_device_rejects_missing_or_mistyped_fields);
     test_run("device round trips and copies deeply", test_device_round_trips_and_copies_deeply);
