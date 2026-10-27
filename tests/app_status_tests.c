@@ -173,9 +173,14 @@ static void test_cancel_and_isolation(void) {
     CHECK_INT(stub.writes, 1); cleanup(&stub);
 
     memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
-    ApiClient *client = g_store.client; g_store.client = NULL;
+    ApiClient *client = g_store.client;
+    ServerAddress address; ApiError error; api_error_init(&error);
+    CHECK(server_address_parse("https://other.example.com", &address));
+    g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &error);
+    server_address_free(&address); api_error_clear(&error); CHECK(g_store.client != NULL);
     CHECK(!status_current(s)); status_send(s, card(s, "wait"), "wrong server"); CHECK_INT(stub.writes, 0);
-    Doc doc; doc_init(&doc); draw(s, &doc); CHECK_INT(s->action_count, 0); doc_free(&doc); g_store.client = client;
+    Doc doc; doc_init(&doc); draw(s, &doc); CHECK_INT(s->action_count, 0); doc_free(&doc);
+    api_client_release(g_store.client); g_store.client = client;
     stub.projects = "[]"; s->base.vt->refresh(&s->base); pump(2);
     CHECK_INT(s->overview.waiting_count, 0); CHECK_INT(s->overview.working_count, 0); CHECK(!s->cards[card(s, "wait")]->present);
     cleanup(&stub);
