@@ -3,6 +3,7 @@
 #define BRIAREUS_STORE_H
 #include "api.h"
 #include "mail_reply.h"
+#include "ssh_approval.h"
 #include "cache.h"
 #include "models.h"
 #include <windows.h>
@@ -13,6 +14,7 @@
 #define WM_APP_ASYNC_DONE    (WM_APP + 3)
 
 typedef struct {
+    SshApprovalQueue *ssh_approvals;    // memory-only decision interlocks and shared cooldowns
     ApiClient *client;                 // NULL until paired
     ULONGLONG mail_retry_until;        // inbox cooldown survives navigation, cleared with the client
     int mail_failures;

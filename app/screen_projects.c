@@ -1,4 +1,5 @@
 #include "screen_projects_internal.h"
+#include "ssh_approvals.h"
 #include "session_cache.h"
 
 typedef struct {
@@ -64,7 +65,7 @@ static void projects_count(ProjectsScreen *s) {
         }
         json_free(list);
     }
-    screen_projects_g_waiting = findings_waiting(s->projects, s->count);
+    screen_projects_g_waiting = findings_waiting(s->projects, s->count) + ssh_approvals_badge();
     screen_projects_g_status = status_waiting(s->projects, s->count);
 }
 

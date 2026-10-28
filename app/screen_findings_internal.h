@@ -2,6 +2,7 @@
 #define BRIAREUS_SCREEN_FINDINGS_INTERNAL_H
 #include "dialogs.h"
 #include "screens.h"
+#include "ssh_approvals.h"
 #include "str.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,7 @@ typedef struct { char *session_id; char *title; char *text; bool danger; } Outco
 
 typedef struct {
     Screen base;
+    SshApprovals *ssh;
     Project *projects; size_t project_count;
     Session *all; size_t all_count;             // every project's conversations, which the rounds index
     Session *incoming; size_t incoming_count;   // what the read under way has gathered so far

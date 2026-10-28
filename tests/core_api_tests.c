@@ -1191,7 +1191,30 @@ static void test_removed_integrations_are_unregistered(void) {
     CHECK(api_route("browser_stream") != NULL);
 }
 
+static void ssh_approval_routes(void) {
+    Stub stub = {0}; stub_json(&stub, 200, "{\"requests\":[]}"); ApiClient *c = client(&stub);
+    ApiError error; api_error_init(&error); Json *args = json_object();
+    Json *answer = api_call(c, "ssh_requests", args, 0, &error);
+    CHECK(answer != NULL); CHECK_STR(stub.last_method, "GET"); CHECK_STR(stub.last_url, BASE "ssh/requests"); CHECK(stub.last_body == NULL); json_free(answer);
+    json_set_str(args, "id", "fixture/id ?");
+    const char *decisions[] = {"approve", "deny"};
+    for (size_t i = 0; i < 2; i++) {
+        json_set_str(args, "decision", decisions[i]); stub_json(&stub, 200, "{\"request\":{\"id\":\"fixture/id ?\",\"status\":\"denied\"}}");
+        answer = api_call(c, "ssh_decision", args, 0, &error); CHECK(answer != NULL); json_free(answer);
+        CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_url, BASE "ssh/requests/fixture%2Fid%20%3F/decision");
+        Json *body = json_parsez(stub.last_body); CHECK_INT(json_count(body), 1); CHECK_STR(json_str(json_get(body, "decision")), decisions[i]); json_free(body);
+    }
+    stub_json(&stub, 400, "{\"error\":\"SSH request is no longer awaiting approval\"}");
+    int before = stub.calls; answer = api_call(c, "ssh_decision", args, 0, &error); CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.status, 400);
+    stub_json(&stub, 429, "{\"error\":\"cooldown\"}"); stub.retry_after = "120";
+    answer = api_call(c, "ssh_decision", args, 0, &error); CHECK(answer == NULL); CHECK(error.retry_after == 120);
+    stub.fail = true; stub.fail_message = "fixture timeout"; before = stub.calls;
+    answer = api_call(c, "ssh_decision", args, 0, &error); CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.kind, API_NETWORK);
+    json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
 void api_tests(void) {
+    test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving, previews and shared browser remain", test_removed_integrations_are_unregistered);
     test_run("final catalog transport and provider session request failures", test_final_catalog_transport_and_session_requests);
