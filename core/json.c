@@ -1,6 +1,7 @@
 #include "json.h"
 #include "str.h"
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -375,17 +376,20 @@ static void write_string(Str *out, const char *s) {
     str_appendc(out, '"');
 }
 
-static void write_number(Str *out, double d) {
-    if (!isfinite(d)) { str_appendz(out, "null"); return; }
-    if (d == floor(d) && fabs(d) < 1e15) { str_appendf(out, "%lld", (long long)d); return; }
-    char buf[64];
-    snprintf(buf, sizeof buf, "%.17g", d);
+static const char *number_text(double d, char buf[64]) {
+    if (!isfinite(d)) return "null";
+    if (d == floor(d) && fabs(d) < 1e15) { snprintf(buf, 64, "%lld", (long long)d); return buf; }
+    snprintf(buf, 64, "%.17g", d);
     // Shortest representation that round-trips, as Foundation prints doubles.
     for (int precision = 1; precision <= 17; precision++) {
-        snprintf(buf, sizeof buf, "%.*g", precision, d);
+        snprintf(buf, 64, "%.*g", precision, d);
         if (strtod(buf, NULL) == d) break;
     }
-    str_appendz(out, buf);
+    return buf;
+}
+
+static void write_number(Str *out, double d) {
+    char buf[64]; str_appendz(out, number_text(d, buf));
 }
 
 static int compare_keys(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
@@ -433,3 +437,55 @@ static void write_value(Str *out, const Json *v, bool sorted, int pretty_level) 
 
 char *json_serialize(const Json *value, bool sorted) { Str s; str_init(&s); write_value(&s, value, sorted, -1); return str_detach(&s); }
 char *json_pretty(const Json *value) { Str s; str_init(&s); write_value(&s, value, true, 0); return str_detach(&s); }
+
+// Bounds are subtracted before adding, including room for the output's terminating NUL.
+static bool measure_add(size_t *bytes, size_t extra, size_t limit) {
+    if (extra > limit - *bytes) return false;
+    *bytes += extra; return true;
+}
+static bool measure_string(const char *text, size_t *bytes, size_t limit) {
+    if (!measure_add(bytes, 2, limit)) return false;
+    for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+        size_t n = 1;
+        switch (*p) {
+        case '"': case '\\': case '\n': case '\r': case '\t': case '\b': case '\f': n = 2; break;
+        default: if (*p < 0x20) n = 6; break;
+        }
+        if (!measure_add(bytes, n, limit)) return false;
+    }
+    return true;
+}
+static bool measure_value(const Json *v, size_t *bytes, size_t limit) {
+    if (!v) v = &shared_null;
+    switch (v->type) {
+    case JSON_NULL: return measure_add(bytes, 4, limit);
+    case JSON_BOOL: return measure_add(bytes, v->b ? 4 : 5, limit);
+    case JSON_NUMBER: { char buf[64]; return measure_add(bytes, strlen(number_text(v->n, buf)), limit); }
+    case JSON_STRING: return measure_string(v->s, bytes, limit);
+    case JSON_ARRAY:
+        if (!measure_add(bytes, 2, limit)) return false;
+        for (size_t i = 0; i < v->a.count; i++) {
+            if (i && !measure_add(bytes, 1, limit)) return false;
+            if (!measure_value(v->a.items[i], bytes, limit)) return false;
+        }
+        return true;
+    case JSON_OBJECT:
+        if (!measure_add(bytes, 2, limit)) return false;
+        for (size_t i = 0; i < v->o.count; i++) {
+            if (i && !measure_add(bytes, 1, limit)) return false;
+            if (!measure_string(v->o.keys[i], bytes, limit)) return false;
+            if (!measure_add(bytes, 1, limit)) return false;
+            if (!measure_value(v->o.vals[i], bytes, limit)) return false;
+        }
+        return true;
+    }
+    return false;
+}
+char *json_serialize_bounded(const Json *value, bool sorted, size_t max_bytes) {
+    size_t bytes = 0, limit = max_bytes == SIZE_MAX ? SIZE_MAX - 1 : max_bytes;
+    if (!measure_value(value, &bytes, limit)) return NULL;
+    Str s; str_init(&s);
+    s.data = xmalloc(bytes + 1); s.cap = bytes + 1;
+    write_value(&s, value, sorted, -1);
+    return str_detach(&s);
+}

@@ -104,6 +104,7 @@ static void settings_done(void *owner, Request *req) {
 
 static void ssh_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
+    if (req->client != s->ssh_account || req->client != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) return;
     s->ssh_loaded = true;
     if (!req->ok) { request_error_into(&s->ssh_error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->ssh_error, NULL);
@@ -115,6 +116,11 @@ static void ssh_done(void *owner, Request *req) {
 }
 
 void screen_settings_ssh_load(SettingsScreen *s) {
+    if (s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) {
+        request_cancel(&s->req_ssh); api_client_release(s->ssh_account);
+        s->ssh_account = api_client_retain(g_store.client); set_string(&s->ssh_device, g_store.device.id);
+        json_free(s->ssh); s->ssh = json_object(); s->ssh_loaded = false; set_string(&s->ssh_error, NULL);
+    }
     if (s->req_ssh || !store_supports("settings_ssh_servers")) { s->ssh_loaded = true; return; }
     store_call("settings_ssh_servers", json_object(), 0, s, ssh_done, 0, &s->req_ssh);
 }
@@ -240,6 +246,7 @@ void screen_settings_settings_ssh_changed(void) {
 const Json *screen_settings_ssh_rows(SettingsScreen *s) { return json_get(s->ssh, "list"); }
 
 void screen_settings_ssh_open_row(SettingsScreen *s, size_t index) {
+    if (s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) return;
     const Json *row = json_at(screen_settings_ssh_rows(s), index);
     if (json_is_object(row)) app_show_detail(screen_settings_ssh_settings_screen_new(row, json_get(s->ssh, "defaults")));
 }

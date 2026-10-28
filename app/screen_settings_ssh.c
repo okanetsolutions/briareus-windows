@@ -22,11 +22,12 @@ static void ssh_show_error(SshForm *s, char *text) {
 
 static void ssh_save_done(void *owner, Request *req) {
     SshForm *s = owner;
+    if (req->client != s->account || !screen_settings_ssh_current(s)) return;
     const Json *row = req->ok ? json_get(req->result, "server") : NULL;
-    if (!json_is_object(row)) {
-        char *text = request_error_or_unexpected(req);
-        // The server's own words, on the tab in use; one about the database login or its key opens the Database tab.
-        s->error_tab = str_icontains(text, "database") || str_icontains(text, "credential") ? ST_DATABASE : screen_settings_g_ssh_tab;
+    double saved_id = screen_settings_ssh_row_id(row);
+    if (!json_is_object(row) || saved_id <= 0 || (s->id && saved_id != s->id)) {
+        char *text = xstrdup(request_outcome_unknown(req) || req->ok ? "The save outcome is unknown. Your draft is retained; check the server before saving again." : "The server refused the save. Your draft is retained.");
+        s->error_tab = screen_settings_g_ssh_tab;
         ssh_show_error(s, text);
         return;
     }
@@ -36,12 +37,23 @@ static void ssh_save_done(void *owner, Request *req) {
     if (!json_bool_is(json_get(row, "hasDbCredentials"), true)) set_string(&s->db_user, "");
     else if (json_str(sent)) set_string(&s->db_user, json_str(sent));
     else if (!s->db_user && !s->id) set_string(&s->db_user, "");
+    bool confirmed = ssh_secrets_saved(&s->secrets, row, req->args, s->sent_secrets);
     json_free(s->row); s->row = json_clone(row);
+    for (int f = 0; f < SSH_SECRET_COUNT; f++) json_object_remove(s->row, SSH_SECRET_KEYS[f]);
     set_string(&s->error, NULL);
     s->id = screen_settings_ssh_row_id(row);
     free(s->base.id); s->base.id = screen_settings_ssh_form_id(s->id);
     settings_select_id(s->base.id);
-    screen_settings_ssh_fill(s);
+    if (json_bool_is(json_get(row, "hasDbCredentials"), true) && json_str_nonempty(json_get(req->args, "dbPassword"))
+        && s->db_revision == s->sent_db_revision && s->edits[S_DBPASS]) {
+        s->filling = true;
+        screen_settings_ssh_set_secret(s->edits[S_DBPASS], "");
+        s->filling = false;
+    }
+    if (s->revision == s->sent_revision) screen_settings_ssh_fill(s);
+    else screen_settings_ssh_secret_controls(s);
+    s->dirty = screen_settings_ssh_tab_changed(s, ST_SERVER) || screen_settings_ssh_tab_changed(s, ST_DATABASE);
+    if (!confirmed) ssh_show_error(s, xstrdup("The response did not confirm the password change. Your draft is retained; check the server before saving again."));
     // A server that answers without the login's fields did not keep it: say so rather than show an empty form as saved.
     bool sent_login = json_str(json_get(req->args, "dbUsername")) || json_str(json_get(req->args, "dbPassword"));
     const Json *has = json_get(row, "hasDbCredentials");
@@ -54,11 +66,15 @@ static void ssh_save_done(void *owner, Request *req) {
 }
 
 void screen_settings_ssh_save(SshForm *s) {
+    if (!screen_settings_ssh_current(s)) return;
     if (s->req_save || s->req_delete || !store_supports(s->id ? "update_ssh_server" : "create_ssh_server")) return;
     char *why = NULL;
     Json *body = screen_settings_ssh_body(s, &why);
     if (!body) { ssh_show_error(s, why); return; }
     if (s->id) json_set_num(body, "id", s->id);
+    s->sent_revision = s->revision;
+    s->sent_db_revision = s->db_revision;
+    for (int f = 0; f < SSH_SECRET_COUNT; f++) s->sent_secrets[f] = s->secrets.fields[f].revision;
     store_call(s->id ? "update_ssh_server" : "create_ssh_server", body, 0, s, ssh_save_done, 0, &s->req_save);
     pane_header_changed(s->base.pane);
 }
@@ -93,17 +109,23 @@ static void ssh_clone(SshForm *s) {
     if (s->edits[S_DBUSER]) { char *text = screen_settings_edit_text(s->edits[S_DBUSER]), *t = str_trim(text); json_set_str(copy, "dbUsername", t); free(text); free(t); }
     s->dirty = false;
     Screen *clone = screen_settings_ssh_settings_screen_new(copy, NULL);
+    SshForm *form = (SshForm *)clone;
+    ssh_secrets_free(&form->secrets); ssh_secrets_clone(&form->secrets, &s->secrets);
+    for (int f = 0; f < SSH_SECRET_COUNT; f++) json_object_remove(form->row, SSH_SECRET_KEYS[f]);
+    form->dirty = ssh_secrets_changed(&form->secrets);
     ((SshForm *)clone)->focus_first = S_LABEL;
     screen_settings_g_ssh_tab = ST_SERVER;
-    json_free(copy);
+    ssh_secrets_scrub(copy); json_free(copy);
     app_show_detail(clone);
 }
 
 // MARK: The screen
 
 static void ssh_release(SshForm *s) {
-    for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    s->filling = true;
+    for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) { screen_settings_set_edit_text(s->edits[f], ""); DestroyWindow(s->edits[f]); }
     for (int p = 0; p < SP_COUNT; p++) free(s->picks[p]);
+    ssh_secrets_free(&s->secrets); api_client_release(s->account); free(s->device);
     json_free(s->row); free(s->error); free(s->db_user); free(s->login_error);
     screen_release(&s->base);
 }
@@ -116,7 +138,11 @@ static void ssh_destroy(Screen *base) {
 
 static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
     SshForm *s = (SshForm *)base;
+    if (s->retired || !screen_settings_ssh_current(s)) return;
     switch (action) {
+    case ACT_SSH_SECRET:
+        ssh_secrets_toggle(&s->secrets, (int)arg);
+        screen_settings_ssh_secret_controls(s); screen_settings_ssh_changed(s); pane_relayout(base->pane); break;
     case ACT_SSH_SAVE: screen_settings_ssh_save(s); break;
     case ACT_SSH_CLONE: ssh_clone(s); break;
     case ACT_SSH_DELETE: ssh_delete(s); break;
@@ -138,7 +164,16 @@ static void ssh_command(Screen *base, int id, int code, HWND control) {
     int f = id - ID_SSH_FIELD;
     if (f < 0 || f >= S_COUNT || !s->edits[f]) return;
     switch (code) {
-    case EN_CHANGE: screen_settings_ssh_changed(s); break;
+    case EN_CHANGE:
+        if (s->filling) break;
+        if (f == S_DBPASS) s->db_revision++;
+        if (f == S_PASSWORD || f == S_SUDO_PASSWORD) {
+            char *text = screen_settings_ssh_secret_text(s->edits[f]);
+            ssh_secrets_set(&s->secrets, f - S_PASSWORD, text, strlen(text));
+            ssh_secret_free(text, strlen(text));
+            screen_settings_ssh_secret_cues(s);
+        }
+        screen_settings_ssh_changed(s); break;
     case EN_SETFOCUS: {
         s->focused = f;
         RECT content = pane_content_rect(base->pane);
@@ -178,7 +213,10 @@ static bool ssh_can_leave(Screen *base) {
     free(message);
     s->modal = false;
     if (s->retired) { ssh_release(s); return true; }
-    if (leave) s->dirty = false;
+    if (leave) {
+        ssh_secrets_free(&s->secrets); ssh_secrets_init(&s->secrets, s->row, NULL, false);
+        screen_settings_ssh_secret_controls(s); s->dirty = false;
+    }
     return leave;
 }
 
@@ -190,10 +228,17 @@ static const ScreenVTable ssh_vt = {
 Screen *screen_settings_ssh_settings_screen_new(const Json *row, const Json *defaults) {
     SshForm *s = xcalloc(1, sizeof *s);
     s->base.vt = &ssh_vt;
+    s->account = api_client_retain(g_store.client); s->device = xstrdup(g_store.device.id);
     s->focused = -1; s->focus_first = -1;
     s->row = json_is_object(row) ? json_clone(row) : json_is_object(defaults) ? json_clone(defaults) : json_object();
     s->id = screen_settings_ssh_row_id(s->row);
     s->base.id = screen_settings_ssh_form_id(s->id);
+    SettingsScreen *settings = screen_settings_g_settings;
+    bool current = settings && settings->ssh_loaded && settings->ssh_account == g_store.client && str_eq(settings->ssh_device, g_store.device.id);
+    const Json *rows = current ? screen_settings_ssh_rows(settings) : NULL;
+    ssh_secrets_init(&s->secrets, s->row, rows, !s->id);
+    ssh_secrets_scrub(s->row);
+    for (int f = 0; f < SSH_SECRET_COUNT; f++) json_object_remove(s->row, SSH_SECRET_KEYS[f]);
     if (!s->id) {
         // A new server starts on the first project, as the web's form does, and where its label is typed.
         if (!json_str_nonempty(json_get(s->row, "repo")) && screen_settings_g_settings) {

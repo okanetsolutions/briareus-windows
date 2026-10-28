@@ -74,7 +74,7 @@ static void settings_destroy(Screen *base) {
     json_free(s->projects); free(s->error);
     json_free(s->providers); free(s->providers_error);
     json_free(s->servers); free(s->servers_error);
-    json_free(s->ssh); free(s->ssh_error);
+    json_free(s->ssh); free(s->ssh_error); api_client_release(s->ssh_account); free(s->ssh_device);
     json_free(s->forge); free(s->forge_error);
     request_cancel(&s->req_mcp); json_free(s->mcp); free(s->mcp_error); api_client_release(s->mcp_account);
     request_cancel(&s->req_mail); json_free(s->mail); free(s->mail_error); api_client_release(s->mail_client);
@@ -124,7 +124,9 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PROVIDER: screen_settings_settings_open_provider(s, (size_t)arg); break;
     case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
     case ACT_OPEN_SERVER: screen_settings_servers_open_row(s, (size_t)arg); break;
-    case ACT_NEW_SSH: app_show_detail(screen_settings_ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
+    case ACT_NEW_SSH:
+        if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) break;
+        app_show_detail(screen_settings_ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
     case ACT_OPEN_SSH: screen_settings_ssh_open_row(s, (size_t)arg); break;
     case ACT_NEW_FORGE: app_show_detail(screen_settings_forge_settings_screen_new(NULL, json_get(s->forge, "defaults"))); break;
     case ACT_OPEN_FORGE: screen_settings_forge_open_row(s, (size_t)arg); break;
@@ -173,7 +175,7 @@ static void settings_visible(Screen *base, bool shown) {
     if (!s->loaded && !s->req) screen_settings_projects_load(s);
     if (!s->providers_loaded && !s->req_providers) screen_settings_providers_load(s);
     if (!s->servers_loaded && !s->req_servers) screen_settings_servers_load(s);
-    if (!s->ssh_loaded && !s->req_ssh) screen_settings_ssh_load(s);
+    if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) screen_settings_ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) screen_settings_forge_load(s);
     if (!s->mcp_loaded || s->mcp_account != g_store.client) screen_settings_mcp_load(s);
     if (mail_settings_offered() && (!s->mail_loaded || s->mail_client != g_store.client)) screen_settings_mail_load(s);
@@ -276,7 +278,9 @@ const FieldDef screen_settings_SSH_FIELDS[S_COUNT] = {
     [S_PORT] = { "port", K_NUMBER, "Port", "22", NULL, 0, true },
     [S_USER] = { "username", K_TEXT, "Username", "deploy", NULL, 0, true },
     [S_KEY] = { "identityFile", K_TEXT, "Private key path", "/home/you/.ssh/id_ed25519",
-        "Absolute path on the machine running Briareus; leave empty for its default SSH keys or agent. Password prompts are not supported.", 0, true },
+        "Absolute path on the machine running Briareus; leave empty for its default SSH keys or agent. Not used while an SSH password is stored.", 0, true },
+    [S_PASSWORD] = { "password", K_TEXT, "Password", "empty = key authentication", "Stored encrypted and never shown again. Leave empty to keep the stored password.", 0, true },
+    [S_SUDO_PASSWORD] = { "sudoPassword", K_TEXT, "Sudo password", "empty = no sudo", "Separate from SSH login. Root commands follow the permission mode, including running without approval in Don't ask anything mode.", 0, true },
     [S_DBHOST] = { "dbHost", K_TEXT, "Database host", "127.0.0.1", "Where the database listens, as seen from this server itself.", 0, true },
     [S_DBPORT] = { "dbPort", K_NUMBER, "Database port", "3306", NULL, 0, true },
     [S_DBUSER] = { "dbUsername", K_TEXT, "Database username", "app", "Empty removes the stored login.", 0, true },

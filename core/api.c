@@ -1,3 +1,4 @@
+#include "ssh_settings.h"
 #include "api.h"
 #include "mail_reply.h"
 #include "browser.h"
@@ -249,11 +250,12 @@ static Json *request(ApiClient *c, const char *path, const char *method, const J
     char *url = xstrfmt("%s%s", c->address.base_url, path);
     char *data = NULL; size_t len = 0;
     if (body) {
-        data = json_serialize(body, false); len = strlen(data);
-        if (len > MAX_REQUEST_BYTES) { free(data); free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
+        data = json_serialize_bounded(body, false, MAX_REQUEST_BYTES);
+        if (!data) { free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
+        len = strlen(data);
     }
     Json *result = send_request(c, method, url, body ? "application/json" : NULL, data, len, timeout_ms, error);
-    free(data); free(url);
+    ssh_secret_free(data, len); free(url);
     return result;
 }
 
@@ -506,7 +508,10 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
         json_free(rest); rest = safe;
     }
     Str path; str_init(&path);
-    if (!fill_path(route, rest, &path, error)) { str_free(&path); json_free(rest); return NULL; }
+    if (!fill_path(route, rest, &path, error)) {
+        if (str_eq(name, "create_ssh_server") || str_eq(name, "update_ssh_server")) ssh_secrets_scrub(rest);
+        str_free(&path); json_free(rest); return NULL;
+    }
     char *kept = NULL;
     if (route->filter) {
         const char *f = json_str(json_get(rest, route->filter));
@@ -542,6 +547,7 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
             if (str_eq(json_str(json_get(json_at(rows, i), route->filter)), kept)) json_array_push(mine, json_clone(json_at(rows, i)));
         json_object_set(result, route->list, mine);
     }
+    if (str_eq(name, "create_ssh_server") || str_eq(name, "update_ssh_server")) ssh_secrets_scrub(rest);
     free(kept); str_free(&path); json_free(rest);
     return result;
 }

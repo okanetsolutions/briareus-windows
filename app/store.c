@@ -1,3 +1,4 @@
+#include "ssh_settings.h"
 #include "store.h"
 #include "credentials.h"
 #include "str.h"
@@ -271,6 +272,7 @@ void store_voice_notes_off(void (*done)(void *ctx, const char *reason), void *ct
 // MARK: - Requests
 
 static void request_free(Request *r) {
+    if (str_eq(r->operation, "create_ssh_server") || str_eq(r->operation, "update_ssh_server")) ssh_secrets_scrub(r->args);
     free(r->operation); json_free(r->args); free(r->audio); free(r->audio_type); free(r->file); free(r->file_name);
     json_free(r->result); free(r->text); api_error_clear(&r->error);
     if (r->client) api_client_release(r->client);
