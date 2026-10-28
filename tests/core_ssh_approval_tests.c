@@ -83,7 +83,24 @@ static void refusals_and_cooldowns(void) {
     CHECK(ssh_approval_body(NULL, "approve") == NULL); CHECK(ssh_approval_body("", "deny") == NULL); CHECK(ssh_approval_body("r", "other") == NULL);
     Json *body = ssh_approval_body("r", "deny"); CHECK_STR(json_str(json_get(body, "decision")), "deny"); CHECK_INT(json_count(body), 2); json_free(body);
 }
+static void retained_connection_state(void) {
+    SshApprovalQueue *queues = NULL, *old = ssh_approval_queue(&queues, "cached"), *q = ssh_approval_queue(&queues, "verified");
+    load(old); CHECK(ssh_approval_begin(old, request(old), &device, 1000));
+    old->retry_until = 4600;
+    ssh_approval_retain(q, old);
+    CHECK(q->retry_until == 4600); CHECK(!q->fresh); CHECK_INT(json_count(q->rows), 0);
+    CHECK(!json_equal(json_get(q->decisions, "fake-request"), json_get(old->decisions, "fake-request")));
+    // Transferred writes have the same recovery outcome as a transport timeout.
+    ApiError e; api_error_init(&e); api_error_set(&e, API_NETWORK, 0, "fixture timeout", -1);
+    Json *sent = json_clone(request(old)); ssh_approval_finish(old, sent, false, NULL, &e, 1000);
+    CHECK(json_equal(json_get(q->decisions, "fake-request"), json_get(old->decisions, "fake-request")));
+    load(q); CHECK(!ssh_approval_eligible(q, request(q), &device, 5000));
+    CHECK(json_equal(json_get(ssh_approval_row(q, "fake-request"), "result"), json_get(old->decisions, "fake-request")));
+    q->retry_until = 8200; ssh_approval_retain(q, old); CHECK(q->retry_until == 8200);
+    json_free(sent); api_error_clear(&e); ssh_approval_free(&queues);
+}
 void core_ssh_approval_tests(void) {
+    test_run("SSH approval retained connection state", retained_connection_state);
     test_run("SSH approval public metadata and elevation", metadata);
     test_run("SSH approval eligibility and outcome interlocks", eligibility_and_outcomes);
     test_run("SSH approval refusals and monotonic cooldowns", refusals_and_cooldowns);

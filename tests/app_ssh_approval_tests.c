@@ -125,27 +125,58 @@ static void refused_metadata_preserves_interlocks(void) {
     }
 }
 static void restored_metadata_rebinds_and_keeps_interlocks(void) {
-    Fixture f; init(&f); SshApprovals *s = ssh_approvals_new(&f.owner);
-    ssh_approvals_visible(s, true); complete(&f, 0); intptr_t old = draw(s); CHECK(old != 0);
-    ssh_approvals_refresh(s); entered(&f, 1);
-    g_store.device.label = "Verified device";
-    CHECK_INT(draw(s), 0); entered(&f, 2); CHECK(!queue(s)->fresh);
-    ssh_approvals_action(s, SSH_APPROVE, old); CHECK(s->write == NULL);
-    complete(&f, 1); CHECK(!queue(s)->fresh); // The cached-device response cannot populate the new scope.
-    complete(&f, 2); intptr_t token = draw(s); CHECK(token != 0);
-    f.steps[3].fail = true; ssh_approvals_action(s, SSH_APPROVE, token); entered(&f, 3);
-    g_store.device.expires_at = 9999999999999.0;
-    CHECK_INT(draw(s), 0); entered(&f, 4);
-    CHECK(!json_is_null(json_get(queue(s)->decisions, "fake-request")));
-    complete(&f, 3); CHECK(!queue(s)->fresh);
-    complete(&f, 4); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
-    SshApprovals *b = ssh_approvals_new(&f.owner); ssh_approvals_visible(b, true); complete(&f, 5);
-    CHECK_INT(draw(b), 0); ssh_approvals_free(b);
-    // Returning to a previously cached scope still requires a new read and retains the interlock.
-    g_store.device.expires_at = 0;
-    CHECK_INT(draw(s), 0); entered(&f, 6); CHECK(!queue(s)->fresh);
-    complete(&f, 6); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
-    ssh_approvals_free(s); clear(&f);
+    for (int timeout = 0; timeout < 2; timeout++) {
+        Fixture f; init(&f); SshApprovals *s = ssh_approvals_new(&f.owner);
+        ssh_approvals_visible(s, true); complete(&f, 0); intptr_t old = draw(s); CHECK(old != 0);
+        ssh_approvals_refresh(s); entered(&f, 1);
+        g_store.device.label = "Verified device";
+        CHECK_INT(draw(s), 0); entered(&f, 2); CHECK(!queue(s)->fresh);
+        ssh_approvals_action(s, SSH_APPROVE, old); CHECK(s->write == NULL);
+        complete(&f, 1); CHECK(!queue(s)->fresh); // The cached-device response cannot populate the new scope.
+        complete(&f, 2); intptr_t token = draw(s); CHECK(token != 0);
+        f.steps[3].fail = timeout != 0;
+        f.steps[3].answer = "{\"request\":{\"id\":\"fake-request\",\"status\":\"running\"}}"; ssh_approvals_action(s, SSH_APPROVE, token); entered(&f, 3);
+        Json *sending = json_clone(json_get(queue(s)->decisions, "fake-request"));
+        g_store.device.expires_at = 9999999999999.0;
+        CHECK_INT(draw(s), 0); entered(&f, 4);
+        CHECK(!json_is_null(json_get(queue(s)->decisions, "fake-request")));
+        CHECK(!json_equal(sending, json_get(queue(s)->decisions, "fake-request")));
+        Json *uncertain = json_clone(json_get(queue(s)->decisions, "fake-request")); json_free(sending);
+        complete(&f, 3); CHECK(!queue(s)->fresh);
+        complete(&f, 4); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
+        SshApprovals *b = ssh_approvals_new(&f.owner); ssh_approvals_visible(b, true); complete(&f, 5);
+        CHECK_INT(draw(b), 0);
+        CHECK(json_equal(uncertain, json_get(ssh_approval_row(queue(b), "fake-request"), "result")));
+        json_free(uncertain); ssh_approvals_free(b);
+        // Returning to a previously cached scope still requires a new read and retains the interlock.
+        g_store.device.expires_at = 0;
+        CHECK_INT(draw(s), 0); entered(&f, 6); CHECK(!queue(s)->fresh);
+        complete(&f, 6); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
+        ssh_approvals_free(s); clear(&f);
+    }
+}
+static void metadata_rebind_preserves_cooldowns(void) {
+    for (int post = 0; post < 2; post++) {
+        Fixture f; init(&f); SshApprovals *s = ssh_approvals_new(&f.owner);
+        ssh_approvals_visible(s, true); complete(&f, 0);
+        f.steps[1].status = 429; f.steps[1].retry = "3600";
+        if (post) ssh_approvals_action(s, SSH_APPROVE, draw(s));
+        else ssh_approvals_refresh(s);
+        entered(&f, 1); g_store.device.label = "Verified device";
+        CHECK_INT(draw(s), 0); entered(&f, 2); SshApprovalQueue *rebound = queue(s);
+        complete(&f, 1); double until = rebound->retry_until;
+        CHECK(until >= (double)time(NULL) + 3598); CHECK(!rebound->fresh);
+        complete(&f, 2); CHECK(rebound->retry_until == until);
+        g_store.device.expires_at = 9999999999999.0;
+        ssh_approvals_refresh(s); CHECK(s->read == NULL); CHECK(queue(s)->retry_until == until);
+        CHECK(!queue(s)->fresh); CHECK_INT(json_count(queue(s)->rows), 0); CHECK_INT(f.calls, 3);
+        // Reopening and returning to an older scope cannot shorten the deadline.
+        ssh_approvals_free(s); s = ssh_approvals_new(&f.owner); ssh_approvals_visible(s, true);
+        CHECK(s->read == NULL); CHECK(queue(s)->retry_until == until);
+        g_store.device.label = NULL; g_store.device.expires_at = 0;
+        ssh_approvals_refresh(s); CHECK(s->read == NULL); CHECK(queue(s)->retry_until == until);
+        ssh_approvals_free(s); clear(&f);
+    }
 }
 static void findings_cooldown_does_not_delay_ssh(void) {
     Fixture f; init(&f);
@@ -171,6 +202,7 @@ static void findings_cooldown_does_not_delay_ssh(void) {
 }
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
+    test_run("SSH metadata rebind retains read and write cooldowns", metadata_rebind_preserves_cooldowns);
     test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
     test_run("Findings cooldown leaves SSH polling independent", findings_cooldown_does_not_delay_ssh);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);

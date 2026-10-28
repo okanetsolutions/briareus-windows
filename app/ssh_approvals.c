@@ -13,11 +13,7 @@ static bool current(SshApprovals *s) {
 static SshApprovalQueue *queue(SshApprovals *s) { return ssh_approval_queue(&g_store.ssh_approvals, s->scope); }
 static void retain_decisions(SshApprovalQueue *q) {
     for (SshApprovalQueue *old = g_store.ssh_approvals; old; old = old->next) {
-        if (old == q) continue;
-        for (size_t i = 0; i < json_count(old->decisions); i++) {
-            const char *id = json_key(old->decisions, i);
-            json_object_set(q->decisions, id, json_clone(json_get(old->decisions, id)));
-        }
+        ssh_approval_retain(q, old);
     }
 }
 // Rebinding discards displayed metadata, but submitted decisions survive until disconnect.
@@ -44,7 +40,8 @@ static void completed(void *ctx, Request *req) {
     Json *d = device_json(&g_store.device);
     bool same = req->client == g_store.client && g_store.has_device && json_equal(d, c->device);
     json_free(d);
-    if (same && store_can_manage() && store_supports("ssh_requests")) {
+    bool accepted = same && store_can_manage() && store_supports("ssh_requests");
+    if (accepted) {
         SshApprovalQueue *q = ssh_approval_queue(&g_store.ssh_approvals, c->scope);
         if (c->sent) ssh_approval_finish(q, c->sent, req->ok, req->result, &req->error, (double)time(NULL));
         else if (!req->ok) ssh_approval_failure(q, &req->error, (double)time(NULL));
@@ -54,6 +51,14 @@ static void completed(void *ctx, Request *req) {
         }
         if (!req->ok && api_error_unauthorized(&req->error)) store_invalidate_credentials(&req->error);
         notify();
+    }
+    // A server cooldown belongs to the continuing connection, even after metadata changes.
+    if (req->client == g_store.client && !req->ok && req->error.status == 429) {
+        SshApprovalQueue *q = ssh_approval_queue(&g_store.ssh_approvals, c->scope);
+        if (!accepted) ssh_approval_failure(q, &req->error, (double)time(NULL));
+        for (SshApprovalQueue *other = g_store.ssh_approvals; other; other = other->next) {
+            if (other->retry_until < q->retry_until) other->retry_until = q->retry_until;
+        }
     }
     json_free(c->device); json_free(c->sent); free(c->scope); free(c); req->completion_ctx = NULL;
 }

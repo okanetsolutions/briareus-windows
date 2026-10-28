@@ -13,6 +13,8 @@ typedef struct SshApprovalQueue {
     struct SshApprovalQueue *next;
 } SshApprovalQueue;
 SshApprovalQueue *ssh_approval_queue(SshApprovalQueue **queues, const char *scope);
+// Retain connection interlocks and cooldowns, treating transferred in-flight decisions as uncertain.
+void ssh_approval_retain(SshApprovalQueue *q, const SshApprovalQueue *old);
 void ssh_approval_free(SshApprovalQueue **queues);
 // Returned row is borrowed; detail/body are owned. No secret or file content fields are copied.
 const Json *ssh_approval_row(const SshApprovalQueue *q, const char *id);

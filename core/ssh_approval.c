@@ -3,10 +3,22 @@
 #include <stdlib.h>
 #include <math.h>
 
+static const char *sending = "Sending decision; do not submit it again.";
+static const char *uncertain = "Outcome unknown. Check this request on the server; this decision will not be resubmitted.";
+
 SshApprovalQueue *ssh_approval_queue(SshApprovalQueue **queues, const char *scope) {
     for (SshApprovalQueue *q = *queues; q; q = q->next) if (str_eq(q->scope, scope)) return q;
     SshApprovalQueue *q = xcalloc(1, sizeof *q); q->scope = xstrdup(scope); q->rows = json_object(); q->decisions = json_object();
     q->next = *queues; *queues = q; return q;
+}
+void ssh_approval_retain(SshApprovalQueue *q, const SshApprovalQueue *old) {
+    if (q == old) return;
+    q->retry_until = fmax(q->retry_until, old->retry_until);
+    for (size_t i = 0; i < json_count(old->decisions); i++) {
+        const char *id = json_key(old->decisions, i);
+        const char *result = json_str(json_get(old->decisions, id));
+        json_set_str(q->decisions, id, str_eq(result, sending) ? uncertain : result);
+    }
 }
 void ssh_approval_free(SshApprovalQueue **queues) {
     while (*queues) { SshApprovalQueue *q = *queues; *queues = q->next; free(q->scope); free(q->error); json_free(q->rows); json_free(q->decisions); free(q); }
@@ -90,7 +102,7 @@ static void set_result(SshApprovalQueue *q, const char *id, Json *row, const cha
 bool ssh_approval_begin(SshApprovalQueue *q, const Json *displayed, const Device *device, double now) {
     if (!ssh_approval_eligible(q, displayed, device, now)) return false;
     Json *row = (Json *)ssh_approval_row(q, text(displayed, "id"));
-    set_result(q, text(displayed, "id"), row, "Sending decision; do not submit it again."); q->generation++; return true;
+    set_result(q, text(displayed, "id"), row, sending); q->generation++; return true;
 }
 void ssh_approval_finish(SshApprovalQueue *q, const Json *sent, bool ok, const Json *answer, const ApiError *error, double now) {
     Json *row = (Json *)ssh_approval_row(q, text(sent, "id"));
@@ -106,7 +118,7 @@ void ssh_approval_finish(SshApprovalQueue *q, const Json *sent, bool ok, const J
     // Even definite refusals require a fresh review; uncertain results are never retried.
     set_result(q, text(sent, "id"), row, !ok && api_error_is_refusal(error)
         ? "Decision refused. Refresh to check current state; review on the server before taking further action."
-        : "Outcome unknown. Check this request on the server; this decision will not be resubmitted.");
+        : uncertain);
     // A decision's 404 means this item vanished, rather than loss of the entire list.
     ApiError copy = *error; if (copy.status == 404) copy.status = 400;
     ssh_approval_failure(q, &copy, now);
