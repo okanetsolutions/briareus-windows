@@ -7,7 +7,7 @@
 
 static Route routes[] = {{"GET", "/prompts", "read"}, {"POST", "/prompts", "admin"},
     {"PUT", "/prompts/{id}", "admin"}, {"DELETE", "/prompts/{id}", "admin"}, {"POST", "/sessions/{sessionId}/message", "manage"}};
-static const char *library = "{\"prompts\":[{\"id\":41,\"title\":\"Scoped\",\"body\":\"saved\nbody\",\"repo\":\"o/r\",\"sortOrder\":1},{\"id\":42,\"title\":\"Shared\",\"body\":\"global\",\"repo\":null,\"sortOrder\":2}]}";
+static const char *library = "{\"prompts\":[{\"id\":41,\"title\":\"Scoped\",\"body\":\"saved\\nbody\",\"repo\":\"o/r\",\"sortOrder\":1},{\"id\":42,\"title\":\"Shared\",\"body\":\"global\",\"repo\":null,\"sortOrder\":2}]}";
 static ConversationScreen *open_composer(ScreenFixture *f, const char *repo) {
     Session ss = {0}; ss.raw = json_object(); json_set_str(ss.raw, "id", "s1"); json_set_str(ss.raw, "repo", repo); json_set_str(ss.raw, "status", "idle");
     Screen *screen = conversation_screen_new(&ss); session_free(&ss);

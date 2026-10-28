@@ -42,7 +42,7 @@ static void limits_and_edit(void) {
     over = xstrfmt("%sx", body); CHECK(saved_prompt_create("Title", over, NULL) == NULL); free(over); free(title); free(body);
     title = repeated("e\xCC\x81", 60); p = saved_prompt_create(title, "body", NULL); CHECK(p != NULL); json_free(p); free(title);
     body = repeated("x", 19999); over = xstrfmt("  %s", body); CHECK(saved_prompt_create("Title", over, NULL) == NULL); free(over); free(body);
-    Json *original = json_parsez("{\"id\":41,\"title\":\"Original\",\"body\":\"  kept\nbody\",\"repo\":\"o/r\",\"sortOrder\":9}");
+    Json *original = json_parsez("{\"id\":41,\"title\":\"Original\",\"body\":\"  kept\\nbody\",\"repo\":\"o/r\",\"sortOrder\":9}");
     p = saved_prompt_edit(original, "Renamed", "  kept\nbody"); CHECK_INT(json_count(p), 2);
     CHECK_INT(json_int_or(json_get(p, "id"), 0), 41); CHECK_STR(json_str(json_get(p, "title")), "Renamed");
     CHECK(json_is_null(json_get(p, "body"))); CHECK(json_is_null(json_get(p, "repo"))); CHECK(json_is_null(json_get(p, "sortOrder"))); json_free(p);
