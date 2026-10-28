@@ -142,12 +142,17 @@ static void destroy_top(Pane *p) {
     // Timers a screen forgot die with it.
     s->vt->destroy(s);
 }
+static bool pane_registered(Pane *p) {
+    for (size_t i = 0; i < pane_count; i++) if (all_panes[i] == p) return true;
+    return false;
+}
 bool pane_can_leave(Pane *p) {
     if (!p) return true;
     size_t depth = p->depth;
     for (size_t i = depth; i > 0; i--) {
         Screen *s = p->stack[i - 1];
         if (s->vt->can_leave && !s->vt->can_leave(s)) return false;
+        if (!pane_registered(p)) return false;
         if (p->depth != depth || p->stack[i - 1] != s) return false;
     }
     return true;
@@ -157,6 +162,7 @@ void pane_pop(Pane *p) {
     Screen *top = pane_top(p);
     size_t depth = p->depth;
     if (top->vt->can_leave && !top->vt->can_leave(top)) return;
+    if (!pane_registered(p)) return;
     if (p->depth != depth || pane_top(p) != top) return;
     destroy_top(p);
     p->scroll_y = 0; p->stick_bottom = false; p->show_bottom_button = false;

@@ -145,6 +145,15 @@ bool detached_any_shown(void) {
     for (size_t i = 0; i < g_window_count; i++) if (IsWindowVisible(g_windows[i]->hwnd) && !IsIconic(g_windows[i]->hwnd)) return true;
     return false;
 }
+bool detached_can_leave_all(void) {
+    size_t count = g_window_count;
+    for (size_t i = 0; i < count; i++) {
+        Detached *w = g_windows[i];
+        if (!pane_can_leave(w->pane)) return false;
+        if (g_window_count != count || g_windows[i] != w) return false;
+    }
+    return true;
+}
 void detached_close_all(void) {
     while (g_window_count) {
         size_t before = g_window_count;

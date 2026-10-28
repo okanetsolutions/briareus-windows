@@ -148,6 +148,39 @@ static void stale_reads(void) {
     g_store.device.permission = "manage"; SetEvent(f.release[MW_ACCOUNTS]); screen_fixture_pump(&f.f, 1);
     CHECK(!mail_wake_current(s)); CHECK(!mail_wake_savable(s)); close_form(s); clear(&f);
 }
+static void write_cooldown_and_cancelled_read(void) {
+    WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3); act(s, MW_ADD, 0);
+    f.status[MW_WRITE] = 429; f.retry[MW_WRITE] = "120"; act(s, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
+    double deadline = mail_wake_deadline(s, MW_WRITE); CHECK(deadline > (double)time(NULL));
+    act(s, MW_RETRY, 0); screen_fixture_pump(&f.f, 3); act(s, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 1);
+    close_form(s); s = open_form(&f, "s", 3); act(s, MW_ADD, 0); act(s, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 1);
+    CHECK(mail_wake_deadline(s, MW_WRITE) == deadline);
+    f.block[MW_ACCOUNTS] = true; f.status[MW_ACCOUNTS] = 429; f.retry[MW_ACCOUNTS] = "180";
+    act(s, MW_RETRY, 0); CHECK_INT(WaitForSingleObject(f.entered[MW_ACCOUNTS], 10000), WAIT_OBJECT_0); screen_fixture_pump(&f.f, 2);
+    close_form(s); SetEvent(f.release[MW_ACCOUNTS]); screen_fixture_pump(&f.f, 1);
+    s = open_form(&f, "s", 2); CHECK(mail_wake_deadline(s, MW_ACCOUNTS) > deadline); CHECK_INT(f.calls[MW_ACCOUNTS], 4);
+    close_form(s); clear(&f);
+}
+static void malformed_prerequisites_and_saved_response(void) {
+    WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3); act(s, MW_ADD, 0); edit(s, 4, L"keep");
+    f.responses[MW_ACCOUNTS] = "{\"accounts\":[{\"id\":999}],\"providers\":[]}";
+    f.responses[MW_PROJECTS] = "{\"projects\":[{\"repo\":\"other\",\"mailToolsEnabled\":true}]}";
+    act(s, MW_RETRY, 0); screen_fixture_pump(&f.f, 3); CHECK(!s->fresh[MW_ACCOUNTS]); CHECK(!s->fresh[MW_PROJECTS]);
+    CHECK(s->errors[MW_ACCOUNTS] && s->errors[MW_PROJECTS]); CHECK(!mail_wake_savable(s));
+    CHECK_STR(json_str(json_get(json_at(s->draft.rules, 0), "subject")), "keep");
+    f.responses[MW_ACCOUNTS] = ACCOUNTS; f.responses[MW_PROJECTS] = "[{\"repo\":\"o/r\",\"mailToolsEnabled\":true}]";
+    act(s, MW_RETRY, 0); screen_fixture_pump(&f.f, 3); CHECK(mail_wake_savable(s));
+    // A success with another record's contents is an uncertain outcome, even without an identity field.
+    f.responses[MW_WRITE] = EMPTY; act(s, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
+    CHECK(mail_wake_dirty(&s->draft)); CHECK(json_bool_is(json_get(mail_wake_entry(s, MW_WRITE), "uncertain"), true));
+    close_form(s); clear(&f);
+}
+static void empty_layout(Screen *base, Doc *doc) { (void)base; (void)doc; }
+static void empty_header(Screen *base, HeaderInfo *info) { (void)base; snprintf(info->title, sizeof info->title, "Test root"); }
+static Screen *empty_root(void) {
+    static const ScreenVTable vt = {.destroy = screen_release, .layout = empty_layout, .header = empty_header};
+    Screen *base = xcalloc(1, sizeof *base); base->vt = &vt; return base;
+}
 static Pane *navigation_pane;
 static MailWakeScreen *retiring_screen;
 static void navigate(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -156,7 +189,7 @@ static void navigate(Screen *base, int action, intptr_t arg, POINT pt) {
 static void retire_in_modal(void) { close_form(retiring_screen); }
 static void discard_navigation(void) {
     WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
-    pane_push(f.f.pane, placeholder_screen_new()); pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
+    pane_push(f.f.pane, empty_root()); pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
     act(s, MW_ADD, 0); edit(s, 4, L"draft");
     navigation_pane = f.f.pane;
     static const ScreenVTable navigation_vt = {.action = navigate}; Screen navigation = {.vt = &navigation_vt};
@@ -180,8 +213,26 @@ static void reconcile_and_modal_retirement(void) {
     retiring_screen = s; modal_driver_action_during(&s->base, MW_DISCARD, 0, IDOK, retire_in_modal); retiring_screen = NULL;
     SetEvent(f.release[MW_ACCOUNTS]); screen_fixture_pump(&f.f, 1); clear(&f);
 }
+static bool detached_leave_result;
+static void check_detached_leave(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)base; (void)action; (void)arg; (void)pt; detached_leave_result = detached_can_leave_all();
+}
+static void detached_navigation(void) {
+    WakeFixture f; init(&f);
+    Pane *pane = detached_open(empty_root(), NULL, false); CHECK(pane != NULL);
+    Session ss = {0}; ss.raw = json_parsez("{\"id\":\"detached\",\"repo\":\"o/r\"}");
+    MailWakeScreen *s = (MailWakeScreen *)mail_wake_screen_new(&ss); session_free(&ss); pane_push(pane, &s->base); screen_fixture_pump(&f.f, 3);
+    act(s, MW_ADD, 0); edit(s, 4, L"detached draft");
+    static const ScreenVTable vt = {.action = check_detached_leave}; Screen navigation = {.vt = &vt};
+    modal_driver_action(&navigation, 0, 0, IDCANCEL); CHECK(!detached_leave_result); CHECK(mail_wake_dirty(&s->draft)); CHECK_INT(pane_depth(pane), 2);
+    modal_driver_action(&navigation, 0, 0, IDOK); CHECK(detached_leave_result); CHECK(!mail_wake_dirty(&s->draft));
+    detached_close_all(); clear(&f);
+}
 void app_mail_wake_tests(void) {
     screen_fixture_prepare();
+    test_run("main-window pre-close guard includes unsaved detached mail wake drafts", detached_navigation);
+    test_run("mail wake PUT cooldown and cancelled read Retry-After survive reopening", write_cooldown_and_cancelled_read);
+    test_run("mail wake malformed prerequisites and wrong saved contents preserve draft", malformed_prerequisites_and_saved_response);
     test_run("mail wake Back cancellation and explicit discard guard stacked navigation", discard_navigation);
     test_run("mail wake explicit reconciliation and modal retirement drop later completions", reconcile_and_modal_retirement);
     test_run("mail wake linked form add/edit/remove/enable/save/refill/reopen", lifecycle);

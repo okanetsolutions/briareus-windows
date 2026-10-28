@@ -375,6 +375,7 @@ void detached_close(Pane *pane);
 /// Whether any of them is on screen, not minimized.
 bool detached_any_shown(void);
 /// They all close (signing out, quitting) or take a new theme.
+bool detached_can_leave_all(void);
 void detached_close_all(void);
 void detached_themed(void);
 /// Disables every one of them but `except`, or enables again the ones it disabled.
