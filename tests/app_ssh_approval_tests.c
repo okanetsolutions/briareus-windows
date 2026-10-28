@@ -148,7 +148,10 @@ static void restored_metadata_rebinds_and_keeps_interlocks(void) {
     ssh_approvals_free(s); clear(&f);
 }
 static void findings_cooldown_does_not_delay_ssh(void) {
-    Fixture f; init(&f); Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
+    Fixture f; init(&f);
+    wchar_t dir[MAX_PATH]; GetTempPathW(MAX_PATH, dir); wcscat(dir, L"briareus-ssh-poll-tests");
+    g_store.cache = cache_new(dir); cache_remove_all(g_store.cache);
+    Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
     Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}};
     g_store.routes = routes; g_store.route_count = 3;
     screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
@@ -164,7 +167,7 @@ static void findings_cooldown_does_not_delay_ssh(void) {
     base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 4);
     base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
     base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 4);
-    base->vt->destroy(base); clear(&f);
+    base->vt->destroy(base); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir); clear(&f);
 }
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
