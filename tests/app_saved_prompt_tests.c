@@ -277,8 +277,10 @@ static void feedback_insert(void) {
     CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
     CHECK_OWNED_STR(s->prompts->draft(s), "dictated first");
     feedback_type(s, L" \t\r\n");
+    CHECK(!IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
     prompt_picker_insert_row(s->prompts, json_at(s->prompts->rows, 0));
     CHECK_OWNED_STR(s->prompts->draft(s), "saved\nbody");
+    CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
     // Selection must not replace manually authored text; a pending transcript joins the latest draft.
     feedback_type(s, L"manual  ");
     SendDlgItemMessageW(s->dialog, IDC_INPUT, EM_SETSEL, 0, -1);
