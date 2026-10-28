@@ -14,6 +14,11 @@ static Json *entry(const char *key) {
     if (!json_is_object(json_get(g_store.mail_wake_state, key))) json_object_set(g_store.mail_wake_state, key, json_object());
     return (Json *)json_get(g_store.mail_wake_state, key);
 }
+bool mail_wake_read_current(MailWakeScreen *s) {
+    const Json *write = mail_wake_entry(s, MW_WRITE);
+    return s->fresh[MW_READ] && s->record && s->read_epoch == json_num_or(json_get(write, "epoch"), 0)
+        && !json_bool_is(json_get(write, "pending"), true);
+}
 static bool locked(MailWakeScreen *s) {
     const Json *e = mail_wake_entry(s, MW_WRITE);
     return json_bool_is(json_get(e, "pending"), true) || json_bool_is(json_get(e, "uncertain"), true);
@@ -104,6 +109,7 @@ static void read_done(void *owner, Request *r) {
         : str_eq(r->operation, mail_wake_operations[MW_ACCOUNTS]) ? MW_ACCOUNTS : MW_PROJECTS;
     bool ok = !r->arg && r->ok && adopt(s, r, route);
     s->fresh[route] = ok;
+    if (ok && route == MW_READ) s->read_epoch = json_num_or(json_get(mail_wake_entry(s, MW_WRITE), "epoch"), 0);
     char *error = ok ? NULL : request_error_or_unexpected(r); set_string(&s->errors[route], error); free(error);
     mail_wake_repaint(s);
 }
@@ -135,6 +141,7 @@ static void write_done(void *owner, Request *r) {
         json_free(s->record); s->record = json_clone(r->result); mail_wake_fill_controls(s);
         set_string(&s->notice, "Saved."); set_string(&s->errors[MW_WRITE], NULL);
         s->fresh[MW_READ] = true;
+        s->read_epoch = json_num_or(json_get(mail_wake_entry(s, MW_WRITE), "epoch"), 0);
     } else {
         char *error = request_error_or_unexpected(r); set_string(&s->errors[MW_WRITE], error); free(error);
     }

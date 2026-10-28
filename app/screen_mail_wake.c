@@ -40,11 +40,12 @@ static bool can_leave(Screen *base) {
 }
 static void discard(MailWakeScreen *s, bool reconcile) {
     if (!mail_wake_editable(s)) return;
-    if (reconcile && (!s->fresh[MW_READ] || !s->record || json_bool_is(json_get(mail_wake_entry(s, MW_WRITE), "pending"), true))) return;
+    if (reconcile && !mail_wake_read_current(s)) return;
     bool yes = mail_wake_confirm(s);
     if (s->retired) { mail_wake_release(s); return; }
     if (!yes || !s->shown || !mail_wake_current(s)) return;
     if (reconcile) {
+        if (!mail_wake_read_current(s)) return;
         MailWake fresh = {0};
         if (!mail_wake_read(&fresh, s->record)) return;
         mail_wake_free(&s->draft); s->draft = fresh;

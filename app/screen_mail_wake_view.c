@@ -61,7 +61,7 @@ void mail_wake_layout(Screen *base, Doc *doc) {
     if (json_bool_is(json_get(write, "uncertain"), true)) {
         doc_notice(doc, 0, w, "Save outcome is uncertain. Your draft is kept. Refresh the saved rules, then explicitly use them before saving again.");
         doc_button(doc, 0, 0, "Discard draft and use refreshed rules", BUTTON_BORDERED, MW_RECONCILE, 0,
-            s->fresh[MW_READ] && !json_bool_is(json_get(write, "pending"), true) && mail_wake_editable(s));
+            mail_wake_read_current(s) && mail_wake_editable(s));
         if (s->record) { char *record = json_pretty(s->record); doc_text(doc, 0, w, record, FONT_MONO, theme.muted, DT_WORDBREAK); free(record); }
     }
     if (!s->draft.rules) return;

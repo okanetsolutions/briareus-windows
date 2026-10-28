@@ -28,7 +28,13 @@ void mail_wake_fill_controls(MailWakeScreen *s) {
 static void focus_next(MailWakeScreen *s, int field, bool backwards) {
     for (int n = 0; n < MW_FIELDS; n++) {
         field = (field + (backwards ? MW_FIELDS - 1 : 1)) % MW_FIELDS;
-        if (s->laid[field] && IsWindowVisible(s->edits[field]) && IsWindowEnabled(s->edits[field])) { SetFocus(s->edits[field]); return; }
+        if (s->laid[field] && IsWindowEnabled(s->edits[field]) && mail_wake_editable(s)) {
+            RECT content = pane_content_rect(s->base.pane);
+            int scroll = pane_scroll_y(s->base.pane), height = content.bottom - content.top;
+            if (s->rects[field].top < scroll || s->rects[field].bottom > scroll + height)
+                pane_scroll_to(s->base.pane, s->rects[field].top);
+            SetFocus(s->edits[field]); return;
+        }
     }
     SetFocus(pane_hwnd(s->base.pane));
 }

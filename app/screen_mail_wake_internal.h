@@ -23,12 +23,14 @@ typedef struct {
     char *keys[MW_ROUTES], *errors[MW_ROUTES], *notice;
     bool fresh[MW_ROUTES], shown, modal, retired, filling;
     int generation, tools, picker;
+    double read_epoch;
     HWND edits[MW_FIELDS]; RECT rects[MW_FIELDS]; bool laid[MW_FIELDS], clipped[MW_FIELDS];
 } MailWakeScreen;
 extern const char *const mail_wake_operations[MW_ROUTES];
 bool mail_wake_current(MailWakeScreen *s);
 bool mail_wake_editable(MailWakeScreen *s);
 bool mail_wake_savable(MailWakeScreen *s);
+bool mail_wake_read_current(MailWakeScreen *s);
 const Json *mail_wake_entry(MailWakeScreen *s, int route);
 double mail_wake_deadline(MailWakeScreen *s, int route);
 void mail_wake_repaint(MailWakeScreen *s);

@@ -177,6 +177,7 @@ void app_set_overlay(Screen *screen) {
     Screen *root = pane_root(g_overlay);
     if (root && screen && screen->id && str_eq(root->id, screen->id) && pane_depth(g_overlay) == 1) { screen->vt->destroy(screen); return; }
     if (!screen && !root) return;
+    if (!pane_can_leave(g_overlay)) { if (screen) screen->vt->destroy(screen); return; }
     // Win32 leaves focus on a hidden window, so closing the panel hands it back to the board.
     HWND focus = GetFocus(), overlay = pane_hwnd(g_overlay);
     bool had_focus = focus && (focus == overlay || IsChild(overlay, focus));
@@ -246,14 +247,14 @@ static bool raise_detached(Screen *screen) {
     return true;
 }
 bool app_detail_can_leave(void) {
-    return pane_can_leave(g_detail);
+    return pane_can_leave(g_overlay) && pane_can_leave(g_detail);
 }
 void app_show_detail(Screen *screen) {
     if (raise_detached(screen)) return;
     Screen *root = pane_root(g_detail);
     // A form with unsaved changes may keep its place.
     bool same = root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1;
-    if (!same && !pane_can_leave(g_detail)) { screen->vt->destroy(screen); return; }
+    if (!same && !app_detail_can_leave()) { screen->vt->destroy(screen); return; }
     if (same) {
         if (root->vt->adopt) root->vt->adopt(root, screen);
         screen->vt->destroy(screen);
