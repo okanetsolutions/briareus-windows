@@ -1,6 +1,5 @@
 #include "screen_findings_internal.h"
 
-static void sessions_done(void *owner, Request *req);
 static void projects_done(void *owner, Request *req);
 static void cycle_start(FindingsScreen *s);
 static void cycle_end(FindingsScreen *s);
@@ -171,6 +170,7 @@ static void set_all(FindingsScreen *s, size_t r, const char *decision) {
 static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     FindingsScreen *s = (FindingsScreen *)base;
+    if (action >= SSH_APPROVE && action <= SSH_REFRESH) { ssh_approvals_action(s->ssh, action, arg); return; }
     if (action == ACT_DISMISS_OUTCOME) { screen_findings_outcome_drop(s, (size_t)arg); pane_relayout(base->pane); return; }
     if (action == ACT_OUTCOME_SESSION) {
         if ((size_t)arg >= s->outcome_count) return;
@@ -244,6 +244,7 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
 
 static void findings_timer(Screen *base, UINT id) {
     FindingsScreen *s = (FindingsScreen *)base;
+    ssh_approvals_timer(s->ssh, id);
     if (!poller_fired(&s->poller, id)) return;
     // A read still under way answers this tick too; the poller only needs its next one scheduled.
     if (s->req_projects || s->req_sessions) poller_finished(&s->poller, false, -1); else cycle_start(s);
@@ -251,17 +252,19 @@ static void findings_timer(Screen *base, UINT id) {
 
 static void findings_visible(Screen *base, bool shown) {
     FindingsScreen *s = (FindingsScreen *)base;
+    ssh_approvals_visible(s->ssh, shown);
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 7000);
     else { poller_stop(&s->poller); request_cancel(&s->req_projects); request_cancel(&s->req_sessions); sessions_free(s->incoming, s->incoming_count); s->incoming = NULL; s->incoming_count = 0; }
 }
 
-static void findings_refresh(Screen *base) { screen_findings_cycle_now((FindingsScreen *)base); }
+static void findings_refresh(Screen *base) { FindingsScreen *s = (FindingsScreen *)base; ssh_approvals_refresh(s->ssh); screen_findings_cycle_now(s); }
 
-static void findings_activated(Screen *base, bool active) { if (active) { FindingsScreen *s = (FindingsScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
+static void findings_activated(Screen *base, bool active) { if (active) { FindingsScreen *s = (FindingsScreen *)base; ssh_approvals_visible(s->ssh, true); poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
 
 static void findings_destroy(Screen *base) {
     FindingsScreen *s = (FindingsScreen *)base;
     poller_stop(&s->poller);
+    ssh_approvals_free(s->ssh);
     request_cancel(&s->req_projects); request_cancel(&s->req_sessions); request_cancel(&s->req_write);
     projects_free(s->projects, s->project_count);
     sessions_free(s->all, s->all_count); sessions_free(s->incoming, s->incoming_count);
@@ -290,6 +293,7 @@ static const ScreenVTable findings_vt = {
 Screen *findings_screen_new(void) {
     FindingsScreen *s = xcalloc(1, sizeof *s);
     s->base.vt = &findings_vt; s->base.id = xstrdup("findings");
+    s->ssh = ssh_approvals_new(&s->base);
     s->write_kind = WRITE_NONE; s->retry_after = -1;
     restore(s);
     return &s->base;

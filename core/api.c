@@ -384,6 +384,8 @@ static const ApiRoute ROUTES[] = {
     { "delete_db_server", "DELETE", "settings/db-servers/{id}" },
     { "test_db_server", "POST", "settings/db-servers/test" },
     // The SSH servers agents may run commands on, each held to one project; also for an admin token.
+    { "ssh_requests", "GET", "ssh/requests" },
+    { "ssh_decision", "POST", "ssh/requests/{id}/decision" },
     { "settings_ssh_servers", "GET", "settings/ssh/servers" },
     { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" },

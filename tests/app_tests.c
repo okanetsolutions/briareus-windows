@@ -30,6 +30,7 @@ int main(void) {
     app_pulls_tests();
     app_projects_tests();
     app_ssh_settings_tests();
+    app_ssh_approval_tests();
     app_secret_cleanup_tests();
     return test_summary();
 }

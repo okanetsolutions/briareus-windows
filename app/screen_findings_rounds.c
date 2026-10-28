@@ -261,6 +261,7 @@ void screen_findings_findings_layout(Screen *base, Doc *doc) {
     s->doc_stale = false;
     int w = doc->width, x = 0, iw = w;
     doc_space(doc, px(14));
+    ssh_approvals_layout(s->ssh, doc, x, iw);
     if (s->error) { doc_notice(doc, x, iw, s->error); doc_space(doc, px(10)); }
     for (size_t i = 0; i < s->outcome_count; i++) layout_outcome(s, doc, x, iw, i);
     if (s->round_count) {
