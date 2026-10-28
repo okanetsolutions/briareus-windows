@@ -1,3 +1,4 @@
+#include "saved_prompt.h"
 #include "ssh_settings.h"
 #include "api.h"
 #include "mail_reply.h"
@@ -286,6 +287,10 @@ static const ApiRoute ROUTES[] = {
     {"server_stats", "GET", "stats/server", NULL, NULL, NULL},
     {"sessions_stats", "GET", "stats/sessions", NULL, NULL, NULL},
     {"session_stats", "GET", "sessions/{sessionId}/stats", NULL, NULL, NULL},
+    {"prompts", "GET", "prompts"},
+    {"create_prompt", "POST", "prompts"},
+    {"update_prompt", "PUT", "prompts/{id}"},
+    {"delete_prompt", "DELETE", "prompts/{id}"},
     // Projects
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },
@@ -508,6 +513,11 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
         json_set_str(safe, "id", json_str(json_get(rest, "id")));
         json_set_str(safe, "text", json_str(json_get(rest, "text")));
         json_free(rest); rest = safe;
+    }
+    if (str_eq(name, "create_prompt") || str_eq(name, "update_prompt")) {
+        Json *safe = saved_prompt_wire(rest, str_eq(name, "create_prompt"));
+        json_free(rest); rest = safe;
+        if (!rest) { api_error_set(error, API_HTTP, 400, "Invalid saved prompt title or body (limits: 120 and 20000 UTF-16 units).", -1); return NULL; }
     }
     Str path; str_init(&path);
     if (!fill_path(route, rest, &path, error)) {

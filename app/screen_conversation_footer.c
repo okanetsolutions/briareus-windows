@@ -88,16 +88,16 @@ int screen_conversation_conversation_footer_height(Screen *base, int width) {
     Canvas *cv = NULL;   // measuring only
     int inner = width - px(24) * 2; if (inner > px(860)) inner = px(860);
     int chips = chips_layout(s, cv, inner, NULL);
-    int files = screen_conversation_can_message(s) ? attach_list_height(s->files, cv, inner - px(24)) : 0;
-    int box = screen_conversation_can_message(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
-    int cost = screen_conversation_can_message(s) ? loop_cost_height(s, cv, inner) : 0;
+    int files = screen_conversation_can_compose(s) ? attach_list_height(s->files, cv, inner - px(24)) : 0;
+    int box = screen_conversation_can_compose(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
+    int cost = screen_conversation_can_compose(s) ? loop_cost_height(s, cv, inner) : 0;
     int h = px(8) + chips + px(8) + box + px(6) + px(16) + cost + px(14);
     return h;
 }
 
 void screen_conversation_conversation_footer_layout(Screen *base, const RECT *rc) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (!screen_conversation_can_message(s)) { ShowWindow(s->composer, SW_HIDE); return; }
+    if (!screen_conversation_can_compose(s)) { ShowWindow(s->composer, SW_HIDE); return; }
     // Made in the detail pane, the composer follows a conversation pushed onto the side panel instead.
     HWND parent = pane_hwnd(base->pane);
     if (GetParent(s->composer) != parent) SetParent(s->composer, parent);
@@ -137,8 +137,9 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
         free(label);
     }
     int top = y0 + chips + px(8);
+    SetRectEmpty(&s->prompts_rc);
     memset(&s->mic_rc, 0, sizeof s->mic_rc); memset(&s->send_rc, 0, sizeof s->send_rc); memset(&s->discard_rc, 0, sizeof s->discard_rc); memset(&s->attach_rc, 0, sizeof s->attach_rc);
-    if (!screen_conversation_can_message(s)) {
+    if (!screen_conversation_can_compose(s)) {
         RECT box = { col.left, top, col.right, top + px(30) + px(20) + 2 };
         fill_round_rect(cv, &box, px(16), theme.raise, theme.line);
         bool reopen = store_supports("reopen") && str_eq(session_status(ss), "closed");
@@ -170,7 +171,7 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
         fill_round_rect(cv, &send, px(8), theme.raise, theme.line);
         draw_text(cv, "\xE2\x96\xA0", &send, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
-        bool enabled = can && !trimmed_empty && !uploading;
+        bool enabled = can && !trimmed_empty && !uploading && screen_conversation_can_message(s);
         fill_round_rect(cv, &send, px(8), enabled || s->busy ? theme.accent : theme.field, enabled || s->busy ? theme.accent : theme.field);
         draw_text(cv, "\xE2\x86\xB5", &send, FONT_BODY, enabled || s->busy ? theme.on_accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
@@ -180,6 +181,12 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
         RECT attach = { x, row_y, x + bw, row_y + bh };
         s->attach_rc = attach;
         attach_button_paint(cv, &attach, attach_list_count(s->files) < ATTACHMENTS_MAX);
+        x += bw + px(6);
+    }
+    if (prompt_picker_offered(s->prompts)) {
+        RECT button = { x, row_y, x + bw, row_y + bh }; s->prompts_rc = button;
+        fill_round_rect(cv, &button, px(8), theme.raise, theme.line);
+        draw_text(cv, "\xF0\x9F\x93\x9A", &button, FONT_EMOJI_LARGE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += bw + px(6);
     }
     if (store_can_transcribe()) {
@@ -212,7 +219,11 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
 void screen_conversation_conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
     if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && PtInRect(&g_chip_rc[CHIP_LOOP], pt)) { screen_conversation_menu_choice(s, session_review_loop_on(screen_conversation_session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
-    if (!screen_conversation_can_message(s)) { if (PtInRect(&s->send_rc, pt) && !s->busy && !s->uncertain) screen_conversation_confirm_and_mutate(s, "reopen"); return; }
+    if (!screen_conversation_can_compose(s)) { if (PtInRect(&s->send_rc, pt) && !s->busy && !s->uncertain) screen_conversation_confirm_and_mutate(s, "reopen"); return; }
+    if (PtInRect(&s->prompts_rc, pt) && prompt_picker_offered(s->prompts)) {
+        POINT menu = {s->prompts_rc.left, s->prompts_rc.bottom}; ClientToScreen(pane_hwnd(base->pane), &menu);
+        prompt_picker_open(s->prompts, menu); return;
+    }
     if (attach_list_click(s->files, pt)) return;
     if (PtInRect(&s->attach_rc, pt)) { attach_list_pick(s->files); return; }
     if (PtInRect(&s->send_rc, pt)) {

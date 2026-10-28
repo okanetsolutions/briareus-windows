@@ -21,6 +21,7 @@ static void drop_client(void) {
     json_free(g_store.mail_wake_state); g_store.mail_wake_state = NULL;
     ssh_approval_free(&g_store.ssh_approvals);
     json_free(g_store.resources_retries); g_store.resources_retries = NULL;
+    json_free(g_store.prompt_state); g_store.prompt_state = NULL;
     json_free(g_store.status_uncertain); g_store.status_uncertain = NULL;
     g_store.home_uncertain = false;
     memset(g_store.home_retry_until, 0, sizeof g_store.home_retry_until);
