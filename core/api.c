@@ -250,8 +250,9 @@ static Json *request(ApiClient *c, const char *path, const char *method, const J
     char *url = xstrfmt("%s%s", c->address.base_url, path);
     char *data = NULL; size_t len = 0;
     if (body) {
-        data = json_serialize(body, false); len = strlen(data);
-        if (len > MAX_REQUEST_BYTES) { ssh_secret_free(data, len); free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
+        data = json_serialize_bounded(body, false, MAX_REQUEST_BYTES);
+        if (!data) { free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
+        len = strlen(data);
     }
     Json *result = send_request(c, method, url, body ? "application/json" : NULL, data, len, timeout_ms, error);
     ssh_secret_free(data, len); free(url);

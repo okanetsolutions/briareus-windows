@@ -928,5 +928,6 @@ int main(void) {
     session_working_tests();
     pull_conversation_tests();
     core_ssh_settings_tests();
+    core_secret_cleanup_tests();
     return test_summary();
 }

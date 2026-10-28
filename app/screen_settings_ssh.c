@@ -229,6 +229,7 @@ Screen *screen_settings_ssh_settings_screen_new(const Json *row, const Json *def
     bool current = settings && settings->ssh_loaded && settings->ssh_account == g_store.client && str_eq(settings->ssh_device, g_store.device.id);
     const Json *rows = current ? screen_settings_ssh_rows(settings) : NULL;
     ssh_secrets_init(&s->secrets, s->row, rows, !s->id);
+    ssh_secrets_scrub(s->row);
     for (int f = 0; f < SSH_SECRET_COUNT; f++) json_object_remove(s->row, SSH_SECRET_KEYS[f]);
     if (!s->id) {
         // A new server starts on the first project, as the web's form does, and where its label is typed.

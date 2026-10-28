@@ -120,6 +120,10 @@ $(BUILD)/app/%.o: app/%.cpp app/*.h core/*.h | $(BUILD)/app
 $(BUILD)/tests/%.o: tests/%.c tests/*.h tests/fixtures/*/*.h app/*.h core/*.h | $(BUILD)/tests
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# These allocator fixtures include the owning implementations under a private symbol namespace.
+$(BUILD)/tests/core_secret_cleanup_tests.o: core/str.c core/json.c core/ssh_settings.c core/api.c
+$(BUILD)/tests/app_secret_cleanup_tests.o: core/str.c core/json.c core/ssh_settings.c app/screen_settings_ssh.c
+
 $(RES): res/briareus.rc res/briareus.manifest res/briareus.ico app/resource.h | $(BUILD)
 	$(WINDRES) -Ires -Iapp -i res/briareus.rc -o $@
 

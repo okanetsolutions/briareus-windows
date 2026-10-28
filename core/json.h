@@ -73,6 +73,9 @@ bool json_equal(const Json *a, const Json *b);
 
 /// Compact serialization. `sorted` orders object keys so equal values are equal bytes.
 char *json_serialize(const Json *value, bool sorted);
+/// Compact output with at most max_bytes bytes (excluding NUL), or NULL if too large.
+/// Measures without copying strings and allocates the full output before writing any value.
+char *json_serialize_bounded(const Json *value, bool sorted, size_t max_bytes);
 /// Indented, with sorted keys, for reading unknown payloads.
 char *json_pretty(const Json *value);
 
