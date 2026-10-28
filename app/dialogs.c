@@ -161,7 +161,10 @@ static LRESULT dialog_static_color(HWND dialog, WPARAM wp, LPARAM lp, COLORREF c
 // MARK: - Voice in dialogs
 
 void dialog_voice_append(DialogVoice *v, const char *text) {
-    if (text && *text) append_control_text(v->dialog, v->text_id, text);
+    if (!text || !*text) return;
+    append_control_text(v->dialog, v->text_id, text);
+    // Multiline edits do not emit EN_CHANGE for WM_SETTEXT; feedback must enable Start.
+    if (v->text_id == IDC_INPUT) SendMessageW(v->dialog, WM_COMMAND, MAKEWPARAM(IDC_INPUT, EN_CHANGE), (LPARAM)GetDlgItem(v->dialog, IDC_INPUT));
 }
 static void dialog_voice_changed(void *ctx) {
     DialogVoice *v = ctx;
@@ -528,6 +531,7 @@ static void input_insert(void *ctx, const char *body) {
     set_control_text(s->dialog, IDC_INPUT, joined); free(draft); free(joined);
     HWND edit = GetDlgItem(s->dialog, IDC_INPUT); int len = GetWindowTextLengthW(edit);
     SendMessageW(edit, EM_SETSEL, len, len); SetFocus(edit);
+    SendMessageW(s->dialog, WM_COMMAND, MAKEWPARAM(IDC_INPUT, EN_CHANGE), (LPARAM)edit);
 }
 static void input_close(InputState *s) {
     s->closed = true;

@@ -233,7 +233,13 @@ static void temporary_visibility_preserves_conversation(void) {
     clear(&f);
 }
 static ScreenFixture *feedback_fixture;
-static ConversationScreen *feedback_source;
+static Screen *feedback_source;
+static void feedback_layout(Screen *base, Doc *doc) { (void)base; (void)doc; }
+static void feedback_destroy(Screen *base) { free(base); }
+static const ScreenVTable feedback_source_vt = {.layout = feedback_layout, .destroy = feedback_destroy};
+static Screen *feedback_owner(void) {
+    Screen *owner = xcalloc(1, sizeof *owner); owner->vt = &feedback_source_vt; return owner;
+}
 static bool feedback_ok;
 static char *feedback_result;
 static InputState *feedback_state;
@@ -241,6 +247,10 @@ static BOOL CALLBACK feedback_find(HWND window, LPARAM unused) {
     (void)unused;
     if (!GetDlgItem(window, IDC_INPUT)) return TRUE;
     feedback_state = (InputState *)GetWindowLongPtrW(window, GWLP_USERDATA); return FALSE;
+}
+static void feedback_type(InputState *s, const wchar_t *text) {
+    SetDlgItemTextW(s->dialog, IDC_INPUT, text);
+    SendMessageW(s->dialog, WM_COMMAND, MAKEWPARAM(IDC_INPUT, EN_CHANGE), (LPARAM)GetDlgItem(s->dialog, IDC_INPUT));
 }
 static InputState *feedback_dialog(void) {
     feedback_state = NULL; EnumThreadWindows(GetCurrentThreadId(), feedback_find, 0);
@@ -250,11 +260,11 @@ static void feedback_action(Screen *unused, int action, intptr_t arg, POINT pt) 
     (void)unused; (void)action; (void)arg; (void)pt;
     size_t count; const BoardAction *known = board_actions_known(&count), *feedback = NULL;
     for (size_t i = 0; i < count; i++) if (str_eq(known[i].id, "custom-feedback")) feedback = &known[i];
-    feedback_ok = dialog_action_input(feedback_fixture->parent, &feedback_source->base, "o/r", feedback, 9, &feedback_result);
+    feedback_ok = dialog_action_input(feedback_fixture->parent, feedback_source, "o/r", feedback, 9, &feedback_result);
 }
 static void feedback_run(ScreenFixture *f, int answer, void (*during)(void)) {
-    feedback_fixture = f; feedback_source = open_composer(f, "o/r");
-    pane_set_root(f->pane, &feedback_source->base);
+    feedback_fixture = f; feedback_source = feedback_owner();
+    screen_fixture_pane(f, feedback_source); pane_set_root(f->pane, feedback_source);
     ScreenVTable vt = {.action = feedback_action}; Screen driver = {.vt = &vt};
     feedback_result = NULL; feedback_ok = false;
     modal_driver_action_during(&driver, 0, 0, answer, during);
@@ -263,11 +273,14 @@ static void feedback_insert(void) {
     InputState *s = feedback_dialog(); if (!s) return;
     CHECK(IsWindowVisible(GetDlgItem(s->dialog, IDC_PROMPT_LIBRARY)));
     load(feedback_fixture, s->prompts);
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L" \t\r\n");
+    dialog_voice_append(&s->voice, "dictated first");
+    CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
+    CHECK_OWNED_STR(s->prompts->draft(s), "dictated first");
+    feedback_type(s, L" \t\r\n");
     prompt_picker_insert_row(s->prompts, json_at(s->prompts->rows, 0));
     CHECK_OWNED_STR(s->prompts->draft(s), "saved\nbody");
     // Selection must not replace manually authored text; a pending transcript joins the latest draft.
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"manual  ");
+    feedback_type(s, L"manual  ");
     SendDlgItemMessageW(s->dialog, IDC_INPUT, EM_SETSEL, 0, -1);
     prompt_picker_insert_row(s->prompts, json_at(s->prompts->rows, 0));
     dialog_voice_append(&s->voice, "dictated");
@@ -281,7 +294,7 @@ static void feedback_insertion_and_voice(void) {
 }
 static void feedback_failure(void) {
     InputState *s = feedback_dialog(); if (!s) return;
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"keep manual text");
+    feedback_type(s, L"keep manual text");
     feedback_fixture->read_status = 503; load(feedback_fixture, s->prompts);
     CHECK(s->prompts->error != NULL); CHECK(s->prompts->rows == NULL);
     CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
@@ -297,7 +310,7 @@ static void feedback_error_and_retry(void) {
 }
 static void feedback_stale(void) {
     InputState *s = feedback_dialog(); if (!s) return;
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"keep"); load(feedback_fixture, s->prompts);
+    feedback_type(s, L"keep"); load(feedback_fixture, s->prompts);
     Json *rows = json_clone(s->prompts->rows); unsigned generation = s->prompts->generation, visibility = s->prompts->visibility_generation;
     ShowWindow(s->dialog, SW_HIDE); ShowWindow(s->dialog, SW_SHOW);
     prompt_picker_choose(s->prompts, PICK_ROW, rows, generation, visibility, (POINT){0});
@@ -316,7 +329,7 @@ static void feedback_stale_context(void) {
 }
 static void feedback_pending_close(void) {
     InputState *s = feedback_dialog(); if (!s) return;
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"cancel me");
+    feedback_type(s, L"cancel me");
     feedback_fixture->block_read = true; prompt_picker_read(s->prompts);
     CHECK_INT(WaitForSingleObject(feedback_fixture->entered, 10000), WAIT_OBJECT_0);
 }
@@ -327,11 +340,11 @@ static void feedback_cancel_read(void) {
 }
 static void feedback_replace(void) {
     InputState *s = feedback_dialog(); if (!s) return;
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"old draft");
+    feedback_type(s, L"old draft");
     feedback_fixture->block_read = true; prompt_picker_read(s->prompts);
     CHECK_INT(WaitForSingleObject(feedback_fixture->entered, 10000), WAIT_OBJECT_0);
-    ConversationScreen *replacement = open_composer(feedback_fixture, "o/other");
-    pane_set_root(feedback_fixture->pane, &replacement->base);
+    Screen *replacement = feedback_owner();
+    pane_set_root(feedback_fixture->pane, replacement);
     SetEvent(feedback_fixture->resume); screen_fixture_pump(feedback_fixture, 1);
     CHECK(!s->prompts->loaded); CHECK(s->prompts->rows == NULL);
     CHECK(!prompt_picker_offered(s->prompts));
@@ -344,7 +357,7 @@ static void feedback_replaced_owner(void) {
 static void feedback_manual(void) {
     InputState *s = feedback_dialog(); if (!s) return;
     CHECK(!IsWindowVisible(GetDlgItem(s->dialog, IDC_PROMPT_LIBRARY)));
-    SetDlgItemTextW(s->dialog, IDC_INPUT, L"manual only");
+    feedback_type(s, L"manual only");
 }
 static void feedback_without_library(void) {
     ScreenFixture f; init(&f); g_store.route_count = 1;

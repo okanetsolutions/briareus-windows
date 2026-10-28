@@ -8,7 +8,7 @@ typedef char *(*PromptDraft)(void *ctx); // owned UTF-8 current draft
 typedef void (*PromptInsert)(void *ctx, const char *body);
 PromptPicker *prompt_picker_new(Screen *owner, const char *repo, const char *identity,
     PromptOwnerCurrent current, PromptDraft draft, PromptInsert insert, void *ctx);
-// Modal owners use their own HWND for popup routing and notifications.
+// Modal owners route popups and editors to their own HWND. Free before releasing the owner context.
 PromptPicker *prompt_picker_dialog_new(HWND window, const char *repo, const char *identity,
     PromptOwnerCurrent current, PromptDraft draft, PromptInsert insert, void *ctx);
 void prompt_picker_free(PromptPicker *p);
