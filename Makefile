@@ -73,7 +73,8 @@ coverage:
 	# Screen request tests parse replies concurrently; keep gcov counters consistent across worker threads.
 	$(MAKE) BUILD=build-cov OPT="-O0 --coverage -fprofile-update=atomic" test
 	mkdir -p build-cov/coverage
-	$(GCOVR) --root . --object-directory build-cov --filter core/ --txt-summary --html-details build-cov/coverage/index.html 		--fail-under-line $(COVERAGE_MIN)
+	# Allocator probes compile the same sources with renamed functions; count each physical line once.
+	$(GCOVR) --merge-lines --root . --object-directory build-cov --filter core/ --txt-summary --html-details build-cov/coverage/index.html 		--fail-under-line $(COVERAGE_MIN)
 
 # The tests in a build of their own with the checks GCC adds at run time: undefined behaviour (signed overflow, bad shifts,
 # misaligned or null access, out-of-bounds indexing of arrays) traps, fortified libc calls stop on an overrun they can
