@@ -178,10 +178,11 @@ static void save_after_read(Screen *unused, int action, intptr_t arg, POINT pt) 
 static void save_after_initial_read(void) {
     ScreenFixture f; init(&f); ConversationScreen *s = open_composer(&f, NULL);
     modal_picker = s->prompts; menu_fixture = &f;
+    f.write_response = "{\"prompt\":{\"id\":51,\"title\":\"Changed\",\"body\":\"edited\\nbody\",\"repo\":null}}";
     screen_conversation_set_composer_text(s, "authored");
     ScreenVTable vt = {.action = save_after_read}; Screen driver = {.vt = &vt};
     modal_driver_action_during(&driver, 0, 0, IDOK, fill);
-    screen_fixture_pump(&f, 1); CHECK_INT(f.writes, 1);
+    screen_fixture_pump(&f, 2); CHECK_INT(f.writes, 1);
     CHECK_STR(f.method, "POST"); CHECK_STR(json_str(json_get(f.body, "title")), "Changed");
     CHECK_STR(json_str(json_get(f.body, "body")), "edited\nbody");
     CHECK_OWNED_STR(screen_conversation_composer_text(s), "authored");
