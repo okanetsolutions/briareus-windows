@@ -46,7 +46,7 @@ static void validation(void) {
     SshSecrets s; ssh_secrets_init(&s, row, NULL, false);
     char text[1025]; memset(text, 'x', sizeof text);
     // 511 two-byte code points plus one ASCII byte is exactly the byte limit.
-    for (int i = 0; i < 1022; i += 2) { text[i] = (char)0xc3; text[i+1] = (char)0xa9; }
+    for (int i = 0; i < 1022; i += 2) { memcpy(text + i, "\xc3\xa9", 2); }
     for (int f = 0; f < 2; f++) for (int mode = 0; mode < 6; mode++) {
         size_t bytes = mode == 0 ? 1023 : mode == 1 ? 1024 : 3;
         const char *v = mode < 2 ? text : mode == 2 ? "a\rb" : mode == 3 ? "a\nb" : mode == 4 ? "a\0b" : " x ";
