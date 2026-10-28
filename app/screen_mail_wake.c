@@ -32,6 +32,7 @@ bool mail_wake_confirm(MailWakeScreen *s) {
 }
 static bool can_leave(Screen *base) {
     MailWakeScreen *s = (MailWakeScreen *)base;
+    if (s->modal) return false;
     if (!mail_wake_dirty(&s->draft)) return true;
     bool discard = mail_wake_confirm(s);
     if (s->retired) { mail_wake_release(s); return true; }

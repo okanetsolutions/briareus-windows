@@ -164,6 +164,7 @@ static void form_refresh(Screen *base) { load((WebhookForm *)base); }
 
 static bool form_can_leave(Screen *base) {
     WebhookForm *s = (WebhookForm *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", "The webhook's settings have not been saved.", "Discard", true);

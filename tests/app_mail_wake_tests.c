@@ -199,6 +199,39 @@ static void navigate(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)base; (void)action; (void)arg; (void)pt; pane_pop(navigation_pane);
 }
 static void retire_in_modal(void) { close_form(retiring_screen); }
+static bool retire_after_nested_close;
+static void nested_close_in_modal(void) {
+    MailWakeScreen *s = retiring_screen;
+    CHECK(!pane_can_leave(s->base.pane));
+    CHECK(s->modal); CHECK(mail_wake_dirty(&s->draft));
+    CHECK(IsWindow(s->edits[0]));
+    if (retire_after_nested_close) {
+        pane_set_root(s->base.pane, NULL);
+        CHECK(s->retired); CHECK(s->modal); CHECK(IsWindow(s->edits[0]));
+    }
+}
+static void reentrant_leave_confirmation(void) {
+    WakeFixture f; init(&f);
+    const int answers[] = {IDCANCEL, IDOK};
+    for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
+        for (int retire = 0; retire < 2; retire++) {
+            MailWakeScreen *s = open_form(&f, "nested", 3);
+            pane_push(f.f.pane, empty_root()); pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
+            edit(s, 0, L"31"); HWND control = s->edits[0];
+            navigation_pane = f.f.pane; retiring_screen = s; retire_after_nested_close = retire != 0;
+            static const ScreenVTable vt = {.action = navigate}; Screen navigation = {.vt = &vt};
+            modal_driver_action_during(&navigation, 0, 0, answers[i], nested_close_in_modal);
+            if (retire) { CHECK_INT(pane_depth(f.f.pane), 0); CHECK(!IsWindow(control)); }
+            else if (answers[i] == IDOK) { CHECK_INT(pane_depth(f.f.pane), 1); CHECK(!IsWindow(control)); }
+            else {
+                CHECK_INT(pane_depth(f.f.pane), 2); CHECK(mail_wake_dirty(&s->draft));
+                CHECK(!s->modal); CHECK(IsWindow(control)); CHECK_STR(s->draft.caps[0], "31");
+            }
+            pane_set_root(f.f.pane, NULL); navigation_pane = NULL; retiring_screen = NULL;
+        }
+    }
+    clear(&f);
+}
 static void discard_navigation(void) {
     WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
     pane_push(f.f.pane, empty_root()); pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
@@ -368,6 +401,7 @@ static void keyboard_offscreen_fields(void) {
 }
 void app_mail_wake_tests(void) {
     screen_fixture_prepare();
+    test_run("mail wake nested close preserves the original confirmation owner", reentrant_leave_confirmation);
     test_run("mail wake stale drafts cannot save after another editor writes or reconciles", other_editor_save);
     test_run("mail wake typing and reverting update the retained Discard action", typing_updates_discard);
     test_run("mail wake Tab reaches hidden fields after scrolling during save", keyboard_after_save);

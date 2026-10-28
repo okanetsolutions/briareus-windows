@@ -66,6 +66,36 @@ static void retire_form(void) {
     CHECK(s->retired); CHECK(s->modal);
     CHECK(IsWindow(s->edits[F_PER_HOUR]));
 }
+static void nested_close(void) {
+    CHECK(!pane_can_leave(leaving_form->base.pane));
+    CHECK(leaving_form->modal); CHECK(leaving_form->dirty);
+    CHECK(IsWindow(leaving_form->edits[F_PER_HOUR]));
+}
+static void nested_close_then_retire(void) { nested_close(); retire_form(); }
+static void reentrant_leave_confirmation(void) {
+    ScreenFixture f; screen_fixture_init(&f, ROUTES, 2); f.read_response = UNLIMITED;
+    static const ScreenVTable navigation_vt = {.action = check_leave};
+    Screen navigation = {.vt = &navigation_vt};
+    const int answers[] = {IDCANCEL, IDOK};
+    for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
+        for (int retire = 0; retire < 2; retire++) {
+            Screen *base = open_form(&f); leaving_form = (WebhookForm *)base;
+            pane_push(f.pane, base); screen_fixture_pump(&f, 1);
+            leaving_form->dirty = true;
+            HWND edit = leaving_form->edits[F_PER_HOUR];
+            modal_driver_action_during(&navigation, 0, 0, answers[i], retire ? nested_close_then_retire : nested_close);
+            if (retire) { CHECK(leave_result); CHECK(!IsWindow(edit)); }
+            else {
+                CHECK(leave_result == (answers[i] == IDOK));
+                CHECK(leaving_form->dirty == (answers[i] == IDCANCEL));
+                CHECK(!leaving_form->modal); CHECK(IsWindow(edit));
+                pane_set_root(f.pane, NULL);
+            }
+            CHECK(pane_top(f.pane) == NULL); leaving_form = NULL;
+        }
+    }
+    screen_fixture_clear(&f);
+}
 static void leave_confirmation_lifetime(void) {
     ScreenFixture f; screen_fixture_init(&f, ROUTES, 2); f.read_response = UNLIMITED;
     static const ScreenVTable navigation_vt = {.action = check_leave};
@@ -86,6 +116,7 @@ static void leave_confirmation_lifetime(void) {
 }
 void app_webhook_tests(void) {
     screen_fixture_prepare();
+    test_run("webhook nested close preserves the original confirmation owner", reentrant_leave_confirmation);
     test_run("webhook leave confirmation survives stack teardown", leave_confirmation_lifetime);
     test_run("webhook form loads saves and reopens unlimited turns", unlimited_lifecycle);
     test_run("new webhook form keeps defaults and rejects invalid saves", defaults_and_invalid_save);
