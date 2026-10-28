@@ -45,6 +45,7 @@
 #define IDD_ACTION_INPUT        500
 #define IDC_INPUT               501
 #define IDC_HINT                502
+#define IDC_PROMPT_LIBRARY      503
 
 #define IDD_MEET_PROMPT         600
 #define IDC_MEET_PROMPT         601

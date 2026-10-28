@@ -211,7 +211,7 @@ typedef struct {
 typedef struct { wchar_t glyph; COLORREF color; } EventBadge;
 
 const char *screen_pulls_action_icon(const char *id);
-bool screen_pulls_action_prompt(const BoardAction *a, int number, char **input);
+bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input);
 BoardAction *screen_pulls_row_actions(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count);
 void screen_pulls_list_retry_stop(Poller *poller, bool *armed);
 void screen_pulls_list_retry_arm(Poller *poller, bool *armed, const char *repo);

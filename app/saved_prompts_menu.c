@@ -6,7 +6,7 @@ static void item(HMENU menu, UINT id, const char *text, bool enabled) {
     AppendMenuW(menu, MF_STRING | (enabled ? 0 : MF_GRAYED), id, w); free(w); free(escaped);
 }
 static int popup(PromptPicker *p, HMENU menu, POINT pt) {
-    HWND owner = pane_hwnd(p->owner->pane);
+    HWND owner = p->window ? p->window : pane_hwnd(p->owner->pane);
     int id = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, 0, owner, NULL);
     DestroyMenu(menu); return id;
 }
@@ -29,7 +29,7 @@ static void submit_dialog(PromptPicker *p) {
     if (p->editing && !row_current(p, p->original)) return;
     char *title = xstrdup(p->title), *body = xstrdup(p->body);
     unsigned generation = p->generation;
-    bool ok = dialog_edit_item(app_dialog_owner(), p->editing ? "Edit saved prompt" : "Save as a prompt", &title, &body);
+    bool ok = dialog_edit_item(p->window ? p->window : app_dialog_owner(), p->editing ? "Edit saved prompt" : "Save as a prompt", &title, &body);
     if (!ok || !dialog_current(p, generation)) { free(title); free(body); return; }
     free(p->title); free(p->body); p->title = title; p->body = body;
     if (!p->editing && p->repo) {

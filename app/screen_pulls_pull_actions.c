@@ -94,10 +94,12 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         // The list may be rebuilt while the prompt is up, so the errand is copied first.
         BoardAction a; board_action_copy(&a, &s->actions[arg]);
         char *input = NULL;
+        Pane *source_pane = base->pane; HWND source_window = pane_hwnd(source_pane);
         s->dialog_open = true;
-        bool ok = screen_pulls_action_prompt(&a, s->number, &input);
-        s->dialog_open = false;
-        if (ok) screen_pulls_start_action(s, &a, input);
+        bool ok = screen_pulls_action_prompt(base, s->project.repo, &a, s->number, &input);
+        bool current = IsWindow(source_window) && pane_top(source_pane) == base;
+        if (current) s->dialog_open = false;
+        if (ok && current) screen_pulls_start_action(s, &a, input);
         free(input); board_action_free(&a);
         break;
     }

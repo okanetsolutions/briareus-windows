@@ -18,9 +18,9 @@ const char *screen_pulls_action_icon(const char *id) {
 }
 
 /// Asks for an errand's input when it takes one; the others start straight away. True to go ahead.
-bool screen_pulls_action_prompt(const BoardAction *a, int number, char **input) {
+bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input) {
     *input = NULL;
-    if (a->has_input) return dialog_action_input(app_dialog_owner(), a, number, input);
+    if (a->has_input) return dialog_action_input(app_dialog_owner(), source, repo, a, number, input);
     return true;
 }
 

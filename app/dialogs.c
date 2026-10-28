@@ -1,4 +1,6 @@
 #include "dialogs.h"
+#include "dialogs_input_internal.h"
+#include "saved_prompt.h"
 #include "mail_reply.h"
 #include "canvas.h"
 #include "resource.h"
@@ -158,11 +160,13 @@ static LRESULT dialog_static_color(HWND dialog, WPARAM wp, LPARAM lp, COLORREF c
 
 // MARK: - Voice in dialogs
 
-typedef struct { HWND dialog; VoiceNote *note; int text_id; } DialogVoice;
+void dialog_voice_append(DialogVoice *v, const char *text) {
+    if (text && *text) append_control_text(v->dialog, v->text_id, text);
+}
 static void dialog_voice_changed(void *ctx) {
     DialogVoice *v = ctx;
     char *text = voice_take_text(v->note);
-    if (text) { if (*text) append_control_text(v->dialog, v->text_id, text); free(text); }
+    if (text) { dialog_voice_append(v, text); free(text); }
     char *error = voice_take_error(v->note);
     if (error) { wchar_t *w = utf8_to_wide(error); MessageBoxW(v->dialog, w, L"Voice note", MB_OK | MB_ICONINFORMATION); free(w); free(error); }
     VoiceState state = voice_state(v->note);
@@ -512,7 +516,24 @@ char *dialog_rename(HWND owner, const char *current) { return dialog_text(owner,
 
 // MARK: - Action input
 
-typedef struct { const BoardAction *action; int number; char *input; HWND dialog; DialogVoice voice; } InputState;
+static bool input_current(void *ctx, const char *repo, const char *identity) {
+    (void)identity; InputState *s = ctx;
+    if (s->closed || !str_eq(repo, s->repo) || !IsWindowVisible(s->dialog)) return false;
+    if ((InputState *)GetWindowLongPtrW(s->dialog, GWLP_USERDATA) != s) return false;
+    return IsWindowVisible(s->source_window) && pane_top(s->pane) == s->source;
+}
+static char *input_draft(void *ctx) { return control_text(((InputState *)ctx)->dialog, IDC_INPUT); }
+static void input_insert(void *ctx, const char *body) {
+    InputState *s = ctx; char *draft = input_draft(s), *joined = saved_prompt_insert(draft, body);
+    set_control_text(s->dialog, IDC_INPUT, joined); free(draft); free(joined);
+    HWND edit = GetDlgItem(s->dialog, IDC_INPUT); int len = GetWindowTextLengthW(edit);
+    SendMessageW(edit, EM_SETSEL, len, len); SetFocus(edit);
+}
+static void input_close(InputState *s) {
+    s->closed = true;
+    prompt_picker_free(s->prompts); s->prompts = NULL;
+    if (s->voice.note) { voice_free(s->voice.note); s->voice.note = NULL; }
+}
 static void input_update(InputState *s) {
     char *text = control_text(s->dialog, IDC_INPUT); char *trimmed = str_trim(text);
     EnableWindow(GetDlgItem(s->dialog, IDC_START), !(*trimmed == 0 && s->action->input.required));
@@ -531,8 +552,14 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
         set_control_text(dialog, IDC_HINT, hint ? hint : "");
         char *note = xstrfmt("%s. This runs a paid agent on pull request #%d and may write to GitHub.", s->action->hint, s->number);
         set_control_text(dialog, IDC_NOTE, note); free(note);
+        s->voice.dialog = dialog; s->voice.text_id = IDC_INPUT;
         if (!store_can_transcribe()) ShowWindow(GetDlgItem(dialog, IDC_MIC), SW_HIDE);
-        else { s->voice.dialog = dialog; s->voice.text_id = IDC_INPUT; s->voice.note = voice_new(dialog_voice_changed, &s->voice); }
+        else s->voice.note = voice_new(dialog_voice_changed, &s->voice);
+        s->prompts = prompt_picker_dialog_new(dialog, s->repo, "feedback", input_current, input_draft, input_insert, s);
+        prompt_picker_visible(s->prompts, true);
+        bool library = str_eq(s->action->id, "custom-feedback") && store_supports("prompts")
+            && saved_prompt_scope_allowed(g_store.device.permission, g_store.device.repos, g_store.device.repo_count, s->repo);
+        ShowWindow(GetDlgItem(dialog, IDC_PROMPT_LIBRARY), library ? SW_SHOW : SW_HIDE);
         input_update(s);
         SetFocus(GetDlgItem(dialog, IDC_INPUT));
         return FALSE;
@@ -542,6 +569,12 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
     case WM_PAINT: { static const int ids[] = { IDC_INPUT }; dialog_paint_frames(dialog, ids, 1); return TRUE; }
     case WM_DRAWITEM: return dialog_draw_item(wp, lp, IDC_START) ? TRUE : FALSE;
     case WM_TIMER: if (wp == 7 && s) dialog_voice_tick(&s->voice); return TRUE;
+    case WM_SHOWWINDOW:
+        if (s && s->prompts) {
+            prompt_picker_visible(s->prompts, wp != 0);
+        }
+        return FALSE;
+    case WM_DESTROY: if (s) input_close(s); return TRUE;
     case WM_COMMAND:
         if (!s) return FALSE;
         switch (LOWORD(wp)) {
@@ -550,7 +583,16 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
             else if (HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) dialog_invalidate_frame(dialog, IDC_INPUT);
             return TRUE;
         case IDC_MIC: dialog_voice_toggle(&s->voice); return TRUE;
-        case IDC_START: { char *text = control_text(dialog, IDC_INPUT); s->input = str_trim(text); free(text); EndDialog(dialog, IDOK); return TRUE; }
+        case IDC_PROMPT_LIBRARY: {
+            RECT r; GetWindowRect(GetDlgItem(dialog, IDC_PROMPT_LIBRARY), &r);
+            prompt_picker_open(s->prompts, (POINT){r.left, r.bottom}); return TRUE;
+        }
+        case IDC_START: {
+            if (!prompt_picker_owner_current(s->prompts)) { EndDialog(dialog, IDCANCEL); return TRUE; }
+            char *text = control_text(dialog, IDC_INPUT); char *trimmed = str_trim(text); free(text);
+            if (!*trimmed && s->action->input.required) { free(trimmed); return TRUE; }
+            s->input = trimmed; EndDialog(dialog, IDOK); return TRUE;
+        }
         case IDCANCEL: EndDialog(dialog, IDCANCEL); return TRUE;
         }
         return FALSE;
@@ -558,11 +600,12 @@ static INT_PTR CALLBACK input_proc(HWND dialog, UINT msg, WPARAM wp, LPARAM lp) 
     }
     return FALSE;
 }
-bool dialog_action_input(HWND owner, const BoardAction *action, int number, char **input) {
+bool dialog_action_input(HWND owner, Screen *source, const char *repo, const BoardAction *action, int number, char **input) {
     InputState s; memset(&s, 0, sizeof s);
-    s.action = action; s.number = number;
+    s.action = action; s.number = number; s.repo = xstrdup(repo);
+    s.source = source; s.pane = source->pane; s.source_window = pane_hwnd(s.pane);
     INT_PTR result = modal_box(IDD_ACTION_INPUT, owner, input_proc, (LPARAM)&s);
-    if (s.voice.note) voice_free(s.voice.note);
+    input_close(&s); free(s.repo);
     if (result != IDOK) { free(s.input); return false; }
     *input = s.input ? s.input : xstrdup("");
     return true;

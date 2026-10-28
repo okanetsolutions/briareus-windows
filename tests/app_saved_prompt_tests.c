@@ -3,6 +3,7 @@
 #include "saved_prompts_internal.h"
 #include "modal_driver.h"
 #include "resource.h"
+#include "dialogs_input_internal.h"
 #include "suites.h"
 
 static Route routes[] = {{"GET", "/sessions/{sessionId}", "read"}, {"GET", "/prompts", "read"}, {"POST", "/prompts", "admin"},
@@ -231,8 +232,134 @@ static void temporary_visibility_preserves_conversation(void) {
     cache_free(g_store.cache); g_store.cache = NULL; RemoveDirectoryW(directory);
     clear(&f);
 }
+static ScreenFixture *feedback_fixture;
+static ConversationScreen *feedback_source;
+static bool feedback_ok;
+static char *feedback_result;
+static InputState *feedback_state;
+static BOOL CALLBACK feedback_find(HWND window, LPARAM unused) {
+    (void)unused;
+    if (!GetDlgItem(window, IDC_INPUT)) return TRUE;
+    feedback_state = (InputState *)GetWindowLongPtrW(window, GWLP_USERDATA); return FALSE;
+}
+static InputState *feedback_dialog(void) {
+    feedback_state = NULL; EnumThreadWindows(GetCurrentThreadId(), feedback_find, 0);
+    CHECK(feedback_state != NULL); return feedback_state;
+}
+static void feedback_action(Screen *unused, int action, intptr_t arg, POINT pt) {
+    (void)unused; (void)action; (void)arg; (void)pt;
+    size_t count; const BoardAction *known = board_actions_known(&count), *feedback = NULL;
+    for (size_t i = 0; i < count; i++) if (str_eq(known[i].id, "custom-feedback")) feedback = &known[i];
+    feedback_ok = dialog_action_input(feedback_fixture->parent, &feedback_source->base, "o/r", feedback, 9, &feedback_result);
+}
+static void feedback_run(ScreenFixture *f, int answer, void (*during)(void)) {
+    feedback_fixture = f; feedback_source = open_composer(f, "o/r");
+    pane_set_root(f->pane, &feedback_source->base);
+    ScreenVTable vt = {.action = feedback_action}; Screen driver = {.vt = &vt};
+    feedback_result = NULL; feedback_ok = false;
+    modal_driver_action_during(&driver, 0, 0, answer, during);
+}
+static void feedback_insert(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    CHECK(IsWindowVisible(GetDlgItem(s->dialog, IDC_PROMPT_LIBRARY)));
+    load(feedback_fixture, s->prompts);
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L" \t\r\n");
+    prompt_picker_insert_row(s->prompts, json_at(s->prompts->rows, 0));
+    CHECK_OWNED_STR(s->prompts->draft(s), "saved\nbody");
+    // Selection must not replace manually authored text; a pending transcript joins the latest draft.
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"manual  ");
+    SendDlgItemMessageW(s->dialog, IDC_INPUT, EM_SETSEL, 0, -1);
+    prompt_picker_insert_row(s->prompts, json_at(s->prompts->rows, 0));
+    dialog_voice_append(&s->voice, "dictated");
+    CHECK_OWNED_STR(s->prompts->draft(s), "manual  \n\nsaved\nbody dictated");
+    CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START))); CHECK_INT(feedback_fixture->writes, 0);
+}
+static void feedback_insertion_and_voice(void) {
+    ScreenFixture f; init(&f); feedback_run(&f, IDC_START, feedback_insert);
+    CHECK(feedback_ok); CHECK_STR(feedback_result, "manual  \n\nsaved\nbody dictated"); free(feedback_result);
+    CHECK_INT(f.writes, 0); clear(&f);
+}
+static void feedback_failure(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"keep manual text");
+    feedback_fixture->read_status = 503; load(feedback_fixture, s->prompts);
+    CHECK(s->prompts->error != NULL); CHECK(s->prompts->rows == NULL);
+    CHECK(IsWindowEnabled(GetDlgItem(s->dialog, IDC_START)));
+    CHECK_OWNED_STR(s->prompts->draft(s), "keep manual text");
+    expire(s->prompts); feedback_fixture->read_status = 200;
+    prompt_picker_choose(s->prompts, PICK_RETRY, NULL, s->prompts->generation, s->prompts->visibility_generation, (POINT){0});
+    screen_fixture_pump(feedback_fixture, 1); CHECK(s->prompts->error == NULL); CHECK_INT(json_count(s->prompts->rows), 2);
+    CHECK_OWNED_STR(s->prompts->draft(s), "keep manual text");
+}
+static void feedback_error_and_retry(void) {
+    ScreenFixture f; init(&f); feedback_run(&f, IDC_START, feedback_failure);
+    CHECK(feedback_ok); CHECK_STR(feedback_result, "keep manual text"); free(feedback_result); clear(&f);
+}
+static void feedback_stale(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"keep"); load(feedback_fixture, s->prompts);
+    Json *rows = json_clone(s->prompts->rows); unsigned generation = s->prompts->generation, visibility = s->prompts->visibility_generation;
+    ShowWindow(s->dialog, SW_HIDE); ShowWindow(s->dialog, SW_SHOW);
+    prompt_picker_choose(s->prompts, PICK_ROW, rows, generation, visibility, (POINT){0});
+    CHECK_OWNED_STR(s->prompts->draft(s), "keep");
+    // A response for the old project must not become selectable in a changed context.
+    feedback_fixture->block_read = true; prompt_picker_read(s->prompts);
+    CHECK_INT(WaitForSingleObject(feedback_fixture->entered, 10000), WAIT_OBJECT_0);
+    set_string(&s->repo, "o/other"); SetEvent(feedback_fixture->resume); screen_fixture_pump(feedback_fixture, 1);
+    CHECK(!s->prompts->loaded); CHECK(s->prompts->rows == NULL);
+    prompt_picker_choose(s->prompts, PICK_SAVE, rows, generation, visibility, (POINT){0}); CHECK_INT(s->prompts->editing, -1);
+    CHECK_OWNED_STR(s->prompts->draft(s), "keep"); json_free(rows);
+}
+static void feedback_stale_context(void) {
+    ScreenFixture f; init(&f); feedback_run(&f, IDC_START, feedback_stale);
+    CHECK(!feedback_ok); CHECK(feedback_result == NULL); CHECK_INT(f.writes, 0); clear(&f);
+}
+static void feedback_pending_close(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"cancel me");
+    feedback_fixture->block_read = true; prompt_picker_read(s->prompts);
+    CHECK_INT(WaitForSingleObject(feedback_fixture->entered, 10000), WAIT_OBJECT_0);
+}
+static void feedback_cancel_read(void) {
+    ScreenFixture f; init(&f); feedback_run(&f, IDCANCEL, feedback_pending_close);
+    CHECK(!feedback_ok); CHECK(feedback_result == NULL);
+    SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK_INT(f.writes, 0); clear(&f);
+}
+static void feedback_replace(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"old draft");
+    feedback_fixture->block_read = true; prompt_picker_read(s->prompts);
+    CHECK_INT(WaitForSingleObject(feedback_fixture->entered, 10000), WAIT_OBJECT_0);
+    ConversationScreen *replacement = open_composer(feedback_fixture, "o/other");
+    pane_set_root(feedback_fixture->pane, &replacement->base);
+    SetEvent(feedback_fixture->resume); screen_fixture_pump(feedback_fixture, 1);
+    CHECK(!s->prompts->loaded); CHECK(s->prompts->rows == NULL);
+    CHECK(!prompt_picker_offered(s->prompts));
+    CHECK_OWNED_STR(s->prompts->draft(s), "old draft");
+}
+static void feedback_replaced_owner(void) {
+    ScreenFixture f; init(&f); feedback_run(&f, IDC_START, feedback_replace);
+    CHECK(!feedback_ok); CHECK(feedback_result == NULL); CHECK_INT(f.writes, 0); clear(&f);
+}
+static void feedback_manual(void) {
+    InputState *s = feedback_dialog(); if (!s) return;
+    CHECK(!IsWindowVisible(GetDlgItem(s->dialog, IDC_PROMPT_LIBRARY)));
+    SetDlgItemTextW(s->dialog, IDC_INPUT, L"manual only");
+}
+static void feedback_without_library(void) {
+    ScreenFixture f; init(&f); g_store.route_count = 1;
+    feedback_run(&f, IDC_START, feedback_manual);
+    CHECK(feedback_ok); CHECK_STR(feedback_result, "manual only"); free(feedback_result);
+    CHECK_INT(f.reads, 0); CHECK_INT(f.writes, 0); clear(&f);
+}
 void app_saved_prompt_tests(void) {
     screen_fixture_prepare();
+    test_run("feedback manual Start works without prompt capability", feedback_without_library);
+    test_run("feedback replaced source rejects delayed prompt response and Start", feedback_replaced_owner);
+    test_run("feedback saved prompt insert append and transcript preserve authored text", feedback_insertion_and_voice);
+    test_run("feedback prompt load failure preserves manual Start and supports retry", feedback_error_and_retry);
+    test_run("feedback hidden popup and stale project response are ignored", feedback_stale_context);
+    test_run("feedback cancellation retires pending prompt read", feedback_cancel_read);
     test_run("temporary conversation visibility preserves reading and pending work", temporary_visibility_preserves_conversation);
     test_run("saved prompt Save survives initial read completion in popup", save_after_initial_read);
     test_run("composer saved prompt insertion stays local and bound to current owner and permission", composer_insert_and_gates);
