@@ -106,7 +106,9 @@ void prompt_picker_read(PromptPicker *p) {
 }
 static void write_done(void *ctx, Request *r) {
     PromptPicker *p = ctx;
-    if (!prompt_picker_current(p)) return;
+    // Completion still retires accepted edits while hidden: otherwise a successful
+    // create could reappear as Resume and create a duplicate on the next visit.
+    if (!account(p->client, p->device)) return;
     if (write_answer(r)) { prompt_picker_clear_edit(p); set_string(&p->notice, NULL); }
     else { set_string(&p->notice, NULL); p->notice = request_error_or_unexpected(r); }
     p->loaded = false; json_free(p->rows); p->rows = NULL; p->generation++;

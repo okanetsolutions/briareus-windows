@@ -136,10 +136,31 @@ static void read_delete_order_and_teardown(void) {
     CHECK(!prompt_picker_writable(p, "create_prompt")); SetEvent(o.f.resume); screen_fixture_pump(&o.f, 1); CHECK(prompt_picker_writable(p, "create_prompt"));
     s->base.vt->destroy(&s->base); CloseHandle(o.old_started); CloseHandle(o.old_release); clear(&o.f);
 }
+static void hidden_create_retires_form_and_abandoned_reads(void) {
+    ScreenFixture f; init(&f); ConversationScreen *s = open_composer(&f, NULL); PromptPicker *p = s->prompts;
+    modal_picker = p; modal_owner = s;
+    screen_conversation_set_composer_text(s, "authored");
+    // The initial read is in flight when Save opens; it is not the owner of this form.
+    f.block_read = true; prompt_picker_read(p); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+    f.block_write = true; ResetEvent(f.entered);
+    f.write_response = "{\"prompt\":{\"id\":51,\"title\":\"Changed\",\"body\":\"edited\\nbody\",\"repo\":null}}";
+    run_modal(3, IDOK, fill); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+    CHECK(p->read == NULL); CHECK_INT(p->editing, 0);
+    s->base.vt->visible(&s->base, false); SetEvent(f.resume); screen_fixture_pump(&f, 2);
+    CHECK_INT(p->editing, -1); CHECK(p->title == NULL); CHECK_INT(f.writes, 1);
+    CHECK_OWNED_STR(screen_conversation_composer_text(s), "authored");
+    s->base.vt->visible(&s->base, true); f.block_read = false; load(&f, p); CHECK_INT(f.writes, 1);
+    // A new read's delayed completion cannot land on a changed auth snapshot.
+    ResetEvent(f.entered); ResetEvent(f.resume); f.block_read = true; prompt_picker_read(p);
+    CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0); g_store.device.permission = "manage";
+    SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK(!p->loaded); CHECK(p->rows == NULL);
+    g_store.device.permission = "admin"; s->base.vt->destroy(&s->base); clear(&f);
+}
 void app_saved_prompt_tests(void) {
     screen_fixture_prepare();
     test_run("composer saved prompt insertion stays local and bound to current owner and permission", composer_insert_and_gates);
     test_run("saved prompt dialogs cancel preserve scope retain failed edits and survive reentrant retirement", dialogs_and_write_lifecycle);
     test_run("saved prompt read failures cooldowns and uncertain creation survive navigation", failures_cooldowns_and_uncertainty);
     test_run("saved prompt cancelled old read cannot resurrect deletion and pending writes survive teardown", read_delete_order_and_teardown);
+    test_run("hidden successful prompt creation cannot reappear as Resume and stale auth reads are ignored", hidden_create_retires_form_and_abandoned_reads);
 }

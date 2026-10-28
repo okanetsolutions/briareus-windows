@@ -51,6 +51,9 @@ static void submit_dialog(PromptPicker *p) {
 }
 static void save(PromptPicker *p) {
     if (!prompt_picker_writable(p, "create_prompt")) return;
+    // This form authors a new record, independent of the list currently loading.
+    // Cancel that read so its completion cannot invalidate accepted dialog input.
+    if (p->read) { request_cancel(&p->read); p->loaded = false; p->generation++; }
     char *text = p->draft(p->ctx);
     // The dialog can shorten an overlong authored draft; only reject a blank draft.
     char *joined = saved_prompt_insert(text, ""); bool nonempty = !str_empty(joined); free(joined);
