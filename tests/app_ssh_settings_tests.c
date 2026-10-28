@@ -7,6 +7,7 @@ static Route ROUTES[] = {
     {"GET", "/settings/ssh/servers", "admin"},
     {"POST", "/settings/ssh/servers", "admin"},
     {"PUT", "/settings/ssh/servers/{id}", "admin"},
+    {"GET", "/settings/ssh/servers/{id}/db-credentials", "admin"},
 };
 typedef struct { ScreenFixture fixture; SshForm *form; Doc doc; } Form;
 static const char *ROW = "{\"id\":7,\"repo\":\"o/r\",\"host\":\"fixture.invalid\",\"username\":\"fixture\",\"port\":22,\"hasPassword\":true,\"hasSudoPassword\":false}";
@@ -89,6 +90,25 @@ static void edits_during_save(void) {
     assert_text(&f, S_PASSWORD, "newer draft"); assert_text(&f, S_SUDO_PASSWORD, ""); assert_text(&f, S_LABEL, "New label"); CHECK(f.form->dirty);
     cleanup(&f);
 }
+static void database_edits_during_save(void) {
+    for (int mode = 0; mode < 3; mode++) {
+        Form f; setup(&f, ROW);
+        type(&f, S_DBUSER, "fixture-db"); type(&f, S_DBPASS, "submitted password");
+        f.fixture.write_response = "{\"server\":{\"id\":7,\"repo\":\"o/r\",\"host\":\"fixture.invalid\",\"username\":\"fixture\",\"port\":22,\"hasDbCredentials\":true,\"hasPassword\":true,\"hasSudoPassword\":false}}";
+        f.fixture.block_write = true;
+        screen_settings_ssh_save(f.form); CHECK_INT(WaitForSingleObject(f.fixture.entered, 10000), WAIT_OBJECT_0);
+        type(&f, S_LABEL, "New label");
+        if (mode) type(&f, S_DBPASS, "newer password");
+        if (mode == 2) type(&f, S_DBPASS, "submitted password");
+        SetEvent(f.fixture.resume); screen_fixture_pump(&f.fixture, 1);
+        const char *expected = mode == 0 ? "" : mode == 1 ? "newer password" : "submitted password";
+        assert_text(&f, S_DBPASS, expected); assert_text(&f, S_LABEL, "New label"); CHECK(f.form->dirty);
+        char *why = NULL; Json *body = screen_settings_ssh_body(f.form, &why); CHECK(body != NULL); CHECK(why == NULL);
+        if (mode == 0) CHECK(json_is_null(json_get(body, "dbPassword")));
+        else CHECK_STR(json_str(json_get(body, "dbPassword")), expected);
+        json_free(body); free(why); cleanup(&f);
+    }
+}
 static void connection_and_navigation(void) {
     for (int mode = 0; mode < 3; mode++) {
         Form f; setup(&f, ROW); type(&f, S_PASSWORD, "fixture login");
@@ -144,6 +164,7 @@ void app_ssh_settings_tests(void) {
     test_run("SSH independently offered controls and removal", per_field_and_remove);
     test_run("SSH refusal uncertain and unconfirmed saves retain drafts", failures_retain_draft);
     test_run("SSH completion preserves newer secret and unrelated edits", edits_during_save);
+    test_run("SSH database password acknowledgement preserves newer edits", database_edits_during_save);
     test_run("SSH save scope and cancellation on navigation", connection_and_navigation);
     test_run("SSH draft discard confirmation", discard);
 }

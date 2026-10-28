@@ -508,7 +508,10 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
         json_free(rest); rest = safe;
     }
     Str path; str_init(&path);
-    if (!fill_path(route, rest, &path, error)) { str_free(&path); json_free(rest); return NULL; }
+    if (!fill_path(route, rest, &path, error)) {
+        if (str_eq(name, "create_ssh_server") || str_eq(name, "update_ssh_server")) ssh_secrets_scrub(rest);
+        str_free(&path); json_free(rest); return NULL;
+    }
     char *kept = NULL;
     if (route->filter) {
         const char *f = json_str(json_get(rest, route->filter));

@@ -159,6 +159,7 @@ typedef struct {
     ApiClient *account; // Retained connection owning this form and its drafts.
     char *device;
     unsigned long long revision, sent_revision, sent_secrets[SSH_SECRET_COUNT];
+    unsigned long long db_revision, sent_db_revision;
     char *db_user;         // the stored database username, as read back; NULL until known
     char *login_error;     // why it could not be read back
 } SshForm;

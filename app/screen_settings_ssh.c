@@ -44,6 +44,12 @@ static void ssh_save_done(void *owner, Request *req) {
     s->id = screen_settings_ssh_row_id(row);
     free(s->base.id); s->base.id = screen_settings_ssh_form_id(s->id);
     settings_select_id(s->base.id);
+    if (json_bool_is(json_get(row, "hasDbCredentials"), true) && json_str_nonempty(json_get(req->args, "dbPassword"))
+        && s->db_revision == s->sent_db_revision && s->edits[S_DBPASS]) {
+        s->filling = true;
+        screen_settings_ssh_set_secret(s->edits[S_DBPASS], "");
+        s->filling = false;
+    }
     if (s->revision == s->sent_revision) screen_settings_ssh_fill(s);
     else screen_settings_ssh_secret_controls(s);
     s->dirty = screen_settings_ssh_tab_changed(s, ST_SERVER) || screen_settings_ssh_tab_changed(s, ST_DATABASE);
@@ -67,6 +73,7 @@ void screen_settings_ssh_save(SshForm *s) {
     if (!body) { ssh_show_error(s, why); return; }
     if (s->id) json_set_num(body, "id", s->id);
     s->sent_revision = s->revision;
+    s->sent_db_revision = s->db_revision;
     for (int f = 0; f < SSH_SECRET_COUNT; f++) s->sent_secrets[f] = s->secrets.fields[f].revision;
     store_call(s->id ? "update_ssh_server" : "create_ssh_server", body, 0, s, ssh_save_done, 0, &s->req_save);
     pane_header_changed(s->base.pane);
@@ -159,6 +166,7 @@ static void ssh_command(Screen *base, int id, int code, HWND control) {
     switch (code) {
     case EN_CHANGE:
         if (s->filling) break;
+        if (f == S_DBPASS) s->db_revision++;
         if (f == S_PASSWORD || f == S_SUDO_PASSWORD) {
             char *text = screen_settings_ssh_secret_text(s->edits[f]);
             ssh_secrets_set(&s->secrets, f - S_PASSWORD, text, strlen(text));
