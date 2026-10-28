@@ -30,6 +30,11 @@ static void composer_insert_and_gates(void) {
     CHECK_INT(attach_list_count(s->files), 0); CHECK_INT(f.writes, 0);
     screen_conversation_send_message(s); CHECK_INT(f.writes, 0);
     screen_conversation_set_composer_text(s, " \t\n"); prompt_picker_insert_row(p, json_at(p->rows, 1)); CHECK_OWNED_STR(screen_conversation_composer_text(s), "global");
+    f.read_response = "{\"prompts\":[{\"id\":43,\"title\":\"CRLF\",\"body\":\"saved\\r\\nbody\",\"repo\":null}]}";
+    load(&f, p); prompt_picker_insert_row(p, json_at(p->rows, 0));
+    CHECK_OWNED_STR(screen_conversation_composer_text(s), "global\n\nsaved\nbody");
+    SendMessageW(s->composer, EM_GETSEL, (WPARAM)&first, (LPARAM)&last); CHECK_INT(first, 21); CHECK_INT(first, last);
+    CHECK_INT(f.writes, 0); f.read_response = library; load(&f, p); screen_conversation_set_composer_text(s, "global");
     Json *old = json_clone(json_at(p->rows, 0));
     prompt_picker_visible(p, false); prompt_picker_insert_row(p, old); CHECK_OWNED_STR(screen_conversation_composer_text(s), "global");
     prompt_picker_visible(p, true); load(&f, p);

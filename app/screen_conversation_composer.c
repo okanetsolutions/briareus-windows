@@ -12,7 +12,8 @@ char *screen_conversation_composer_text(ConversationScreen *s) {
 }
 
 void screen_conversation_set_composer_text(ConversationScreen *s, const char *text) {
-    char *crlf = str_replace(text ? text : "", "\n", "\r\n");
+    char *lf = str_replace(text ? text : "", "\r\n", "\n");
+    char *crlf = str_replace(lf, "\n", "\r\n"); free(lf);
     wchar_t *w = utf8_to_wide(crlf);
     SetWindowTextW(s->composer, w);
     SendMessageW(s->composer, EM_SETSEL, (WPARAM)wcslen(w), (LPARAM)wcslen(w));
