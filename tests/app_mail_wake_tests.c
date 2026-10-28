@@ -71,7 +71,7 @@ static void lifecycle(void) {
     act(s, MW_ADD, 0); CHECK_INT(json_count(s->draft.rules), 2); act(s, MW_REMOVE, 1); CHECK_INT(json_count(s->draft.rules), 1);
     edit(s, 1, L"0"); act(s, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 0); CHECK(s->errors[MW_WRITE] != NULL);
     edit(s, 1, L"10"); f.responses[MW_WRITE] = SAVED;
-    CHECK(mail_wake_savable(s)); act(s, MW_SAVE, 0); act(s, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
+    CHECK(mail_wake_savable(s)); CHECK(s->base.vt->key(&s->base, 'S', true, false)); act(s, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
     CHECK_INT(f.calls[MW_WRITE], 1); CHECK_STR(f.f.method, "PUT"); CHECK_STR(f.f.url, "https://example.com/api/v1/sessions/s%2F%2B/mail-wake");
     CHECK_INT(json_count(f.f.body), 3); CHECK_STR(json_str(json_get(json_at(json_get(f.f.body, "rules"), 0), "subject")), "Alert");
     CHECK(!mail_wake_dirty(&s->draft)); CHECK_STR(json_str(json_get(json_at(s->draft.rules, 0), "id")), "server-id");
@@ -175,6 +175,18 @@ static void malformed_prerequisites_and_saved_response(void) {
     CHECK(mail_wake_dirty(&s->draft)); CHECK(json_bool_is(json_get(mail_wake_entry(s, MW_WRITE), "uncertain"), true));
     close_form(s); clear(&f);
 }
+static void old_server_completion(void) {
+    WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
+    for (int i = 0; i < MW_WRITE; i++) { f.block[i] = true; f.status[i] = 401; }
+    act(s, MW_RETRY, 0);
+    for (int i = 0; i < MW_WRITE; i++) CHECK_INT(WaitForSingleObject(f.entered[i], 10000), WAIT_OBJECT_0);
+    ServerAddress address; ApiError error; api_error_init(&error); CHECK(server_address_parse("https://other.example.com", &address));
+    ApiClient *other = api_client_new(&address, "brm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &error);
+    server_address_free(&address); api_error_clear(&error); CHECK(other != NULL); g_store.client = other;
+    for (int i = 0; i < MW_WRITE; i++) SetEvent(f.release[i]);
+    screen_fixture_pump(&f.f, 3); CHECK(g_store.client == other); CHECK(g_store.has_device); CHECK(!mail_wake_current(s));
+    CHECK(!mail_wake_savable(s)); close_form(s); api_client_release(other); g_store.client = f.f.client; clear(&f);
+}
 static void empty_layout(Screen *base, Doc *doc) { (void)base; (void)doc; }
 static void empty_header(Screen *base, HeaderInfo *info) { (void)base; snprintf(info->title, sizeof info->title, "Test root"); }
 static Screen *empty_root(void) {
@@ -230,6 +242,7 @@ static void detached_navigation(void) {
 }
 void app_mail_wake_tests(void) {
     screen_fixture_prepare();
+    test_run("mail wake late old-server 401 cannot invalidate the replacement connection", old_server_completion);
     test_run("main-window pre-close guard includes unsaved detached mail wake drafts", detached_navigation);
     test_run("mail wake PUT cooldown and cancelled read Retry-After survive reopening", write_cooldown_and_cancelled_read);
     test_run("mail wake malformed prerequisites and wrong saved contents preserve draft", malformed_prerequisites_and_saved_response);

@@ -91,6 +91,9 @@ static void filters_and_caps(void) {
         free(w.caps[c]); w.caps[c] = xstrdup(c ? "1000" : "600");
     }
     body = mail_wake_body(&w, &a, 1, &error); CHECK(body != NULL); json_free(body);
+    free(w.caps[0]); w.caps[0] = xstrdup("601"); CHECK(mail_wake_body(&w, &a, 1, &error) == NULL); free(error);
+    free(w.caps[0]); w.caps[0] = xstrdup("1"); free(w.caps[1]); w.caps[1] = xstrdup("1");
+    body = mail_wake_body(&w, &a, 1, &error); CHECK(body != NULL); CHECK_INT(json_int_or(json_get(body, "maxTurns"), 0), 1); json_free(body);
     mail_wake_free(&w); mail_accounts_free(&a);
 }
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
