@@ -11,6 +11,25 @@ static bool current(SshApprovals *s) {
     Json *d = device_json(&g_store.device); bool same = json_equal(d, s->device); json_free(d); return same;
 }
 static SshApprovalQueue *queue(SshApprovals *s) { return ssh_approval_queue(&g_store.ssh_approvals, s->scope); }
+static void retain_decisions(SshApprovalQueue *q) {
+    for (SshApprovalQueue *old = g_store.ssh_approvals; old; old = old->next) {
+        if (old == q) continue;
+        for (size_t i = 0; i < json_count(old->decisions); i++) {
+            const char *id = json_key(old->decisions, i);
+            json_object_set(q->decisions, id, json_clone(json_get(old->decisions, id)));
+        }
+    }
+}
+// Rebinding discards displayed metadata, but submitted decisions survive until disconnect.
+static void rebind(SshApprovals *s) {
+    request_cancel(&s->read); request_cancel(&s->write);
+    json_free(s->bindings); s->bindings = NULL;
+    json_free(s->device); s->device = device_json(&g_store.device);
+    free(s->scope); s->scope = json_serialize(s->device, true);
+    SshApprovalQueue *q = queue(s);
+    json_free(q->rows); q->rows = json_object(); q->fresh = false; q->generation++;
+    retain_decisions(q);
+}
 static void notify(void) {
     for (SshApprovals *s = views; s; s = s->next) {
         if (!s->owner->pane) continue;
@@ -44,23 +63,32 @@ static void attach(SshApprovals *s, Request *req, const Json *sent) {
     req->completion_ctx = c; req->completed = completed;
 }
 void ssh_approvals_refresh(SshApprovals *s) {
-    if (!s || !s->shown || !g_store.active || !current(s) || s->read) return;
+    if (!s || !s->shown || !g_store.active || s->client != g_store.client) return;
+    if (!store_can_manage() || !store_supports("ssh_requests")) return;
+    if (!current(s)) rebind(s);
+    if (s->read) return;
     if (queue(s)->retry_until > (double)time(NULL)) return;
     Request *req = store_call("ssh_requests", json_object(), 0, NULL, NULL, 0, &s->read); attach(s, req, NULL);
+}
+void ssh_approvals_timer(SshApprovals *s, UINT id) {
+    if (!s || !poller_fired(&s->poller, id)) return;
+    ssh_approvals_refresh(s);
+    poller_finished(&s->poller, false, -1);
 }
 void ssh_approvals_visible(SshApprovals *s, bool shown) {
     if (!s) return;
     s->shown = shown;
-    if (shown) ssh_approvals_refresh(s);
-    else { request_cancel(&s->read); json_free(s->bindings); s->bindings = NULL; }
+    if (shown) { if (s->owner->pane) poller_start(&s->poller, s->owner->pane, SSH_POLL, 7000); ssh_approvals_refresh(s); }
+    else { poller_stop(&s->poller); request_cancel(&s->read); json_free(s->bindings); s->bindings = NULL; }
 }
 SshApprovals *ssh_approvals_new(Screen *owner) {
     SshApprovals *s = xcalloc(1, sizeof *s); s->owner = owner;
     s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device);
-    s->scope = json_serialize(s->device, true); s->next = views; views = s; return s;
+    s->scope = json_serialize(s->device, true); retain_decisions(queue(s)); s->next = views; views = s; return s;
 }
 void ssh_approvals_free(SshApprovals *s) {
     if (!s) return;
+    poller_stop(&s->poller);
     request_cancel(&s->read); request_cancel(&s->write);
     SshApprovals **slot = &views; while (*slot && *slot != s) slot = &(*slot)->next;
     if (*slot) *slot = s->next;
@@ -88,6 +116,7 @@ void ssh_approvals_action(SshApprovals *s, int action, intptr_t token) {
 }
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w) {
     if (!s) return;
+    if (!current(s)) ssh_approvals_refresh(s);
     json_free(s->bindings); s->bindings = json_object();
     if (!current(s)) return;
     SshApprovalQueue *q = queue(s); s->rendered_generation = q->generation;

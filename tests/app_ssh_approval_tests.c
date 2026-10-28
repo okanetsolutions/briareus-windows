@@ -1,5 +1,6 @@
 #include "screen_fixture.h"
 #include "ssh_approvals.h"
+#include "screen_findings_internal.h"
 #include "suites.h"
 #include "fixtures/ssh_approval.h"
 
@@ -123,8 +124,52 @@ static void refused_metadata_preserves_interlocks(void) {
         ssh_approvals_free(a); ssh_approvals_free(b); clear(&f);
     }
 }
+static void restored_metadata_rebinds_and_keeps_interlocks(void) {
+    Fixture f; init(&f); SshApprovals *s = ssh_approvals_new(&f.owner);
+    ssh_approvals_visible(s, true); complete(&f, 0); intptr_t old = draw(s); CHECK(old != 0);
+    ssh_approvals_refresh(s); entered(&f, 1);
+    g_store.device.label = "Verified device";
+    CHECK_INT(draw(s), 0); entered(&f, 2); CHECK(!queue(s)->fresh);
+    ssh_approvals_action(s, SSH_APPROVE, old); CHECK(s->write == NULL);
+    complete(&f, 1); CHECK(!queue(s)->fresh); // The cached-device response cannot populate the new scope.
+    complete(&f, 2); intptr_t token = draw(s); CHECK(token != 0);
+    f.steps[3].fail = true; ssh_approvals_action(s, SSH_APPROVE, token); entered(&f, 3);
+    g_store.device.expires_at = 9999999999999.0;
+    CHECK_INT(draw(s), 0); entered(&f, 4);
+    CHECK(!json_is_null(json_get(queue(s)->decisions, "fake-request")));
+    complete(&f, 3); CHECK(!queue(s)->fresh);
+    complete(&f, 4); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
+    SshApprovals *b = ssh_approvals_new(&f.owner); ssh_approvals_visible(b, true); complete(&f, 5);
+    CHECK_INT(draw(b), 0); ssh_approvals_free(b);
+    // Returning to a previously cached scope still requires a new read and retains the interlock.
+    g_store.device.expires_at = 0;
+    CHECK_INT(draw(s), 0); entered(&f, 6); CHECK(!queue(s)->fresh);
+    complete(&f, 6); CHECK(queue(s)->fresh); CHECK_INT(draw(s), 0);
+    ssh_approvals_free(s); clear(&f);
+}
+static void findings_cooldown_does_not_delay_ssh(void) {
+    Fixture f; init(&f); Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
+    Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}};
+    g_store.routes = routes; g_store.route_count = 3;
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
+    f.steps[1].status = 429; f.steps[1].retry = "3600";
+    base->vt->timer(base, TIMER_POLL); complete(&f, 1);
+    CHECK_STR(f.steps[1].url, "https://example.com/api/v1/projects");
+    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.base_ms, 7000);
+    base->vt->timer(base, SSH_POLL); complete(&f, 2);
+    CHECK_STR(f.steps[2].url, "https://example.com/api/v1/ssh/requests");
+    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.retry_after, -1);
+    f.steps[3].status = 429; f.steps[3].retry = "3600";
+    base->vt->timer(base, SSH_POLL); complete(&f, 3);
+    base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 4);
+    base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
+    base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 4);
+    base->vt->destroy(base); clear(&f);
+}
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
+    test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
+    test_run("Findings cooldown leaves SSH polling independent", findings_cooldown_does_not_delay_ssh);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);

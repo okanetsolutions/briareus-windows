@@ -244,8 +244,8 @@ static void findings_action(Screen *base, int action, intptr_t arg, POINT pt) {
 
 static void findings_timer(Screen *base, UINT id) {
     FindingsScreen *s = (FindingsScreen *)base;
+    ssh_approvals_timer(s->ssh, id);
     if (!poller_fired(&s->poller, id)) return;
-    ssh_approvals_refresh(s->ssh);
     // A read still under way answers this tick too; the poller only needs its next one scheduled.
     if (s->req_projects || s->req_sessions) poller_finished(&s->poller, false, -1); else cycle_start(s);
 }
@@ -259,7 +259,7 @@ static void findings_visible(Screen *base, bool shown) {
 
 static void findings_refresh(Screen *base) { FindingsScreen *s = (FindingsScreen *)base; ssh_approvals_refresh(s->ssh); screen_findings_cycle_now(s); }
 
-static void findings_activated(Screen *base, bool active) { if (active) { FindingsScreen *s = (FindingsScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
+static void findings_activated(Screen *base, bool active) { if (active) { FindingsScreen *s = (FindingsScreen *)base; ssh_approvals_visible(s->ssh, true); poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
 
 static void findings_destroy(Screen *base) {
     FindingsScreen *s = (FindingsScreen *)base;
