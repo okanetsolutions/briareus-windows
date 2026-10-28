@@ -3,6 +3,9 @@
 #include "str.h"
 #include "suites.h"
 #include "test.h"
+#include "screen_fixture.h"
+#include "modal_driver.h"
+#include "screen_mail_internal.h"
 #include <limits.h>
 #include <math.h>
 #include <string.h>
@@ -76,7 +79,58 @@ static void backoff(void) {
     CHECK_INT(mail_settings_retry_ms(1, 90.5), 90500); CHECK_INT(mail_settings_retry_ms(1, 0.1), 10000);
     CHECK_INT(mail_settings_retry_ms(1, NAN), 10000); CHECK_INT(mail_settings_retry_ms(1, 1e100), INT_MAX);
 }
+static MailScreen *disconnecting;
+static void nested_close(void) {
+    CHECK(!pane_can_leave(disconnecting->base.pane));
+    CHECK(disconnecting->modal);
+    CHECK(IsWindow(disconnecting->label_edit));
+}
+static void nested_close_then_retire(void) {
+    nested_close();
+    pane_set_root(disconnecting->base.pane, NULL);
+    CHECK(disconnecting->modal); CHECK(disconnecting->retired);
+    CHECK(IsWindow(disconnecting->label_edit));
+}
+static void disconnect_confirmation_lifetime(void) {
+    const int answers[] = {IDCANCEL, IDOK};
+    for (int dirty = 0; dirty < 2; dirty++) {
+        for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
+            for (int retire = 0; retire < 2; retire++) {
+                ScreenFixture f; screen_fixture_init(&f, ROUTES, 6);
+                f.read_response = "{\"accounts\":[{\"id\":7,\"provider\":\"gmail\",\"email\":\"one@example.com\",\"label\":\"Original\",\"status\":\"connected\"}],\"providers\":[\"gmail\"]}";
+                Screen *base = mail_settings_screen_open(7);
+                screen_fixture_pane(&f, base); pane_push(f.pane, base); screen_fixture_pump(&f, 1);
+                disconnecting = (MailScreen *)base;
+                CHECK(disconnecting->loaded); CHECK_INT(disconnecting->accounts.count, 1);
+                HWND edit = disconnecting->label_edit; CHECK(IsWindow(edit));
+                if (dirty) {
+                    SetWindowTextW(edit, L"Draft");
+                    base->vt->command(base, ID_MAIL_LABEL, EN_CHANGE, edit);
+                }
+                CHECK(disconnecting->dirty == (dirty != 0));
+                modal_driver_action_during(base, ACT_DELETE, 7, answers[i], retire ? nested_close_then_retire : nested_close);
+                if (retire) {
+                    CHECK(pane_top(f.pane) == NULL); CHECK(!IsWindow(edit)); CHECK_INT(f.writes, 0);
+                } else {
+                    if (answers[i] == IDOK) {
+                        screen_fixture_pump(&f, 2); CHECK_INT(f.writes, 1);
+                        CHECK_STR(f.method, "DELETE");
+                        CHECK_STR(f.url, "https://example.com/api/v1/settings/mail/accounts/7");
+                    } else {
+                        CHECK_INT(f.writes, 0); CHECK(disconnecting->dirty == (dirty != 0));
+                        CHECK_OWNED_STR(screen_mail_edit_text(edit), dirty ? "Draft" : "Original");
+                    }
+                    CHECK(!disconnecting->modal); CHECK(IsWindow(edit));
+                    pane_set_root(f.pane, NULL);
+                }
+                disconnecting = NULL; screen_fixture_clear(&f);
+            }
+        }
+    }
+}
 void app_mail_tests(void) {
+    screen_fixture_prepare();
+    test_run("mail disconnect keeps its owner through nested close and teardown", disconnect_confirmation_lifetime);
     test_run("mail navigation and each write require deployed routes and admin permission", permissions);
     test_run("mail results are discarded on screen connection or permission changes", lifecycle);
     test_run("cancelled and superseded mail requests never reach the retired owner", cancellation);
