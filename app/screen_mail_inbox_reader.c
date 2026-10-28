@@ -159,7 +159,8 @@ void screen_mail_inbox_layout_reader(Inbox *s, Doc *doc, const MailGroup *rows, 
         doc_space(doc, px(20));
         doc_rule(doc, ix, iw);
         doc_space(doc, px(12));
-        doc_text(doc, ix, iw, "Reply, forward, archive and star messages in your mailbox.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+        screen_mail_reply_layout(s, doc, ix, iw);
+        doc_text(doc, ix, iw, "Forward, archive and star messages in your mailbox.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(8));
         doc_button(doc, ix, 0, "Reply at provider", BUTTON_BORDERED, ACT_PROVIDER, 0, url);
     }

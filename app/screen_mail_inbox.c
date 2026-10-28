@@ -37,7 +37,7 @@ void screen_mail_inbox_cancel(Inbox *s) {
 }
 
 void screen_mail_inbox_clear_selection(Inbox *s) {
-    request_cancel(&s->body_read); mail_message_free(&s->body);
+    screen_mail_reply_cancel(s); request_cancel(&s->body_read); mail_message_free(&s->body);
     screen_mail_inbox_text_set(&s->selected_id, NULL); screen_mail_inbox_text_set(&s->body_error, NULL); s->selected_account = 0;
     s->reveal_open = false; s->reveal_block = false; s->block_held = false; s->page_follow = 0;
 }
@@ -54,6 +54,7 @@ void screen_mail_inbox_reset_list(Inbox *s) {
 void screen_mail_inbox_clear_private(Inbox *s) {
     request_cancel(&s->deletion); screen_mail_inbox_cancel(s); screen_mail_inbox_reset_list(s); mail_accounts_free(&s->accounts); s->accounts_loaded = false;
     mail_filter_free(&s->filter); screen_mail_inbox_text_set(&s->account_error, NULL);
+    api_client_release(s->mail_client); s->mail_client = NULL;
     s->kind = KIND_PEOPLE; s->group = GROUP_THREADS;
 }
 
@@ -63,7 +64,10 @@ bool screen_mail_inbox_current(Inbox *s, Request *r) {
     return false;
 }
 
-bool screen_mail_inbox_ready(Inbox *s) { return s->shown && !s->modal && !s->deletion && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until; }
+bool screen_mail_inbox_ready(Inbox *s) {
+    if (s->mail_client && s->mail_client != g_store.client) return false;
+    return s->shown && !s->modal && !s->deletion && g_store.active && g_store.client && mail_inbox_offered() && GetTickCount64() >= g_store.mail_retry_until;
+}
 
 void screen_mail_inbox_arm(Inbox *s) {
     if (!s->shown || s->modal || !g_store.active || !mail_inbox_offered() || !screen_mail_inbox_window(s)) return;
@@ -167,6 +171,7 @@ static void accounts_done(void *owner, Request *r) {
             for (size_t i = 0; i < s->accounts.count; i++) {
                 const MailAccount *a = &s->accounts.accounts[i];
                 if (mail_account_readable(&s->accounts, a->id) && !mail_account_readable(&fresh, a->id)) changed = true;
+                if (!mail_reply_same_account(a, mail_account_find(&fresh, a->id))) changed = true;
             }
             for (size_t i = 0; i < fresh.count; i++) {
                 const MailAccount *a = &fresh.accounts[i];
@@ -185,6 +190,7 @@ static void accounts_done(void *owner, Request *r) {
 }
 
 void screen_mail_inbox_load_accounts(Inbox *s) {
+    if (s->mail_client != g_store.client) { screen_mail_inbox_clear_private(s); s->mail_client = api_client_retain(g_store.client); }
     if (!screen_mail_inbox_ready(s) || s->account_read) { screen_mail_inbox_arm(s); return; }
     store_call("settings_mail_accounts", json_object(), 0, s, accounts_done, s->generation, &s->account_read); screen_mail_inbox_repaint(s);
 }
@@ -232,7 +238,7 @@ bool screen_mail_inbox_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     if (vk == VK_RETURN) { if (s->focus_message >= 0) screen_mail_inbox_action(base, ACT_SELECT, s->focus_message, (POINT){0}); return true; }
     if (vk == 'M') { screen_mail_inbox_open_provider(s); return true; }
     if (vk == 'A') { screen_mail_inbox_cycle_account(s); return true; }
-    if (vk == 'R') { screen_mail_inbox_open_provider(s); return true; }
+    if (vk == 'R') { base->vt->action(base, screen_mail_reply_allowed(s) ? ACT_REPLY : ACT_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_DELETE) { screen_mail_inbox_action(base, store_supports("delete_mail_message") ? ACT_DELETE : ACT_DELETE_PROVIDER, 0, (POINT){0}); return true; }
     if (vk == VK_OEM_2) { screen_mail_inbox_edit_filter(s, ACT_Q); return true; }
     return false;
@@ -268,7 +274,7 @@ static void footer_paint(Screen *base, Canvas *cv, const RECT *rc) {
     keycap(cv, &x, y, h, "j"); keycap(cv, &x, y, h, "k"); keylabel(cv, &x, y, h, rc->right, "move");
     keycap(cv, &x, y, h, "Enter"); keylabel(cv, &x, y, h, rc->right, "open");
     keycap(cv, &x, y, h, "Esc"); keylabel(cv, &x, y, h, rc->right, "close");
-    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply at provider");
+    keycap(cv, &x, y, h, "r"); keylabel(cv, &x, y, h, rc->right, "reply");
     keycap(cv, &x, y, h, "Del"); keylabel(cv, &x, y, h, rc->right, store_supports("delete_mail_message") ? "delete message" : "delete at provider");
     keycap(cv, &x, y, h, "m"); keylabel(cv, &x, y, h, rc->right, "open at provider");
     keycap(cv, &x, y, h, "a"); keylabel(cv, &x, y, h, rc->right, "switch mailbox");

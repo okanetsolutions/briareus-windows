@@ -7,8 +7,8 @@
 
 typedef struct {
     int id, sync_days, messages, unread;
-    char *provider, *email, *label, *status, *last_sync_error;
-    bool enabled, syncing;
+    char *provider, *email, *label, *status, *last_sync_error, *access; // access: NULL if omitted, empty if malformed
+    bool enabled, syncing, read_only;
     double last_sync_at, created_at, updated_at; // epoch milliseconds; zero when absent
 } MailAccount;
 typedef struct {

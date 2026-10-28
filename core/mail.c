@@ -7,7 +7,7 @@
 
 static double timestamp(const Json *j) { double n; return json_num(j, &n) && isfinite(n) && n > 0 ? n : 0; }
 void mail_account_free(MailAccount *a) {
-    free(a->provider); free(a->email); free(a->label); free(a->status); free(a->last_sync_error);
+    free(a->access); free(a->provider); free(a->email); free(a->label); free(a->status); free(a->last_sync_error);
     memset(a, 0, sizeof *a);
 }
 bool mail_account_parse(const Json *j, MailAccount *a) {
@@ -18,6 +18,10 @@ bool mail_account_parse(const Json *j, MailAccount *a) {
     if (!json_is_object(j) || id <= 0 || !provider || !email) return false;
     a->id = id; a->provider = xstrdup(provider); a->email = xstrdup(email);
     a->label = xstrdup(json_str(json_get(j, "label")));
+    for (size_t i = 0; i < json_count(j); i++) {
+        if (str_eq(json_key(j, i), "access")) a->access = xstrdup(json_str_or(json_get(j, "access"), ""));
+    }
+    a->read_only = str_eq(a->access, "read");
     a->status = xstrdup(json_str(json_get(j, "status")));
     a->last_sync_error = xstrdup(json_str(json_get(j, "lastSyncError")));
     a->enabled = json_bool_is(json_get(j, "enabled"), true);

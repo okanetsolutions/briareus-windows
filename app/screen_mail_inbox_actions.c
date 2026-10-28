@@ -115,6 +115,7 @@ static void delete_message(Inbox *s) {
 void screen_mail_inbox_action(Screen *base, int act, intptr_t arg, POINT pt) {
     (void)pt; Inbox *s = (Inbox *)base;
     if (!s->shown || s->modal || s->deletion || !mail_inbox_offered()) return;
+    if (act >= ACT_REPLY && act <= ACT_REPLY_RECONCILE) { screen_mail_reply_action(s, act); return; }
     if (act == ACT_DELETE) { delete_message(s); return; }
     if (act == ACT_MENU) {
         s->menu = s->menu == (int)arg ? MENU_NONE : (int)arg;

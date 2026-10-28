@@ -21,6 +21,7 @@ static void drop_client(void) {
     json_free(g_store.status_uncertain); g_store.status_uncertain = NULL;
     g_store.home_uncertain = false;
     memset(g_store.home_retry_until, 0, sizeof g_store.home_retry_until);
+    mail_replies_free(&g_store.mail_replies);
     g_store.mail_retry_until = 0; g_store.mail_failures = 0;
     if (g_store.has_device) { device_free(&g_store.device); g_store.has_device = false; }
     routes_free(g_store.routes, g_store.route_count); g_store.routes = NULL; g_store.route_count = 0;

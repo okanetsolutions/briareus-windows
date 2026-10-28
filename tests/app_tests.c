@@ -24,6 +24,7 @@ int main(void) {
     app_mail_consent_tests();
     app_mail_inbox_tests();
     app_mail_delete_tests();
+    app_mail_reply_tests();
     app_pulls_tests();
     return test_summary();
 }

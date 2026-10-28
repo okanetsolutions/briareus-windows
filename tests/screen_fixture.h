@@ -10,13 +10,13 @@ typedef struct {
     ApiClient *client;
     HWND dispatcher, parent;
     Pane *pane;
-    const char *read_response, *write_response;
+    const char *read_response, *write_response, *write_retry;
     int read_status, write_status;
     volatile LONG reads, writes;
     char *method, *url;
     Json *body;
     HANDLE entered, resume;
-    bool block_read, block_write;
+    bool block_read, block_write, fail_write;
 } ScreenFixture;
 
 static inline bool screen_fixture_transport(void *ctx, const char *method, const char *url,
@@ -36,8 +36,9 @@ static inline bool screen_fixture_transport(void *ctx, const char *method, const
     if ((read && f->block_read) || (!read && f->block_write)) {
         SetEvent(f->entered); WaitForSingleObject(f->resume, 10000);
     }
+    if (!read && f->fail_write) { *error = xstrdup("Fixture transport timeout"); return false; }
     *status = read ? f->read_status : f->write_status;
-    *type = xstrdup("application/json"); *retry = NULL; *error = NULL;
+    *type = xstrdup("application/json"); *retry = xstrdup(read ? NULL : f->write_retry); *error = NULL;
     const char *answer = read ? f->read_response : f->write_response;
     *response = xstrdup(answer ? answer : "{}"); *len = strlen(*response);
     return true;
@@ -95,6 +96,7 @@ static inline void screen_fixture_clear(ScreenFixture *f) {
     if (f->parent) DestroyWindow(f->parent);
     api_client_release(f->client); DestroyWindow(f->dispatcher);
     CloseHandle(f->entered); CloseHandle(f->resume);
+    mail_replies_free(&g_store.mail_replies);
     free(f->method); free(f->url); json_free(f->body); memset(&g_store, 0, sizeof g_store);
 }
 

@@ -1,4 +1,5 @@
 #include "api.h"
+#include "mail_reply.h"
 #include "browser.h"
 #include "str.h"
 #include <ctype.h>
@@ -405,6 +406,7 @@ static const ApiRoute ROUTES[] = {
     { "finish_mcp_sign_in", "POST", "settings/mcp/servers/{id}/finish-sign-in" },
     { "mail_messages", "GET", "mail/messages" },
     { "mail_message", "GET", "mail/accounts/{account}/messages/{id}" },
+    { "reply_mail_message", "POST", "mail/accounts/{account}/messages/{id}/reply" },
     { "delete_mail_message", "DELETE", "mail/accounts/{account}/messages/{id}" },
     // Global mailbox settings; all six routes require an Admin token in the deployed catalog.
     { "settings_mail_accounts", "GET", "settings/mail/accounts" },
@@ -490,6 +492,17 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
     const ApiRoute *route = api_route(name);
     if (!route) { api_error_set(error, API_HTTP, 400, "Unknown call", -1); return NULL; }
     Json *rest = arguments && json_is_object(arguments) ? json_clone(arguments) : json_object();
+    if (str_eq(name, "reply_mail_message")) {
+        Json *body = mail_reply_body(json_str(json_get(rest, "text")));
+        bool target = json_int_or(json_get(rest, "account"), 0) > 0 && json_str_nonempty(json_get(rest, "id"));
+        if (!body || !target) { json_free(body); json_free(rest); api_error_set(error, API_HTTP, 400, "Invalid reply text", -1); return NULL; }
+        json_free(body);
+        Json *safe = json_object();
+        json_set_num(safe, "account", json_int_or(json_get(rest, "account"), 0));
+        json_set_str(safe, "id", json_str(json_get(rest, "id")));
+        json_set_str(safe, "text", json_str(json_get(rest, "text")));
+        json_free(rest); rest = safe;
+    }
     Str path; str_init(&path);
     if (!fill_path(route, rest, &path, error)) { str_free(&path); json_free(rest); return NULL; }
     char *kept = NULL;
