@@ -1,4 +1,5 @@
 #include "screen_conversation_internal.h"
+#include "saved_prompt.h"
 
 
 char *screen_conversation_composer_text(ConversationScreen *s) {
@@ -11,7 +12,8 @@ char *screen_conversation_composer_text(ConversationScreen *s) {
 }
 
 void screen_conversation_set_composer_text(ConversationScreen *s, const char *text) {
-    char *crlf = str_replace(text ? text : "", "\n", "\r\n");
+    char *lf = str_replace(text ? text : "", "\r\n", "\n");
+    char *crlf = str_replace(lf, "\n", "\r\n"); free(lf);
     wchar_t *w = utf8_to_wide(crlf);
     SetWindowTextW(s->composer, w);
     SendMessageW(s->composer, EM_SETSEL, (WPARAM)wcslen(w), (LPARAM)wcslen(w));
@@ -73,4 +75,25 @@ void screen_conversation_conversation_command(Screen *base, int id, int code, HW
         if (lines != s->composer_lines) { s->composer_lines = lines; pane_footer_changed(base->pane); }
         else { RECT rc; GetClientRect(pane_hwnd(base->pane), &rc); rc.top = rc.bottom - screen_conversation_conversation_footer_height(base, rc.right); InvalidateRect(pane_hwnd(base->pane), &rc, FALSE); }
     }
+}
+
+// The picker is bound to this conversation, project and connection. It only changes
+// the draft; existing selection is left alone until the user chooses insertion.
+bool screen_conversation_can_compose(ConversationScreen *s) {
+    if (str_eq(session_status(screen_conversation_session(s)), "closed")) return false;
+    return screen_conversation_can_message(s) || prompt_picker_offered(s->prompts);
+}
+static bool prompts_current(void *ctx, const char *repo, const char *identity) {
+    ConversationScreen *s = ctx; const Session *ss = screen_conversation_session(s);
+    return IsWindow(s->composer) && str_eq(session_id(ss), identity) && str_eq(session_repo(ss), repo);
+}
+static char *prompts_draft(void *ctx) { return screen_conversation_composer_text(ctx); }
+static void prompts_insert(void *ctx, const char *body) {
+    ConversationScreen *s = ctx;
+    char *current = screen_conversation_composer_text(s), *joined = saved_prompt_insert(current, body);
+    screen_conversation_set_composer_text(s, joined); free(joined); free(current); SetFocus(s->composer);
+}
+void screen_conversation_prompts_init(ConversationScreen *s) {
+    const Session *ss = screen_conversation_session(s);
+    s->prompts = prompt_picker_new(&s->base, session_repo(ss), session_id(ss), prompts_current, prompts_draft, prompts_insert, s);
 }

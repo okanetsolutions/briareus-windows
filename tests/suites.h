@@ -67,4 +67,6 @@ void core_secret_cleanup_tests(void);
 void app_secret_cleanup_tests(void);
 void core_ssh_approval_tests(void);
 void app_ssh_approval_tests(void);
+void core_saved_prompt_tests(void);
+void app_saved_prompt_tests(void);
 #endif

@@ -6,6 +6,7 @@ static void mutate_done(void *owner, Request *req);
 static void conversation_timer(Screen *base, UINT id);
 static void show_panel(ConversationScreen *s);
 static void conversation_visible(Screen *base, bool shown);
+static void conversation_window_visible(Screen *base, bool shown);
 static void conversation_refresh(Screen *base);
 static void conversation_scrolled(Screen *base, bool at_bottom);
 static void conversation_activated(Screen *base, bool active);
@@ -211,6 +212,10 @@ static void conversation_visible(Screen *base, bool shown) {
     }
 }
 
+static void conversation_window_visible(Screen *base, bool shown) {
+    prompt_picker_visible(((ConversationScreen *)base)->prompts, shown);
+}
+
 static void conversation_refresh(Screen *base) { ConversationScreen *s = (ConversationScreen *)base; screen_conversation_refresh(s, true); }
 
 static void conversation_scrolled(Screen *base, bool at_bottom) { ConversationScreen *s = (ConversationScreen *)base; s->at_bottom = at_bottom; pane_stick_to_bottom(base->pane, at_bottom); }
@@ -236,6 +241,7 @@ static void conversation_destroy(Screen *base) {
     poller_stop(&s->poller);
     if (base->pane) { KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE); }
     if (s->voice) voice_free(s->voice);
+    prompt_picker_free(s->prompts);
     attach_list_free(s->files);
     if (s->composer) DestroyWindow(s->composer);
     session_free(&s->initial); if (s->has_snapshot) session_free(&s->snapshot);
@@ -250,7 +256,7 @@ static const ScreenVTable conversation_vt = {
     .timer = conversation_timer, .footer_height = screen_conversation_conversation_footer_height,
     .footer_layout = screen_conversation_conversation_footer_layout, .footer_paint = screen_conversation_conversation_footer_paint, .footer_click = screen_conversation_conversation_footer_click,
     .visible = conversation_visible, .command = screen_conversation_conversation_command, .key = conversation_key, .refresh = conversation_refresh,
-    .scrolled = conversation_scrolled, .activated = conversation_activated, .detachable = true, .searchable = true,
+    .scrolled = conversation_scrolled, .activated = conversation_activated, .window_visible = conversation_window_visible, .detachable = true, .searchable = true,
 };
 
 Screen *conversation_screen_new(const Session *initial) {
@@ -260,6 +266,7 @@ Screen *conversation_screen_new(const Session *initial) {
     transcript_init(&s->transcript);
     s->composer_lines = 1; s->at_bottom = true;
     s->files = attach_list_new(&s->base, "message");
+    screen_conversation_prompts_init(s);
     if (store_can_transcribe()) s->voice = voice_new(screen_conversation_voice_changed, s);
     return &s->base;
 }

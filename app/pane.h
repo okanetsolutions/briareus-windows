@@ -67,6 +67,8 @@ typedef struct ScreenVTable {
     bool searchable;
     /// Also deliver visible(false/true) when the top screen's pane or window hides/reappears.
     bool effective_visibility;
+    /// Effective pane/window visibility, separate from navigation initialization and cleanup.
+    void (*window_visible)(Screen *s, bool shown);
 } ScreenVTable;
 
 struct Screen {

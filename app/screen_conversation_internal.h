@@ -1,5 +1,6 @@
 #ifndef BRIAREUS_SCREEN_CONVERSATION_INTERNAL_H
 #define BRIAREUS_SCREEN_CONVERSATION_INTERNAL_H
+#include "saved_prompts.h"
 #include "attach_list.h"
 #include "dialogs.h"
 #include "meeting.h"
@@ -47,10 +48,11 @@ typedef struct {
     char *triage_note;
     int tick;
     VoiceNote *voice;
+    PromptPicker *prompts;
     AttachList *files;
     char header_title[512], header_subtitle[256];
     // footer hit rects
-    RECT mic_rc, send_rc, discard_rc, attach_rc;
+    RECT mic_rc, send_rc, discard_rc, attach_rc, prompts_rc;
     bool at_bottom;
 } ConversationScreen;
 
@@ -60,6 +62,8 @@ enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHI
 
 const Session *screen_conversation_session(ConversationScreen *s);
 bool screen_conversation_can_message(ConversationScreen *s);
+bool screen_conversation_can_compose(ConversationScreen *s);
+void screen_conversation_prompts_init(ConversationScreen *s);
 char *screen_conversation_composer_text(ConversationScreen *s);
 void screen_conversation_set_composer_text(ConversationScreen *s, const char *text);
 bool screen_conversation_composer_empty(ConversationScreen *s);

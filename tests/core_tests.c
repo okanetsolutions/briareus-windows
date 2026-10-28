@@ -930,5 +930,6 @@ int main(void) {
     core_ssh_settings_tests();
     core_ssh_approval_tests();
     core_secret_cleanup_tests();
+    core_saved_prompt_tests();
     return test_summary();
 }
