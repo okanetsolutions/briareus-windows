@@ -23,7 +23,7 @@ typedef struct {
     char *keys[MW_ROUTES], *errors[MW_ROUTES], *notice;
     bool fresh[MW_ROUTES], shown, modal, retired, filling;
     int generation, tools, picker;
-    double read_epoch;
+    double read_epoch, draft_epoch;
     HWND edits[MW_FIELDS]; RECT rects[MW_FIELDS]; bool laid[MW_FIELDS], clipped[MW_FIELDS];
 } MailWakeScreen;
 extern const char *const mail_wake_operations[MW_ROUTES];

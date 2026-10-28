@@ -476,8 +476,8 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONUP: if (g_dragging_splitter) ReleaseCapture(); return 0;
     case WM_CAPTURECHANGED: if (g_dragging_splitter) { g_dragging_splitter = false; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_CLOSE: {
-        if (!detached_can_leave_all()) return 0;
-        if (!pane_can_leave(g_detail) || !pane_can_leave(g_panel) || !pane_can_leave(g_overlay)) return 0;
+        if (!detached_can_leave_all()) { updater_restart_cancelled(); return 0; }
+        if (!pane_can_leave(g_detail) || !pane_can_leave(g_panel) || !pane_can_leave(g_overlay)) { updater_restart_cancelled(); return 0; }
         // Open SSH and SFTP sessions end with the app, so it asks first.
         size_t ssh = 0, sftp = sftp_live_count();
         for (size_t i = 0; i < term_count(); i++) if (term_running(term_at(i))) ssh++;

@@ -70,6 +70,7 @@ void mail_wake_place(Screen *base, const RECT *content, int scroll) {
     int margin = (client.right - client.left - pane_content_width(base->pane)) / 2;
     for (int i = 0; i < MW_FIELDS; i++) {
         HWND e = s->edits[i]; if (!e) continue;
+        EnableWindow(e, mail_wake_editable(s));
         if (!s->shown || !s->laid[i] || !mail_wake_current(s)) { ShowWindow(e, SW_HIDE); continue; }
         RECT r = {content->left + margin + s->rects[i].left, content->top + s->rects[i].top - scroll,
             content->left + margin + s->rects[i].right, content->top + s->rects[i].bottom - scroll}, visible;
@@ -78,6 +79,6 @@ void mail_wake_place(Screen *base, const RECT *content, int scroll) {
         bool clipped = !EqualRect(&visible, &r);
         if (clipped) SetWindowRgn(e, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
         else if (s->clipped[i]) SetWindowRgn(e, NULL, TRUE);
-        s->clipped[i] = clipped; EnableWindow(e, mail_wake_editable(s)); ShowWindow(e, SW_SHOWNA);
+        s->clipped[i] = clipped; ShowWindow(e, SW_SHOWNA);
     }
 }

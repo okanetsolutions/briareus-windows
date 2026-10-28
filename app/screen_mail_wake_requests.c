@@ -29,6 +29,7 @@ bool mail_wake_editable(MailWakeScreen *s) {
 }
 bool mail_wake_savable(MailWakeScreen *s) {
     if (!mail_wake_editable(s) || locked(s) || !mail_wake_dirty(&s->draft)) return false;
+    if (!mail_wake_read_current(s) || s->draft_epoch != s->read_epoch) return false;
     for (int i = 0; i < MW_ROUTES; i++) {
         if (s->requests[i] || mail_wake_deadline(s, i) > (double)time(NULL)) return false;
         if (i != MW_WRITE && (!s->fresh[i] || !store_supports(mail_wake_operations[i]))) return false;
@@ -98,7 +99,11 @@ static bool adopt(MailWakeScreen *s, Request *r, int route) {
     if (!response_identity(s, r) || !mail_wake_read(&next, r->result)) return false;
     json_free(s->record); s->record = json_clone(r->result);
     bool preserve = s->draft.rules && (mail_wake_dirty(&s->draft) || locked(s));
-    if (!preserve) { mail_wake_free(&s->draft); s->draft = next; mail_wake_fill_controls(s); }
+    if (!preserve) {
+        mail_wake_free(&s->draft); s->draft = next;
+        s->draft_epoch = json_num_or(json_get(mail_wake_entry(s, MW_WRITE), "epoch"), 0);
+        mail_wake_fill_controls(s);
+    }
     else mail_wake_free(&next);
     return true;
 }
@@ -142,7 +147,11 @@ static void write_done(void *owner, Request *r) {
         set_string(&s->notice, "Saved."); set_string(&s->errors[MW_WRITE], NULL);
         s->fresh[MW_READ] = true;
         s->read_epoch = json_num_or(json_get(mail_wake_entry(s, MW_WRITE), "epoch"), 0);
+        s->draft_epoch = s->read_epoch;
     } else {
+        // A definite refusal leaves this editor's baseline intact; a refresh is still required.
+        if (!r->ok && !r->arg && !request_outcome_unknown(r))
+            s->draft_epoch = json_num_or(json_get(mail_wake_entry(s, MW_WRITE), "epoch"), 0);
         char *error = request_error_or_unexpected(r); set_string(&s->errors[MW_WRITE], error); free(error);
     }
     mail_wake_free(&saved); mail_wake_repaint(s);

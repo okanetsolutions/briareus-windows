@@ -58,8 +58,13 @@ void mail_wake_layout(Screen *base, Doc *doc) {
     if (s->notice) doc_notice(doc, 0, w, s->notice);
     const Json *write = mail_wake_entry(s, MW_WRITE);
     if (json_bool_is(json_get(write, "pending"), true)) doc_loading(doc, 0, w, "Waiting for the previous save to finish; no duplicate save will be sent.");
-    if (json_bool_is(json_get(write, "uncertain"), true)) {
-        doc_notice(doc, 0, w, "Save outcome is uncertain. Your draft is kept. Refresh the saved rules, then explicitly use them before saving again.");
+    bool uncertain = json_bool_is(json_get(write, "uncertain"), true);
+    bool stale = !json_bool_is(json_get(write, "pending"), true)
+        && s->draft.rules && s->draft_epoch != json_num_or(json_get(write, "epoch"), 0);
+    if (uncertain || stale) {
+        doc_notice(doc, 0, w, uncertain
+            ? "Save outcome is uncertain. Your draft is kept. Refresh the saved rules, then explicitly use them before saving again."
+            : "The saved rules changed in another editor. Your draft is kept. Refresh the saved rules, then explicitly use them before saving again.");
         doc_button(doc, 0, 0, "Discard draft and use refreshed rules", BUTTON_BORDERED, MW_RECONCILE, 0,
             mail_wake_read_current(s) && mail_wake_editable(s));
         if (s->record) { char *record = json_pretty(s->record); doc_text(doc, 0, w, record, FONT_MONO, theme.muted, DT_WORDBREAK); free(record); }

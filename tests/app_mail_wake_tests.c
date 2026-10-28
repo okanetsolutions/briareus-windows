@@ -258,6 +258,70 @@ static void other_editor_reconciliation(void) {
     CHECK(!mail_wake_dirty(&b->draft)); CHECK_INT(f.calls[MW_WRITE], 1);
     close_form(a); close_form(b); clear(&f);
 }
+static void other_editor_save(void) {
+    WakeFixture f; init(&f);
+    MailWakeScreen *a = open_form(&f, "s", 3), *b = open_form(&f, "s", 3), *c = open_form(&f, "s", 3);
+    edit(a, 0, L"31"); edit(b, 1, L"11"); edit(c, 1, L"12");
+    f.responses[MW_WRITE] = "{\"rules\":[],\"perHour\":31,\"maxTurns\":10}";
+    act(a, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
+    CHECK(!mail_wake_dirty(&a->draft)); CHECK(!mail_wake_savable(b));
+    act(b, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 1);
+    f.responses[MW_READ] = f.responses[MW_WRITE];
+    act(b, MW_RETRY, 0); screen_fixture_pump(&f.f, 3);
+    CHECK(mail_wake_read_current(b)); CHECK_STR(b->draft.caps[0], "30"); CHECK(!mail_wake_savable(b));
+    act(b, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 1);
+    modal_driver_action(&b->base, MW_RECONCILE, 0, IDOK);
+    CHECK_STR(b->draft.caps[0], "31"); edit(b, 1, L"11"); CHECK(mail_wake_savable(b));
+    f.fail_write = true; act(b, MW_SAVE, 0); screen_fixture_pump(&f.f, 1);
+    f.responses[MW_READ] = "{\"rules\":[],\"perHour\":31,\"maxTurns\":11}";
+    act(a, MW_RETRY, 0); screen_fixture_pump(&f.f, 3);
+    modal_driver_action(&a->base, MW_RECONCILE, 0, IDOK);
+    CHECK(!json_bool_is(json_get(mail_wake_entry(c, MW_WRITE), "uncertain"), true));
+    CHECK(!mail_wake_savable(c)); act(c, MW_SAVE, 0); CHECK_INT(f.calls[MW_WRITE], 2);
+    close_form(a); close_form(b); close_form(c); clear(&f);
+}
+static int discard_action(Pane *pane) {
+    Doc *doc = pane_doc(pane);
+    for (size_t i = 0; i < doc->count; i++) {
+        if (str_eq(doc->items[i].text, "Discard changes")) return doc->items[i].action;
+    }
+    CHECK(false); return -1;
+}
+static void typing_updates_discard(void) {
+    WakeFixture f; init(&f); f.responses[MW_READ] = SAVED;
+    MailWakeScreen *s = open_form(&f, "s", 3);
+    pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
+    UpdateWindow(pane_hwnd(f.f.pane)); CHECK_INT(discard_action(f.f.pane), 0);
+    edit(s, 0, L"31"); UpdateWindow(pane_hwnd(f.f.pane)); CHECK_INT(discard_action(f.f.pane), MW_DISCARD);
+    edit(s, 0, L"30"); UpdateWindow(pane_hwnd(f.f.pane)); CHECK_INT(discard_action(f.f.pane), 0);
+    edit(s, 4, L"changed"); UpdateWindow(pane_hwnd(f.f.pane)); CHECK_INT(discard_action(f.f.pane), MW_DISCARD);
+    edit(s, 4, L"Alert"); UpdateWindow(pane_hwnd(f.f.pane)); CHECK_INT(discard_action(f.f.pane), 0);
+    pane_set_root(f.f.pane, NULL); clear(&f);
+}
+static void keyboard_after_save(void) {
+    WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
+    for (int i = 0; i < MAIL_WAKE_LIMIT; i++) act(s, MW_ADD, 0);
+    pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
+    RECT bounds = {0, 0, 900, 500}; pane_set_bounds(f.f.pane, &bounds);
+    UpdateWindow(pane_hwnd(f.f.pane));
+    char *error = NULL; Json *body = mail_wake_body(&s->draft, &s->accounts, s->tools, &error);
+    CHECK(body != NULL); CHECK(error == NULL); free(error);
+    char *saved = json_serialize(body, true); json_free(body); f.responses[MW_WRITE] = saved;
+    f.block[MW_WRITE] = true; act(s, MW_SAVE, 0);
+    CHECK_INT(WaitForSingleObject(f.entered[MW_WRITE], 10000), WAIT_OBJECT_0);
+    UpdateWindow(pane_hwnd(f.f.pane)); CHECK(!IsWindowEnabled(s->edits[0]));
+    pane_scroll_to(f.f.pane, s->rects[MW_FIELDS - 1].top); UpdateWindow(pane_hwnd(f.f.pane));
+    CHECK(!IsWindowVisible(s->edits[0]));
+    SetEvent(f.release[MW_WRITE]); screen_fixture_pump(&f.f, 1); UpdateWindow(pane_hwnd(f.f.pane));
+    CHECK(!mail_wake_dirty(&s->draft)); CHECK(IsWindowEnabled(s->edits[0]));
+    SetFocus(s->edits[MW_FIELDS - 1]); SendMessageW(s->edits[MW_FIELDS - 1], WM_KEYDOWN, VK_TAB, 0);
+    CHECK(GetFocus() == s->edits[0]); CHECK(IsWindowVisible(s->edits[0]));
+    BYTE keys[256] = {0}; keys[VK_SHIFT] = 0x80; SetKeyboardState(keys);
+    SendMessageW(s->edits[0], WM_KEYDOWN, VK_TAB, 0);
+    memset(keys, 0, sizeof keys); SetKeyboardState(keys);
+    CHECK(GetFocus() == s->edits[MW_FIELDS - 1]); CHECK(IsWindowVisible(s->edits[MW_FIELDS - 1]));
+    free(saved); pane_set_root(f.f.pane, NULL); clear(&f);
+}
 static void keyboard_offscreen_fields(void) {
     WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
     for (int i = 0; i < MAIL_WAKE_LIMIT; i++) act(s, MW_ADD, 0);
@@ -281,6 +345,9 @@ static void keyboard_offscreen_fields(void) {
 }
 void app_mail_wake_tests(void) {
     screen_fixture_prepare();
+    test_run("mail wake stale drafts cannot save after another editor writes or reconciles", other_editor_save);
+    test_run("mail wake typing and reverting update the retained Discard action", typing_updates_discard);
+    test_run("mail wake Tab reaches hidden fields after scrolling during save", keyboard_after_save);
     test_run("mail wake reconciliation requires a read after another editor write", other_editor_reconciliation);
     test_run("mail wake Tab and Shift-Tab reveal offscreen fields and wrap", keyboard_offscreen_fields);
     test_run("mail wake late old-server 401 cannot invalidate the replacement connection", old_server_completion);

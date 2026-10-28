@@ -48,7 +48,7 @@ static void discard(MailWakeScreen *s, bool reconcile) {
         if (!mail_wake_read_current(s)) return;
         MailWake fresh = {0};
         if (!mail_wake_read(&fresh, s->record)) return;
-        mail_wake_free(&s->draft); s->draft = fresh;
+        mail_wake_free(&s->draft); s->draft = fresh; s->draft_epoch = s->read_epoch;
         Json *e = (Json *)mail_wake_entry(s, MW_WRITE); json_set_bool(e, "uncertain", false);
         set_string(&s->errors[MW_WRITE], NULL);
     } else mail_wake_discard(&s->draft);
@@ -93,7 +93,12 @@ static void command(Screen *base, int id, int code, HWND control) {
     (void)control; MailWakeScreen *s = (MailWakeScreen *)base;
     int field = id - MW_FIELD_ID;
     if (field < 0 || field >= MW_FIELDS || s->filling || !mail_wake_editable(s)) return;
-    if (code == EN_CHANGE) { mail_wake_capture(s, field); pane_header_changed(base->pane); }
+    if (code == EN_CHANGE) {
+        bool dirty = mail_wake_dirty(&s->draft);
+        mail_wake_capture(s, field);
+        if (dirty != mail_wake_dirty(&s->draft)) mail_wake_repaint(s);
+        else pane_header_changed(base->pane);
+    }
 }
 static bool key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     (void)shift;
