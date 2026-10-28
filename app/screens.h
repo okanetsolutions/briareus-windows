@@ -22,6 +22,7 @@ void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
 /// A session's ⚡ Webhook (an admin token's): arm it, set its caps and the instructions webhook, copy its URLs and keys,
 /// and rotate the keys.
+Screen *mail_wake_screen_new(const Session *session);
 Screen *webhook_screen_new(const Session *session);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
@@ -335,7 +336,8 @@ Pane *app_panel_pane(void);
 void app_set_panel(Screen *screen);
 /// A side panel over the right of the main column, as GitHub's board opens an item beside it: the board's cards open
 /// their issue or pull request there. While it is open, app_push_detail pushes onto it; NULL (or its ✕) closes it.
-void app_set_overlay(Screen *screen);
+// Returns false when the current overlay refuses to leave. Takes ownership of screen.
+bool app_set_overlay(Screen *screen);
 /// The column a session's browser docks in, on the right of its conversation; NULL takes it away.
 Pane *app_browser_pane(void);
 void app_set_browser(Screen *screen);
@@ -374,6 +376,7 @@ void detached_close(Pane *pane);
 /// Whether any of them is on screen, not minimized.
 bool detached_any_shown(void);
 /// They all close (signing out, quitting) or take a new theme.
+bool detached_can_leave_all(void);
 void detached_close_all(void);
 void detached_themed(void);
 /// Disables every one of them but `except`, or enables again the ones it disabled.

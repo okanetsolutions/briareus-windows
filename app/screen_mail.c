@@ -94,6 +94,7 @@ static void refresh(Screen *base) {
 
 static bool can_leave(Screen *base) {
     MailScreen *s = (MailScreen *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     const MailAccount *a = mail_account_find(&s->accounts, s->focus);
     const char *name = a && !str_empty(a->label) ? a->label : a && a->email ? a->email : "this mailbox";

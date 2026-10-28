@@ -31,6 +31,7 @@ typedef struct {
     HWND edits[F_COUNT];
     RECT rects[F_COUNT];
     bool laid[F_COUNT], clipped[F_COUNT];
+    bool modal, retired;   // Destruction during a leave confirmation defers release until it returns.
     bool dirty, filling, shown;
     int focused;
     char *message; bool message_ok;

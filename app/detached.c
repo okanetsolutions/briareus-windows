@@ -61,6 +61,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(320); return 0; }
     case WM_DPICHANGED: { RECT *rc = (RECT *)lp; SetWindowPos(hwnd, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, SWP_NOZORDER | SWP_NOACTIVATE); return 0; }
     case WM_DETACHED_DOCK: if (w) dock(w); return 0;
+    case WM_CLOSE:
+        if (w && !pane_can_leave(w->pane)) return 0;
+        break;
     case WM_DESTROY:
         if (!w) return 0;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -141,6 +144,15 @@ void detached_close(Pane *pane) { PostMessageW(GetAncestor(pane_hwnd(pane), GA_R
 bool detached_any_shown(void) {
     for (size_t i = 0; i < g_window_count; i++) if (IsWindowVisible(g_windows[i]->hwnd) && !IsIconic(g_windows[i]->hwnd)) return true;
     return false;
+}
+bool detached_can_leave_all(void) {
+    size_t count = g_window_count;
+    for (size_t i = 0; i < count; i++) {
+        Detached *w = g_windows[i];
+        if (!pane_can_leave(w->pane)) return false;
+        if (g_window_count != count || g_windows[i] != w) return false;
+    }
+    return true;
 }
 void detached_close_all(void) {
     while (g_window_count) {

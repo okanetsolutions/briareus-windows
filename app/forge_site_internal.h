@@ -30,6 +30,7 @@ struct ForgeSite {
     Json *site;             // the ForgeSite, as listed and then as read again
     int tab;
     bool shown;
+    bool modal, retired;   // Keep the editor alive until its leave confirmation returns.
     char *site_error;
     Request *req_site;
     // The deploy script and the .env: what was read, whether it was read, the editors over them.

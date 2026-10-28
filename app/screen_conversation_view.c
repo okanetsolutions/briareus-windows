@@ -1,3 +1,4 @@
+#include "mail_wake.h"
 #include "screen_conversation_internal.h"
 
 static void header_button(HeaderInfo *info, wchar_t glyph, const char *label, int action, bool enabled, bool destructive);
@@ -185,6 +186,10 @@ void screen_conversation_conversation_header(Screen *base, HeaderInfo *info) {
         bool armed = json_bool_is(json_get(json_get(ss->raw, "webhook"), "armed"), true);
         header_button(info, 0xE945, armed ? "\xE2\x9A\xA1 Webhook \xE2\x97\x8F" : "\xE2\x9A\xA1 Webhook", ACT_MENU_ITEM + MENU_WEBHOOK, true, false);
     }
+    if (store_supports("session_mail_wake")) {
+        bool on = mail_wake_active(json_get(ss->raw, "mailWake"));
+        header_button(info, 0xE715, on ? "✉ Mail wake ●" : "✉ Mail wake", ACT_MENU_ITEM + MENU_MAIL_WAKE, true, false);
+    }
     if (store_supports("cancel") && session_is_active(ss)) header_button(info, 0xE71A, "\xE2\x8F\xB9 Stop", ACT_MENU_ITEM + MENU_STOP, can, false);
     if (store_supports("reopen") && closed) header_button(info, 0xE7A7, "\xE2\x9F\xB3 Reopen", ACT_MENU_ITEM + MENU_REOPEN, can, false);
     if (store_supports("close") && !closed) header_button(info, 0xE8BB, "Close", ACT_MENU_ITEM + MENU_CLOSE, can, false);
@@ -202,6 +207,7 @@ void screen_conversation_menu_choice(ConversationScreen *s, int chosen) {
     case MENU_COPY: break;
     case MENU_BROWSER: browser_open(ss); break;
     case MENU_RESOURCES: if (store_supports("session_stats")) app_push_from(&s->base, resources_screen_new(ss)); break;
+    case MENU_MAIL_WAKE: if (store_supports("session_mail_wake")) app_push_from(&s->base, mail_wake_screen_new(ss)); break;
     case MENU_WEBHOOK: app_push_from(&s->base, webhook_screen_new(ss)); break;
     case MENU_LOOP_OFF:
     case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); screen_conversation_mutate(s, "review_loop", extra); break; }

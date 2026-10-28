@@ -159,12 +159,16 @@ static void form_clone(DbForm *s) {
 
 // MARK: - The screen
 
+static void form_release(DbForm *s) {
+    for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    json_free(s->row); free(s->error); free(s->test_text);
+    screen_release(&s->base);
+}
 static void form_destroy(Screen *base) {
     DbForm *s = (DbForm *)base;
     request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_test);
-    for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
-    json_free(s->row); free(s->error); free(s->test_text);
-    screen_release(base);
+    if (s->modal) { s->retired = true; return; }
+    form_release(s);
 }
 
 static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -215,11 +219,15 @@ static void form_visible(Screen *base, bool shown) {
 
 static bool form_can_leave(Screen *base) {
     DbForm *s = (DbForm *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     const char *name = json_str_nonempty(json_get(s->row, "label"));
     char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this server") : xstrdup("The new database server has not been saved.");
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
     free(message);
+    s->modal = false;
+    if (s->retired) { form_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }

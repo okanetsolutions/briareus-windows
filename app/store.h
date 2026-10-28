@@ -19,6 +19,7 @@ typedef struct {
     MailReply *mail_replies;           // owned connection-scoped drafts and send interlocks
     double home_retry_until[4];        // Smart home read cooldowns survive navigation, cleared with the client
     double status_detail_retry_until, status_message_retry_until; // Status cooldowns survive navigation, cleared with the client
+    Json *mail_wake_state;             // owned device/route/session cooldowns and uncertain write interlocks
     Json *resources_retries;           // session/permission-scoped read deadlines, owned; cleared with client
     Json *status_uncertain;            // owned repo:session interlocks, cleared with the client
     bool home_uncertain;               // unresolved command outcome survives Smart home navigation

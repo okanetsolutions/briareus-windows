@@ -104,6 +104,7 @@ typedef struct {
     RuntimePick picks[R_COUNT];
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
+    bool modal, retired;   // Destruction during a leave confirmation defers release until it returns.
     bool dirty, filling, shown;
     bool tab_dot;          // the open tab showed its unsaved-changes dot at the last layout
     int focused, focus_first;   // the field with the focus, and one to focus once the controls exist; -1 for none
@@ -147,6 +148,7 @@ typedef struct {
     bool enabled;          // Available to sessions on this project
     char *picks[SP_COUNT];
     Request *req_save, *req_delete, *req_login;
+    bool modal, retired;   // Destruction during a leave confirmation defers release until it returns.
     bool dirty, filling, shown, tab_dot;
     int focused, focus_first;
     char *error;
@@ -174,6 +176,7 @@ typedef struct {
     bool laid[G_COUNT], clipped[G_COUNT];
     Json *repos;           // the projects ticked, as `owner/name`
     Request *req_save, *req_delete;
+    bool modal, retired;   // Destruction during a leave confirmation defers release until it returns.
     bool dirty, filling, shown, tab_dot;
     int focused, focus_first;
     char *error;

@@ -36,6 +36,7 @@ void usage_tests(void);
 void pull_conversation_tests(void);
 
 // app_tests.exe
+void app_leave_tests(void);
 void app_find_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);
@@ -50,6 +51,8 @@ void app_mail_tests(void);
 void app_mail_consent_tests(void);
 void app_pulls_tests(void);
 
+void core_mail_wake_tests(void);
+void app_mail_wake_tests(void);
 void webhook_tests(void);
 void app_webhook_tests(void);
 void provider_status_tests(void);
