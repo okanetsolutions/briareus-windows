@@ -33,6 +33,7 @@ typedef struct {
     bool toggles[T_COUNT];
     bool shown_keys[4];
     bool loading, busy, dirty, filling, shown;
+    bool modal, retired;    // Defer release while a leave confirmation pumps messages.
     char *error;            // the read failed
     char *message; bool message_ok;
     Request *req_read, *req_write;

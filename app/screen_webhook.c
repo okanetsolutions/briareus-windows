@@ -89,14 +89,19 @@ void screen_webhook_form_save(WebhookForm *s) {
 
 static void changed(WebhookForm *s) { if (s->filling) return; if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); } }
 
-static void form_destroy(Screen *base) {
-    WebhookForm *s = (WebhookForm *)base;
-    request_cancel(&s->req_read); request_cancel(&s->req_write);
+static void form_release(WebhookForm *s) {
     for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
     json_free(s->hook);
     session_free(&s->session);
     free(s->error); free(s->message);
-    screen_release(base);
+    screen_release(&s->base);
+}
+
+static void form_destroy(Screen *base) {
+    WebhookForm *s = (WebhookForm *)base;
+    request_cancel(&s->req_read); request_cancel(&s->req_write);
+    if (s->modal) { s->retired = true; return; }
+    form_release(s);
 }
 
 static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -160,7 +165,10 @@ static void form_refresh(Screen *base) { load((WebhookForm *)base); }
 static bool form_can_leave(Screen *base) {
     WebhookForm *s = (WebhookForm *)base;
     if (!s->dirty) return true;
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", "The webhook's settings have not been saved.", "Discard", true);
+    s->modal = false;
+    if (s->retired) { form_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }

@@ -336,7 +336,8 @@ Pane *app_panel_pane(void);
 void app_set_panel(Screen *screen);
 /// A side panel over the right of the main column, as GitHub's board opens an item beside it: the board's cards open
 /// their issue or pull request there. While it is open, app_push_detail pushes onto it; NULL (or its ✕) closes it.
-void app_set_overlay(Screen *screen);
+// Returns false when the current overlay refuses to leave. Takes ownership of screen.
+bool app_set_overlay(Screen *screen);
 /// The column a session's browser docks in, on the right of its conversation; NULL takes it away.
 Pane *app_browser_pane(void);
 void app_set_browser(Screen *screen);

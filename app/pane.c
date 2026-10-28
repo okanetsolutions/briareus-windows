@@ -900,6 +900,7 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
     }
 }
 static void mouse_up(Pane *p, int x, int y) {
+    HWND hwnd = p->hwnd;
     if (p->doc.selecting) { end_selection(p); return; }
     if (p->carrying) { POINT at = { x, y }; end_carry(p, at, DRAG_DROP); return; }
     if (p->dragging_thumb) { p->dragging_thumb = false; ReleaseCapture(); InvalidateRect(p->hwnd, NULL, FALSE); return; }
@@ -918,7 +919,8 @@ static void mouse_up(Pane *p, int x, int y) {
             else if (p->header.buttons[b].action == ACTION_MOVE_WINDOW) { if (p->move_cb) p->move_cb(p->move_ctx); }
             else if (s && p->header.buttons[b].enabled && s->vt->action) s->vt->action(s, p->header.buttons[b].action, 0, sp);
         }
-        InvalidateRect(p->hwnd, NULL, FALSE);
+        // Actions can pump a modal loop that destroys this pane.
+        if ((Pane *)GetWindowLongPtrW(hwnd, GWLP_USERDATA) == p) InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
     int pressed = p->doc.pressed; p->doc.pressed = -1;
@@ -932,7 +934,8 @@ static void mouse_up(Pane *p, int x, int y) {
             else if (it->action == ACTION_TIP) { }
             else if (s->vt->action) s->vt->action(s, it->action, it->arg, sp);
         }
-        InvalidateRect(p->hwnd, NULL, FALSE);
+        // Actions can pump a modal loop that destroys this pane.
+        if ((Pane *)GetWindowLongPtrW(hwnd, GWLP_USERDATA) == p) InvalidateRect(hwnd, NULL, FALSE);
     }
 }
 

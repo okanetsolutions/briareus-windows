@@ -172,12 +172,12 @@ void app_set_panel(Screen *screen) {
 }
 
 static void close_overlay(void *ctx) { (void)ctx; app_set_overlay(NULL); }
-void app_set_overlay(Screen *screen) {
-    if (!g_overlay) { if (screen) screen->vt->destroy(screen); return; }
+bool app_set_overlay(Screen *screen) {
+    if (!g_overlay) { if (screen) screen->vt->destroy(screen); return true; }
     Screen *root = pane_root(g_overlay);
-    if (root && screen && screen->id && str_eq(root->id, screen->id) && pane_depth(g_overlay) == 1) { screen->vt->destroy(screen); return; }
-    if (!screen && !root) return;
-    if (!pane_can_leave(g_overlay)) { if (screen) screen->vt->destroy(screen); return; }
+    if (root && screen && screen->id && str_eq(root->id, screen->id) && pane_depth(g_overlay) == 1) { screen->vt->destroy(screen); return true; }
+    if (!screen && !root) return true;
+    if (!pane_can_leave(g_overlay)) { if (screen) screen->vt->destroy(screen); return false; }
     // Win32 leaves focus on a hidden window, so closing the panel hands it back to the board.
     HWND focus = GetFocus(), overlay = pane_hwnd(g_overlay);
     bool had_focus = focus && (focus == overlay || IsChild(overlay, focus));
@@ -186,6 +186,7 @@ void app_set_overlay(Screen *screen) {
     if (screen) SetFocus(overlay);
     else if (had_focus && g_detail) SetFocus(pane_hwnd(g_detail));
     InvalidateRect(g_main, NULL, TRUE);
+    return true;
 }
 
 void app_set_browser(Screen *screen) {

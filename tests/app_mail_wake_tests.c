@@ -240,6 +240,29 @@ static void detached_navigation(void) {
     modal_driver_action(&navigation, 0, 0, IDOK); CHECK(detached_leave_result); CHECK(!mail_wake_dirty(&s->draft));
     detached_close_all(); clear(&f);
 }
+static HWND retiring_pane_window;
+static Pane *retiring_pane;
+static void destroy_modal_pane(void) {
+    pane_destroy(retiring_pane); retiring_pane = NULL;
+}
+static void click_back(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)base; (void)action; (void)arg; (void)pt;
+    RECT content = pane_content_rect(retiring_pane);
+    LPARAM at = MAKELPARAM(px(34), content.top / 2);
+    SendMessageW(retiring_pane_window, WM_LBUTTONDOWN, 0, at);
+    SendMessageW(retiring_pane_window, WM_LBUTTONUP, 0, at);
+}
+static void back_mouse_modal_retirement(void) {
+    WakeFixture f; init(&f); MailWakeScreen *s = open_form(&f, "s", 3);
+    pane_push(f.f.pane, empty_root()); pane_push(f.f.pane, &s->base); screen_fixture_pump(&f.f, 3);
+    act(s, MW_ADD, 0); edit(s, 4, L"draft");
+    retiring_pane = f.f.pane; retiring_pane_window = pane_hwnd(retiring_pane);
+    UpdateWindow(retiring_pane_window);
+    static const ScreenVTable vt = {.action = click_back}; Screen navigation = {.vt = &vt};
+    modal_driver_action_during(&navigation, 0, 0, IDOK, destroy_modal_pane);
+    CHECK(retiring_pane == NULL); CHECK(!IsWindow(retiring_pane_window));
+    f.f.pane = NULL; clear(&f);
+}
 static void other_editor_reconciliation(void) {
     WakeFixture f; init(&f);
     MailWakeScreen *a = open_form(&f, "s", 3), *b = open_form(&f, "s", 3);
@@ -355,6 +378,7 @@ void app_mail_wake_tests(void) {
     test_run("mail wake PUT cooldown and cancelled read Retry-After survive reopening", write_cooldown_and_cancelled_read);
     test_run("mail wake malformed prerequisites and wrong saved contents preserve draft", malformed_prerequisites_and_saved_response);
     test_run("mail wake Back cancellation and explicit discard guard stacked navigation", discard_navigation);
+    test_run("pane Back mouse action survives modal owner destruction", back_mouse_modal_retirement);
     test_run("mail wake explicit reconciliation and modal retirement drop later completions", reconcile_and_modal_retirement);
     test_run("mail wake linked form add/edit/remove/enable/save/refill/reopen", lifecycle);
     test_run("mail wake catalog/token/project gating and unavailable disabled accounts", gating);
