@@ -55,6 +55,8 @@ static void eligibility_and_outcomes(void) {
         CHECK(!ssh_approval_eligible(q, request(q), &device, 1000));
         load(q); CHECK(!ssh_approval_eligible(q, request(q), &device, 1000));
     }
+    answer = json_parsez("{\"requests\":[]}"); CHECK(ssh_approval_read(q, answer, q->generation)); json_free(answer);
+    CHECK_INT(ssh_approval_waiting(q, 1000), 0); CHECK_INT(json_count(q->rows), 1);
     // A read refusal redacts metadata while preserving the ID-only decision interlock.
     api_error_set(&error, API_HTTP, 403, "fixture access revoked", 0); ssh_approval_failure(q, &error, 1000);
     CHECK_INT(json_count(q->rows), 0); load(q); CHECK(!ssh_approval_eligible(q, request(q), &device, 1000));

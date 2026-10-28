@@ -66,7 +66,10 @@ bool ssh_approval_read(SshApprovalQueue *q, const Json *answer, unsigned long lo
     for (size_t i = 0; i < json_count(q->rows); i++) {
         const char *id = json_key(q->rows, i); const Json *old = json_get(q->rows, id);
         if (json_is_null(json_get(old, "result")) || !json_is_null(json_get(rows, id))) continue;
-        json_object_set(rows, id, json_clone(old));
+        Json *retained = json_clone(old);
+        Json *r = (Json *)json_get(retained, "request");
+        json_set_str(r, "status", "not in pending list");
+        json_object_set(rows, id, retained);
     }
     json_free(q->rows); q->rows = rows; q->fresh = true; q->generation++; free(q->error); q->error = NULL; return true;
 }
