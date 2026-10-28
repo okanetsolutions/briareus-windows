@@ -14,12 +14,14 @@ static void metadata(void) {
     CHECK(ssh_approval_queue(&queues, "device/project") == q);
     CHECK(ssh_approval_queue(&queues, "other") != q); load(q);
     CHECK(!ssh_approval_elevated(request(q))); CHECK_INT(ssh_approval_waiting(q, 1000), 1);
+    char *detail = ssh_approval_detail(request(q), 1000); CHECK(strstr(detail, "(ID 7)")); free(detail);
     Json *answer = json_parsez(SSH_REQUESTS), *r = (Json *)json_at(json_get(answer, "requests"), 0);
+    json_set_num(r, "serverId", 1793198400000.0);
     json_set_bool(r, "sudo", true); json_set_bool(r, "unattended", true);
     json_set_str(r, "password", "never-render-this"); json_set_str(r, "privateKey", "never-render-this");
     Json *u = json_parsez("{\"sourcePath\":\"/fixture/report\",\"destination\":\"/tmp/report\",\"size\":123,\"sha256\":\"fixture-hash\",\"contents\":\"never-render-this\"}"); json_object_set(r, "upload", u);
     CHECK(ssh_approval_read(q, answer, q->generation)); CHECK(ssh_approval_elevated(request(q)));
-    char *detail = ssh_approval_detail(request(q), 1000);
+    detail = ssh_approval_detail(request(q), 1000); CHECK(strstr(detail, "(ID 1793198400000)"));
     CHECK(strstr(detail, "as root")); CHECK(strstr(detail, "printf fixture")); CHECK(strstr(detail, "/fixture/report"));
     CHECK(strstr(detail, "/tmp/report")); CHECK(strstr(detail, "123 bytes")); CHECK(strstr(detail, "fixture-hash"));
     CHECK(strstr(detail, "operator@fixture.invalid:22")); CHECK(strstr(detail, "fake-session")); CHECK(strstr(detail, "fake-request"));

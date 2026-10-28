@@ -130,8 +130,8 @@ size_t ssh_approval_waiting(const SshApprovalQueue *q, double now) {
 }
 char *ssh_approval_detail(const Json *r, double now) {
     Str s; str_init(&s);
-    str_appendf(&s, "SSH approval%s\nServer: %s (ID %d)\n%s@%s:%d\nProject: %s\nSession: %s (%s)\nRequest: %s\nStatus: %s\nExpires: %.0f (Unix milliseconds)\nTimeout: %d seconds\n",
-        ssh_approval_elevated(r) ? " as root" : "", text(r, "serverLabel"), json_int_or(json_get(r, "serverId"), 0),
+    str_appendf(&s, "SSH approval%s\nServer: %s (ID %.0f)\n%s@%s:%d\nProject: %s\nSession: %s (%s)\nRequest: %s\nStatus: %s\nExpires: %.0f (Unix milliseconds)\nTimeout: %d seconds\n",
+        ssh_approval_elevated(r) ? " as root" : "", text(r, "serverLabel"), json_num_or(json_get(r, "serverId"), 0),
         text(r, "username"), text(r, "host"), json_int_or(json_get(r, "port"), 22), text(r, "repo"), text(r, "sessionTitle"),
         text(r, "jobId"), text(r, "id"), pending(r, now) ? "pending" : str_eq(text(r, "status"), "pending") ? "expired" : text(r, "status"),
         json_num_or(json_get(r, "expiresAt"), 0), json_int_or(json_get(r, "timeoutSeconds"), 0));
