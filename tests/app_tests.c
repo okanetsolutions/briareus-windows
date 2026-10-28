@@ -28,5 +28,6 @@ int main(void) {
     app_mail_delete_tests();
     app_mail_reply_tests();
     app_pulls_tests();
+    app_projects_tests();
     return test_summary();
 }
