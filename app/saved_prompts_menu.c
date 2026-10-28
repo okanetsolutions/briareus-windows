@@ -1,6 +1,5 @@
 #include "saved_prompts_internal.h"
 
-enum { PICK_SAVE = 1, PICK_EDIT, PICK_DELETE, PICK_RETRY, PICK_RESUME, PICK_ROW = 100 };
 static void item(HMENU menu, UINT id, const char *text, bool enabled) {
     // Prompt titles are data, not menu mnemonics.
     char *escaped = str_replace(text, "&", "&&"); wchar_t *w = utf8_to_wide(escaped);
@@ -105,11 +104,24 @@ static const Json *choose_row(PromptPicker *p, const Json *rows, POINT pt) {
     int selected = popup(p, menu, pt);
     return selected > 0 ? json_at(rows, (size_t)selected - 1) : NULL;
 }
+void prompt_picker_choose(PromptPicker *p, int chosen, const Json *rows, unsigned generation, unsigned visibility, POINT pt) {
+    // Save authors a new record; a completed list read does not invalidate it.
+    if (chosen == PICK_SAVE && prompt_picker_current(p) && p->visibility_generation == visibility) save(p);
+    else if (dialog_current(p, generation)) {
+        if (chosen >= PICK_ROW) prompt_picker_insert_row(p, json_at(rows, (size_t)(chosen - PICK_ROW)));
+        else if (chosen == PICK_RETRY) prompt_picker_read(p);
+        else if (chosen == PICK_RESUME) submit_dialog(p);
+        else if (chosen == PICK_EDIT || chosen == PICK_DELETE) {
+            const Json *row = choose_row(p, rows, pt);
+            if (row && dialog_current(p, generation)) { if (chosen == PICK_EDIT) edit(p, row); else delete_prompt(p, row); }
+        }
+    }
+}
 void prompt_picker_open(PromptPicker *p, POINT pt) {
     if (!p || p->modal || !prompt_picker_current(p)) return;
     if (p->epoch != json_num_or(json_get(prompt_picker_state(p), "epoch"), 0)) p->loaded = false;
     if (!p->loaded && !p->read) prompt_picker_read(p);
-    p->modal = true; unsigned generation = p->generation;
+    p->modal = true; unsigned generation = p->generation, visibility = p->visibility_generation;
     Json *rows = p->loaded && !p->error ? json_clone(p->rows) : NULL;
     HMENU menu = CreatePopupMenu();
     if (p->notice) item(menu, 0, p->notice, false);
@@ -133,15 +145,6 @@ void prompt_picker_open(PromptPicker *p, POINT pt) {
     if (store_supports("delete_prompt")) item(menu, PICK_DELETE, "Delete a prompt...", json_count(rows) && prompt_picker_writable(p, "delete_prompt"));
     if (p->editing >= 0) item(menu, PICK_RESUME, "Resume unsaved prompt...", prompt_picker_writable(p, p->editing ? "update_prompt" : "create_prompt"));
     int chosen = popup(p, menu, pt);
-    if (dialog_current(p, generation)) {
-        if (chosen >= PICK_ROW) prompt_picker_insert_row(p, json_at(rows, (size_t)(chosen - PICK_ROW)));
-        else if (chosen == PICK_RETRY) prompt_picker_read(p);
-        else if (chosen == PICK_SAVE) save(p);
-        else if (chosen == PICK_RESUME) submit_dialog(p);
-        else if (chosen == PICK_EDIT || chosen == PICK_DELETE) {
-            const Json *row = choose_row(p, rows, pt);
-            if (row && dialog_current(p, generation)) { if (chosen == PICK_EDIT) edit(p, row); else delete_prompt(p, row); }
-        }
-    }
+    prompt_picker_choose(p, chosen, rows, generation, visibility, pt);
     json_free(rows); end_modal(p);
 }

@@ -6,6 +6,7 @@
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
+enum { PICK_SAVE = 1, PICK_EDIT, PICK_DELETE, PICK_RETRY, PICK_RESUME, PICK_ROW = 100 };
 struct PromptPicker {
     Screen *owner; ApiClient *client; Json *device;
     char *repo, *identity, *key; void *ctx;
@@ -15,7 +16,7 @@ struct PromptPicker {
     char *error, *notice, *title, *body;
     int editing; // -1 no retained dialog; 0 create; positive server prompt id
     bool everywhere, shown, modal, retired, loaded;
-    unsigned generation; double epoch;
+    unsigned generation, visibility_generation; double epoch;
 };
 bool prompt_picker_current(PromptPicker *p);
 bool prompt_picker_writable(PromptPicker *p, const char *operation);
@@ -30,4 +31,6 @@ void prompt_picker_insert_row(PromptPicker *p, const Json *row);
 void prompt_picker_edit(PromptPicker *p, const Json *row);
 void prompt_picker_save(PromptPicker *p);
 void prompt_picker_delete(PromptPicker *p, const Json *row);
+// Dispatch a popup result against the snapshots captured when it opened.
+void prompt_picker_choose(PromptPicker *p, int chosen, const Json *rows, unsigned generation, unsigned visibility, POINT pt);
 #endif

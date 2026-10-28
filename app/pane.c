@@ -103,12 +103,17 @@ bool pane_is_sidebar(Pane *p) { return p->sidebar; }
 
 void screen_release(Screen *s) { if (!s) return; free(s->id); free(s); }
 
-static void set_visible(Screen *s, bool shown) { if (s && s->vt->visible) s->vt->visible(s, shown); }
+static void set_visible(Screen *s, bool shown) {
+    if (!s) return;
+    if (s->vt->visible) s->vt->visible(s, shown);
+    if (s->vt->window_visible) s->vt->window_visible(s, shown && s->pane->shown);
+}
 static void visibility_changed(Pane *p, bool shown) {
     if (p->shown == shown) return;
     p->shown = shown;
     Screen *s = pane_top(p);
-    if (s && s->vt->effective_visibility) set_visible(s, shown);
+    if (s && s->vt->effective_visibility && s->vt->visible) s->vt->visible(s, shown);
+    if (s && s->vt->window_visible) s->vt->window_visible(s, shown);
 }
 static void show_top(Pane *p) {
     Screen *s = pane_top(p);

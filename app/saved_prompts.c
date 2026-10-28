@@ -42,7 +42,7 @@ void prompt_picker_free(PromptPicker *p) {
 }
 void prompt_picker_visible(PromptPicker *p, bool shown) {
     if (!p) return;
-    p->shown = shown; p->generation++;
+    p->shown = shown; p->generation++; p->visibility_generation++;
     if (!shown) { request_cancel(&p->read); p->loaded = false; json_free(p->rows); p->rows = NULL; }
 }
 PromptPicker *prompt_picker_new(Screen *owner, const char *repo, const char *identity,

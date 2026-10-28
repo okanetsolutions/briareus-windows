@@ -5,14 +5,17 @@
 #include "resource.h"
 #include "suites.h"
 
-static Route routes[] = {{"GET", "/prompts", "read"}, {"POST", "/prompts", "admin"},
+static Route routes[] = {{"GET", "/sessions/{sessionId}", "read"}, {"GET", "/prompts", "read"}, {"POST", "/prompts", "admin"},
     {"PUT", "/prompts/{id}", "admin"}, {"DELETE", "/prompts/{id}", "admin"}, {"POST", "/sessions/{sessionId}/message", "manage"}};
 static const char *library = "{\"prompts\":[{\"id\":41,\"title\":\"Scoped\",\"body\":\"saved\\nbody\",\"repo\":\"o/r\",\"sortOrder\":1},{\"id\":42,\"title\":\"Shared\",\"body\":\"global\",\"repo\":null,\"sortOrder\":2}]}";
+static void visible(Screen *s, bool shown) {
+    s->vt->visible(s, shown); s->vt->window_visible(s, shown);
+}
 static ConversationScreen *open_composer(ScreenFixture *f, const char *repo) {
     Session ss = {0}; ss.raw = json_object(); json_set_str(ss.raw, "id", "s1"); json_set_str(ss.raw, "repo", repo); json_set_str(ss.raw, "status", "idle");
     Screen *screen = conversation_screen_new(&ss); session_free(&ss);
     if (!f->pane) screen_fixture_pane(f, screen); else screen->pane = f->pane;
-    screen->vt->visible(screen, true); return (ConversationScreen *)screen;
+    visible(screen, true); return (ConversationScreen *)screen;
 }
 static void init(ScreenFixture *f) { screen_fixture_init(f, routes, sizeof routes / sizeof *routes); f->read_response = library; }
 static void load(ScreenFixture *f, PromptPicker *p) { prompt_picker_read(p); screen_fixture_pump(f, 1); CHECK(p->loaded); }
@@ -62,7 +65,7 @@ static BOOL CALLBACK fill_dialog(HWND hwnd, LPARAM arg) {
     SetDlgItemTextW(hwnd, IDC_EDIT_TITLE, L"Changed"); SetDlgItemTextW(hwnd, IDC_EDIT_BODY, L"edited\r\nbody"); return FALSE;
 }
 static void fill(void) { EnumThreadWindows(GetCurrentThreadId(), fill_dialog, 0); }
-static void hide_owner(void) { modal_owner->base.vt->visible(&modal_owner->base, false); }
+static void hide_owner(void) { visible(&modal_owner->base, false); }
 static void destroy_owner(void) { modal_owner->base.vt->destroy(&modal_owner->base); modal_owner = NULL; }
 static void change_auth(void) { g_store.device.permission = "manage"; }
 static void run_modal(int action, int answer, void (*during)(void)) {
@@ -86,7 +89,7 @@ static void dialogs_and_write_lifecycle(void) {
     CHECK(!prompt_picker_writable(p, "update_prompt")); expire(p); load(&f, p);
     // Auth changes inside a live dialog cannot apply its accepted values or send.
     run_modal(1, IDOK, change_auth); CHECK_INT(f.writes, 2); g_store.device.permission = "admin";
-    run_modal(1, IDOK, hide_owner); CHECK_INT(f.writes, 2); s->base.vt->visible(&s->base, true); load(&f, p);
+    run_modal(1, IDOK, hide_owner); CHECK_INT(f.writes, 2); visible(&s->base, true); load(&f, p);
     // Retiring the screen from the nested modal loop is safe; no write uses the freed owner.
     run_modal(1, IDOK, destroy_owner); CHECK_INT(f.writes, 2);
     json_free(modal_row); modal_row = NULL; clear(&f);
@@ -151,18 +154,86 @@ static void hidden_create_retires_form_and_abandoned_reads(void) {
     f.write_response = "{\"prompt\":{\"id\":51,\"title\":\"Changed\",\"body\":\"edited\\nbody\",\"repo\":null}}";
     run_modal(3, IDOK, fill); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
     CHECK(p->read == NULL); CHECK_INT(p->editing, 0);
-    s->base.vt->visible(&s->base, false); SetEvent(f.resume); screen_fixture_pump(&f, 2);
+    visible(&s->base, false); SetEvent(f.resume); screen_fixture_pump(&f, 2);
     CHECK_INT(p->editing, -1); CHECK(p->title == NULL); CHECK_INT(f.writes, 1);
     CHECK_OWNED_STR(screen_conversation_composer_text(s), "authored");
-    s->base.vt->visible(&s->base, true); f.block_read = false; load(&f, p); CHECK_INT(f.writes, 1);
+    visible(&s->base, true); f.block_read = false; load(&f, p); CHECK_INT(f.writes, 1);
     // A new read's delayed completion cannot land on a changed auth snapshot.
     ResetEvent(f.entered); ResetEvent(f.resume); f.block_read = true; prompt_picker_read(p);
     CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0); g_store.device.permission = "manage";
     SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK(!p->loaded); CHECK(p->rows == NULL);
     g_store.device.permission = "admin"; s->base.vt->destroy(&s->base); clear(&f);
 }
+static ScreenFixture *menu_fixture;
+static void save_after_read(Screen *unused, int action, intptr_t arg, POINT pt) {
+    (void)unused; (void)action; (void)arg;
+    PromptPicker *p = modal_picker;
+    prompt_picker_read(p); p->modal = true;
+    unsigned generation = p->generation, visibility = p->visibility_generation;
+    // Model the read completion dispatched by the popup's nested message loop.
+    screen_fixture_pump(menu_fixture, 1); CHECK(p->loaded);
+    prompt_picker_choose(p, PICK_SAVE, NULL, generation, visibility, pt);
+    p->modal = false;
+}
+static void save_after_initial_read(void) {
+    ScreenFixture f; init(&f); ConversationScreen *s = open_composer(&f, NULL);
+    modal_picker = s->prompts; menu_fixture = &f;
+    screen_conversation_set_composer_text(s, "authored");
+    ScreenVTable vt = {.action = save_after_read}; Screen driver = {.vt = &vt};
+    modal_driver_action_during(&driver, 0, 0, IDOK, fill);
+    screen_fixture_pump(&f, 1); CHECK_INT(f.writes, 1);
+    CHECK_STR(f.method, "POST"); CHECK_STR(json_str(json_get(f.body, "title")), "Changed");
+    CHECK_STR(json_str(json_get(f.body, "body")), "edited\nbody");
+    CHECK_OWNED_STR(screen_conversation_composer_text(s), "authored");
+    // A stale row selection and a hidden/revealed owner still invalidate menu actions.
+    PromptPicker *p = s->prompts; expire(p); load(&f, p);
+    Json *rows = json_clone(p->rows); unsigned generation = p->generation, visibility = p->visibility_generation;
+    load(&f, p); prompt_picker_choose(p, PICK_ROW, rows, generation, visibility, (POINT){0});
+    CHECK_OWNED_STR(screen_conversation_composer_text(s), "authored");
+    prompt_picker_clear_edit(p); prompt_picker_visible(p, false); prompt_picker_visible(p, true);
+    prompt_picker_choose(p, PICK_SAVE, rows, generation, visibility, (POINT){0}); CHECK_INT(p->editing, -1);
+    json_free(rows); s->base.vt->destroy(&s->base); clear(&f);
+}
+static void temporary_visibility_preserves_conversation(void) {
+    ScreenFixture f; init(&f); ConversationScreen *s = open_composer(&f, "o/r");
+    wchar_t temp[MAX_PATH], directory[MAX_PATH];
+    CHECK(GetTempPathW(MAX_PATH, temp) != 0); CHECK(GetTempFileNameW(temp, L"spv", 0, directory) != 0);
+    DeleteFileW(directory); CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
+    pane_set_root(f.pane, &s->base);
+    screen_conversation_set_composer_text(s, "unfinished draft");
+    pane_scroll_to_top(f.pane); int reading_y = pane_scroll_y(f.pane);
+    s->at_bottom = false; pane_stick_to_bottom(f.pane, false);
+    f.block_read = true;
+    screen_conversation_refresh(s, false);
+    CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+    Request *pending = s->req_refresh; CHECK(pending != NULL);
+    CHECK(s->voice != NULL); voice_record(s->voice);
+    CHECK_INT(voice_state(s->voice), VOICE_STARTING);
+    for (int i = 0; i < 2; i++) {
+        // Window transitions and hiding the pane must leave navigation state alone.
+        if (i == 0) pane_window_visibility(f.parent, false); else pane_show(f.pane, false);
+        CHECK(!prompt_picker_offered(s->prompts)); CHECK(s->req_refresh == pending);
+        CHECK(!s->at_bottom); CHECK(s->poller.running); CHECK_INT(voice_state(s->voice), VOICE_STARTING); CHECK_INT(pane_scroll_y(f.pane), reading_y);
+        if (i == 0) pane_window_visibility(f.parent, true); else pane_show(f.pane, true);
+        CHECK(prompt_picker_offered(s->prompts)); CHECK(s->req_refresh == pending);
+        CHECK(!s->at_bottom); CHECK(s->poller.running); CHECK_INT(voice_state(s->voice), VOICE_STARTING); CHECK_INT(pane_scroll_y(f.pane), reading_y);
+    }
+    CHECK_OWNED_STR(screen_conversation_composer_text(s), "unfinished draft");
+    // Navigation still performs the original cleanup.
+    visible(&s->base, false); CHECK(s->req_refresh == NULL); CHECK(!s->poller.running);
+    CHECK_INT(voice_state(s->voice), VOICE_IDLE);
+    SetEvent(f.resume); screen_fixture_pump(&f, 1);
+    MSG message = {0}; ULONGLONG end = GetTickCount64() + 10000;
+    while (!PeekMessageW(&message, f.dispatcher, WM_APP_ASYNC_DONE, WM_APP_ASYNC_DONE, PM_REMOVE) && GetTickCount64() < end) Sleep(1);
+    CHECK_INT(message.message, WM_APP_ASYNC_DONE);
+    if (message.message == WM_APP_ASYNC_DONE) store_handle_message(message.message, message.wParam, message.lParam);
+    cache_free(g_store.cache); g_store.cache = NULL; RemoveDirectoryW(directory);
+    clear(&f);
+}
 void app_saved_prompt_tests(void) {
     screen_fixture_prepare();
+    test_run("temporary conversation visibility preserves reading and pending work", temporary_visibility_preserves_conversation);
+    test_run("saved prompt Save survives initial read completion in popup", save_after_initial_read);
     test_run("composer saved prompt insertion stays local and bound to current owner and permission", composer_insert_and_gates);
     test_run("saved prompt dialogs cancel preserve scope retain failed edits and survive reentrant retirement", dialogs_and_write_lifecycle);
     test_run("saved prompt read failures cooldowns and uncertain creation survive navigation", failures_cooldowns_and_uncertainty);

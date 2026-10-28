@@ -6,6 +6,7 @@ static void mutate_done(void *owner, Request *req);
 static void conversation_timer(Screen *base, UINT id);
 static void show_panel(ConversationScreen *s);
 static void conversation_visible(Screen *base, bool shown);
+static void conversation_window_visible(Screen *base, bool shown);
 static void conversation_refresh(Screen *base);
 static void conversation_scrolled(Screen *base, bool at_bottom);
 static void conversation_activated(Screen *base, bool active);
@@ -192,7 +193,6 @@ static void create_composer(ConversationScreen *s, HWND parent) {
 
 static void conversation_visible(Screen *base, bool shown) {
     ConversationScreen *s = (ConversationScreen *)base;
-    prompt_picker_visible(s->prompts, shown);
     if (shown) {
         if (!s->composer) create_composer(s, pane_hwnd(base->pane));
         // The composer goes with the conversation into a window of its own, and back.
@@ -210,6 +210,10 @@ static void conversation_visible(Screen *base, bool shown) {
         // A pull request pushed over the conversation fills the window; the column returns with the conversation.
         if (base->pane == app_detail_pane()) app_set_panel(NULL);
     }
+}
+
+static void conversation_window_visible(Screen *base, bool shown) {
+    prompt_picker_visible(((ConversationScreen *)base)->prompts, shown);
 }
 
 static void conversation_refresh(Screen *base) { ConversationScreen *s = (ConversationScreen *)base; screen_conversation_refresh(s, true); }
@@ -252,7 +256,7 @@ static const ScreenVTable conversation_vt = {
     .timer = conversation_timer, .footer_height = screen_conversation_conversation_footer_height,
     .footer_layout = screen_conversation_conversation_footer_layout, .footer_paint = screen_conversation_conversation_footer_paint, .footer_click = screen_conversation_conversation_footer_click,
     .visible = conversation_visible, .command = screen_conversation_conversation_command, .key = conversation_key, .refresh = conversation_refresh,
-    .scrolled = conversation_scrolled, .activated = conversation_activated, .effective_visibility = true, .detachable = true, .searchable = true,
+    .scrolled = conversation_scrolled, .activated = conversation_activated, .window_visible = conversation_window_visible, .detachable = true, .searchable = true,
 };
 
 Screen *conversation_screen_new(const Session *initial) {
