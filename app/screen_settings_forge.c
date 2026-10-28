@@ -89,12 +89,16 @@ static void forge_delete(ForgeForm *s) {
 
 // MARK: The screen
 
+static void forge_release(ForgeForm *s) {
+    for (int f = 0; f < G_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    json_free(s->repos); json_free(s->row); free(s->error);
+    screen_release(&s->base);
+}
 static void forge_destroy(Screen *base) {
     ForgeForm *s = (ForgeForm *)base;
     request_cancel(&s->req_save); request_cancel(&s->req_delete);
-    for (int f = 0; f < G_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
-    json_free(s->repos); json_free(s->row); free(s->error);
-    screen_release(base);
+    if (s->modal) { s->retired = true; return; }
+    forge_release(s);
 }
 
 static void forge_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -144,11 +148,15 @@ static void forge_visible(Screen *base, bool shown) {
 
 static bool forge_can_leave(Screen *base) {
     ForgeForm *s = (ForgeForm *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     const char *name = json_str_nonempty(json_get(s->row, "label"));
     char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this Forge account") : xstrdup("The new Forge account has not been saved.");
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
     free(message);
+    s->modal = false;
+    if (s->retired) { forge_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }

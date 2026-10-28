@@ -33,6 +33,7 @@ typedef struct {
     bool laid[F_COUNT], clipped[F_COUNT];
     bool enabled;          // In the pool
     Request *req_save, *req_delete, *req_test;
+    bool modal, retired;   // Destruction during a leave confirmation defers release until it returns.
     bool dirty, filling, shown, tab_dot;
     int focused, focus_first;
     char *error;

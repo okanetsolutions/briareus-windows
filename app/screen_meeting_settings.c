@@ -55,12 +55,16 @@ void screen_meeting_settings_form_save(MeetingForm *s) {
 
 // MARK: - The screen
 
-static void form_destroy(Screen *base) {
-    MeetingForm *s = (MeetingForm *)base;
+static void form_release(MeetingForm *s) {
     for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
     meeting_settings_free(&s->saved);
     free(s->cable); free(s->message);
-    screen_release(base);
+    screen_release(&s->base);
+}
+static void form_destroy(Screen *base) {
+    MeetingForm *s = (MeetingForm *)base;
+    if (s->modal) { s->retired = true; return; }
+    form_release(s);
 }
 
 static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -117,8 +121,12 @@ static void form_visible(Screen *base, bool shown) {
 
 static bool form_can_leave(Screen *base) {
     MeetingForm *s = (MeetingForm *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", "The meeting assistant's settings have not been saved.", "Discard", true);
+    s->modal = false;
+    if (s->retired) { form_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }

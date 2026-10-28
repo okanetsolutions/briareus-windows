@@ -36,6 +36,7 @@ void usage_tests(void);
 void pull_conversation_tests(void);
 
 // app_tests.exe
+void app_leave_tests(void);
 void app_find_tests(void);
 void app_format_tests(void);
 void app_common_tests(void);

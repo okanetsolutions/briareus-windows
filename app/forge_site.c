@@ -194,12 +194,18 @@ bool forge_site_key(ForgeSite *v, WPARAM vk, bool ctrl) {
     return true;
 }
 
+static void release(ForgeSite *v);
+
 bool forge_site_can_leave(ForgeSite *v) {
+    if (v && v->modal) return false;
     if (!v || (!v->changed[ED_SCRIPT] && !v->changed[ED_ENV])) return true;
     char *message = xstrfmt("The changes to %s%s%s of %s have not been saved to Forge.", v->changed[ED_SCRIPT] ? "the deploy script" : "",
                             v->changed[ED_SCRIPT] && v->changed[ED_ENV] ? " and " : "", v->changed[ED_ENV] ? "the .env" : "", site_name(v));
+    v->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
     free(message);
+    v->modal = false;
+    if (v->retired) { release(v); return true; }
     if (leave) v->changed[ED_SCRIPT] = v->changed[ED_ENV] = false;
     return leave;
 }
@@ -219,11 +225,8 @@ ForgeSite *forge_site_new(Screen *host, int action_base, double account, const J
     return v;
 }
 
-void forge_site_free(ForgeSite *v) {
-    if (!v) return;
-    request_cancel(&v->req_site);
+static void release(ForgeSite *v) {
     for (int ed = 0; ed < ED_COUNT; ed++) {
-        request_cancel(&v->req_load[ed]); request_cancel(&v->req_save[ed]);
         if (v->edits[ed]) {
             // The .env leaves the edit control's memory with the view.
             SetWindowTextW(v->edits[ed], L"");
@@ -235,4 +238,12 @@ void forge_site_free(ForgeSite *v) {
     json_free(v->server); json_free(v->site);
     free(v->site_error);
     free(v);
+}
+
+void forge_site_free(ForgeSite *v) {
+    if (!v) return;
+    request_cancel(&v->req_site);
+    for (int ed = 0; ed < ED_COUNT; ed++) { request_cancel(&v->req_load[ed]); request_cancel(&v->req_save[ed]); }
+    if (v->modal) { v->retired = true; return; }
+    release(v);
 }

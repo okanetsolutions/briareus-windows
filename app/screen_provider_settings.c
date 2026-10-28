@@ -123,15 +123,19 @@ static void form_clone(FormScreen *s) {
 
 // MARK: The screen
 
+static void form_release(FormScreen *s) {
+    for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    json_free(s->row); json_free(s->status); json_free(s->login_from);
+    free(s->binary); free(s->status_error); free(s->test_result); free(s->device_code); free(s->error);
+    screen_release(&s->base);
+}
 static void form_destroy(Screen *base) {
     FormScreen *s = (FormScreen *)base;
     if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_LOGIN);
     request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_status);
     request_cancel(&s->req_login); request_cancel(&s->req_test);
-    for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
-    json_free(s->row); json_free(s->status); json_free(s->login_from);
-    free(s->binary); free(s->status_error); free(s->test_result); free(s->device_code); free(s->error);
-    screen_release(base);
+    if (s->modal) { s->retired = true; return; }
+    form_release(s);
 }
 
 static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -215,11 +219,15 @@ static void form_visible(Screen *base, bool shown) {
 
 static bool form_can_leave(Screen *base) {
     FormScreen *s = (FormScreen *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     const char *name = json_str_nonempty(json_get(s->row, "label"));
     char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this provider") : xstrdup("The new provider has not been saved.");
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
     free(message);
+    s->modal = false;
+    if (s->retired) { form_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }

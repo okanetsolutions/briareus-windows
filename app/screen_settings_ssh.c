@@ -101,13 +101,17 @@ static void ssh_clone(SshForm *s) {
 
 // MARK: The screen
 
-static void ssh_destroy(Screen *base) {
-    SshForm *s = (SshForm *)base;
-    request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_login);
+static void ssh_release(SshForm *s) {
     for (int f = 0; f < S_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
     for (int p = 0; p < SP_COUNT; p++) free(s->picks[p]);
     json_free(s->row); free(s->error); free(s->db_user); free(s->login_error);
-    screen_release(base);
+    screen_release(&s->base);
+}
+static void ssh_destroy(Screen *base) {
+    SshForm *s = (SshForm *)base;
+    request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_login);
+    if (s->modal) { s->retired = true; return; }
+    ssh_release(s);
 }
 
 static void ssh_action(Screen *base, int action, intptr_t arg, POINT pt) {
@@ -165,11 +169,15 @@ static void ssh_visible(Screen *base, bool shown) {
 
 static bool ssh_can_leave(Screen *base) {
     SshForm *s = (SshForm *)base;
+    if (s->modal) return false;
     if (!s->dirty) return true;
     const char *name = json_str_nonempty(json_get(s->row, "label"));
     char *message = s->id ? xstrfmt("The changes to %s have not been saved.", name ? name : "this SSH server") : xstrdup("The new SSH server has not been saved.");
+    s->modal = true;
     bool leave = app_confirm("Discard unsaved changes?", message, "Discard", true);
     free(message);
+    s->modal = false;
+    if (s->retired) { ssh_release(s); return true; }
     if (leave) s->dirty = false;
     return leave;
 }
