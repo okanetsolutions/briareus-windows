@@ -1,0 +1,15 @@
+# SSH server passwords
+
+Parity source: [Swift #140](https://github.com/okanetsolutions/briareus-swift/pull/140), final merge `949fa74165e2084f6135a69149fe6e737a162745`, including `SSHServerLogic.swift`, both form models/screens and its tests. Contract checked against [core API reference](https://github.com/nadinyamaui/briareus/blob/694436f83b6c1d8887606b5810ab88f0edfc1e44/docs/api-v1-reference.md) and `lib/ssh.js` / `lib/ssh-routes.js` at that revision.
+
+Each field is offered independently when its row contains `hasPassword` or `hasSudoPassword`, even when false or null. Only boolean true means stored. Core 3.72–3.75 rows offering SSH passwords alone never receive a sudo password field. The API never returns either saved password.
+
+For a new form, explicit defaults or any row in the current connection/device's loaded list establish each capability. A known empty list assumes both, matching Swift; this cannot distinguish an empty list on an old core, so the save response must confirm each submitted change. An unread or malformed list establishes no capabilities. Reopen the form after loading the list to discover support. A response omitting flags establishes no stored password or continued support.
+
+The boxes mask text. Blank preserves a stored password by omitting the field, typed text replaces it verbatim, and explicit removal sends an empty string. Removal empties the draft; subsequent typing cancels removal. Core rejects over 1023 UTF-8 bytes, CR, LF and embedded NUL. Sudo remains separate from SSH authentication and follows the existing permission mode, including running without approval in allow mode.
+
+A successful save takes stored flags only from the response and clears only acknowledged drafts whose revisions still match the request. Refusal, timeout, malformed response, mismatched server ID and missing or contradictory acknowledgement retain the draft; writes are never automatically retried. Recheck server state before manually saving an uncertain change. A retained draft whose capability disappears is hidden and stays dirty until discarded, and is never sent through an unrelated save. New edits and other forms are protected by revisions, request cancellation, server ID, client identity and device ID.
+
+Clones carry only current typed drafts and capability information, never saved secrets, stored flags or removal requests. Draft buffers and controls clear on acknowledged save, confirmed discard and destruction; temporary password conversion and request buffers are erased before release. Passwords do not enter response caches, disk, notices or drawing payloads. The SSH form's leave-confirmation retirement protection remains in place. No new Win32 APIs are introduced, so this change needs no Switch shim extension.
+
+Tests use fake transports and sentinel values only. This scope adds neither SSH execution nor approval UI; elevated approval labeling remains a separate change. Local cross-compilation does not execute Windows tests: PR CI runs the linked controls, transport, cancellation and modal tests under both Windows toolchains and the existing sanitizers, leak and coverage checks.

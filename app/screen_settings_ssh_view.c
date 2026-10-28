@@ -21,6 +21,9 @@ static void paint_ssh_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
 
 /// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
+    if (f == S_PASSWORD || f == S_SUDO_PASSWORD) {
+        if (!s->secrets.fields[f - S_PASSWORD].offered) return;
+    }
     const FieldDef *d = &screen_settings_SSH_FIELDS[f];
     doc_field_label(doc, x, w, d->label, theme.ink, d->hint);
     doc_space(doc, px(6));
@@ -32,6 +35,14 @@ static void ssh_field(SshForm *s, Doc *doc, int x, int w, int f) {
     s->rects[f] = (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
     s->laid[f] = true;
     doc->y = box.bottom;
+    if (f == S_PASSWORD || f == S_SUDO_PASSWORD) {
+        int secret = f - S_PASSWORD;
+        const SshSecret *v = &s->secrets.fields[secret];
+        if (v->stored || v->remove) {
+            doc_space(doc, px(6));
+            doc_button(doc, x, w, v->remove ? "Undo removal on save" : "Remove stored password on save", BUTTON_PLAIN, ACT_SSH_SECRET, secret, true);
+        }
+    }
     doc_space(doc, px(14));
 }
 
@@ -99,6 +110,7 @@ void screen_settings_ssh_layout(Screen *base, Doc *doc) {
     SshForm *s = (SshForm *)base;
     memset(s->laid, 0, sizeof s->laid);
     int col = doc->width, x = 0;
+    if (!screen_settings_ssh_current(s)) { doc_notice_box(doc, x, col, "Reopen SSH settings on the current connection."); return; }
     doc_space(doc, px(8));
     char *why = screen_settings_ssh_unavailable();
     if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
@@ -120,6 +132,8 @@ void screen_settings_ssh_layout(Screen *base, Doc *doc) {
         ssh_row(s, doc, x, col, C_LABEL, C_REPO);
         ssh_row(s, doc, x, col, C_HOST, C_PORT);
         ssh_row(s, doc, x, col, C_USER, C_KEY);
+        ssh_field(s, doc, x, col, S_PASSWORD);
+        ssh_field(s, doc, x, col, S_SUDO_PASSWORD);
         ssh_row(s, doc, x, col, C_MODE, C_ENABLED);
         screen_settings_note(doc, x, col, "First verify the server's host key and add it to the Briareus account's known_hosts file. Unknown or changed host keys are refused. SSH configuration aliases and interactive commands are not supported.");
     } else if (!screen_settings_ssh_db_offered()) {

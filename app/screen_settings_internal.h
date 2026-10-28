@@ -3,6 +3,7 @@
 #include "project_settings.h"
 #include "meeting.h"
 #include "mcp.h"
+#include "ssh_settings.h"
 #include "screens.h"
 #include "str.h"
 #include <commctrl.h>
@@ -37,6 +38,7 @@ typedef struct {
     bool ssh_loaded;
     char *ssh_error;
     Request *req_ssh;
+    ApiClient *ssh_account; char *ssh_device;
     Json *forge;        // the server's ForgeAccount rows as `list`, and `defaults`
     bool forge_loaded;
     char *forge_error;
@@ -121,7 +123,7 @@ typedef struct { char *text; bool enabled; } SelectData;
 /// An SSH server's boxes, as the web's form has them, each on one of the tabs below. The database login under them is
 /// write-only on the server: the row says only whether one is stored (`hasDbCredentials`), so the username is read back
 /// through `GET …/db-credentials` and the password box stays empty, sent only when something is typed in it.
-enum { S_LABEL, S_HOST, S_PORT, S_USER, S_KEY, S_DBHOST, S_DBPORT, S_DBUSER, S_DBPASS, S_COUNT };
+enum { S_LABEL, S_HOST, S_PORT, S_USER, S_KEY, S_PASSWORD, S_SUDO_PASSWORD, S_DBHOST, S_DBPORT, S_DBUSER, S_DBPASS, S_COUNT };
 
 extern const FieldDef screen_settings_SSH_FIELDS[S_COUNT];
 /// The two pickers: the project whose sessions may use the server, and whether its commands wait for approval.
@@ -134,7 +136,7 @@ enum { C_LABEL, C_REPO, C_HOST, C_PORT, C_USER, C_KEY, C_MODE, C_ENABLED, C_DBHO
 enum { ST_SERVER, ST_DATABASE, ST_COUNT };
 
 extern int screen_settings_g_ssh_tab;
-enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS, ACT_SSH_TAB };
+enum { ACT_SSH_SAVE = 1200, ACT_SSH_CLONE, ACT_SSH_DELETE, ACT_SSH_TOGGLE, ACT_SSH_PICK, ACT_SSH_FOCUS, ACT_SSH_TAB, ACT_SSH_SECRET };
 
 enum { ID_SSH_FIELD = 2100 };
 
@@ -153,6 +155,10 @@ typedef struct {
     int focused, focus_first;
     char *error;
     int error_tab;         // the tab whose field the last refused save was about
+    SshSecrets secrets;
+    ApiClient *account; // Retained connection owning this form and its drafts.
+    char *device;
+    unsigned long long revision, sent_revision, sent_secrets[SSH_SECRET_COUNT];
     char *db_user;         // the stored database username, as read back; NULL until known
     char *login_error;     // why it could not be read back
 } SshForm;
@@ -266,6 +272,11 @@ char *screen_settings_ssh_field_text(const Json *row, int f);
 bool screen_settings_ssh_has_login(SshForm *s);
 bool screen_settings_ssh_db_offered(void);
 void screen_settings_ssh_fill(SshForm *s);
+void screen_settings_ssh_secret_controls(SshForm *s);
+void screen_settings_ssh_secret_cues(SshForm *s);
+bool screen_settings_ssh_current(SshForm *s);
+char *screen_settings_ssh_secret_text(HWND edit);
+void screen_settings_ssh_set_secret(HWND edit, const char *text);
 Json *screen_settings_ssh_body(SshForm *s, char **why);
 bool screen_settings_ssh_tab_changed(SshForm *s, int tab);
 void screen_settings_ssh_changed(SshForm *s);

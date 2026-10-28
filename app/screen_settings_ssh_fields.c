@@ -17,6 +17,7 @@ const char *screen_settings_mode_title(const char *mode) { return str_eq(mode, "
 static int ssh_field_tab(int f) { return f >= S_DBHOST ? ST_DATABASE : ST_SERVER; }
 
 char *screen_settings_ssh_field_text(const Json *row, int f) {
+    if (f == S_PASSWORD || f == S_SUDO_PASSWORD) return xstrdup("");
     const Json *v = json_get(row, screen_settings_SSH_FIELDS[f].key);
     double n;
     if (screen_settings_SSH_FIELDS[f].kind == K_NUMBER) return json_num(v, &n) && isfinite(n) ? xstrfmt("%.10g", n) : xstrdup("");
@@ -55,75 +56,27 @@ void screen_settings_ssh_fill(SshForm *s) {
     for (int p = 0; p < SP_COUNT; p++) set_string(&s->picks[p], ssh_saved_pick(s->row, p));
     s->filling = true;
     for (int f = 0; f < S_COUNT; f++) {
-        if (!s->edits[f]) continue;
+        if (!s->edits[f] || f == S_PASSWORD || f == S_SUDO_PASSWORD) continue;
         char *text = ssh_text(s, f);
         screen_settings_set_edit_text(s->edits[f], text);
         free(text);
     }
     s->filling = false;
-    s->dirty = false;
+    s->dirty = ssh_secrets_changed(&s->secrets);
+    screen_settings_ssh_secret_controls(s);
     ssh_password_cue(s);
-}
-
-/// The body a save sends; NULL with `*why` when a field cannot be sent as it is.
-Json *screen_settings_ssh_body(SshForm *s, char **why) {
-    s->error_tab = ST_SERVER;
-    Json *body = json_is_object(s->row) ? json_clone(s->row) : json_object();
-    json_object_remove(body, "id");
-    json_object_remove(body, "hasDbCredentials");
-    json_object_remove(body, "dbUsername");
-    json_object_remove(body, "dbPassword");
-    if (!screen_settings_ssh_db_offered()) { json_object_remove(body, "dbHost"); json_object_remove(body, "dbPort"); }
-    for (int f = 0; f < S_COUNT; f++) {
-        if (!s->edits[f] || (ssh_field_tab(f) == ST_DATABASE && !screen_settings_ssh_db_offered())) continue;
-        char *text = screen_settings_edit_text(s->edits[f]), *t = f == S_DBPASS ? xstrdup(text) : str_trim(text);
-        free(text);
-        if (f == S_DBUSER) {
-            // Sent only when it changed: the server keeps the password with a new username, and empty clears the login.
-            char *saved = ssh_text(s, f);
-            if (!str_eq(t, saved) && (*t || s->db_user || json_str(json_get(s->row, "dbUsername")))) json_set_str(body, "dbUsername", t);
-            free(saved);
-        } else if (f == S_DBPASS) {
-            // Left empty, the stored password stays.
-            if (*t) json_set_str(body, "dbPassword", t);
-        } else if (f == S_DBPORT && !*t) {
-            json_object_remove(body, "dbPort");   // the server's own default, 3306
-        } else if (screen_settings_SSH_FIELDS[f].kind == K_NUMBER) {
-            char *end; long port = strtol(t, &end, 10);
-            if (!*t || *end || port < 1 || port > 65535) {
-                *why = xstrdup(f == S_DBPORT ? "Enter a database port from 1 to 65535." : "Enter a port from 1 to 65535.");
-                s->error_tab = ssh_field_tab(f);
-                free(t); json_free(body);
-                return NULL;
-            }
-            json_set_num(body, screen_settings_SSH_FIELDS[f].key, (double)port);
-        } else json_set_str(body, screen_settings_SSH_FIELDS[f].key, t);
-        free(t);
-    }
-    for (int p = 0; p < SP_COUNT; p++) json_set_str(body, SSH_PICK_KEYS[p], s->picks[p] ? s->picks[p] : "");
-    json_set_bool(body, "enabled", s->enabled);
-    const char *missing = NULL;
-    if (str_empty(json_str(json_get(body, "repo")))) missing = "Choose the project whose sessions may use this server.";
-    else if (str_empty(json_str(json_get(body, "host")))) missing = "Enter the host: a hostname or an IP address.";
-    else if (str_empty(json_str(json_get(body, "username")))) missing = "Enter the username to connect as.";
-    else if (json_str_nonempty(json_get(body, "dbPassword"))) {
-        // A password goes with a username: the one typed, else the one stored.
-        const char *user = json_str(json_get(body, "dbUsername"));
-        if (user ? !*user : !s->db_user ? !screen_settings_ssh_has_login(s) : !*s->db_user) { missing = "A database password needs a database username."; s->error_tab = ST_DATABASE; }
-    }
-    if (missing) { *why = xstrdup(missing); json_free(body); return NULL; }
-    return body;
 }
 
 /// Whether a tab holds a change not saved yet, for the dot after its title.
 bool screen_settings_ssh_tab_changed(SshForm *s, int tab) {
     if (tab == ST_SERVER) {
+        if (ssh_secrets_changed(&s->secrets)) return true;
         if (s->enabled != ssh_saved_enabled(s->row)) return true;
         for (int p = 0; p < SP_COUNT; p++)
             if (!str_eq(s->picks[p] ? s->picks[p] : "", ssh_saved_pick(s->row, p))) return true;
     }
     for (int f = 0; f < S_COUNT; f++) {
-        if (!s->edits[f] || ssh_field_tab(f) != tab) continue;
+        if (!s->edits[f] || f == S_PASSWORD || f == S_SUDO_PASSWORD || ssh_field_tab(f) != tab) continue;
         char *now = screen_settings_edit_text(s->edits[f]), *saved = ssh_text(s, f);
         bool differs = !str_eq(now, saved);
         free(now); free(saved);
@@ -136,6 +89,7 @@ static bool ssh_form_changed(SshForm *s) { return screen_settings_ssh_tab_change
 
 void screen_settings_ssh_changed(SshForm *s) {
     if (s->filling) return;
+    s->revision++;
     if (!s->dirty) { s->dirty = true; pane_header_changed(s->base.pane); }
     bool changed = ssh_form_changed(s);
     if (changed != s->tab_dot) { s->tab_dot = changed; pane_relayout(s->base.pane); }
@@ -195,7 +149,7 @@ void screen_settings_ssh_ensure_controls(SshForm *s) {
     if (s->edits[0]) return;
     HWND owner = pane_hwnd(s->base.pane);
     for (int f = 0; f < S_COUNT; f++) {
-        DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (screen_settings_SSH_FIELDS[f].kind == K_NUMBER ? ES_NUMBER : 0) | (f == S_DBPASS ? ES_PASSWORD : 0);
+        DWORD style = WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | (screen_settings_SSH_FIELDS[f].kind == K_NUMBER ? ES_NUMBER : 0) | (f == S_DBPASS || f == S_PASSWORD || f == S_SUDO_PASSWORD ? ES_PASSWORD : 0);
         HWND e = CreateWindowExW(0, L"EDIT", L"", style, 0, 0, 10, 10, owner, (HMENU)(INT_PTR)(ID_SSH_FIELD + f), GetModuleHandleW(NULL), NULL);
         SendMessageW(e, WM_SETFONT, (WPARAM)font(screen_settings_SSH_FIELDS[f].mono ? FONT_MONO : FONT_BODY), TRUE);
         SendMessageW(e, EM_SETLIMITTEXT, screen_settings_SSH_FIELDS[f].kind == K_NUMBER ? 5 : 1024, 0);
@@ -209,11 +163,13 @@ void screen_settings_ssh_ensure_controls(SshForm *s) {
     for (int f = 0; f < S_COUNT; f++) { char *text = ssh_text(s, f); screen_settings_set_edit_text(s->edits[f], text); free(text); }
     s->filling = false;
     ssh_password_cue(s);
+    screen_settings_ssh_secret_controls(s);
 }
 
 /// The stored database username, read back so the box shows it; the password that comes with it is not kept.
 static void ssh_login_done(void *owner, Request *req) {
     SshForm *s = owner;
+    if (req->client != s->account || !screen_settings_ssh_current(s)) return;
     const Json *login = req->ok ? json_get(req->result, "credentials") : NULL;
     if (!json_is_object(login)) { request_error_into(&s->login_error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->login_error, NULL);
@@ -230,6 +186,7 @@ static void ssh_login_done(void *owner, Request *req) {
 }
 
 void screen_settings_ssh_load_login(SshForm *s) {
+    if (!screen_settings_ssh_current(s)) return;
     if (s->db_user || s->req_login || s->login_error || !screen_settings_ssh_has_login(s) || !store_supports("ssh_db_credentials")) return;
     Json *args = json_object(); json_set_num(args, "id", s->id);
     store_call("ssh_db_credentials", args, 0, s, ssh_login_done, 0, &s->req_login);

@@ -60,4 +60,6 @@ void session_working_tests(void);
 void app_conversation_tests(void);
 void app_provider_settings_tests(void);
 void app_project_settings_tests(void);
+void core_ssh_settings_tests(void);
+void app_ssh_settings_tests(void);
 #endif

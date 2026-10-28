@@ -1,3 +1,4 @@
+#include "ssh_settings.h"
 #include "api.h"
 #include "mail_reply.h"
 #include "browser.h"
@@ -250,10 +251,10 @@ static Json *request(ApiClient *c, const char *path, const char *method, const J
     char *data = NULL; size_t len = 0;
     if (body) {
         data = json_serialize(body, false); len = strlen(data);
-        if (len > MAX_REQUEST_BYTES) { free(data); free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
+        if (len > MAX_REQUEST_BYTES) { ssh_secret_free(data, len); free(url); api_error_set(error, API_OVERSIZED_REQUEST, 0, NULL, -1); return NULL; }
     }
     Json *result = send_request(c, method, url, body ? "application/json" : NULL, data, len, timeout_ms, error);
-    free(data); free(url);
+    ssh_secret_free(data, len); free(url);
     return result;
 }
 
@@ -542,6 +543,7 @@ Json *api_call(ApiClient *c, const char *name, const Json *arguments, int timeou
             if (str_eq(json_str(json_get(json_at(rows, i), route->filter)), kept)) json_array_push(mine, json_clone(json_at(rows, i)));
         json_object_set(result, route->list, mine);
     }
+    if (str_eq(name, "create_ssh_server") || str_eq(name, "update_ssh_server")) ssh_secrets_scrub(rest);
     free(kept); str_free(&path); json_free(rest);
     return result;
 }
