@@ -349,6 +349,8 @@ static const ApiRoute ROUTES[] = {
     { "browser_input", "POST", "sessions/{sessionId}/browser/input" },
     { "browser_stream", "GET", "sessions/{sessionId}/browser/stream" },
     // The session's ⚡ Webhook, for an admin token: its settings, URLs and keys, changed, and its keys replaced.
+    { "session_mail_wake", "GET", "sessions/{sessionId}/mail-wake" },
+    { "set_session_mail_wake", "PUT", "sessions/{sessionId}/mail-wake" },
     { "session_webhook", "GET", "sessions/{sessionId}/webhook" },
     { "set_session_webhook", "PUT", "sessions/{sessionId}/webhook" },
     { "rotate_session_webhook", "POST", "sessions/{sessionId}/webhook/rotate" },

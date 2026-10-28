@@ -17,6 +17,7 @@ static void set_error_from(const ApiError *e) { char *t = api_error_description(
 static void drop_client(void) {
     if (g_store.client) { api_client_release(g_store.client); g_store.client = NULL; }
     g_store.status_detail_retry_until = 0; g_store.status_message_retry_until = 0;
+    json_free(g_store.mail_wake_state); g_store.mail_wake_state = NULL;
     json_free(g_store.resources_retries); g_store.resources_retries = NULL;
     json_free(g_store.status_uncertain); g_store.status_uncertain = NULL;
     g_store.home_uncertain = false;

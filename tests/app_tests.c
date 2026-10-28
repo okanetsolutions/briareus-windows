@@ -6,6 +6,7 @@ int main(void) {
     app_resources_tests();
     app_server_resources_tests();
     app_status_tests();
+    app_mail_wake_tests();
     app_webhook_tests();
     app_conversation_tests();
     app_format_tests();

@@ -246,15 +246,14 @@ static bool raise_detached(Screen *screen) {
     return true;
 }
 bool app_detail_can_leave(void) {
-    Screen *root = g_detail ? pane_root(g_detail) : NULL;
-    return !root || !root->vt->can_leave || root->vt->can_leave(root);
+    return pane_can_leave(g_detail);
 }
 void app_show_detail(Screen *screen) {
     if (raise_detached(screen)) return;
     Screen *root = pane_root(g_detail);
     // A form with unsaved changes may keep its place.
     bool same = root && screen->id && str_eq(root->id, screen->id) && pane_depth(g_detail) == 1;
-    if (root && !same && root->vt->can_leave && !root->vt->can_leave(root)) { screen->vt->destroy(screen); return; }
+    if (!same && !pane_can_leave(g_detail)) { screen->vt->destroy(screen); return; }
     if (same) {
         if (root->vt->adopt) root->vt->adopt(root, screen);
         screen->vt->destroy(screen);
@@ -305,8 +304,7 @@ static void pop_out_detail(void) {
 }
 static void post_pop_out(void *ctx) { (void)ctx; PostMessageW(g_main, WM_APP_POP_OUT, 0, 0); }
 void app_clear_detail(void) {
-    Screen *root = pane_root(g_detail);
-    if (root && root->vt->can_leave && !root->vt->can_leave(root)) return;
+    if (!pane_can_leave(g_detail)) return;
     pane_set_root(g_panel, NULL);
     pane_set_root(g_overlay, NULL);
     app_set_browser(NULL);
@@ -477,6 +475,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_LBUTTONUP: if (g_dragging_splitter) ReleaseCapture(); return 0;
     case WM_CAPTURECHANGED: if (g_dragging_splitter) { g_dragging_splitter = false; InvalidateRect(hwnd, NULL, FALSE); } return 0;
     case WM_CLOSE: {
+        if (!pane_can_leave(g_detail) || !pane_can_leave(g_panel) || !pane_can_leave(g_overlay)) return 0;
         // Open SSH and SFTP sessions end with the app, so it asks first.
         size_t ssh = 0, sftp = sftp_live_count();
         for (size_t i = 0; i < term_count(); i++) if (term_running(term_at(i))) ssh++;

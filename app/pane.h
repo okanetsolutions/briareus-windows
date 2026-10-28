@@ -85,6 +85,8 @@ void pane_window_visibility(HWND window, bool shown);
 bool pane_is_sidebar(Pane *pane);
 
 void pane_push(Pane *pane, Screen *screen);
+/// Checks leave guards from the top down; false also means navigation changed inside a modal.
+bool pane_can_leave(Pane *pane);
 void pane_pop(Pane *pane);
 void pane_pop_to_root(Pane *pane);
 /// Replaces the whole stack with one screen (NULL empties the pane).

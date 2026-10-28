@@ -50,6 +50,8 @@ void app_mail_tests(void);
 void app_mail_consent_tests(void);
 void app_pulls_tests(void);
 
+void core_mail_wake_tests(void);
+void app_mail_wake_tests(void);
 void webhook_tests(void);
 void app_webhook_tests(void);
 void provider_status_tests(void);

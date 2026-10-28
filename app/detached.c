@@ -61,6 +61,9 @@ static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x = px(420); mmi->ptMinTrackSize.y = px(320); return 0; }
     case WM_DPICHANGED: { RECT *rc = (RECT *)lp; SetWindowPos(hwnd, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, SWP_NOZORDER | SWP_NOACTIVATE); return 0; }
     case WM_DETACHED_DOCK: if (w) dock(w); return 0;
+    case WM_CLOSE:
+        if (w && !pane_can_leave(w->pane)) return 0;
+        break;
     case WM_DESTROY:
         if (!w) return 0;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
