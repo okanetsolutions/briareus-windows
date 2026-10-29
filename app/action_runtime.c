@@ -28,7 +28,7 @@ static void catalog_ready(ActionRuntime *s, const Json *providers) {
     if (!s->ready) set_string(&s->error, "No available provider with a verified matching CLI and model. Check the server's provider configuration and login.");
     changed(s);
 }
-// /actions resolves omitted runtime fields from actionRuntime and rejects non-Claude reviews before creating a job.
+// /actions resolves omitted runtime fields from actionRuntime and rejects unsupported review providers before creating a job.
 static void project_default_ready(ActionRuntime *s) {
     if (!s->allow_project_default) {
         set_string(&s->error, "CLI identity is unavailable for this action."); changed(s); return;

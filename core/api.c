@@ -327,6 +327,7 @@ static const ApiRoute ROUTES[] = {
     { "pull_comments", "GET", "pulls/{pr}/comments" },
     { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" },
+    { "code_reviews", "GET", "pulls/{pr}/code-reviews" },
     { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },

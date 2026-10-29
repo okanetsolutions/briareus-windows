@@ -11,12 +11,12 @@ static Route ROUTES[] = {
     {"POST", "/actions", "manage"}, {"GET", "/actions", "read"}, {"POST", "/sessions", "manage"}
 };
 static const char *RUNTIMES = "{\"default\":{\"providerId\":1,\"model\":\"gpt\",\"effort\":\"high\"},\"providers\":["
-    "{\"id\":1,\"label\":\"Claude label is not identity\",\"available\":true,\"models\":[{\"id\":\"gpt\"}]},"
+    "{\"id\":1,\"label\":\"Codex label is not identity\",\"available\":true,\"models\":[{\"id\":\"gpt\"}]},"
     "{\"id\":2,\"label\":\"Custom account\",\"available\":true,\"defaultModel\":\"opus\",\"models\":["
     "{\"id\":\"opus\",\"efforts\":[\"low\",\"high\"],\"defaultEffort\":\"high\"},"
     "{\"id\":\"sonnet\",\"efforts\":[\"medium\"],\"defaultEffort\":\"medium\"}]}]}";
-static const char *PROVIDERS = "{\"providers\":[{\"id\":1,\"binary\":\"codex\"},{\"id\":2,\"binary\":\"claude\",\"available\":true,\"auth\":{\"loggedIn\":true}}]}";
-static const char *CATALOG = "[{\"id\":\"review\",\"label\":\"Code review\",\"binary\":\"claude\"}]";
+static const char *PROVIDERS = "{\"providers\":[{\"id\":1,\"binary\":\"claude\"},{\"id\":2,\"binary\":\"codex\",\"available\":true,\"auth\":{\"loggedIn\":true}}]}";
+static const char *CATALOG = "[{\"id\":\"review\",\"label\":\"Code review\",\"binary\":\"codex\"}]";
 static const char *runtime_reply, *provider_reply;
 static int provider_status;
 static wchar_t cache_directory[MAX_PATH];
@@ -44,7 +44,7 @@ static void cleanup(ScreenFixture *f) {
     screen_fixture_clear(f);
 }
 static void load(ScreenFixture *f, ActionRuntime *s) {
-    action_runtime_init(s, "o/r", "claude", true, NULL, NULL); action_runtime_load(s); screen_fixture_pump(f, 2);
+    action_runtime_init(s, "o/r", "codex", true, NULL, NULL); action_runtime_load(s); screen_fixture_pump(f, 2);
 }
 static void exact_payload(ScreenFixture *f) {
     CHECK_STR(f->method, "POST"); CHECK_STR(f->url, "https://example.com/api/v1/actions");
@@ -82,7 +82,7 @@ static void compatible_default_and_manage_identity(void) {
     ScreenFixture f; setup(&f);
     runtime_reply = "{\"default\":{\"providerId\":2,\"model\":\"opus\",\"effort\":\"low\"},\"providers\":[{\"id\":2,\"label\":\"Account\",\"models\":[{\"id\":\"opus\",\"efforts\":[\"low\",\"high\"],\"defaultEffort\":\"high\"}]}]}";
     char *repos[] = {"o/r"}; g_store.device.permission = "manage"; g_store.device.repos = repos; g_store.device.repo_count = 1;
-    ActionRuntime runtime; action_runtime_init(&runtime, "o/r", "claude", true, NULL, NULL); action_runtime_load(&runtime); screen_fixture_pump(&f, 1);
+    ActionRuntime runtime; action_runtime_init(&runtime, "o/r", "codex", true, NULL, NULL); action_runtime_load(&runtime); screen_fixture_pump(&f, 1);
     CHECK(runtime.ready && runtime.server_default); CHECK_STR(runtime.choice.effort, "low"); CHECK_INT(f.reads, 1);
     RuntimeChoice chosen = {0}; CHECK(action_runtime_take(&runtime, &chosen));
     CHECK_INT(chosen.provider_id, 0); CHECK(chosen.model == NULL && chosen.effort == NULL);
@@ -92,19 +92,19 @@ static void compatible_default_and_manage_identity(void) {
 }
 static void unavailable_and_denied_never_start(void) {
     ScreenFixture f; setup(&f); ActionRuntime runtime;
-    provider_reply = "{\"providers\":[{\"id\":1,\"binary\":\"codex\"},{\"id\":2,\"binary\":\"claude\",\"auth\":{\"loggedIn\":false}}]}";
+    provider_reply = "{\"providers\":[{\"id\":1,\"binary\":\"claude\"},{\"id\":2,\"binary\":\"codex\",\"auth\":{\"loggedIn\":false}}]}";
     load(&f, &runtime); CHECK(!runtime.ready); CHECK(runtime.error != NULL); action_runtime_free(&runtime);
     char *repos[] = {"o/r"}; g_store.device.permission = "manage"; g_store.device.repos = repos; g_store.device.repo_count = 1;
-    action_runtime_init(&runtime, "o/r", "claude", true, NULL, NULL); action_runtime_load(&runtime); screen_fixture_pump(&f, 1);
+    action_runtime_init(&runtime, "o/r", "codex", true, NULL, NULL); action_runtime_load(&runtime); screen_fixture_pump(&f, 1);
     CHECK(runtime.ready && runtime.server_default); CHECK(runtime.error == NULL); CHECK_INT(f.reads, 3); action_runtime_free(&runtime);
-    g_store.device.permission = "read"; action_runtime_init(&runtime, "o/r", "claude", true, NULL, NULL); action_runtime_load(&runtime);
+    g_store.device.permission = "read"; action_runtime_init(&runtime, "o/r", "codex", true, NULL, NULL); action_runtime_load(&runtime);
     CHECK(runtime.read == NULL); CHECK(runtime.error != NULL); action_runtime_free(&runtime);
     CHECK_INT(f.writes, 0); cleanup(&f);
 }
 static void cancellation_and_stale_context(void) {
     for (int change = 0; change < 4; change++) {
         ScreenFixture f; setup(&f); f.block_read = true; ActionRuntime runtime;
-        action_runtime_init(&runtime, "o/r", "claude", true, NULL, NULL); action_runtime_load(&runtime);
+        action_runtime_init(&runtime, "o/r", "codex", true, NULL, NULL); action_runtime_load(&runtime);
         CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
         ApiClient *original = g_store.client;
         if (change == 0) action_runtime_free(&runtime);
@@ -135,7 +135,7 @@ static void obsolete_action_catalog_cannot_replace_current_metadata(void) {
     // Complete the unsupported pull read first, then replace the connection before the held action catalog returns.
     screen_fixture_pump(&f, 1); ApiClient *original = g_store.client; g_store.client = NULL;
     SetEvent(f.resume); screen_fixture_pump(&f, 1);
-    CHECK_STR(json_str(json_get(json_at(pull->catalog, 0), "binary")), "claude");
+    CHECK_STR(json_str(json_get(json_at(pull->catalog, 0), "binary")), "codex");
     Json *saved = cache_value(g_store.cache, "actions"); CHECK(saved == NULL); json_free(saved);
     CHECK_INT(f.writes, 0); g_store.client = original; screen->vt->destroy(screen); cleanup(&f);
 }
@@ -146,7 +146,7 @@ static void stale_action_completions_are_isolated(void) {
         Project project = {.repo = "o/r"};
         Screen *screen = view ? pull_detail_screen_new(&project, 12, NULL, NULL) : pulls_screen_new(&project);
         screen_fixture_pane(&f, screen);
-        BoardAction review = {.id = "review", .binary = "claude", .advertised = true}; RuntimeChoice chosen = {2, "sonnet", "medium"};
+        BoardAction review = {.id = "review", .binary = "codex", .advertised = true}; RuntimeChoice chosen = {2, "sonnet", "medium"};
         PullScreen *pull = view ? (PullScreen *)screen : NULL; PullsScreen *board = view ? NULL : (PullsScreen *)screen;
         char **write_error = view ? &pull->write_error : &board->write_error; set_string(write_error, "current-context-error");
         if (view) { json_free(pull->pr); pull->pr = json_parsez("{\"headRef\":\"topic\"}"); screen_pulls_start_action(pull, &review, NULL, &chosen); }
@@ -175,7 +175,7 @@ static BOOL CALLBACK find_modal(HWND window, LPARAM arg) {
 }
 static void prompt_driver(Screen *unused, int action, intptr_t arg, POINT pt) {
     (void)unused; (void)action; (void)arg; (void)pt;
-    BoardAction review = {.id = "review", .label = "Code review", .binary = "claude", .advertised = true};
+    BoardAction review = {.id = "review", .label = "Code review", .binary = "codex", .advertised = true};
     char *input = NULL; modal_ok = screen_pulls_action_prompt(modal_source, "o/r", &review, 12, &input, &modal_choice); free(input);
 }
 static void during_modal(void) {
@@ -299,7 +299,7 @@ static void fallback_requires_an_available_default_and_review_contract(void) {
     ScreenFixture f; setup(&f); char *repos[] = {"o/r"}; g_store.device.permission = "manage"; g_store.device.repos = repos; g_store.device.repo_count = 1;
     for (int scenario = 0; scenario < 3; scenario++) {
         runtime_reply = scenario == 0 ? "{\"default\":null,\"providers\":[]}" : RUNTIMES;
-        ActionRuntime runtime; action_runtime_init(&runtime, "o/r", "claude", scenario != 1, NULL, NULL);
+        ActionRuntime runtime; action_runtime_init(&runtime, "o/r", "codex", scenario != 1, NULL, NULL);
         action_runtime_load(&runtime); screen_fixture_pump(&f, 1);
         if (scenario < 2) { CHECK(!runtime.ready); CHECK(runtime.error != NULL); }
         else {
@@ -319,7 +319,7 @@ void app_action_runtime_tests(void) {
     test_run("old endpoint action catalog cannot overwrite current metadata or cache", obsolete_action_catalog_cannot_replace_current_metadata);
     test_run("action POST completions ignore replaced endpoint account and project", stale_action_completions_are_isolated);
     test_run("runtime popup selects model, cancels and rejects changed owners or tokens", runtime_modal_selection_cancel_and_owner_replacement);
-    test_run("review selects valid Claude runtime and submits exact action once from both views", valid_selection_and_both_submit_paths);
+    test_run("review selects valid Codex runtime and submits exact action once from both views", valid_selection_and_both_submit_paths);
     test_run("review honors compatible project default and manage runtime metadata", compatible_default_and_manage_identity);
     test_run("review rejects unavailable runtime and denied identity access without writes", unavailable_and_denied_never_start);
     test_run("review runtime cancellation and stale connection token permission cannot submit", cancellation_and_stale_context);

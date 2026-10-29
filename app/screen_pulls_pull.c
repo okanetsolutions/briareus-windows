@@ -17,6 +17,7 @@ static void pull_destroy(Screen *base) {
     request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
     request_cancel(&s->req_issue); json_free(s->issue_projects); json_free(s->issue_incoming);
     request_cancel(&s->req_edit); request_cancel(&s->req_update_branch); free(s->edit_error); free(s->branch_note);
+    screen_pulls_reviews_clear(s);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
@@ -36,6 +37,7 @@ static void pull_destroy(Screen *base) {
 
 /// The main column: what the selected tab holds.
 static void layout_main(PullScreen *s, Doc *doc, Col c) {
+    if (s->tab == PR_TAB_FINDINGS || s->tab == PR_TAB_CODE_REVIEWS) { screen_pulls_layout_reviews(s, doc, c); return; }
     if (json_is_null(s->pr)) {
         if (s->tab == PR_TAB_SESSIONS) screen_pulls_layout_runs(s, doc, c);
         else if (!s->error) doc_loading(doc, c.x, c.w, NULL);
@@ -44,7 +46,7 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     switch (s->tab) {
     case PR_TAB_FILES: pull_files_layout(s->files, doc, c.x, c.w); break;
     case PR_TAB_CONVERSATION: screen_pulls_layout_conversation(s, doc, c); break;
-    case PR_TAB_FINDINGS: screen_pulls_layout_findings(s, doc, c); break;
+    case PR_TAB_FINDINGS: case PR_TAB_CODE_REVIEWS: screen_pulls_layout_reviews(s, doc, c); break;
     case PR_TAB_SESSIONS: screen_pulls_layout_runs(s, doc, c); break;
     default:
         screen_pulls_layout_description(s, doc, c);
@@ -114,8 +116,8 @@ static void pull_layout(Screen *base, Doc *doc) {
     if (s->tab == PR_TAB_RUN) {
         screen_pulls_layout_run(s, doc, w);
         return;
-    } else if (files) {
-        // The files take the whole width: GitHub's Files changed tab has no sidebar.
+    } else if (files || s->tab == PR_TAB_FINDINGS || s->tab == PR_TAB_CODE_REVIEWS) {
+        // Tables and file diffs use the whole pane so their columns remain readable.
         layout_main(s, doc, screen_pulls_col_make(0, w));
     } else if (w >= px(880)) {
         // Wide: the conversation on the left, GitHub's sidebar on the right. The sidebar stays in view beside the
@@ -171,7 +173,10 @@ static void pull_timer(Screen *base, UINT id) {
     if (id == TIMER_RUN_LOG) { screen_pulls_run_log_tick(s); return; }
     if (poller_fired(&s->poller, id)) {
         bool enabled = !s->busy && !s->merging && !s->deciding && !s->editing && !s->updating_branch && !s->dialog_open;
-        if (enabled) screen_pulls_pull_load(s); else poller_finished(&s->poller, false, -1);
+        if (enabled) {
+            screen_pulls_pull_load(s);
+            screen_pulls_reviews_poll(s);
+        } else poller_finished(&s->poller, false, -1);
     }
 }
 
@@ -182,6 +187,8 @@ static void pull_visible(Screen *base, bool shown) {
     if (s->web && !shown) webview_show(s->web, false);
     if (shown) screen_pulls_profiles_load(s);
     if (shown && s->run_busy) SetTimer(pane_hwnd(base->pane), TIMER_RUN_LOG, 1500, NULL);
+    if (!shown) request_cancel(&s->reviews.req);
+    if (shown) screen_pulls_reviews_load(s, false);
     if (!shown) KillTimer(pane_hwnd(base->pane), TIMER_RUN_LOG);
     if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s); }
     else { poller_stop(&s->poller); pull_files_cancel(s->files); screen_pulls_conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); request_cancel(&s->req_issue); }
@@ -195,6 +202,7 @@ void screen_pulls_pull_refresh(Screen *base) {
     s->uncertain = false; set_string(&s->write_error, NULL); set_string(&s->edit_error, NULL); set_string(&s->branch_note, NULL);
     request_cancel(&s->req_body); s->body_read = false;
     request_cancel(&s->req_issue); s->issues_read = false; json_free(s->issue_incoming); s->issue_incoming = NULL;
+    request_cancel(&s->reviews.req); screen_pulls_reviews_load(s, true);
     request_cancel(&s->req_pull); screen_pulls_pull_load(s);
     if (pull_files_started(s->files)) pull_files_refresh(s->files);
     pane_relayout(base->pane);
@@ -204,7 +212,7 @@ static void pull_activated(Screen *base, bool active) { if (active) { PullScreen
 
 static const ScreenVTable pull_vt = {
     .destroy = pull_destroy, .layout = pull_layout, .header = pull_header, .action = screen_pulls_pull_action, .timer = pull_timer,
-    .visible = pull_visible, .refresh = screen_pulls_pull_refresh, .activated = pull_activated, .place = pull_place,
+    .key = screen_pulls_reviews_key, .visible = pull_visible, .refresh = screen_pulls_pull_refresh, .activated = pull_activated, .place = pull_place,
 };
 
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary) {

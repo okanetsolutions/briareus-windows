@@ -680,7 +680,7 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
                 if (str_eq(f->runs[k].text, "9 ") && str_eq(f->runs[k + 1].text, "commits ")) commits = true;
         }
     }
-    CHECK_INT(tabs, 5); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
+    CHECK_INT(tabs, 6); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
     CHECK(layout_contains(base, "Body marker"));
     CHECK_INT(files_calls, 0); CHECK_INT(comments_calls, 0);
     select_pull_tab(base, "Conversation"); drain(1);
@@ -690,12 +690,12 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
     CHECK(!layout_contains(base, "Timeline marker"));
     select_pull_tab(base, "Findings");
-    CHECK(layout_contains(base, "Finding marker")); CHECK(layout_has_action(base, ACT_FINDING_TOGGLE));
+    CHECK(layout_contains(base, "not supported")); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
     select_pull_tab(base, "Sessions");
     CHECK(layout_has_action(base, ACT_OPEN_RUN)); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
     select_pull_tab(base, "Run");
     CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
-    const intptr_t retired[] = { 4, 5, -1, 8, INTPTR_MAX };
+    const intptr_t retired[] = { 4, 5, -1, 9, INTPTR_MAX };
     for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) {
         base->vt->action(base, ACT_PR_TAB, retired[i], (POINT){0});
         CHECK_INT(s->tab, PR_TAB_BODY); CHECK(layout_contains(base, "Body marker"));

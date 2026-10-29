@@ -2,7 +2,6 @@
 
 static void rebuild_actions(PullScreen *s);
 static void pull_finish_poll(PullScreen *s);
-static void findings_done(void *owner, Request *req);
 static void body_done(void *owner, Request *req);
 static void conv_done(void *owner, Request *req);
 static void conv_page(PullScreen *s, int k, int page);
@@ -49,13 +48,6 @@ static void pull_finish_poll(PullScreen *s) {
     screen_pulls_save_pull(s);
     poller_finished(&s->poller, s->error != NULL, -1);
     pane_relayout(s->base.pane);
-}
-
-static void findings_done(void *owner, Request *req) {
-    PullScreen *s = owner;
-    if (req->ok) { json_free(s->findings); s->findings = json_clone(json_get(req->result, "findings")); set_string(&s->findings_error, NULL); }
-    else { request_error_into(&s->findings_error, req); }
-    pull_finish_poll(s);
 }
 
 static void body_done(void *owner, Request *req) {
@@ -119,10 +111,6 @@ static void pull_done(void *owner, Request *req) {
         Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
         store_call("pull_description", args, 0, s, body_done, TAG_BODY, &s->req_body);
     }
-    if (store_supports("findings")) {
-        Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
-        store_call("findings", args, 0, s, findings_done, TAG_FINDINGS, &s->req_findings);
-    }
     screen_pulls_issue_projects_load(s);
     pull_finish_poll(s);
 }
@@ -179,6 +167,7 @@ void screen_pulls_sessions_done_pull(void *owner, Request *req) {
 }
 
 void screen_pulls_pull_load(PullScreen *s) {
+    screen_pulls_reviews_load(s, false);
     if (json_is_null(s->pr)) {
         char *key = xstrfmt("pull:%s#%d", s->project.repo, s->number);
         Json *saved = cache_value(g_store.cache, key);
