@@ -17,7 +17,8 @@ extern "C" {
 struct Canvas {
     HWND hwnd;                          // a pane's window, or NULL for the borrowed GDI canvas
     ID2D1RenderTarget *rt;
-    ID2D1HwndRenderTarget *hwnd_rt;
+    ID2D1DCRenderTarget *window_rt;     // owned; bound to the window's DC for each frame
+    HDC window_dc;                      // the window's DC while a frame is open
     ID2D1SolidColorBrush *brush;
     bool color_fonts;                   // the target draws colour glyphs (emoji), Windows 8.1 and later
     int clips;
@@ -189,7 +190,7 @@ extern "C" void canvas_set_font(FontId id, const wchar_t *face, float size, int 
 static void drop_target(Canvas *cv) {
     release(cv->brush);
     cv->rt = NULL;
-    release(cv->hwnd_rt);
+    release(cv->window_rt);
 }
 static bool make_brush(Canvas *cv) {
     if (FAILED(cv->rt->CreateSolidColorBrush(D2D1::ColorF(0, 0, 0), &cv->brush))) return false;
@@ -205,10 +206,9 @@ static D2D1_RENDER_TARGET_PROPERTIES target_properties(void) {
 static bool ensure_target(Canvas *cv) {
     if (cv->rt) return true;
     if (!d2d) return false;
-    RECT rc; GetClientRect(cv->hwnd, &rc);
-    D2D1_SIZE_U size = D2D1::SizeU((UINT32)(rc.right > 1 ? rc.right : 1), (UINT32)(rc.bottom > 1 ? rc.bottom : 1));
-    if (FAILED(d2d->CreateHwndRenderTarget(target_properties(), D2D1::HwndRenderTargetProperties(cv->hwnd, size), &cv->hwnd_rt))) return false;
-    cv->rt = cv->hwnd_rt;
+    D2D1_RENDER_TARGET_PROPERTIES props = target_properties();
+    if (FAILED(d2d->CreateDCRenderTarget(&props, &cv->window_rt))) return false;
+    cv->rt = cv->window_rt;
     if (!make_brush(cv)) { drop_target(cv); return false; }
     return true;
 }
@@ -223,11 +223,16 @@ extern "C" void canvas_free(Canvas *cv) {
     drop_target(cv);
     free(cv);
 }
-extern "C" void canvas_resize(Canvas *cv, int width, int height) {
-    if (cv && cv->hwnd_rt) cv->hwnd_rt->Resize(D2D1::SizeU((UINT32)(width > 1 ? width : 1), (UINT32)(height > 1 ? height : 1)));
-}
+/// Each frame binds the target at the window's current size, so a resize needs nothing more.
+extern "C" void canvas_resize(Canvas *cv, int width, int height) { (void)cv; (void)width; (void)height; }
+/// The frame reaches the window through its DC rather than an HWND render target: GDI clips the DC to the window's
+/// visible region, which WS_CLIPCHILDREN keeps clear of the screens' controls, so a frame never paints over an Edit.
 extern "C" bool canvas_begin(Canvas *cv) {
     if (!cv || !ensure_target(cv)) return false;
+    RECT rc; GetClientRect(cv->hwnd, &rc);
+    cv->window_dc = GetDC(cv->hwnd);
+    if (!cv->window_dc) return false;
+    if (FAILED(cv->window_rt->BindDC(cv->window_dc, &rc))) { ReleaseDC(cv->hwnd, cv->window_dc); cv->window_dc = NULL; return false; }
     cv->rt->BeginDraw();
     cv->rt->SetTransform(D2D1::Matrix3x2F::Identity());
     cv->clips = 0; cv->layers = 0;
@@ -236,10 +241,12 @@ extern "C" bool canvas_begin(Canvas *cv) {
 extern "C" void canvas_end(Canvas *cv) {
     if (!cv || !cv->rt) return;
     while (cv->clips > 0) canvas_unclip(cv);
-    if (cv->rt->EndDraw() == (HRESULT)D2DERR_RECREATE_TARGET) {
+    HRESULT hr = cv->rt->EndDraw();
+    ReleaseDC(cv->hwnd, cv->window_dc); cv->window_dc = NULL;
+    if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {
         // The GPU was reset or changed: draw the frame again on a new target.
         drop_target(cv);
-        if (cv->hwnd) InvalidateRect(cv->hwnd, NULL, FALSE);
+        InvalidateRect(cv->hwnd, NULL, FALSE);
     }
 }
 
