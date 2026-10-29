@@ -169,7 +169,7 @@ void status_place(Screen *base, const RECT *content, int scroll_y) {
         HWND parent = pane_hwnd(base->pane);
         if (GetParent(c->label) != parent) SetParent(c->label, parent);
         SendMessageW(c->label, WM_SETFONT, (WPARAM)font(FONT_FOOTNOTE_SEMIBOLD), TRUE);
-        RECT lr = c->label_rect, clipped; OffsetRect(&lr, content->left + margin, content->top - scroll_y);
+        RECT lr = c->label_rect, clipped = {0}; OffsetRect(&lr, content->left + margin, content->top - scroll_y);
         bool label_visible = show && IntersectRect(&clipped, &lr, content);
         MoveWindow(c->label, lr.left, lr.top, lr.right - lr.left, lr.bottom - lr.top, TRUE);
         if (label_visible) SetWindowRgn(c->label, CreateRectRgn(clipped.left - lr.left, clipped.top - lr.top, clipped.right - lr.left, clipped.bottom - lr.top), TRUE);
