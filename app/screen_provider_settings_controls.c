@@ -114,15 +114,42 @@ static void append_item(HMENU menu, UINT id, const char *text, bool checked) {
     free(w);
 }
 
-void screen_provider_settings_pick_binary(FormScreen *s, POINT pt) {
+HMENU screen_provider_settings_binary_menu(FormScreen *s) {
     HMENU m = CreatePopupMenu();
-    for (size_t i = 0; i < BINARY_COUNT; i++) append_item(m, (UINT)i + 1, screen_provider_settings_BINARIES[i].title, str_eq(screen_provider_settings_BINARIES[i].id, s->binary));
-    int chosen = popup_menu(s, m, pt);
-    if (chosen < 1 || chosen > BINARY_COUNT || str_eq(screen_provider_settings_BINARIES[chosen - 1].id, s->binary)) return;
+    for (size_t i = 0; i < screen_provider_settings_binary_count(s); i++) {
+        const char *id = screen_provider_settings_binary_id(s, i);
+        append_item(m, (UINT)i + 1, screen_provider_settings_binary_title(id), str_eq(id, s->binary));
+    }
+    return m;
+}
+
+void screen_provider_settings_select_binary(FormScreen *s, const char *binary) {
+    if (s->req_save || s->req_delete || str_empty(binary) || str_eq(binary, s->binary)) return;
     screen_provider_settings_cancel_login(s);
-    set_string(&s->binary, screen_provider_settings_BINARIES[chosen - 1].id);
-    // Another CLI's login flow and probe verdict say nothing about this one.
-    set_string(&s->test_result, NULL); set_string(&s->device_code, NULL); s->code_wanted = false;
+    request_cancel(&s->req_test);
+    set_string(&s->binary, binary);
+    // Keep every edit and the optional mode so switching back restores unsaved values.
+    set_string(&s->test_result, NULL);
+    screen_provider_settings_form_changed(s);
+    pane_relayout(s->base.pane);
+}
+
+void screen_provider_settings_pick_binary(FormScreen *s, POINT pt) {
+    // The menu pumps messages; retain its IDs if the catalog arrives while it is open.
+    Json *ids = json_array();
+    for (size_t i = 0; i < screen_provider_settings_binary_count(s); i++) json_array_push(ids, json_string(screen_provider_settings_binary_id(s, i)));
+    int chosen = popup_menu(s, screen_provider_settings_binary_menu(s), pt);
+    if (chosen >= 1 && (size_t)chosen <= json_count(ids)) screen_provider_settings_select_binary(s, json_str(json_at(ids, (size_t)chosen - 1)));
+    json_free(ids);
+}
+
+void screen_provider_settings_select_mode(FormScreen *s, bool token) {
+    if (s->req_save || s->req_delete || !screen_provider_settings_mode_offered(s->binary) || token == s->token) return;
+    // Switching back brings back what the endpoint/key boxes hold.
+    screen_provider_settings_cancel_login(s);
+    request_cancel(&s->req_test);
+    s->token = token;
+    set_string(&s->test_result, NULL);
     screen_provider_settings_form_changed(s);
     pane_relayout(s->base.pane);
 }
@@ -132,11 +159,5 @@ void screen_provider_settings_pick_mode(FormScreen *s, POINT pt) {
     append_item(m, 1, "Login", !s->token);
     append_item(m, 2, "API token", s->token);
     int chosen = popup_menu(s, m, pt);
-    if (!chosen || (chosen == 2) == s->token) return;
-    // Switching to Login drops the endpoint and its token when saved; switching back brings back what the boxes hold.
-    screen_provider_settings_cancel_login(s);
-    s->token = chosen == 2;
-    set_string(&s->test_result, NULL);
-    screen_provider_settings_form_changed(s);
-    pane_relayout(s->base.pane);
+    if (chosen) screen_provider_settings_select_mode(s, chosen == 2);
 }

@@ -24,11 +24,6 @@ static int row_id(const Json *row) { return json_int_or(json_get(row, "id"), 0);
 
 static char *form_id(int id) { return id > 0 ? xstrfmt("settings-provider:%d", id) : xstrdup("settings-provider:new"); }
 
-/// The CLIs a provider runs, as the dashboard's Binary select offers them.
-const screen_provider_settings_BINARIES_type screen_provider_settings_BINARIES[] = {
-    { "claude", "claude (Claude Code)" }, { "codex", "codex (Codex)" }, { "grok", "grok (Grok)" }, { "opencode", "opencode" },
-};
-
 const FieldDef screen_provider_settings_FIELDS[F_COUNT] = {
     [F_LABEL] = { "label", K_TEXT, "Label", "shown in the provider picker", 0, false, false },
     [F_BASE_URL] = { "baseUrl", K_TEXT, "Base URL", "empty = the binary's own service", 0, true, false },
@@ -125,13 +120,14 @@ static void form_clone(FormScreen *s) {
 
 static void form_release(FormScreen *s) {
     for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
-    json_free(s->row); json_free(s->status); json_free(s->login_from);
+    json_free(s->binary_ids); json_free(s->row); json_free(s->status); json_free(s->login_from);
     free(s->binary); free(s->status_error); free(s->test_result); free(s->device_code); free(s->error);
     screen_release(&s->base);
 }
 static void form_destroy(Screen *base) {
     FormScreen *s = (FormScreen *)base;
     if (s->base.pane) KillTimer(pane_hwnd(s->base.pane), TIMER_LOGIN);
+    request_cancel(&s->req_binaries);
     request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_status);
     request_cancel(&s->req_login); request_cancel(&s->req_test);
     if (s->modal) { s->retired = true; return; }
@@ -211,6 +207,7 @@ static void form_visible(Screen *base, bool shown) {
     FormScreen *s = (FormScreen *)base;
     s->shown = shown;
     if (shown) {
+        screen_provider_settings_load_binaries(s);
         screen_provider_settings_form_ensure_controls(s);
         if (s->id && !s->status && !s->req_status) screen_provider_settings_load_status(s, false);
         if (s->focus_first >= 0) { int f = s->focus_first; s->focus_first = -1; SetFocus(s->edits[f]); }

@@ -18,36 +18,10 @@ int screen_provider_settings_shown_rows(FormScreen *s, int f) { int n = s->lines
 
 // MARK: What the binary and the mode allow
 
-/// grok has no token mode and opencode nothing but a key, so only claude and codex choose.
-bool screen_provider_settings_mode_offered(const char *binary) { return !str_eq(binary, "grok") && !str_eq(binary, "opencode"); }
-
-/// Whether the endpoint and its token are part of the provider: the API token mode, or opencode's key.
-bool screen_provider_settings_uses_token(FormScreen *s) { return str_eq(s->binary, "opencode") || (!str_eq(s->binary, "grok") && s->token); }
-
-/// A login is registered against a saved row, so only a saved one logged in through its CLI can log in.
-bool screen_provider_settings_can_log_in(FormScreen *s) { return s->id && !screen_provider_settings_uses_token(s) && !str_eq(s->binary, "opencode"); }
-
 bool screen_provider_settings_field_shown(FormScreen *s, int f) {
     if (f == F_BASE_URL || f == F_API_KEY) return screen_provider_settings_uses_token(s);
     if (f == F_LOGIN_CODE) return s->code_wanted && screen_provider_settings_can_log_in(s);
     return true;
-}
-
-const char *screen_provider_settings_binary_title(const char *binary) {
-    for (size_t i = 0; i < BINARY_COUNT; i++) if (str_eq(screen_provider_settings_BINARIES[i].id, binary)) return screen_provider_settings_BINARIES[i].title;
-    return binary && *binary ? binary : "Pick a binary";
-}
-
-const char *screen_provider_settings_base_url_hint(const char *binary) {
-    if (str_eq(binary, "claude")) return "Passed to the claude CLI as `ANTHROPIC_BASE_URL`, for a proxy or an Anthropic-compatible endpoint. Leave empty for the Anthropic API.";
-    if (str_eq(binary, "opencode")) return "The base URL of the service this entry's models name (`anthropic` for `anthropic/claude-sonnet-4-5`), for a proxy or a compatible gateway; include the `/v1` when the service's own URL carries one. Handed to the CLI as an inline config (`OPENCODE_CONFIG_CONTENT`) alongside the key, so the machine's own opencode config is never touched. Leave empty for the service's own endpoint.";
-    return "A custom API endpoint driven through the codex CLI (Responses wire format). Sessions run with a server-written `CODEX_HOME` pointing codex at it, so the machine's own `~/.codex` login is never touched. Leave empty for the binary's own service.";
-}
-
-const char *screen_provider_settings_api_key_hint(const char *binary) {
-    if (str_eq(binary, "claude")) return "Passed as `ANTHROPIC_API_KEY`, used instead of a login. With a base URL it also goes out as `ANTHROPIC_AUTH_TOKEN`, so gateways that read `Authorization` instead of `x-api-key` see it too.";
-    if (str_eq(binary, "opencode")) return "The key for the service this entry's models name: `anthropic` for `anthropic/claude-sonnet-4-5`. It is handed to the CLI as its whole credential store, so the machine's own opencode credentials stay untouched.";
-    return "Authenticates the base URL above.";
 }
 
 // MARK: Reading and writing the fields
@@ -110,8 +84,8 @@ void screen_provider_settings_form_fill(FormScreen *s) {
 
 /// A field's value as the form would send it, as a new string: trimmed, and the endpoint's emptied when the mode drops it.
 char *screen_provider_settings_field_now(FormScreen *s, int f) {
-    if (!s->edits[f]) return field_text(s->row, f);
     if ((f == F_BASE_URL || f == F_API_KEY) && !screen_provider_settings_uses_token(s)) return xstrdup("");
+    if (!s->edits[f]) return field_text(s->row, f);
     char *text = screen_provider_settings_edit_text(s->edits[f]);
     if (screen_provider_settings_FIELDS[f].kind == K_LIST) {
         Json *list = screen_provider_settings_list_from_text(text); free(text);

@@ -62,6 +62,7 @@ void app_mail_wake_tests(void);
 void webhook_tests(void);
 void app_webhook_tests(void);
 void provider_status_tests(void);
+void provider_settings_tests(void);
 void session_working_tests(void);
 void app_conversation_tests(void);
 void app_action_runtime_tests(void);

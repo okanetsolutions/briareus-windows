@@ -94,13 +94,12 @@ void screen_provider_settings_note(Doc *doc, int x, int w, const char *text) {
 /// Under the label and binary: the mode, then the login, or the endpoint with its token and Test.
 static void layout_connection(FormScreen *s, Doc *doc, int x, int w) {
     if (screen_provider_settings_mode_offered(s->binary)) select_box(doc, x, (w - px(14)) / 2, "Mode", s->token ? "API token" : "Login", ACT_MODE);
-    else if (str_eq(s->binary, "grok")) screen_provider_settings_note(doc, x, w, "grok signs in with its own login; it takes no API token.");
-    else screen_provider_settings_note(doc, x, w, "opencode authenticates with an API key per service and has no login of its own.");
+    else screen_provider_settings_note(doc, x, w, screen_provider_settings_connection_note(s->binary));
     if (!screen_provider_settings_uses_token(s)) {
         if (!s->id) { screen_provider_settings_note(doc, x, w, "Save the provider first: its login is registered against the saved entry, so there is nothing to log in until one exists."); return; }
         screen_provider_settings_headline(s, doc, x, w);
         doc_space(doc, px(12));
-        bool supported = store_supports(str_eq(s->binary, "claude") ? "provider_login_start" : "provider_login");
+        bool supported = screen_provider_settings_can_log_in(s) && store_supports(str_eq(s->binary, "claude") ? "provider_login_start" : "provider_login");
         doc_button(doc, x, 0, s->req_login ? "Logging in\xE2\x80\xA6" : "Log in", BUTTON_BORDERED, ACT_LOGIN, 0, supported && !s->req_login &&
             (!str_eq(s->binary, "codex") || (json_is_object(s->status) && !s->req_status)));
         doc_space(doc, px(10));

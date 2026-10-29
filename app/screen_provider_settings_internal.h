@@ -3,14 +3,16 @@
 #include "screens.h"
 #include "str.h"
 #include "provider_status.h"
+#include "provider_settings.h"
 #include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-typedef struct { const char *id, *title; } screen_provider_settings_BINARIES_type;
-extern const screen_provider_settings_BINARIES_type screen_provider_settings_BINARIES[4];
+typedef enum { BINARY_LOGIN, BINARY_CHOICE, BINARY_KEY } ProviderBinaryAuth;
+typedef struct { const char *id, *title; ProviderBinaryAuth auth; const char *note; } screen_provider_settings_BINARIES_type;
+extern const screen_provider_settings_BINARIES_type screen_provider_settings_BINARIES[6];
 enum { BINARY_COUNT = sizeof screen_provider_settings_BINARIES / sizeof *screen_provider_settings_BINARIES };
 
 typedef enum { K_TEXT, K_LIST } FieldKind;
@@ -34,6 +36,9 @@ enum { TIMER_LOGIN = 7 };
 extern const int screen_provider_settings_LOGIN_WAITS_MS[4];
 typedef struct {
     Screen base;
+    Json *binary_ids;      // owned OpenAPI enum; NULL uses the known registry
+    Request *req_binaries;
+    bool binaries_loaded;
     Json *row;             // what the form was filled from: the saved row, the defaults, or a clone's values
     int id;                // 0 until the provider is saved
     HWND edits[F_COUNT];
@@ -87,6 +92,13 @@ void screen_provider_settings_form_layout(Screen *base, Doc *doc);
 void screen_provider_settings_form_header(Screen *base, HeaderInfo *info);
 void screen_provider_settings_form_place(Screen *base, const RECT *content, int scroll_y);
 void screen_provider_settings_form_ensure_controls(FormScreen *s);
+void screen_provider_settings_load_binaries(FormScreen *s);
+size_t screen_provider_settings_binary_count(FormScreen *s);
+const char *screen_provider_settings_binary_id(FormScreen *s, size_t index);
+void screen_provider_settings_select_binary(FormScreen *s, const char *binary);
+void screen_provider_settings_select_mode(FormScreen *s, bool token);
+HMENU screen_provider_settings_binary_menu(FormScreen *s); // Caller destroys the menu.
+const char *screen_provider_settings_connection_note(const char *binary);
 void screen_provider_settings_pick_binary(FormScreen *s, POINT pt);
 void screen_provider_settings_pick_mode(FormScreen *s, POINT pt);
 void screen_provider_settings_load_status(FormScreen *s, bool fresh);
