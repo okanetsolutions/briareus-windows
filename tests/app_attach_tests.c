@@ -10,9 +10,9 @@ typedef struct { AttachFile *files; size_t count; char *error; } Selection;
 static void selected(void *ctx, AttachFile *files, size_t count, char *error) {
     Selection *s = ctx; s->files = files; s->count = count; s->error = error;
 }
-static void selection_and_read_allow_open_writer(void) {
+static void check_selection_and_read_with_writer(DWORD extra_access) {
     UploadFixture f; init(&f); wchar_t path[MAX_PATH]; temp(path);
-    HANDLE writer = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    HANDLE writer = CreateFileW(path, GENERIC_WRITE | extra_access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     CHECK(writer != INVALID_HANDLE_VALUE); DWORD written = 0;
     CHECK(WriteFile(writer, "saved", 5, &written, NULL)); CHECK_INT(written, 5);
@@ -29,6 +29,10 @@ static void selection_and_read_allow_open_writer(void) {
     }
     attach_files_free(s.files, s.count); free(s.error); attacher_free(a);
     CloseHandle(writer); DeleteFileW(path); screen_fixture_clear(&f.screen);
+}
+static void selection_and_read_allow_open_writer(void) {
+    check_selection_and_read_with_writer(0);
+    check_selection_and_read_with_writer(DELETE);
 }
 static void metadata_boundary_and_grouped_refusals(void) {
     UploadFixture f; init(&f); wchar_t paths[4][MAX_PATH];

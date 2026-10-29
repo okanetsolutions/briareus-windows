@@ -132,7 +132,7 @@ static const char *open_path(const wchar_t *path, HANDLE *out, size_t *len) {
     DWORD attrs = GetFileAttributesW(path);
     if (attrs == INVALID_FILE_ATTRIBUTES) return "could not be read";
     if (attrs & FILE_ATTRIBUTE_DIRECTORY) return "is a folder; attach its files";
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return "could not be opened";
     BY_HANDLE_FILE_INFORMATION info = {0};
     LARGE_INTEGER size = {0};
