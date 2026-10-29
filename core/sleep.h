@@ -4,12 +4,24 @@
 #include <stdint.h>
 
 enum { SLEEP_PANES = 4, SLEEP_TICKER = 30, SLEEP_STEPS = 40, SLEEP_TEXT = 32768 };
+// Worker-side bounded backlog, with no synchronization of its own. A dropped session is repaired by /sessions.
+enum { SLEEP_BACKLOG = 128 };
+typedef struct { Json *events[SLEEP_BACKLOG]; size_t count; bool reconcile; } SleepInbox;
+// Consumes data. False means ordered live/deletion backlog overflow; session overflow never closes a stream.
+bool sleep_inbox_push(SleepInbox *q, const char *type, Json *data);
+Json *sleep_inbox_take(SleepInbox *q, bool *reconcile); // owned FIFO batch; resets the backlog
+void sleep_inbox_free(SleepInbox *q);
 extern const int sleep_choices[7];
 int sleep_minutes(int value); // invalid persisted values use the five minute default
 // Monotonic milliseconds; input is filtered before native accelerator/character dispatch.
 typedef struct { uint64_t input, swallow; bool asleep; uint32_t held[9], blocked[9]; } SleepIdle;
 bool sleep_due(SleepIdle *s, uint64_t now, int minutes, bool eligible);
 bool sleep_input(SleepIdle *s, uint64_t now, unsigned input, bool down, bool up);
+
+// Native windows can synthesize moves when a child appears under a parked cursor.
+typedef struct { int x, y; bool known; } SleepPointer;
+void sleep_pointer_reset(SleepPointer *p, int x, int y);
+bool sleep_pointer_moved(SleepPointer *p, int x, int y);
 
 typedef enum { SLEEP_NONE, SLEEP_FILE, SLEEP_COMMAND } SleepKind;
 typedef struct { SleepKind kind; bool writes; char *text; } SleepStep;

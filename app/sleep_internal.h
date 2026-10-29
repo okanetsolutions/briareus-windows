@@ -4,7 +4,8 @@
 typedef struct SleepFollow SleepFollow;
 SleepFollow *sleep_follow_new(void);
 void sleep_follow_cancel(SleepFollow *f);
-// Owned queued records, at most 128; overflow reconnects to recover session state.
-Json *sleep_follow_drain(SleepFollow *f, bool *ended, int *delay);
+typedef struct { bool ended, reconcile; int status; double retry_after; } SleepFollowInfo;
+// Owned FIFO batch, at most SLEEP_BACKLOG; excess session records request /sessions reconciliation without disconnecting.
+Json *sleep_follow_drain(SleepFollow *f, SleepFollowInfo *info);
 void sleep_follow_release(SleepFollow *f);
 #endif

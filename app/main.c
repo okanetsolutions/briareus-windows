@@ -422,7 +422,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (g_detail && IsWindowVisible(pane_hwnd(g_detail))) SetFocus(pane_hwnd(g_detail));
         else break;
         return 0;
-    case WM_ACTIVATEAPP: if (!wp) sleep_deactivated(); set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
+    case WM_ACTIVATEAPP: sleep_deactivated(); set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc; GetClientRect(hwnd, &rc);

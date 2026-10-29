@@ -3,6 +3,8 @@
 #define BRIAREUS_SUITES_H
 void sleep_tests(void);
 void app_sleep_tests(void);
+void app_sleep_stream_tests(void);
+void app_sftp_picker_tests(void);
 void core_stats_tests(void);
 void core_server_stats_tests(void);
 void app_resources_tests(void);

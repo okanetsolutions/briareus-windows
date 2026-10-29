@@ -11,10 +11,12 @@ static struct {
     HWND main, window, focus;
     HHOOK hook;
     SleepIdle idle;
+    SleepPointer pointer;
     SleepWall wall;
     ApiClient *client;
     char *device, *scope;
-    int minutes, modals;
+    int minutes, modals, failures;
+    uint64_t stream_since;
     SleepFollow *follow;
     Request *sessions, *history, *files[SLEEP_PANES];
     uint64_t events_seen;
@@ -32,7 +34,13 @@ static bool current(void) {
     if (g_sleep.client != g_store.client || !str_eq(g_sleep.device, g_store.device.id)) return false;
     char *key = scope_key(); bool same = str_eq(key, g_sleep.scope); free(key); return same;
 }
+static void pointer_reset(void) {
+    POINT pt;
+    if (GetCursorPos(&pt)) sleep_pointer_reset(&g_sleep.pointer, pt.x, pt.y);
+    else g_sleep.pointer.known = false;
+}
 static void wake(void) {
+    pointer_reset();
     g_sleep.idle.asleep = false; g_sleep.idle.input = now_ms();
     sleep_follow_cancel(g_sleep.follow); sleep_follow_release(g_sleep.follow); g_sleep.follow = NULL;
     request_cancel(&g_sleep.sessions); request_cancel(&g_sleep.history);
@@ -43,6 +51,7 @@ static void wake(void) {
     sleep_wall_free(&g_sleep.wall);
     for (size_t i = 0; i < g_sleep.record_count; i++) session_free(&g_sleep.records[i].session);
     memset(g_sleep.records, 0, sizeof g_sleep.records); g_sleep.record_count = 0;
+    g_sleep.failures = 0;
     if (g_sleep.window) ShowWindow(g_sleep.window, SW_HIDE);
     if (g_sleep.focus && IsWindow(g_sleep.focus) && IsWindowVisible(g_sleep.focus)) SetFocus(g_sleep.focus);
     g_sleep.focus = NULL;
@@ -51,10 +60,12 @@ static void wake(void) {
 }
 void sleep_scope_changed(void) { if (g_sleep.idle.asleep && (!current() || IsIconic(g_sleep.main))) wake(); }
 void sleep_deactivated(void) {
+    pointer_reset();
     memset(g_sleep.idle.held, 0, sizeof g_sleep.idle.held);
     memset(g_sleep.idle.blocked, 0, sizeof g_sleep.idle.blocked);
 }
 void sleep_modal(bool begin) {
+    pointer_reset();
     if (begin) { if (g_sleep.idle.asleep) wake(); g_sleep.modals++; }
     else if (g_sleep.modals) g_sleep.modals--;
     g_sleep.idle.input = now_ms();
@@ -133,7 +144,8 @@ static void receive(const char *type, const Json *j) {
         int i = find_pane(json_str(json_get(j, "sessionId")));
         const char *id = json_str(json_get(j, "sessionId"));
         int r = record_index(id);
-        if (r < 0 || json_int_or(json_get(json_get(j, "event"), "seq"), 0) <= g_sleep.records[r].cursor) return;
+        if (r < 0) { if (g_sleep.snapshot > now_ms() + 1000) g_sleep.snapshot = now_ms() + 1000; return; }
+        if (json_int_or(json_get(json_get(j, "event"), "seq"), 0) <= g_sleep.records[r].cursor) return;
         if (i < 0) {
             for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) {
                 SleepStep step = sleep_step(json_get(j, "event"), session_repo(&g_sleep.records[k].session));
@@ -147,7 +159,8 @@ static void receive(const char *type, const Json *j) {
     }
 }
 static void sessions_done(void *owner, Request *r) {
-    (void)owner; if (!current() || !r->ok || (uint64_t)r->arg != g_sleep.events_seen) return;
+    (void)owner; if (!current() || !r->ok) return;
+    if ((uint64_t)r->arg != g_sleep.events_seen) { g_sleep.snapshot = now_ms() + 1000; return; }
     Session *items = NULL; size_t n = 0; if (!sessions_parse(r->result, &items, &n)) return;
     for (size_t k = 0; k < n; k++) record(&items[k]);
     size_t selected[SLEEP_PANES]; size_t count = sleep_select(items, n, selected, true);
@@ -241,19 +254,37 @@ void sleep_pulse(uint64_t now) {
         g_sleep.client = api_client_retain(g_store.client); g_sleep.device = xstrdup(g_store.device.id); g_sleep.scope = scope_key();
         g_sleep.wall.last_live = now;
         g_sleep.focus = GetFocus(); g_sleep.retry = g_sleep.snapshot = g_sleep.replay_at = 0;
+        pointer_reset();
         ShowWindow(g_sleep.window, SW_SHOWNA);
     }
     RECT rc; GetClientRect(g_sleep.main, &rc);
     SetWindowPos(g_sleep.window, HWND_TOP, 0, 0, rc.right, rc.bottom, SWP_NOACTIVATE);
-    if (!g_sleep.follow && now >= g_sleep.retry) { g_sleep.follow = sleep_follow_new(); g_sleep.retry = now + 30000; }
+    if (!g_sleep.follow && now >= g_sleep.retry) {
+        g_sleep.follow = sleep_follow_new(); g_sleep.stream_since = now;
+        if (!g_sleep.follow) {
+            if (g_sleep.failures < 6) g_sleep.failures++;
+            g_sleep.retry = now + (uint64_t)poll_delay_ms(3000, g_sleep.failures, 0);
+        }
+    }
     if (g_sleep.follow) {
-        bool ended; int delay; Json *queue = sleep_follow_drain(g_sleep.follow, &ended, &delay);
+        SleepFollowInfo info; Json *queue = sleep_follow_drain(g_sleep.follow, &info);
+        if (info.reconcile) { g_sleep.events_seen++; g_sleep.snapshot = 0; }
         for (size_t k = 0; k < json_count(queue); k++) {
-            g_sleep.events_seen++;
-            const Json *item = json_at(queue, k); receive(json_str(json_get(item, "type")), json_get(item, "data"));
+            const Json *item = json_at(queue, k); const char *type = json_str(json_get(item, "type"));
+            if (!str_eq(type, "transcript")) g_sleep.events_seen++;
+            receive(type, json_get(item, "data"));
         }
         json_free(queue);
-        if (ended) { sleep_follow_release(g_sleep.follow); g_sleep.follow = NULL; g_sleep.retry = now + (uint64_t)delay; g_sleep.snapshot = 0; }
+        if (now - g_sleep.stream_since >= 60000) g_sleep.failures = 0;
+        if (info.ended) {
+            sleep_follow_release(g_sleep.follow); g_sleep.follow = NULL;
+            if (g_sleep.failures < 6) g_sleep.failures++;
+            int delay = poll_delay_ms(3000, g_sleep.failures, info.retry_after);
+            if (info.status >= 400 && info.status < 500 && delay < 60000) delay = 60000;
+            g_sleep.retry = now + (uint64_t)delay; g_sleep.snapshot = 0;
+            // Catch up displayed transcripts from their last accepted seq after a real disconnect.
+            for (int i = 0; i < SLEEP_PANES; i++) g_sleep.history_at[i] = 0;
+        }
     }
     if (!g_sleep.sessions && now >= g_sleep.snapshot && store_supports("sessions")) {
         Request *r = store_call_background("sessions", json_object(), 15000, NULL, sessions_done, 0, &g_sleep.sessions); r->arg = (intptr_t)g_sleep.events_seen; g_sleep.snapshot = now + 30000;
@@ -270,7 +301,9 @@ static LRESULT CALLBACK input_hook(int code, WPARAM wp, LPARAM lp) {
     if (code >= 0 && wp == PM_REMOVE) {
         MSG *m = (MSG *)lp; UINT msg = m->message;
         bool key = msg >= WM_KEYFIRST && msg <= WM_KEYLAST;
-        bool mouse = msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST;
+        bool move = msg == WM_MOUSEMOVE || msg == WM_NCMOUSEMOVE;
+        if (move && !sleep_pointer_moved(&g_sleep.pointer, m->pt.x, m->pt.y)) return CallNextHookEx(g_sleep.hook, code, wp, lp);
+        bool mouse = (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || move;
         bool nc = msg >= WM_NCLBUTTONDOWN && msg <= WM_NCXBUTTONDBLCLK;
         if (key || mouse || nc) {
             unsigned button = 0;
@@ -306,6 +339,7 @@ void sleep_start(HWND main) {
     g_sleep.main = main; g_sleep.minutes = settings_read_sleep(); g_sleep.idle.input = now_ms();
     WNDCLASSW wc = {0}; wc.hInstance = GetModuleHandleW(NULL); wc.lpfnWndProc = window_proc; wc.lpszClassName = SLEEP_CLASS; wc.hCursor = LoadCursorW(NULL, IDC_ARROW); RegisterClassW(&wc);
     g_sleep.window = CreateWindowExW(0, SLEEP_CLASS, L"Session activity", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, main, NULL, wc.hInstance, NULL);
+    pointer_reset();
     g_sleep.hook = SetWindowsHookExW(WH_GETMESSAGE, input_hook, NULL, GetCurrentThreadId());
     if (g_sleep.hook && g_sleep.window) SetTimer(g_sleep.window, SLEEP_TIMER, 80, NULL);
 }

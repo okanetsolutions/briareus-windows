@@ -39,7 +39,10 @@ void attach_list_pick_files(AttachList *l) {
     ofn.lpstrFile = buf; ofn.nMaxFile = CHARS;
     ofn.lpstrTitle = L"Attach files";
     ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-    if (!GetOpenFileNameW(&ofn)) {
+    app_modal_begin(ofn.hwndOwner);
+    bool picked = GetOpenFileNameW(&ofn);
+    app_modal_end();
+    if (!picked) {
         if (CommDlgExtendedError() == FNERR_BUFFERTOOSMALL) app_alert("Attachments", "Too many files at once. Pick fewer.");
         free(buf); return;
     }

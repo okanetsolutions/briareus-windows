@@ -62,6 +62,13 @@ void probe_app_alert(const char *title, const char *message);
 #include "attachment_fixture.h"
 #include "../app/attach_queue.c"
 #include <commdlg.h>
+static int picker_depth, picker_begins, picker_ends;
+static void picker_modal_begin(HWND hwnd) { picker_depth++; picker_begins++; app_modal_begin(hwnd); }
+static void picker_modal_end(void) { CHECK_INT(picker_depth, 1); picker_depth--; picker_ends++; app_modal_end(); }
+static DWORD WINAPI picker_error(void) { return 0; }
+#define app_modal_begin picker_modal_begin
+#define app_modal_end picker_modal_end
+#define CommDlgExtendedError picker_error
 static BOOL WINAPI observed_picker(LPOPENFILENAMEW args);
 #define GetOpenFileNameW observed_picker
 #include "../app/attach_list.c"
@@ -99,6 +106,8 @@ static void count_limit_uses_current_reserved_slots(void) {
     DeleteFileW(path); DeleteFileW(empty); screen_fixture_clear(&f.screen);
 }
 static BOOL WINAPI observed_picker(LPOPENFILENAMEW args) {
+    CHECK_INT(picker_depth, 1);
+    if (picker_change == 3) return FALSE;
     if (picker_change == 0) { attach_list_free(failed_owner); failed_owner = NULL; }
     else if (picker_change == 1) attach_list_scope(failed_owner, "o/replacement");
     else g_store.client = NULL;
@@ -107,12 +116,13 @@ static BOOL WINAPI observed_picker(LPOPENFILENAMEW args) {
 }
 static void picker_discards_results_after_context_replacement(void) {
     Route routes[] = {{"POST", "/uploads", "manage"}, {"POST", "/sessions", "manage"}};
-    for (picker_change = 0; picker_change < 3; picker_change++) {
+    for (picker_change = 0; picker_change < 4; picker_change++) {
         ScreenFixture f; screen_fixture_init(&f, routes, 2); Screen screen = {0};
         failed_owner = attach_list_new(&screen, "start_session");
-        fail_schedule = true; failure_alerts = 0;
+        fail_schedule = true; failure_alerts = picker_begins = picker_ends = 0;
         attach_list_pick(failed_owner);
         CHECK_INT(failure_alerts, 0); CHECK_INT(f.writes, 0);
+        CHECK_INT(picker_begins, 1); CHECK_INT(picker_ends, 1); CHECK_INT(picker_depth, 0);
         if (failed_owner) { CHECK_INT(attach_list_count(failed_owner), 0); attach_list_free(failed_owner); failed_owner = NULL; }
         fail_schedule = false; g_store.client = f.client; screen_fixture_clear(&f);
     }

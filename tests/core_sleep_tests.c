@@ -110,7 +110,37 @@ static void seed_behind_live_text(void) {
     json_free(events); session_free(&s); sleep_wall_free(&w);
 }
 
+static void pointer_positions(void) {
+    SleepPointer p = {0}; CHECK(!sleep_pointer_moved(&p, 10, 20));
+    CHECK(!sleep_pointer_moved(&p, 10, 20)); CHECK(sleep_pointer_moved(&p, 11, 20));
+    CHECK(sleep_pointer_moved(&p, 11, 21)); CHECK(!sleep_pointer_moved(&p, 11, 21));
+    sleep_pointer_reset(&p, -50, 200); CHECK(!sleep_pointer_moved(&p, -50, 200));
+    CHECK(sleep_pointer_moved(&p, -49, 200));
+}
+static void bounded_connect_backlog(void) {
+    SleepInbox q = {0};
+    for (int k = 0; k < 220; k++) {
+        Json *s = json_object(); char *id = xstrfmt("closed%d", k); json_set_str(s, "id", id); free(id);
+        json_set_str(s, "status", "closed"); CHECK(sleep_inbox_push(&q, "session", s)); CHECK(q.count <= SLEEP_BACKLOG);
+    }
+    CHECK_INT(q.count, 128); CHECK(q.reconcile);
+    CHECK(sleep_inbox_push(&q, "session.deleted", json_parsez("{\"id\":\"deleted\"}")));
+    for (int k = 1; k <= 3; k++) {
+        Json *e = json_object(); json_set_num(e, "seq", k); CHECK(sleep_inbox_push(&q, "transcript", e));
+    }
+    bool reconcile = false; Json *batch = sleep_inbox_take(&q, &reconcile);
+    CHECK(reconcile); CHECK_INT(json_count(batch), 128); CHECK_INT(q.count, 0);
+    CHECK_STR(json_str(json_get(json_at(batch, 124), "type")), "session.deleted");
+    for (int k = 1; k <= 3; k++) CHECK_INT(json_int_or(json_get(json_get(json_at(batch, 124 + (size_t)k), "data"), "seq"), 0), k);
+    json_free(batch);
+    for (int k = 0; k < 128; k++) CHECK(sleep_inbox_push(&q, "transcript", json_number(k)));
+    CHECK(sleep_inbox_push(&q, "session", json_object())); // a snapshot alone cannot force a reconnect
+    CHECK(!sleep_inbox_push(&q, "transcript", json_number(128)));
+    CHECK_INT(q.count, 128); sleep_inbox_free(&q); CHECK_INT(q.count, 0);
+}
 void sleep_tests(void) {
+    test_run("sleep bounded distinct connect records retain ordered live events", bounded_connect_backlog);
+    test_run("sleep ignores stationary synthetic pointer moves and resets baseline", pointer_positions);
     test_run("sleep history seeds behind live text without rewinding live file", seed_behind_live_text);
     test_run("sleep bounded replay round robin", replay_round_robin);
     test_run("sleep idle and wake gestures", idle_and_gestures);

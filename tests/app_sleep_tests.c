@@ -6,15 +6,18 @@
 
 static ULONGLONG fake_time;
 static ULONGLONG WINAPI sleep_test_clock(void) { return fake_time; }
-static Json *queued;
+static SleepInbox queued;
+static bool fake_ended;
+static double fake_retry_after;
 static int followed, cancelled, released, saved_minutes = 5;
 struct SleepFollow { int unused; };
 static SleepFollow fake_follow;
 static SleepFollow *test_follow_new(void) { followed++; return &fake_follow; }
 static void test_follow_cancel(SleepFollow *f) { if (f) cancelled++; }
 static void test_follow_release(SleepFollow *f) { if (f) released++; }
-static Json *test_follow_drain(SleepFollow *f, bool *ended, int *delay) {
-    (void)f; *ended = false; *delay = 3000; Json *j = queued; queued = NULL; return j ? j : json_array();
+static Json *test_follow_drain(SleepFollow *f, SleepFollowInfo *info) {
+    (void)f; *info = (SleepFollowInfo){.ended = fake_ended, .retry_after = fake_retry_after};
+    return sleep_inbox_take(&queued, &info->reconcile);
 }
 static int test_read_sleep(void) { return saved_minutes; }
 static void test_write_sleep(int minutes) { saved_minutes = minutes; }
@@ -49,18 +52,17 @@ void test_sleep_pulse(uint64_t now);
 
 static Route routes[] = {{"GET", "/events", "read"}, {"GET", "/repo/file", "read"}, {"GET", "/sessions/{id}", "read"}};
 static void init(ScreenFixture *f) {
-    fake_time = 100; followed = cancelled = released = 0; saved_minutes = 5;
+    fake_time = 100; followed = cancelled = released = 0; saved_minutes = 5; fake_ended = false; fake_retry_after = 0;
     screen_fixture_init(f, routes, 1); // no snapshot/history/file capability until explicitly enabled
     f->parent = CreateWindowExW(0, L"STATIC", L"Sleep test", WS_POPUP, 0, 0, 900, 700, NULL, NULL, GetModuleHandleW(NULL), NULL);
     test_sleep_start(f->parent); CHECK(g_sleep.window != NULL);
 }
 static void pulse(ULONGLONG time) { fake_time = time; test_sleep_pulse(time); }
 static void event(const char *type, const char *data) {
-    if (!queued) queued = json_array();
-    Json *item = json_object(); json_set_str(item, "type", type); json_object_set(item, "data", json_parsez(data)); json_array_push(queued, item);
+    CHECK(sleep_inbox_push(&queued, type, json_parsez(data)));
 }
 static void clear(ScreenFixture *f) {
-    test_sleep_stop(); json_free(queued); queued = NULL; screen_fixture_clear(f);
+    test_sleep_stop(); sleep_inbox_free(&queued); screen_fixture_clear(f);
 }
 static void idle_modal_wake_and_reset(void) {
     ScreenFixture f; init(&f);
@@ -161,7 +163,81 @@ static void record_delete_then_add(void) {
     event("transcript", "{\"sessionId\":\"b\",\"event\":{\"seq\":2,\"kind\":\"cmd\",\"text\":\"still live\"}}");
     pulse(300260); CHECK_INT(g_sleep.record_count, 128); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "still live"); clear(&f);
 }
+static POINT native_mouse_point;
+static LRESULT CALLBACK inject_mouse_position(int code, WPARAM wp, LPARAM lp) {
+    MSG *m = (MSG *)lp;
+    if (code >= 0 && wp == PM_REMOVE && (m->message == WM_MOUSEMOVE || m->message == WM_NCMOUSEMOVE)) m->pt = native_mouse_point;
+    return CallNextHookEx(NULL, code, wp, lp);
+}
+static void stationary_moves_do_not_reset_or_wake(void) {
+    ScreenFixture f; init(&f); CHECK(GetCursorPos(&native_mouse_point)); MSG msg;
+    // Posted messages do not acquire native input coordinates consistently under Wine; inject the screen point
+    // before the real hook sees each queued move, without moving the machine's physical pointer.
+    HHOOK positions = SetWindowsHookExW(WH_GETMESSAGE, inject_mouse_position, NULL, GetCurrentThreadId());
+    CHECK(positions != NULL);
+    fake_time = 200000; uint64_t input = g_sleep.idle.input;
+    PostMessageW(f.parent, WM_MOUSEMOVE, 0, 0);
+    CHECK(PeekMessageW(&msg, f.parent, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE));
+    CHECK_INT(g_sleep.idle.input, input); CHECK_INT(msg.message, WM_MOUSEMOVE);
+    pulse(300100); CHECK(g_sleep.idle.asleep);
+    // Showing/reordering the child under the cursor must not turn a native synthetic move into input.
+    ShowWindow(f.parent, SW_SHOWNA); ShowWindow(g_sleep.window, SW_SHOWNA);
+    PostMessageW(g_sleep.window, WM_MOUSEMOVE, 0, 0);
+    CHECK(PeekMessageW(&msg, g_sleep.window, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE));
+    CHECK(g_sleep.idle.asleep); CHECK_INT(g_sleep.idle.input, input);
+    native_mouse_point.x++;
+    PostMessageW(g_sleep.window, WM_MOUSEMOVE, 0, 0);
+    CHECK(PeekMessageW(&msg, g_sleep.window, WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE));
+    CHECK(!g_sleep.idle.asleep); CHECK_INT(msg.message, WM_NULL);
+    fake_time += 1000; test_sleep_deactivated(); CHECK(GetCursorPos(&native_mouse_point)); input = g_sleep.idle.input;
+    PostMessageW(f.parent, WM_NCMOUSEMOVE, 0, 0);
+    CHECK(PeekMessageW(&msg, f.parent, WM_NCMOUSEMOVE, WM_NCMOUSEMOVE, PM_REMOVE));
+    CHECK_INT(g_sleep.idle.input, input);
+    UnhookWindowsHookEx(positions); clear(&f);
+}
+static bool has_session(const char *id) {
+    for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(session_id(&g_sleep.wall.panes[i].session), id)) return true;
+    return false;
+}
+static void large_connect_burst_reconciles_without_reconnecting(void) {
+    ScreenFixture f; init(&f);
+    Route stream_routes[] = {{"GET", "/events", "read"}, {"GET", "/sessions", "read"}};
+    g_store.routes = stream_routes; g_store.route_count = 2; f.block_read = true;
+    f.read_response = "{\"sessions\":[{\"id\":\"dropped\",\"repo\":\"o/r\",\"status\":\"running\"},{\"id\":\"live\",\"repo\":\"o/r\",\"status\":\"running\"}]}";
+    pulse(300100); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+    for (int k = 0; k < 220; k++) {
+        char *data = xstrfmt("{\"id\":\"archive%d\",\"repo\":\"o/r\",\"status\":\"closed\"}", k);
+        event("session", data); free(data); CHECK(queued.count <= SLEEP_BACKLOG);
+    }
+    event("session", "{\"id\":\"live\",\"repo\":\"o/r\",\"status\":\"running\"}");
+    event("transcript", "{\"sessionId\":\"live\",\"event\":{\"seq\":1,\"kind\":\"cmd\",\"text\":\"first\"}}");
+    pulse(300180); CHECK_INT(followed, 1); CHECK_INT(cancelled, 0);
+    CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "first"); CHECK(!has_session("dropped"));
+    SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK(!has_session("dropped")); // pre-burst snapshot is stale
+    f.block_read = false; pulse(301180);
+    event("transcript", "{\"sessionId\":\"live\",\"event\":{\"seq\":2,\"kind\":\"cmd\",\"text\":\"second\"}}");
+    pulse(301260); screen_fixture_pump(&f, 1);
+    CHECK(has_session("dropped")); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "second");
+    CHECK_INT(followed, 1); CHECK_INT(cancelled, 0); CHECK(g_sleep.record_count <= 128);
+    g_sleep.snapshot = 0; pulse(301340);
+    event("session.deleted", "{\"id\":\"dropped\"}"); pulse(301420); screen_fixture_pump(&f, 1);
+    CHECK(!has_session("dropped")); clear(&f);
+}
+static void stream_failures_increase_backoff(void) {
+    ScreenFixture f; init(&f); fake_ended = true;
+    pulse(300100); CHECK_INT(followed, 1); CHECK_INT(g_sleep.retry, 302100);
+    pulse(302099); CHECK_INT(followed, 1);
+    pulse(302100); CHECK_INT(followed, 2); CHECK_INT(g_sleep.retry, 306100);
+    pulse(306100); CHECK_INT(followed, 3); CHECK_INT(g_sleep.retry, 314100);
+    fake_ended = false; pulse(314100); CHECK_INT(followed, 4);
+    pulse(374100); CHECK_INT(g_sleep.failures, 0);
+    fake_ended = true; fake_retry_after = 9; pulse(374180); CHECK_INT(g_sleep.retry, 383180);
+    test_sleep_modal(true); CHECK_INT(g_sleep.failures, 0); test_sleep_modal(false); clear(&f);
+}
 void app_sleep_tests(void) {
+    test_run("sleep large connect burst retains stream live events and snapshot reconciliation", large_connect_burst_reconciles_without_reconnecting);
+    test_run("sleep genuine stream failures back off increasingly and reset after health", stream_failures_increase_backoff);
+    test_run("sleep stationary native mouse moves survive overlay activation", stationary_moves_do_not_reset_or_wake);
     test_run("sleep record deletion transfers ownership before reuse", record_delete_then_add);
     test_run("sleep replay branch fallback live takeover and missing files", replay_file_fallback_and_live_takeover);
     test_run("sleep native wake suppression settings modal lifecycle", idle_modal_wake_and_reset);

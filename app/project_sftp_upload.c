@@ -64,7 +64,9 @@ void project_sftp_upload_files(ProjectSftp *p, SftpSession *s, const char *folde
     ofn.lpstrFile = buf; ofn.nMaxFile = CHARS;
     ofn.lpstrTitle = wtitle;
     ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    app_modal_begin(ofn.hwndOwner);
     bool ok = GetOpenFileNameW(&ofn);
+    app_modal_end();
     free(title); free(wtitle);
     if (!ok) {
         if (CommDlgExtendedError() == FNERR_BUFFERTOOSMALL) app_alert("Upload", "Too many files at once. Pick fewer.");
@@ -97,7 +99,10 @@ wchar_t *project_sftp_pick_folder(HWND parent, const char *title) {
     dialog->lpVtbl->SetTitle(dialog, wtitle);
     free(wtitle);
     wchar_t *out = NULL;
-    if (SUCCEEDED(dialog->lpVtbl->Show(dialog, parent))) {
+    app_modal_begin(parent);
+    HRESULT shown = dialog->lpVtbl->Show(dialog, parent);
+    app_modal_end();
+    if (SUCCEEDED(shown)) {
         IShellItem *item = NULL;
         if (SUCCEEDED(dialog->lpVtbl->GetResult(dialog, &item))) {
             wchar_t *path = NULL;

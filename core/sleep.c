@@ -262,3 +262,9 @@ void sleep_seed(SleepWall *w, int pane, const Json *events, uint64_t now) {
     }
     w->last_live = live; p->seeded = true;
 }
+
+void sleep_pointer_reset(SleepPointer *p, int x, int y) { p->x = x; p->y = y; p->known = true; }
+bool sleep_pointer_moved(SleepPointer *p, int x, int y) {
+    bool moved = p->known && (p->x != x || p->y != y);
+    sleep_pointer_reset(p, x, y); return moved;
+}
