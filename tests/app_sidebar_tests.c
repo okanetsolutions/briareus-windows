@@ -213,6 +213,13 @@ static void test_footer_controls(void) {
                 wchar_t name[40]; GetWindowTextW(buttons[i], name, 40); CHECK(wcslen(name) > 0);
                 previous = r;
             }
+            HDC dc = GetDC(buttons[0]); RECT button_bounds; GetClientRect(buttons[0], &button_bounds);
+            DRAWITEMSTRUCT item = {0}; item.CtlType = ODT_BUTTON; item.CtlID = ACT_SSH;
+            item.hwndItem = buttons[0]; item.hDC = dc; item.rcItem = button_bounds;
+            item.itemState = ODS_SELECTED | ODS_FOCUS;
+            CHECK_INT(SendMessageW(pane_hwnd(f.pane), WM_DRAWITEM, ACT_SSH, (LPARAM)&item), TRUE);
+            item.CtlType = ODT_LISTBOX; CHECK(!s->vt->draw_control(s, &item));
+            ReleaseDC(buttons[0], dc);
             CHECK(s->vt->key(s, VK_TAB, false, false)); CHECK(GetFocus() == buttons[0]);
             SendMessageW(buttons[0], WM_KEYDOWN, VK_TAB, 0); CHECK(GetFocus() == buttons[1]);
             SendMessageW(buttons[1], WM_KEYDOWN, VK_ESCAPE, 0); CHECK(GetFocus() == pane_hwnd(f.pane));

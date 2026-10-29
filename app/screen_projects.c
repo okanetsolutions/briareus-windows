@@ -212,7 +212,7 @@ static bool projects_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
 static const ScreenVTable projects_vt = {
     .destroy = projects_destroy, .layout = projects_layout, .header = projects_header, .action = projects_action,
     .timer = projects_timer, .visible = projects_visible, .refresh = projects_refresh, .activated = projects_activated,
-    .key = projects_key, .command = screen_projects_footer_command, .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
+    .key = projects_key, .draw_control = screen_projects_footer_draw, .command = screen_projects_footer_command, .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
     .footer_press = projects_footer_press, .footer_drag = projects_footer_drag, .footer_wheel = projects_footer_wheel,
 };
 

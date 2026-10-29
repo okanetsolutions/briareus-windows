@@ -226,7 +226,7 @@ static bool sessions_key_press(Screen *base, WPARAM vk, bool ctrl, bool shift) {
 static const ScreenVTable sessions_vt = {
     .destroy = sessions_destroy, .layout = sessions_layout, .header = sessions_header, .action = sessions_action,
     .timer = sessions_timer, .visible = sessions_visible, .refresh = sessions_refresh, .activated = sessions_activated,
-    .command = screen_projects_footer_command, .footer_height = screen_projects_sessions_footer_height, .footer_paint = screen_projects_sessions_footer_paint, .footer_click = screen_projects_sessions_footer_click,
+    .draw_control = screen_projects_footer_draw, .command = screen_projects_footer_command, .footer_height = screen_projects_sessions_footer_height, .footer_paint = screen_projects_sessions_footer_paint, .footer_click = screen_projects_sessions_footer_click,
     .footer_press = screen_projects_sessions_footer_press, .footer_drag = screen_projects_sessions_footer_drag, .footer_wheel = screen_projects_sessions_footer_wheel, .key = sessions_key_press,
 };
 

@@ -46,6 +46,8 @@ typedef struct ScreenVTable {
     /// The screen is (or stops being) the pane's top: start or stop polling, show or hide controls.
     void (*visible)(Screen *s, bool shown);
     void (*command)(Screen *s, int id, int code, HWND control);
+    /// Paints an owner-drawn native child control; true when handled.
+    bool (*draw_control)(Screen *s, const DRAWITEMSTRUCT *item);
     /// A key press while the pane has focus; return true when handled.
     bool (*key)(Screen *s, WPARAM vk, bool ctrl, bool shift);
     /// F5 or the refresh button: read everything again.

@@ -1036,6 +1036,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (s && s->vt->timer) s->vt->timer(s, (UINT)wp);
         return 0;
+    case WM_DRAWITEM: if (s && s->vt->draw_control && s->vt->draw_control(s, (const DRAWITEMSTRUCT *)lp)) return TRUE; break;
     case WM_COMMAND: if (find_command(p, (HWND)lp, HIWORD(wp))) return 0; if (s && s->vt->command) s->vt->command(s, LOWORD(wp), HIWORD(wp), (HWND)lp); return 0;
     case WM_KEYDOWN: {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0, shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;

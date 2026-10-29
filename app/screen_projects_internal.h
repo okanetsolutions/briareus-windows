@@ -68,6 +68,7 @@ typedef struct {
     char *bulk_error;
 } SessionsScreen;
 
+bool screen_projects_footer_draw(Screen *s, const DRAWITEMSTRUCT *item);
 bool screen_projects_footer_key(FooterRects *f, WPARAM vk, bool ctrl, bool shift);
 void screen_projects_footer_controls(Screen *s, FooterRects *f);
 void screen_projects_footer_hide(FooterRects *f);

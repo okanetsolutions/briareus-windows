@@ -9,16 +9,6 @@ static const wchar_t glyphs[] = { 0xE756, 0xE713, 0xE8AC };
 
 static LRESULT CALLBACK button_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     FooterRects *f = (FooterRects *)ref;
-    if (msg == WM_PAINT) {
-        PAINTSTRUCT ps; HDC dc = BeginPaint(hwnd, &ps); RECT rc; GetClientRect(hwnd, &rc);
-        Canvas *cv = canvas_begin_dc(dc, &rc);
-        POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
-        bool hot = PtInRect(&rc, pt), focused = GetFocus() == hwnd;
-        fill_rect(cv, &rc, theme.sidebar);
-        fill_round_rect(cv, &rc, px(7), (SendMessageW(hwnd, BM_GETSTATE, 0, 0) & BST_PUSHED) ? theme.accent_dim : theme.raise, hot || focused ? theme.accent : theme.line);
-        draw_glyph(cv, glyphs[id], &rc, FONT_ICON_SMALL, theme.ink);
-        canvas_end_dc(cv); EndPaint(hwnd, &ps); return 0;
-    }
     if (msg == WM_SETCURSOR) { SetCursor(LoadCursorW(NULL, IDC_HAND)); return TRUE; }
     if (msg == WM_KEYDOWN && wp == VK_TAB) {
         int step = GetKeyState(VK_SHIFT) & 0x8000 ? -1 : 1;
@@ -31,17 +21,35 @@ static LRESULT CALLBACK button_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, U
     }
     if (msg == WM_CHAR && (wp == VK_TAB || wp == VK_ESCAPE)) return 0;
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFocus(GetParent(hwnd)); return 0; }
+    if (msg == WM_MOUSEMOVE) {
+        TRACKMOUSEEVENT tracking = { sizeof tracking, TME_LEAVE, hwnd, 0 }; TrackMouseEvent(&tracking);
+    }
     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_MOUSEMOVE || msg == WM_MOUSELEAVE)
         InvalidateRect(hwnd, NULL, FALSE);
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, button_proc, id);
     return DefSubclassProc(hwnd, msg, wp, lp);
+}
+bool screen_projects_footer_draw(Screen *s, const DRAWITEMSTRUCT *item) {
+    if (!item || item->CtlType != ODT_BUTTON || GetParent(item->hwndItem) != pane_hwnd(s->pane)) return false;
+    for (int i = 0; i < 3; i++) if (item->CtlID == (UINT)actions[i]) {
+        RECT rc = item->rcItem;
+        Canvas *cv = canvas_begin_dc(item->hDC, &rc);
+        POINT pt; GetCursorPos(&pt); ScreenToClient(item->hwndItem, &pt);
+        bool hot = PtInRect(&rc, pt), focused = (item->itemState & ODS_FOCUS) != 0;
+        COLORREF fill = item->itemState & ODS_SELECTED ? theme.accent_dim : theme.raise;
+        fill_rect(cv, &rc, theme.sidebar);
+        fill_round_rect(cv, &rc, px(7), fill, hot || focused ? theme.accent : theme.line);
+        draw_glyph(cv, glyphs[i], &rc, FONT_ICON_SMALL, theme.ink);
+        canvas_end_dc(cv); return true;
+    }
+    return false;
 }
 void screen_projects_footer_controls(Screen *s, FooterRects *f) {
     RECT *rects[] = { &f->ssh_rc, &f->settings_rc, &f->signout_rc };
     HWND parent = pane_hwnd(s->pane);
     for (int i = 0; i < 3; i++) {
         if (!f->buttons[i]) {
-            f->buttons[i] = CreateWindowExW(0, L"BUTTON", names[i], WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+            f->buttons[i] = CreateWindowExW(0, L"BUTTON", names[i], WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
                 0, 0, 0, 0, parent, (HMENU)(INT_PTR)actions[i], GetModuleHandleW(NULL), NULL);
             SetWindowSubclass(f->buttons[i], button_proc, (UINT_PTR)i, (DWORD_PTR)f);
             theme_apply_control(f->buttons[i]);
