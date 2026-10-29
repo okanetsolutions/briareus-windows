@@ -39,9 +39,9 @@ typedef struct {
 
 /// The foot: `☑ Select` 13px muted and the version (the waiting release's in the accent, opening the updates menu), then
 /// at the right the ⚙ Settings icon button and the `⎋ Sign out` button, above a border, under the player.
-// PowerButton in both Segoe Fluent Icons and Segoe MDL2 Assets:
-// https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-ui-symbol-font
-enum { FOOT_BUTTON = 32, FOOT_SIGN_OUT_GLYPH = 0xE7E8 };
+// SignOut in both Segoe Fluent Icons and Segoe MDL2 Assets:
+// https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-ui-symbol-font#pua-f300-f500
+enum { FOOT_BUTTON = 32, FOOT_SIGN_OUT_GLYPH = 0xF3B1 };
 
 // MARK: - Projects
 
