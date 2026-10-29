@@ -43,3 +43,9 @@ count refresh, project/server isolation, held navigation and teardown. Windows C
 executes these tests; a local MinGW cross-build alone is compilation evidence.
 No new Win32 APIs or dependencies were introduced; existing edit/control and region
 APIs are reused, including the APIs already consumed by the Switch shim.
+
+The overview centers a capped two-column layout on wide panes and stacks Working
+below questions on narrow panes. Totals appear once; unavailable totals use an
+unknown marker rather than zero. Titles and option values wrap without clipping.
+The native reply field has a preceding label, with no repeated cue banner, and
+keeps the same control and draft through refresh, scroll and resize.

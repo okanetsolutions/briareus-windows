@@ -138,6 +138,7 @@ void projects_recount_findings(void) { screen_projects_recount(app_sidebar_pane(
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_sessions); poller_stop(&s->poller);
+    screen_projects_footer_free(&s->footer);
     projects_free(s->projects, s->count); free(s->counts); free(s->busy); free(s->error);
     screen_release(base);
 }
@@ -162,7 +163,7 @@ static void projects_header(Screen *base, HeaderInfo *info) { (void)base; (void)
 
 static int projects_footer_height(Screen *base, int width) { (void)base; return screen_projects_sidebar_footer_height(width); }
 
-static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; screen_projects_sidebar_footer_paint(cv, rc, &s->footer, false); }
+static void projects_footer_paint(Screen *base, Canvas *cv, const RECT *rc) { ProjectsScreen *s = (ProjectsScreen *)base; screen_projects_sidebar_footer_paint(cv, rc, &s->footer, false); screen_projects_footer_controls(base, &s->footer); }
 
 static bool projects_footer_press(Screen *base, POINT pt) { return screen_projects_player_press(base->pane, &((ProjectsScreen *)base)->footer, pt); }
 
@@ -174,6 +175,7 @@ static void projects_footer_click(Screen *base, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (screen_projects_player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.version_rc, pt)) { updater_menu(base->pane, pt); return; }
+    if (PtInRect(&s->footer.ssh_rc, pt)) screen_projects_sidebar_common_action(base->pane, ACT_SSH);
     if (PtInRect(&s->footer.settings_rc, pt)) screen_projects_sidebar_common_action(base->pane, ACT_SETTINGS);
     if (PtInRect(&s->footer.signout_rc, pt)) screen_projects_sidebar_common_action(base->pane, ACT_SIGN_OUT);
 }
@@ -193,6 +195,7 @@ static void projects_timer(Screen *base, UINT id) {
 }
 
 static void projects_visible(Screen *base, bool shown) {
+    if (!shown) screen_projects_footer_hide(&((ProjectsScreen *)base)->footer);
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (shown) { projects_count(s); poller_start(&s->poller, base->pane, TIMER_POLL, 30000); }
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_sessions); }
@@ -202,10 +205,14 @@ static void projects_refresh(Screen *base) { ProjectsScreen *s = (ProjectsScreen
 
 static void projects_activated(Screen *base, bool active) { if (active) projects_visible(base, true); }
 
+static bool projects_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
+    return screen_projects_footer_key(&((ProjectsScreen *)base)->footer, vk, ctrl, shift);
+}
+
 static const ScreenVTable projects_vt = {
     .destroy = projects_destroy, .layout = projects_layout, .header = projects_header, .action = projects_action,
     .timer = projects_timer, .visible = projects_visible, .refresh = projects_refresh, .activated = projects_activated,
-    .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
+    .key = projects_key, .command = screen_projects_footer_command, .footer_height = projects_footer_height, .footer_paint = projects_footer_paint, .footer_click = projects_footer_click,
     .footer_press = projects_footer_press, .footer_drag = projects_footer_drag, .footer_wheel = projects_footer_wheel,
 };
 

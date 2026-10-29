@@ -39,6 +39,7 @@ void screen_projects_sessions_footer_paint(Screen *base, Canvas *cv, const RECT 
     }
     RECT foot = { rc->left, y, rc->right, rc->bottom };
     screen_projects_sidebar_footer_paint(cv, &foot, &s->footer, s->select_mode);
+    screen_projects_footer_controls(base, &s->footer);
 }
 
 bool screen_projects_sessions_footer_press(Screen *base, POINT pt) { return screen_projects_player_press(base->pane, &((SessionsScreen *)base)->footer, pt); }
@@ -52,6 +53,7 @@ void screen_projects_sessions_footer_click(Screen *base, POINT pt) {
     if (screen_projects_player_click(base->pane, &s->footer, pt)) return;
     if (PtInRect(&s->footer.select_rc, pt)) { s->select_mode = !s->select_mode; if (!s->select_mode) screen_projects_clear_picks(s); pane_footer_changed(base->pane); return; }
     if (PtInRect(&s->footer.version_rc, pt)) { updater_menu(base->pane, pt); return; }
+    if (PtInRect(&s->footer.ssh_rc, pt)) { screen_projects_sidebar_common_action(base->pane, ACT_SSH); return; }
     if (PtInRect(&s->footer.settings_rc, pt)) { screen_projects_sidebar_common_action(base->pane, ACT_SETTINGS); return; }
     if (PtInRect(&s->footer.signout_rc, pt)) { screen_projects_sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;

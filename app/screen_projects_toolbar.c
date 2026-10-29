@@ -98,11 +98,6 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
     doc_space(doc, px(14));
-    if (project_ssh_offered()) {
-        int item = doc_button(doc, 0, w, "❯ SSH servers", BUTTON_PLAIN, ACT_SSH, 0, true);
-        doc_item(doc, item)->tip = xstrdup("SSH servers (Ctrl+Shift+H)");
-        doc_space(doc, px(8));
-    }
     doc_pin(doc, (int)doc->count, doc->y);
 }
 
@@ -211,34 +206,40 @@ bool screen_projects_player_wheel(Pane *pane, const FooterRects *f, POINT pt, in
     return true;
 }
 
-int screen_projects_sidebar_footer_height(int width) { (void)width; return player_height() + px(6) + 1 + px(8) + px(FOOT_BUTTON) + px(8); }
+int screen_projects_sidebar_footer_height(int width) { return (width < px(250) ? px(22) : 0) + player_height() + px(6) + 1 + px(8) + px(FOOT_BUTTON) + px(8); }
 
 void screen_projects_sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRects *out, bool select_on) {
     fill_rect(cv, rc, theme.sidebar);
     int top = player_paint(cv, rc, out) + px(6);
     draw_line(cv, rc->left + px(10), top, rc->right - px(10), top, theme.line);
     int y = top + 1 + px(8), h = px(FOOT_BUTTON);
+    bool stacked = rc->right - rc->left < px(250);
+    if (stacked) y += px(22);
     int left = rc->left + px(16), right = rc->right - px(10);
     bool update = false;
-    const char *sel = "\xE2\x98\x91 Select", *out_ = "\xE2\x8E\x8B Sign out", *version = updater_label(&update);
-    int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = text_width(cv, out_, FONT_CAPTION) + px(20), vw = text_width(cv, version, FONT_CAPTION2);
+    const char *sel = "\xE2\x98\x91 Select", *version = updater_label(&update);
+    int sw = text_width(cv, sel, FONT_FOOTNOTE), ow = h, vw = text_width(cv, version, FONT_CAPTION2);
     RECT c = { right - ow, y, right, y + h }, g = { c.left - px(6) - h, y, c.left - px(6), y + h };
+    RECT ssh = { g.left - px(6) - h, y, g.left - px(6), y + h };
+    if (!project_ssh_offered()) SetRectEmpty(&ssh);
+    int buttons_left = IsRectEmpty(&ssh) ? g.left : ssh.left;
     RECT a = { left, y, left + sw, y + h };
     // The version sits between ☑ Select and the buttons, and gives way when the sidebar is too narrow for it.
-    int mid = (a.right + g.left) / 2;
+    int mid = (a.right + buttons_left) / 2;
     RECT v = { mid - vw / 2, y, mid + vw / 2 + 1, y + h };
     draw_text(cv, sel, &a, FONT_FOOTNOTE, select_on ? theme.ink : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     out->version_rc = (RECT){ 0, 0, 0, 0 };
-    if (v.left > a.right + px(6)) {
+    if (stacked) v = (RECT){ left, y - px(22), right, y - px(2) };
+    if (stacked || v.left > a.right + px(6)) {
         draw_text(cv, version, &v, FONT_CAPTION2, update ? theme.accent : theme.tertiary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         out->version_rc = v; InflateRect(&out->version_rc, px(4), 0);
     }
     fill_round_rect(cv, &g, px(7), theme.raise, theme.line);
     draw_text(cv, "\xE2\x9A\x99", &g, FONT_EMOJI, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     fill_round_rect(cv, &c, px(7), theme.raise, theme.line);
-    draw_text(cv, out_, &c, FONT_CAPTION, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_glyph(cv, 0xE8AC, &c, FONT_ICON_SMALL, theme.ink);
     InflateRect(&a, px(4), 0);
-    out->select_rc = a; out->settings_rc = g; out->signout_rc = c;
+    out->select_rc = a; out->ssh_rc = ssh; out->settings_rc = g; out->signout_rc = c;
 }
 
 static void sign_out(void) {

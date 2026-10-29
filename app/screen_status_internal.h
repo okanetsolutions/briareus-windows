@@ -16,9 +16,9 @@ typedef struct {
     Transcript transcript;
     bool present, confirmed, answered, laid;
     char *draft, *error, *read_error;
-    HWND edit;
+    HWND label, edit;
     intptr_t reply_action; // rendered Send action, invalidated with the document
-    RECT rect;
+    RECT label_rect, rect;
 } StatusCard;
 typedef struct { size_t card; int option; } StatusAction;
 typedef struct {

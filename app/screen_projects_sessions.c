@@ -148,6 +148,7 @@ void screen_projects_bulk_start(SessionsScreen *s, bool del, bool all) {
 }
 
 static void sessions_destroy(Screen *base) {
+    screen_projects_footer_free(&((SessionsScreen *)base)->footer);
     SessionsScreen *s = (SessionsScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_bulk); poller_stop(&s->poller);
     sessions_free(s->sessions, s->count); project_free(&s->project); free(s->error); free(s->bulk_error);
@@ -206,6 +207,7 @@ static void sessions_timer(Screen *base, UINT id) {
 }
 
 static void sessions_visible(Screen *base, bool shown) {
+    if (!shown) screen_projects_footer_hide(&((SessionsScreen *)base)->footer);
     SessionsScreen *s = (SessionsScreen *)base;
     if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 7000); else { poller_stop(&s->poller); request_cancel(&s->req); }
 }
@@ -215,8 +217,8 @@ static void sessions_refresh(Screen *base) { SessionsScreen *s = (SessionsScreen
 static void sessions_activated(Screen *base, bool active) { if (active) { SessionsScreen *s = (SessionsScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
 
 static bool sessions_key_press(Screen *base, WPARAM vk, bool ctrl, bool shift) {
-    (void)ctrl; (void)shift;
     SessionsScreen *s = (SessionsScreen *)base;
+    if (screen_projects_footer_key(&s->footer, vk, ctrl, shift)) return true;
     if (vk == VK_ESCAPE && s->select_mode) { s->select_mode = false; screen_projects_clear_picks(s); pane_footer_changed(base->pane); return true; }
     return false;
 }
@@ -224,7 +226,7 @@ static bool sessions_key_press(Screen *base, WPARAM vk, bool ctrl, bool shift) {
 static const ScreenVTable sessions_vt = {
     .destroy = sessions_destroy, .layout = sessions_layout, .header = sessions_header, .action = sessions_action,
     .timer = sessions_timer, .visible = sessions_visible, .refresh = sessions_refresh, .activated = sessions_activated,
-    .footer_height = screen_projects_sessions_footer_height, .footer_paint = screen_projects_sessions_footer_paint, .footer_click = screen_projects_sessions_footer_click,
+    .command = screen_projects_footer_command, .footer_height = screen_projects_sessions_footer_height, .footer_paint = screen_projects_sessions_footer_paint, .footer_click = screen_projects_sessions_footer_click,
     .footer_press = screen_projects_sessions_footer_press, .footer_drag = screen_projects_sessions_footer_drag, .footer_wheel = screen_projects_sessions_footer_wheel, .key = sessions_key_press,
 };
 

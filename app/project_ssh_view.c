@@ -113,8 +113,9 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
     }
     project_ssh_load(p);
     RECT view = pane_content_rect(p->host->pane);
+    doc_space(doc, px(16));
     int top = doc->y, bottom = top + (view.bottom - view.top) - top - px(14);
-    if (bottom < top + px(240)) bottom = top + px(240);
+    if (bottom < top) bottom = top;
     int lw = p->global ? px(320) : px(LIST_W);
     if (lw > w * 2 / 5) lw = w * 2 / 5;
     int first = (int)doc->count;
