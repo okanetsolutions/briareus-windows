@@ -138,7 +138,7 @@ const char *filter_kind_name(FilterKind kind);
 
 /// An errand the board runs on a pull request: a paid session started with a prompt the server owns.
 typedef struct { char *label, *placeholder; bool required; } ActionInput;
-typedef struct { char *id, *label, *hint; bool has_input; ActionInput input; } BoardAction;
+typedef struct { char *id, *label, *hint; bool has_input; ActionInput input; char *binary; bool advertised; } BoardAction;
 void board_action_free(BoardAction *action);
 void board_action_copy(BoardAction *into, const BoardAction *from);
 /// The call that starts it: `serve_pull` for Run, `review` for Code review, and `action` (with the errand's id) for the rest.

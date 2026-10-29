@@ -33,7 +33,7 @@ typedef struct {
     Screen base;
     Session initial, snapshot; bool has_snapshot;
     Transcript transcript;
-    bool loaded, restored, unsaved, retimed;
+    bool loaded, restored, unsaved, retimed, removed;
     bool busy, loading, uncertain, pending_full, pending_refresh, renaming, dialog_open;
     bool reloading;   // a mutation landed and the session it changed is not read yet
     char *error, *write_error;
@@ -61,6 +61,7 @@ typedef struct {
 enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
 
 const Session *screen_conversation_session(ConversationScreen *s);
+bool screen_conversation_review_removed(ConversationScreen *s, const Request *req);
 bool screen_conversation_can_message(ConversationScreen *s);
 bool screen_conversation_can_compose(ConversationScreen *s);
 void screen_conversation_prompts_init(ConversationScreen *s);

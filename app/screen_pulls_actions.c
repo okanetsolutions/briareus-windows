@@ -17,10 +17,12 @@ const char *screen_pulls_action_icon(const char *id) {
     return "";
 }
 
-/// Asks for an errand's input when it takes one; the others start straight away. True to go ahead.
-bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input) {
-    *input = NULL;
-    if (a->has_input) return dialog_action_input(app_dialog_owner(), source, repo, a, number, input);
+/// Collects input and, for a restricted CLI, a verified runtime. True to go ahead.
+bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input, RuntimeChoice *runtime) {
+    *input = NULL; memset(runtime, 0, sizeof *runtime);
+    if (!store_can_manage()) return false;
+    if (a->has_input && !dialog_action_input(app_dialog_owner(), source, repo, a, number, input)) return false;
+    if (!str_empty(a->binary)) return dialog_action_runtime(app_dialog_owner(), source, repo, a->binary, runtime);
     return true;
 }
 
@@ -31,6 +33,7 @@ BoardAction *screen_pulls_row_actions(const Json *catalog, const PullSummary *pu
     size_t n; BoardAction *offered = board_actions_offered(catalog, pull, failed_checks, &n);
     BoardAction *out = xcalloc(n, sizeof *out);
     for (size_t i = 0; i < n; i++) {
+        if (!offered[i].advertised && !str_eq(offered[i].id, "run") && store_supports("actions")) continue;
         char *op = board_action_operation(&offered[i]);
         if (store_supports(op)) board_action_copy(&out[(*count)++], &offered[i]);
         free(op);

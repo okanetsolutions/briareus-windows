@@ -38,7 +38,7 @@ static void pulls_destroy(Screen *base) {
     project_files_free(s->files);
     board_filter_free(&s->pull_filter); board_filter_free(&s->issue_filter); board_filter_free(&s->opening);
     issue_folds_free(&s->issue_folds);
-    project_free(&s->project); free(s->error); free(s->write_error); free(s->starting_id);
+    project_free(&s->project); free(s->error); free(s->write_error); free(s->start_device); free(s->starting_id);
     screen_release(base);
 }
 
@@ -92,20 +92,20 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &s->issues[arg])); break;
     case ACT_PULL_ACTION: {
         size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;
-        if (index >= s->pull_count || s->busy || s->uncertain) break;
+        if (index >= s->pull_count || s->busy || s->uncertain || s->dialog_open) break;
         // The rows may be replaced while the prompt is up, so what the start needs is copied first.
         int number = s->pulls[index].number; char *branch = xstrdup(s->pulls[index].branch ? s->pulls[index].branch : "");
         size_t an; BoardAction *actions = screen_pulls_row_actions(s->catalog, &s->pulls[index], 0, &an);
         if (k < an && str_eq(actions[k].id, "run")) screen_pulls_board_open_run(s, index);
         else if (k < an) {
-            char *input = NULL;
+            char *input = NULL; RuntimeChoice runtime = {0};
             Pane *source_pane = base->pane; HWND source_window = pane_hwnd(source_pane);
             s->dialog_open = true;
-            bool ok = screen_pulls_action_prompt(base, s->project.repo, &actions[k], number, &input);
+            bool ok = screen_pulls_action_prompt(base, s->project.repo, &actions[k], number, &input, &runtime);
             bool current = IsWindow(source_window) && pane_top(source_pane) == base;
             if (current) s->dialog_open = false;
-            if (ok && current) screen_pulls_board_start(s, number, branch, &actions[k], input);
-            free(input);
+            if (ok && current) screen_pulls_board_start(s, number, branch, &actions[k], input, &runtime);
+            runtime_choice_free(&runtime); free(input);
         }
         board_actions_free(actions, an); free(branch);
         break;

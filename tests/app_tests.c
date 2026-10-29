@@ -10,6 +10,7 @@ int main(void) {
     app_webhook_tests();
     app_leave_tests();
     app_conversation_tests();
+    app_action_runtime_tests();
     app_format_tests();
     app_common_tests();
     app_sidebar_tests();

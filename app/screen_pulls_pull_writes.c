@@ -9,6 +9,8 @@ static void decide_done(void *owner, Request *req);
 static void start_done(void *owner, Request *req) {
     PullScreen *s = owner;
     s->busy = false;
+    if (req->client != g_store.client || !str_eq(s->start_device, g_store.device.id)) { pane_relayout(s->base.pane); return; }
+    if (!str_eq(json_str(json_get(req->args, "repo")), s->project.repo) || !store_can_manage()) { pane_relayout(s->base.pane); return; }
     if (req->ok) {
         set_string(&s->write_error, NULL);
         // The pull request stays shown; the new session joins its runs.
@@ -21,12 +23,15 @@ static void start_done(void *owner, Request *req) {
     pane_relayout(s->base.pane);
 }
 
-void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const char *input) {
+void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const char *input, const RuntimeChoice *runtime) {
     const char *branch = json_str(json_get(s->pr, "headRef"));
-    if (s->busy || s->uncertain || !branch) return;
+    if (s->busy || s->uncertain || !store_can_manage() || !branch) return;
+    if (!str_empty(action->binary) && (!runtime || runtime->provider_id <= 0)) return;
+    set_string(&s->start_device, g_store.device.id);
     s->busy = true;
     char *op = board_action_operation(action);
     Json *args = board_action_arguments(action, s->project.repo, s->number, branch, input);
+    if (runtime && runtime->provider_id) { Json *rt = runtime_choice_arguments(runtime); json_object_merge(args, rt); json_free(rt); }
     store_call(op, args, board_action_timeout_ms(action), s, start_done, TAG_START, &s->req_start);
     free(op);
     pane_relayout(s->base.pane);

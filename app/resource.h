@@ -69,3 +69,5 @@
 #define IDS_APP_TITLE           1000
 
 #endif
+
+#define IDD_ACTION_RUNTIME 1000

@@ -398,6 +398,7 @@ Json *transcript_json(const Transcript *t) {
 
 static void runtime_model_free(RuntimeModel *m) { free(m->id); free(m->label); str_array_free(m->efforts, m->effort_count); free(m->default_effort); }
 static void runtime_provider_free(RuntimeProvider *p) {
+    free(p->binary);
     free(p->label); free(p->default_model);
     for (size_t i = 0; i < p->model_count; i++) runtime_model_free(&p->models[i]);
     free(p->models);
@@ -444,6 +445,7 @@ bool runtime_catalog_parse(const Json *value, RuntimeCatalog *out) {
         RuntimeProvider *p = &out->providers[out->provider_count++];
         p->id = (int)id; p->label = xstrdup(label); p->available = json_bool_tristate(json_get(pv, "available"));
         p->default_model = json_dup_str(json_get(pv, "defaultModel"));
+        p->binary = json_dup_str(json_get(pv, "binary"));
         size_t mn = json_count(models);
         p->models = xcalloc(mn, sizeof *p->models);
         for (size_t j = 0; j < mn; j++) {
@@ -458,6 +460,38 @@ bool runtime_catalog_parse(const Json *value, RuntimeCatalog *out) {
     }
     return true;
 }
+// /runtimes and /providers use the first active member's id for each account group.
+bool runtime_catalog_for_binary(const Json *value, const Json *providers, const char *binary, RuntimeCatalog *out) {
+    if (!runtime_catalog_parse(value, out)) return false;
+    const Json *entries = json_get(providers, "providers");
+    size_t n = 0;
+    for (size_t i = 0; i < out->provider_count; i++) {
+        RuntimeProvider *p = &out->providers[i];
+        bool available = runtime_provider_available(p);
+        if (str_empty(p->binary)) {
+            for (size_t j = 0; j < json_count(entries); j++) {
+                const Json *entry = json_at(entries, j);
+                if (json_int_or(json_get(entry, "id"), 0) != p->id) continue;
+                free(p->binary); p->binary = json_dup_str(json_get(entry, "binary"));
+                available = available && !json_bool_is(json_get(entry, "available"), false)
+                    && !json_bool_is(json_get(json_get(entry, "auth"), "loggedIn"), false);
+                break;
+            }
+        }
+        if (!available || !str_eq(p->binary, binary) || !p->model_count) { runtime_provider_free(p); continue; }
+        if (n != i) out->providers[n] = *p;
+        n++;
+    }
+    out->provider_count = n;
+    if (out->has_default) {
+        RuntimeChoice valid;
+        bool offered = runtime_catalog_offered(out, &out->def, &valid);
+        runtime_choice_free(&out->def); out->has_default = offered;
+        if (offered) out->def = valid;
+    }
+    return true;
+}
+
 Json *runtime_catalog_json(const RuntimeCatalog *c) {
     Json *o = json_object();
     json_object_set(o, "default", c->has_default ? runtime_choice_json(&c->def) : json_null());
@@ -465,6 +499,7 @@ Json *runtime_catalog_json(const RuntimeCatalog *c) {
     for (size_t i = 0; i < c->provider_count; i++) {
         const RuntimeProvider *p = &c->providers[i];
         Json *pj = json_object();
+        if (p->binary) json_set_str(pj, "binary", p->binary);
         json_set_num(pj, "id", p->id); json_set_str(pj, "label", p->label);
         if (p->available >= 0) json_set_bool(pj, "available", p->available == 1);
         json_object_set(pj, "defaultModel", json_string_or_null(p->default_model));

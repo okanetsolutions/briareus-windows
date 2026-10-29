@@ -313,6 +313,7 @@ static const ApiRoute ROUTES[] = {
     { "projects", "GET", "projects" },
     { "branches", "GET", "branches" },
     { "runtimes", "GET", "runtimes" },
+    { "providers", "GET", "providers" },
     { "usage", "GET", "usage" },
     { "usage_all", "GET", "usage/all" },                   // every project's spend; a filter given as an array repeats
     { "actions", "GET", "actions" },

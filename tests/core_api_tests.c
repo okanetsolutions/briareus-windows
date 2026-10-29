@@ -283,7 +283,7 @@ static void test_unauthorized_is_only_a_401_and_refusals_are_only_4xx(void) {
 
 typedef struct { const char *name, *method, *path, *set, *filter, *list; } Expected;
 static const Expected ROUTE_TABLE[] = {
-    { "projects", "GET", "projects" }, { "branches", "GET", "branches" }, { "runtimes", "GET", "runtimes" }, { "usage", "GET", "usage" },
+    { "projects", "GET", "projects" }, { "branches", "GET", "branches" }, { "runtimes", "GET", "runtimes" }, { "providers", "GET", "providers" }, { "usage", "GET", "usage" },
     { "usage_all", "GET", "usage/all" }, { "actions", "GET", "actions" }, { "action", "POST", "actions" },
     { "pulls", "GET", "pulls" }, { "pull", "GET", "pulls/{pr}" }, { "pull_description", "GET", "pulls/{pr}/description" },
     { "pull_files", "GET", "pulls/{pr}/files" }, { "pull_comments", "GET", "pulls/{pr}/comments" }, { "pull_reviews", "GET", "pulls/{pr}/reviews" },

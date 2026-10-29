@@ -74,7 +74,7 @@ typedef struct {
     Request *req_actions, *req_start;
     bool busy, uncertain, dialog_open;
     int starting_number; char *starting_id;
-    char *write_error;
+    char *write_error, *start_device;
     int merging_number; Request *req_merge;   // the pull request being merged: read for its head first, then merged
     // The Status each linked issue has on its project board, by issue number, from that issue's own read (saved, and
     // shared with the issue and pull request screens). `status_read` holds the ones read this visit; one at a time.
@@ -151,6 +151,7 @@ typedef struct {
     Json *issue_projects, *issue_incoming; bool issues_read; Request *req_issue;
     int issue_round[LINKED_ISSUES_MAX]; size_t issue_round_count;
     int *open_findings; size_t open_finding_count;
+    char *start_device;
     BoardAction *actions; size_t action_count;
     Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_body, *req_delete_run;
     Poller poller;
@@ -211,7 +212,7 @@ typedef struct {
 typedef struct { wchar_t glyph; COLORREF color; } EventBadge;
 
 const char *screen_pulls_action_icon(const char *id);
-bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input);
+bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input, RuntimeChoice *runtime);
 BoardAction *screen_pulls_row_actions(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count);
 void screen_pulls_list_retry_stop(Poller *poller, bool *armed);
 void screen_pulls_list_retry_arm(Poller *poller, bool *armed, const char *repo);
@@ -230,7 +231,7 @@ void screen_pulls_pulls_done(void *owner, Request *req);
 size_t screen_pulls_runs_on(PullsScreen *s, int number);
 bool screen_pulls_run_active_on(PullsScreen *s, int number);
 void screen_pulls_pulls_load(PullsScreen *s, bool fresh);
-void screen_pulls_board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input);
+void screen_pulls_board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input, const RuntimeChoice *runtime);
 void screen_pulls_board_merge(PullsScreen *s, size_t index);
 const char *screen_pulls_reviewer(PullsScreen *s);
 size_t *screen_pulls_review_rows(PullsScreen *s, size_t *count);
@@ -296,7 +297,7 @@ void screen_pulls_run_resume(PullScreen *s);
 void screen_pulls_profiles_load(PullScreen *s);
 void screen_pulls_run_open(PullScreen *s);
 void screen_pulls_run_pick_profile(PullScreen *s, POINT pt);
-void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const char *input);
+void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const char *input, const RuntimeChoice *runtime);
 void screen_pulls_merge(PullScreen *s, const char *method);
 void screen_pulls_pull_edit(PullScreen *s, Json *fields);
 void screen_pulls_update_branch(PullScreen *s);
