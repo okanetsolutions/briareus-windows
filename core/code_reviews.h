@@ -21,4 +21,14 @@ char *code_review_location(const Json *finding);
 char *code_review_usage(const Json *review);
 char *code_review_counts(const Json *review);
 char *code_reviews_counts(const Json *reviews);
+// Values are sums of known nonnegative observations; missing values never become zero.
+typedef struct { double value; size_t known, unknown; } CodeReviewAmount;
+typedef struct {
+    size_t reviews, findings, unpriced_turns;
+    CodeReviewAmount input, output, cost;
+    bool estimated;
+} CodeReviewTotals;
+CodeReviewTotals code_review_totals(const Json *review);
+CodeReviewTotals code_reviews_totals(const Json *reviews);
+char *code_review_counts_compact(const Json *review);
 #endif

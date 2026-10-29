@@ -46,6 +46,15 @@ static void done(void *owner, Request *req) {
             const Json *review = code_review_find(items, r->review_id);
             if (!review) { r->review_id = 0; r->finding_id = 0; }
             else if (r->finding_id && !code_review_finding(review, r->finding_id)) r->finding_id = 0;
+            if (!code_review_find(items, r->row_review_id)) r->row_review_id = code_review_id(json_at(items, 0));
+            if (!r->finding_id) {
+                for (size_t i = 0; i < json_count(items); i++) {
+                    const Json *item = json_at(items, i), *f = json_at(json_get(item, "findings"), 0);
+                    if (!code_review_id(f)) continue;
+                    r->review_id = code_review_id(item); r->finding_id = code_review_id(f); break;
+                }
+                r->reset_inspector = true; r->reveal_row = true;
+            }
         }
     }
     pane_relayout(s->base.pane);
@@ -79,6 +88,16 @@ bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     PullScreen *s = (PullScreen *)base;
     if (ctrl || shift) return false;
     if (s->tab != PR_TAB_FINDINGS && s->tab != PR_TAB_CODE_REVIEWS) return false;
+    if (s->tab == PR_TAB_FINDINGS && (vk == VK_PRIOR || vk == VK_NEXT)) {
+        Doc *doc = base->pane ? pane_doc(base->pane) : NULL;
+        if (!doc || doc->region_count < 2) return false;
+        DocRegion *detail = &doc->regions[1];
+        int step = detail->view.bottom - detail->view.top - px(32);
+        if (step < px(32)) step = px(32);
+        bool moved = doc_region_wheel(doc, detail->view.left, detail->view.top, vk == VK_NEXT ? step : -step);
+        if (moved) InvalidateRect(pane_hwnd(base->pane), NULL, FALSE);
+        return moved;
+    }
     if (vk != VK_UP && vk != VK_DOWN && vk != VK_HOME && vk != VK_END) return false;
     if (!screen_pulls_reviews_sync(s)) return false;
     bool findings = s->tab == PR_TAB_FINDINGS;
@@ -88,7 +107,7 @@ bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     for (size_t i = 0; i < json_count(s->reviews.items); i++) {
         const Json *r = json_at(s->reviews.items, i), *rows = findings ? json_get(r, "findings") : NULL;
         for (size_t j = 0; j < (findings ? json_count(rows) : 1); j++, n++) {
-            if (code_review_id(r) != s->reviews.review_id) continue;
+            if (code_review_id(r) != (findings ? s->reviews.review_id : s->reviews.row_review_id)) continue;
             if (!findings || code_review_id(json_at(rows, j)) == s->reviews.finding_id) selected = n;
         }
     }
@@ -103,15 +122,37 @@ bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     for (size_t i = 0; i < json_count(s->reviews.items); i++) {
         const Json *r = json_at(s->reviews.items, i), *rows = json_get(r, "findings");
         for (size_t j = 0; j < (findings ? json_count(rows) : 1); j++, n++) if (n == selected) {
-            s->reviews.review_id = code_review_id(r);
-            s->reviews.finding_id = findings ? code_review_id(json_at(rows, j)) : 0;
+            if (findings) {
+                s->reviews.review_id = code_review_id(r);
+                s->reviews.finding_id = code_review_id(json_at(rows, j));
+            } else s->reviews.row_review_id = code_review_id(r);
         }
     }
+    s->reviews.reveal_row = true; s->reviews.reset_inspector = true;
     pane_relayout(base->pane);
-    // Follow the selected stable record, including rows beyond the visible viewport.
-    Doc d; doc_init(&d); doc_begin(&d, NULL, pane_content_width(base->pane)); base->vt->layout(base, &d);
-    int action = findings ? ACT_REVIEW_FINDING : ACT_REVIEW_ROW;
-    intptr_t id = (intptr_t)(findings ? s->reviews.finding_id : s->reviews.review_id);
-    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action && d.items[i].arg == id) { pane_scroll_to(base->pane, d.items[i].rc.top - d.pin_bottom); break; }
-    doc_free(&d); return true;
+    if (findings && base->pane) {
+        Doc *doc = pane_doc(base->pane);
+        if (doc->region_count) {
+            RECT region = doc->regions[0].view, view = pane_content_rect(base->pane);
+            int scroll = pane_scroll_y(base->pane), target = scroll;
+            if (region.top < scroll + doc->pin_bottom) target = region.top - doc->pin_bottom;
+            else if (region.bottom > scroll + view.bottom - view.top) target = region.bottom - (view.bottom - view.top);
+            if (target != scroll) pane_scroll_to(base->pane, target);
+        }
+    }
+    if (!findings && base->pane) {
+        Doc d; doc_init(&d); doc_begin(&d, NULL, pane_content_width(base->pane)); base->vt->layout(base, &d);
+        int scroll = pane_scroll_y(base->pane); RECT view = pane_content_rect(base->pane);
+        for (size_t i = 0; i < d.count; i++) {
+            Item *it = &d.items[i];
+            if (it->action != ACT_REVIEW_ROW || it->arg != (intptr_t)s->reviews.row_review_id) continue;
+            int target = scroll;
+            if (it->rc.top < scroll + d.pin_bottom) target = it->rc.top - d.pin_bottom;
+            else if (it->rc.bottom > scroll + view.bottom - view.top) target = it->rc.bottom - (view.bottom - view.top);
+            if (target != scroll) pane_scroll_to(base->pane, target);
+            break;
+        }
+        doc_free(&d);
+    }
+    return true;
 }

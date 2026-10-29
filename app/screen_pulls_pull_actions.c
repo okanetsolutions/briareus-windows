@@ -19,19 +19,22 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
             s->tab = (int)arg; break;
         default: s->tab = PR_TAB_BODY; break;
         }
+        s->reviews.reset_inspector = true; s->reviews.reveal_row = true;
         screen_pulls_reviews_load(s, false);
         screen_pulls_reviews_poll(s);
         if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
         if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
+    case ACT_REVIEW_METADATA:
+        s->reviews.metadata_open = !s->reviews.metadata_open; pane_relayout(base->pane); break;
     case ACT_REVIEW_ROW:
-        if (code_review_find(s->reviews.items, (int64_t)arg)) { s->reviews.review_id = (int64_t)arg; s->reviews.finding_id = 0; }
+        if (code_review_find(s->reviews.items, (int64_t)arg)) { s->reviews.row_review_id = (int64_t)arg; s->reviews.reset_inspector = true; }
         pane_relayout(base->pane); break;
     case ACT_REVIEW_FINDING:
         for (size_t i = 0; i < json_count(s->reviews.items); i++) {
             const Json *r = json_at(s->reviews.items, i);
-            if (code_review_finding(r, (int64_t)arg)) { s->reviews.review_id = code_review_id(r); s->reviews.finding_id = (int64_t)arg; break; }
+            if (code_review_finding(r, (int64_t)arg)) { s->reviews.review_id = code_review_id(r); s->reviews.finding_id = (int64_t)arg; s->reviews.reset_inspector = true; break; }
         }
         pane_relayout(base->pane); break;
     case ACT_WEB_RELOAD: if (s->web) webview_reload(s->web); break;
