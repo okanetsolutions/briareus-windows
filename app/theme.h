@@ -90,8 +90,6 @@ void draw_status_dot(Canvas *cv, int cx, int cy, const char *status);
 int draw_badge(Canvas *cv, int x, int y, wchar_t glyph, const char *text, COLORREF color, COLORREF background, int *height);
 /// A GitHub label as the board draws it: `rounded-full border px-1.5 text-[11px]` in the label's colour; returns its width.
 int draw_chip(Canvas *cv, int x, int y, const char *name, COLORREF color, COLORREF background, int *height);
-/// The square monogram used for projects.
-void draw_monogram(Canvas *cv, int x, int y, int size, const char *text);
 /// The Claude-style working glyph for a tick.
 const wchar_t *working_glyph(int tick);
 const char *working_verb(int tick);

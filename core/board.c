@@ -498,19 +498,6 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
 }
 DEFINE_LIST_FREE(BoardAction, board_actions_free, board_action_free)
 
-// MARK: - Merge
-
-char **merge_warnings(const Json *mergeable, const char *state, size_t *count) {
-    char **notes = xmalloc(5 * sizeof *notes); size_t n = 0;
-    if (json_bool_is(mergeable, false)) notes[n++] = xstrdup("This branch has conflicts that must be resolved before it can merge.");
-    if (json_is_null(mergeable)) notes[n++] = xstrdup("GitHub is still checking whether this branch can merge.");
-    if (str_eq(state, "blocked")) notes[n++] = xstrdup("GitHub reports this pull request as blocked: a required review or check is missing.");
-    else if (str_eq(state, "behind")) notes[n++] = xstrdup("This branch is behind its base branch and may need updating before it can merge.");
-    notes[n] = NULL;
-    *count = n;
-    return notes;
-}
-
 // MARK: - Reviews
 
 static ReviewStatus review_from_states(const char *decision, bool changes, bool approved, bool commented, bool requested) {

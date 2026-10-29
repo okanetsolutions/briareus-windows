@@ -14,30 +14,6 @@ BEGIN
     IDS_APP_TITLE "Briareus"
 END
 
-IDD_NEW_CONVERSATION DIALOGEX 0, 0, 372, 296
-STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "New conversation"
-FONT 10, "Segoe UI", 400, 0, 0x1
-BEGIN
-    LTEXT           "", IDC_PROJECT_NAME, 14, 12, 344, 10
-    LTEXT           "What should the agent do?", IDC_PROMPT_LABEL, 14, 28, 344, 10
-    EDITTEXT        IDC_PROMPT, 16, 42, 340, 94, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | NOT WS_BORDER, 0
-    LTEXT           "", IDC_RECORDING, 14, 148, 220, 10
-    PUSHBUTTON      "Record a voice note", IDC_MIC, 248, 144, 110, 18, BS_OWNERDRAW
-    LTEXT           "Branch", IDC_BRANCH_LABEL, 14, 174, 60, 10
-    COMBOBOX        IDC_BRANCH, 78, 171, 280, 120, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Model", IDC_MODEL_LABEL, 14, 196, 60, 10
-    COMBOBOX        IDC_MODEL, 78, 193, 280, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Effort", IDC_EFFORT_LABEL, 14, 218, 60, 10
-    COMBOBOX        IDC_EFFORT, 78, 215, 280, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Starting a conversation runs a paid agent using this project's configured provider and model.", IDC_NOTE, 14, 238, 344, 18
-    LTEXT           "", IDC_ERROR, 14, 238, 344, 18, NOT WS_VISIBLE
-    LTEXT           "The request may have completed. Close this window and refresh the conversations before starting again.", IDC_UNCERTAIN, 14, 254, 220, 20, NOT WS_VISIBLE
-    PUSHBUTTON      "Return to conversations", IDC_RETURN, 236, 252, 122, 18, BS_OWNERDRAW | NOT WS_VISIBLE
-    PUSHBUTTON      "Start", IDC_START, 240, 272, 56, 18, BS_OWNERDRAW
-    PUSHBUTTON      "Cancel", IDCANCEL, 302, 272, 56, 18, BS_OWNERDRAW
-END
-
 IDD_RENAME DIALOGEX 0, 0, 280, 78
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Rename conversation"

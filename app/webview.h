@@ -11,8 +11,6 @@ typedef struct WebView WebView;
 /// with every request to a host ending in `.` + `host_suffix`, and to no other.
 typedef struct { const char *client_id, *client_secret, *host_suffix; } WebViewAccess;
 
-/// Whether the WebView2 runtime is installed.
-bool webview_available(void);
 /// Starts a browser as a child of `parent` that opens `url` once it is ready. `changed` is called on the UI thread whenever
 /// the page's title, address or the browser's state changes. `access` may be NULL; it is copied. Never NULL; a failure
 /// shows in `webview_error`.
@@ -36,8 +34,7 @@ bool webview_can_forward(WebView *wv);
 bool webview_ready(WebView *wv);
 /// Why the browser could not start, or NULL.
 const char *webview_error(WebView *wv);
-/// The page's title and address as the browser reports them; NULL until it has.
-const char *webview_title(WebView *wv);
+/// The page's address as the browser reports it; NULL until it has.
 const char *webview_url(WebView *wv);
 
 #endif

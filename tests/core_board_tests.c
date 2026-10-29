@@ -779,41 +779,6 @@ static void test_board_action_copies_are_independent(void) {
     board_actions_free(NULL, 0);
 }
 
-// MARK: - Merge warnings
-
-static char *warnings(const char *mergeable, const char *state) {
-    Json *m = mergeable ? json_parsez(mergeable) : NULL;
-    size_t n = 99; char **w = merge_warnings(m, state, &n);
-    Str s; str_init(&s);
-    size_t i = 0;
-    for (; w[i]; i++) str_appendf(&s, "%s%s", i ? "|" : "", w[i]);
-    if (i != n) str_appendz(&s, " (count disagrees)");
-    for (i = 0; w[i]; i++) free(w[i]);
-    free(w); json_free(m);
-    return s.data ? str_detach(&s) : xstrdup("");
-}
-static void test_merge_warnings_cover_every_mergeable_state(void) {
-    const char *conflicts = "This branch has conflicts that must be resolved before it can merge.";
-    const char *checking = "GitHub is still checking whether this branch can merge.";
-    const char *blocked = "GitHub reports this pull request as blocked: a required review or check is missing.";
-    const char *behind = "This branch is behind its base branch and may need updating before it can merge.";
-    const char *quiet[] = { "clean", "unstable", "has_hooks", "dirty", "draft", "unknown", "closed", "merged", "BLOCKED", "Behind", "", NULL };
-    for (size_t i = 0; i < sizeof quiet / sizeof *quiet; i++) CHECK_OWNED_STR(warnings("true", quiet[i]), "");
-    CHECK_OWNED_STR(warnings("false", "dirty"), conflicts);
-    CHECK_OWNED_STR(warnings("null", "unknown"), checking);
-    // Nothing sent is still being checked; a string is not GitHub's answer either way.
-    CHECK_OWNED_STR(warnings(NULL, NULL), checking);
-    CHECK_OWNED_STR(warnings("\"false\"", "clean"), "");
-    CHECK_OWNED_STR(warnings("0", "clean"), "");
-    CHECK_OWNED_STR(warnings("true", "blocked"), blocked);
-    CHECK_OWNED_STR(warnings("true", "behind"), behind);
-    char *both = xstrfmt("%s|%s", conflicts, behind); CHECK_OWNED_STR(warnings("false", "behind"), both); free(both);
-    both = xstrfmt("%s|%s", checking, blocked); CHECK_OWNED_STR(warnings("null", "blocked"), both); free(both);
-    // Closed or merged, only a conflict still gets a word.
-    CHECK_OWNED_STR(warnings("false", "closed"), conflicts);
-    CHECK_OWNED_STR(warnings("false", "merged"), conflicts);
-}
-
 // MARK: - Reviews
 
 static ReviewStatus status_of(const char *decision, const char *reviews) {
@@ -1502,7 +1467,6 @@ void board_tests(void) {
     test_run("the server words the question an errand asks", test_the_server_words_the_question_an_errand_asks);
     test_run("an errand the server lists without a question keeps the app's own", test_an_errand_the_server_lists_without_a_question_keeps_the_apps_own);
     test_run("board action copies are independent", test_board_action_copies_are_independent);
-    test_run("merge warnings cover every mergeable state", test_merge_warnings_cover_every_mergeable_state);
     test_run("review status weighs the decision before the reviewers", test_review_status_weighs_the_decision_before_the_reviewers);
     test_run("review status reads the board row's reviewers", test_review_status_reads_the_board_rows_reviewers);
     test_run("stack positions need a position and a total", test_stack_positions_need_a_position_and_a_total);

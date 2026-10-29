@@ -23,7 +23,7 @@ enum { CTRL_PUT_IS_VISIBLE = 4, CTRL_PUT_BOUNDS = 6, CTRL_PUT_PARENT_WINDOW = 22
 // ICoreWebView2
 enum { CORE_GET_SOURCE = 4, CORE_NAVIGATE = 5, CORE_ADD_SOURCE_CHANGED = 11, CORE_ADD_HISTORY_CHANGED = 13, CORE_RELOAD = 31,
        CORE_GET_CAN_GO_BACK = 38, CORE_GET_CAN_GO_FORWARD = 39, CORE_GO_BACK = 40, CORE_GO_FORWARD = 41, CORE_ADD_TITLE_CHANGED = 46,
-       CORE_GET_TITLE = 48, CORE_ADD_WEB_RESOURCE_REQUESTED = 55, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER = 57 };
+       CORE_ADD_WEB_RESOURCE_REQUESTED = 55, CORE_ADD_WEB_RESOURCE_REQUESTED_FILTER = 57 };
 // ICoreWebView2WebResourceRequestedEventArgs, ICoreWebView2WebResourceRequest, ICoreWebView2HttpRequestHeaders
 enum { ARGS_GET_REQUEST = 3 };
 enum { REQUEST_GET_URI = 3, REQUEST_GET_HEADERS = 9 };
@@ -35,7 +35,7 @@ struct WebView {
     LONG refs; bool closed;
     HWND parent; wchar_t *url; RECT bounds; bool shown;
     void *controller, *core;    // ICoreWebView2Controller, ICoreWebView2
-    char *error, *title, *source;
+    char *error, *source;
     bool can_back, can_forward;
     char *access_suffix; wchar_t *access_id, *access_secret;   // the preview's service token, or NULL
     void (*changed)(void *ctx); void *ctx;
@@ -43,7 +43,7 @@ struct WebView {
 
 static void wv_release(WebView *wv) {
     if (--wv->refs) return;
-    free(wv->url); free(wv->error); free(wv->title); free(wv->source);
+    free(wv->url); free(wv->error); free(wv->source);
     free(wv->access_suffix); free(wv->access_id); free(wv->access_secret);
     free(wv);
 }
@@ -95,7 +95,6 @@ static HRESULT WINAPI page_changed(Handler *h, void *sender, void *args) {
     (void)sender; (void)args;
     WebView *wv = h->wv;
     if (wv->closed || !wv->core) return S_OK;
-    read_string(wv, CORE_GET_TITLE, &wv->title);
     read_string(wv, CORE_GET_SOURCE, &wv->source);
     wv->can_back = read_bool(wv, CORE_GET_CAN_GO_BACK);
     wv->can_forward = read_bool(wv, CORE_GET_CAN_GO_FORWARD);
@@ -206,7 +205,6 @@ static CreateEnvironmentFn runtime_entry(void) {
     }
     return fn;
 }
-bool webview_available(void) { return runtime_entry() != NULL; }
 
 // MARK: - API
 
@@ -267,5 +265,4 @@ bool webview_can_back(WebView *wv) { return wv->core && wv->can_back; }
 bool webview_can_forward(WebView *wv) { return wv->core && wv->can_forward; }
 bool webview_ready(WebView *wv) { return wv->core && !wv->error; }
 const char *webview_error(WebView *wv) { return wv->error; }
-const char *webview_title(WebView *wv) { return wv->title; }
 const char *webview_url(WebView *wv) { return wv->source; }

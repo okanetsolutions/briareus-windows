@@ -190,10 +190,6 @@ bool pull_file_parse(const Json *value, PullFile *out);
 Json *pull_file_json(const PullFile *file);
 void pull_file_free(PullFile *file);
 void pull_file_copy(PullFile *into, const PullFile *from);
-/// The last path component.
-const char *pull_file_name(const PullFile *file);
-/// The path without its last component, as a new string; "" at the root.
-char *pull_file_directory(const PullFile *file);
 
 typedef struct { Json *pr; PullFile *files; size_t file_count; int next_page; bool truncated; } PullFilesPage;   // next_page 0 = none
 bool pull_files_page_parse(const Json *value, PullFilesPage *out);

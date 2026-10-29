@@ -49,7 +49,6 @@ MeetingState meeting_state(void);
 /// Whether the meeting is about this project.
 bool meeting_for(const char *repo);
 void meeting_set_muted(bool muted);
-bool meeting_muted(void);
 /// Asks the assistant to answer what was just said.
 void meeting_answer_now(void);
 /// "🎙 ElevenLabs agent · Zoom · 3:12 · $0.26 · listening", for the project's header. New string.

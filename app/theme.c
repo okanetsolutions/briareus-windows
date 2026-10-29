@@ -226,17 +226,6 @@ int draw_chip(Canvas *cv, int x, int y, const char *name, COLORREF color, COLORR
     if (height) *height = h;
     return w;
 }
-void draw_monogram(Canvas *cv, int x, int y, int size, const char *text) {
-    const char *slash = text ? strrchr(text, '/') : NULL;
-    const char *start = slash && slash[1] ? slash + 1 : (text ? text : "?");
-    wchar_t *w = utf8_to_wide(start);
-    wchar_t letter[2] = { w[0] ? towupper(w[0]) : L'?', 0 };
-    free(w);
-    RECT rc = { x, y, x + size, y + size };
-    COLORREF fill = blend(theme.accent, theme.background, 0.15);
-    fill_round_rect(cv, &rc, size * 28 / 100, fill, fill);
-    draw_textw(cv, letter, &rc, FONT_SERIF_MONOGRAM, theme.accent, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
 
 enum {
     GLYPH_COUNT = (int)(sizeof BRIAREUS_WORKING_GLYPHS / sizeof BRIAREUS_WORKING_GLYPHS[0]),

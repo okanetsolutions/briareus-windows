@@ -87,8 +87,8 @@ enum { EDIT_ASSIGN_ME = 1, EDIT_ASSIGNEES, EDIT_LOGIN };
 // MARK: - Pull request
 
 enum {
-    ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
-    ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
+    ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_MERGE,
+    ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_RELOAD, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
@@ -96,7 +96,7 @@ enum {
 
 enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
 
-enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
+enum { TAG_PULL = 1, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
 
 // Keep existing IDs: retired Commits (4) and Checks (5) fall back to PR Body.
 enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_FINDINGS = 6, PR_TAB_RUN, PR_TAB_CODE_REVIEWS };
@@ -125,11 +125,10 @@ typedef struct {
     Json *catalog;      // the server's `actions`
     Session *runs; size_t run_count;
     char *deleting_run, *run_error;   // the conversation being deleted from the Sessions tab, and why the last one failed
-    Json *findings;
     PullReviews reviews;
     PullFiles *files;   // the Files changed tab
     ConvFeed conv[CONV_FEEDS];   // the Conversation tab
-    char *error, *findings_error, *write_error, *merge_error;
+    char *error, *write_error, *merge_error;
     bool busy, uncertain, merging;
     // An edit of its title, description, labels or assignees, and an update of its branch from its base: `branch_note`
     // says GitHub took the update, which it makes on its own a moment later.
@@ -154,21 +153,17 @@ typedef struct {
     int tab;
     char *body, *body_author;   // the description, from `pull_files` when `pull` leaves it out
     bool body_read;
-    char *deciding;
     // The projects of the issues it closes, as GitHub's sidebar shows them: one `issue` read per linked issue in this
     // repository, once per visit and on refresh, kept as [{number, projects, projectsError}] in the sidebar's order.
     // The round keeps the issue numbers it reads, so a list that changes partway starts it again.
     Json *issue_projects, *issue_incoming; bool issues_read; Request *req_issue;
     int issue_round[LINKED_ISSUES_MAX]; size_t issue_round_count;
-    int *open_findings; size_t open_finding_count;
     char *start_device;
     BoardAction *actions; size_t action_count;
-    Request *req_pull, *req_findings, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_decide, *req_body, *req_delete_run;
+    Request *req_pull, *req_rows, *req_actions, *req_sessions, *req_start, *req_merge, *req_body, *req_delete_run;
     Poller poller;
     bool dialog_open;
 } PullScreen;
-
-extern const char *const screen_pulls_decision_ids[4];
 
 typedef struct { int passed, failed, pending; } CountsData;
 
@@ -262,12 +257,10 @@ void screen_pulls_conv_cancel(PullScreen *s);
 void screen_pulls_issue_projects_load(PullScreen *s);
 void screen_pulls_sessions_done_pull(void *owner, Request *req);
 void screen_pulls_pull_load(PullScreen *s);
-bool screen_pulls_finding_open(PullScreen *s, int i);
 void screen_pulls_paint_counts(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 int screen_pulls_section_box(Doc *doc, int w);
 Col screen_pulls_col_make(int x, int w);
 int screen_pulls_col_box(Doc *doc, Col c);
-void screen_pulls_col_gap(Doc *doc, Col c);
 int screen_pulls_doc_pill(Doc *doc, int x, int y, const char *text, COLORREF color);
 int screen_pulls_doc_stack_pill(Doc *doc, int x, int y, const char *text, bool open);
 void screen_pulls_layout_stack_overview(PullScreen *s, Doc *doc, Col c);
@@ -285,9 +278,6 @@ void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c);
 int screen_pulls_comment_begin(Doc *doc, Col c, CommentHeadData *h, int action, intptr_t arg, int *ix, int *iw);
 void screen_pulls_layout_description(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_layout_conversation(PullScreen *s, Doc *doc, Col c);
-size_t screen_pulls_findings_unfixed(PullScreen *s);
-size_t screen_pulls_findings_to_fix(PullScreen *s);
-bool screen_pulls_solve_findings_offered(PullScreen *s);
 void screen_pulls_reviews_clear(PullScreen *s);
 bool screen_pulls_reviews_sync(PullScreen *s);
 void screen_pulls_reviews_load(PullScreen *s, bool refresh);
@@ -296,7 +286,6 @@ void screen_pulls_reviews_visible(Screen *base, bool shown);
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c);
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
-void screen_pulls_layout_findings(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_layout_runs(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_delete_run_done(void *owner, Request *req);
@@ -319,7 +308,6 @@ void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const c
 void screen_pulls_merge(PullScreen *s, const char *method);
 void screen_pulls_pull_edit(PullScreen *s, Json *fields);
 void screen_pulls_update_branch(PullScreen *s);
-void screen_pulls_decide(PullScreen *s, const char *key, const char *decision);
 void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt);
 void screen_pulls_pull_refresh(Screen *base);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);

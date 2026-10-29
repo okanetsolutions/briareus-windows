@@ -12,16 +12,16 @@ static void pull_activated(Screen *base, bool active);
 
 static void pull_destroy(Screen *base) {
     PullScreen *s = (PullScreen *)base;
-    request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
-    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_decide); request_cancel(&s->req_body);
+    request_cancel(&s->req_pull); request_cancel(&s->req_rows); request_cancel(&s->req_actions);
+    request_cancel(&s->req_sessions); request_cancel(&s->req_start); request_cancel(&s->req_merge); request_cancel(&s->req_body);
     request_cancel(&s->req_delete_run); free(s->deleting_run); free(s->run_error);
     request_cancel(&s->req_issue); json_free(s->issue_projects); json_free(s->issue_incoming);
     request_cancel(&s->req_edit); request_cancel(&s->req_update_branch); free(s->edit_error); free(s->branch_note);
     screen_pulls_reviews_clear(s);
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
-    json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
-    free(s->error); free(s->findings_error); free(s->write_error); free(s->start_device); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
+    json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count);
+    free(s->error); free(s->write_error); free(s->start_device); free(s->merge_error); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
     pull_files_free(s->files);
     request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);
@@ -172,7 +172,7 @@ static void pull_timer(Screen *base, UINT id) {
     if (pull_files_timer(s->files, id)) return;
     if (id == TIMER_RUN_LOG) { screen_pulls_run_log_tick(s); return; }
     if (poller_fired(&s->poller, id)) {
-        bool enabled = !s->busy && !s->merging && !s->deciding && !s->editing && !s->updating_branch && !s->dialog_open;
+        bool enabled = !s->busy && !s->merging && !s->editing && !s->updating_branch && !s->dialog_open;
         if (enabled) {
             screen_pulls_pull_load(s);
             screen_pulls_reviews_poll(s);
@@ -190,7 +190,7 @@ static void pull_visible(Screen *base, bool shown) {
     if (!shown) request_cancel(&s->reviews.req);
     if (!shown) KillTimer(pane_hwnd(base->pane), TIMER_RUN_LOG);
     if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s); }
-    else { poller_stop(&s->poller); pull_files_cancel(s->files); screen_pulls_conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_findings); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); request_cancel(&s->req_issue); }
+    else { poller_stop(&s->poller); pull_files_cancel(s->files); screen_pulls_conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); request_cancel(&s->req_issue); }
 }
 
 void screen_pulls_pull_refresh(Screen *base) {
@@ -220,7 +220,7 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
     project_copy(&s->project, project); s->number = number;
     if (stack) { stack_position_copy(&s->stack, stack); s->has_stack = true; }
     if (summary) { pull_summary_copy(&s->summary, summary); s->has_summary = true; }
-    s->pr = json_null(); s->catalog = json_array(); s->findings = json_array();
+    s->pr = json_null(); s->catalog = json_array();
     s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_FILES_PAGE);
     return &s->base;
 }

@@ -174,42 +174,6 @@ wchar_t review_glyph(ReviewStatus status, COLORREF *color) {
     default: *color = theme.secondary; return 0;
     }
 }
-wchar_t tool_glyph(const char *kind, const char *name, bool is_error) {
-    if (is_error) return 0xE7BA;
-    if (str_eq(kind, "cmd")) return 0xE756;
-    if (str_eq(kind, "git")) return 0xE8AB;
-    char *n = str_fold(name);
-    wchar_t g = 0xE90F;
-    if (strstr(n, "bash") || strstr(n, "shell") || strstr(n, "exec")) g = 0xE756;
-    else if (strstr(n, "read") || strstr(n, "view")) g = 0xE8A5;
-    else if (strstr(n, "todo") || strstr(n, "plan")) g = 0xE9D5;
-    else if (strstr(n, "edit") || strstr(n, "write") || strstr(n, "patch")) g = 0xE70F;
-    else if (strstr(n, "grep") || strstr(n, "glob") || strstr(n, "search") || strstr(n, "find")) g = 0xE721;
-    else if (strstr(n, "web") || strstr(n, "fetch")) g = 0xE774;
-    else if (strstr(n, "task") || strstr(n, "agent")) g = 0xE716;
-    free(n);
-    return g;
-}
-
-size_t pull_badges(const PullSummary *pull, const StackPosition *stack, BadgeSpec *out, size_t cap, char *stack_text, size_t stack_text_len) {
-    size_t n = 0;
-    if (pull_conflicting(pull) && n < cap) { BadgeSpec b = { 0xE7BA, "Conflicts", theme.danger, false }; out[n++] = b; }
-    if (pull->checks && n < cap) {
-        BadgeSpec b = { 0xE823, "Checks", theme.warning, false };
-        if (str_eq(pull->checks, "success")) { b.glyph = 0xE73E; b.color = theme.success; }
-        else if (str_eq(pull->checks, "failure") || str_eq(pull->checks, "error")) { b.glyph = 0xE711; b.color = theme.danger; }
-        out[n++] = b;
-    }
-    if (stack && n < cap) {
-        char *label = stack_position_label(stack, 0);
-        snprintf(stack_text, stack_text_len, "Stack %s", label); free(label);
-        BadgeSpec b = { 0xE81E, stack_text, theme.accent, false }; out[n++] = b;
-    }
-    ReviewStatus review = review_status_of_reviewers(pull->review_decision, pull->reviewers, pull->reviewer_count);
-    if (review != REVIEW_NONE && n < cap) { COLORREF c; wchar_t g = review_glyph(review, &c); BadgeSpec b = { g, review_status_text(review), c, false }; out[n++] = b; }
-    if (pull->draft && n < cap) { BadgeSpec b = { 0xE70F, "Draft", theme.secondary, false }; out[n++] = b; }
-    return n;
-}
 
 void doc_label_chips(Doc *doc, int x, int w, const PullLabel *labels, size_t count, COLORREF background) {
     if (!count) return;
@@ -446,4 +410,3 @@ void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph
     doc_item(doc, i)->tip = xstrdup(title);
     *x += w;
 }
-int content_left(Pane *pane) { (void)pane; return 0; }

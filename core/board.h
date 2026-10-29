@@ -154,9 +154,6 @@ const BoardAction *board_actions_known(size_t *count);
 BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count);
 void board_actions_free(BoardAction *actions, size_t count);
 
-/// What is worth a word before a merge is confirmed. Returns a NULL-terminated array of new strings.
-char **merge_warnings(const Json *mergeable, const char *state, size_t *count);
-
 typedef enum { REVIEW_NONE, REVIEW_APPROVED, REVIEW_CHANGES_REQUESTED, REVIEW_FEEDBACK, REVIEW_REQUESTED } ReviewStatus;
 /// The overall verdict a pull request carries, read from GitHub's review decision and the reviewers themselves.
 ReviewStatus review_status(const char *decision, const Json *reviews);

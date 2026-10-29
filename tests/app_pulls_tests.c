@@ -658,7 +658,6 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     s->pr = json_parsez("{\"number\":1,\"state\":\"open\",\"body\":\"Body marker\","
         "\"commits\":9,\"commitList\":[{\"sha\":\"abc\"}],\"headRef\":\"feature\",\"baseRef\":\"main\","
         "\"headSha\":\"abc\",\"checks\":{\"passed\":3,\"pending\":2,\"failed\":1,\"runs\":[{\"name\":\"CI\"}]}}");
-    json_free(s->findings); s->findings = json_parsez("[{\"key\":\"f1\",\"title\":\"Finding marker\"}]");
     Json *sessions = json_parsez("{\"sessions\":[{\"id\":\"run1\",\"status\":\"completed\",\"title\":\"Session marker\"}]}");
     CHECK(sessions_parse(sessions, &s->runs, &s->run_count)); CHECK_INT(s->run_count, 1); json_free(sessions);
     s->runs_read = true; s->run_url = xstrdup("https://preview.example");
@@ -690,9 +689,9 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
     CHECK(!layout_contains(base, "Timeline marker"));
     select_pull_tab(base, "Findings");
-    CHECK(layout_contains(base, "not supported")); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
+    CHECK(layout_contains(base, "not supported"));
     select_pull_tab(base, "Sessions");
-    CHECK(layout_has_action(base, ACT_OPEN_RUN)); CHECK(!layout_has_action(base, ACT_FINDING_TOGGLE));
+    CHECK(layout_has_action(base, ACT_OPEN_RUN));
     select_pull_tab(base, "Run");
     CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
     const intptr_t retired[] = { 4, 5, -1, 9, INTPTR_MAX };

@@ -186,116 +186,6 @@ static void test_review_glyphs_and_colours(void) {
     CHECK_INT(review_glyph(REVIEW_NONE, &c), 0); CHECK_INT(c, theme.secondary);
 }
 
-static void test_tool_glyphs_follow_the_tool_name(void) {
-    CHECK_INT(tool_glyph("tool", "Bash", false), 0xE756);
-    CHECK_INT(tool_glyph("tool", "shell_command", false), 0xE756);
-    CHECK_INT(tool_glyph("tool", "Read", false), 0xE8A5);
-    CHECK_INT(tool_glyph("tool", "view_image", false), 0xE8A5);
-    CHECK_INT(tool_glyph("tool", "Edit", false), 0xE70F);
-    CHECK_INT(tool_glyph("tool", "Write", false), 0xE70F);
-    CHECK_INT(tool_glyph("tool", "TodoWrite", false), 0xE9D5);
-    CHECK_INT(tool_glyph("tool", "apply_patch", false), 0xE70F);
-    CHECK_INT(tool_glyph("tool", "Grep", false), 0xE721);
-    CHECK_INT(tool_glyph("tool", "Glob", false), 0xE721);
-    CHECK_INT(tool_glyph("tool", "WebSearch", false), 0xE721);
-    CHECK_INT(tool_glyph("tool", "WebFetch", false), 0xE774);
-    CHECK_INT(tool_glyph("tool", "update_plan", false), 0xE9D5);
-    CHECK_INT(tool_glyph("tool", "Task", false), 0xE716);
-    CHECK_INT(tool_glyph("tool", "Agent", false), 0xE716);
-    CHECK_INT(tool_glyph("tool", "mcp__linear__list", false), 0xE90F);
-    CHECK_INT(tool_glyph("tool", NULL, false), 0xE90F);
-}
-
-static void test_tool_glyph_kind_and_errors_come_first(void) {
-    CHECK_INT(tool_glyph("tool_error", "Read", true), 0xE7BA);
-    CHECK_INT(tool_glyph("cmd", "Read", true), 0xE7BA);
-    CHECK_INT(tool_glyph("cmd", "Read", false), 0xE756);
-    CHECK_INT(tool_glyph("git", "Read", false), 0xE8AB);
-    CHECK_INT(tool_glyph("git", NULL, false), 0xE8AB);
-}
-
-// MARK: - Pull request badges
-
-static void test_pull_badges_in_order(void) {
-    ensure_theme();
-    PullSummary p; memset(&p, 0, sizeof p);
-    p.mergeable = "conflicting"; p.checks = "success"; p.review_decision = "APPROVED"; p.draft = true;
-    StackPosition stack; memset(&stack, 0, sizeof stack);
-    stack.position = 2; stack.total = 3; stack.partial = true;
-    BadgeSpec b[8]; char stack_text[32];
-    size_t n = pull_badges(&p, &stack, b, 8, stack_text, sizeof stack_text);
-    CHECK_INT(n, 5);
-    CHECK_STR(b[0].text, "Conflicts"); CHECK_INT(b[0].glyph, 0xE7BA); CHECK_INT(b[0].color, theme.danger);
-    CHECK_STR(b[1].text, "Checks"); CHECK_INT(b[1].glyph, 0xE73E); CHECK_INT(b[1].color, theme.success);
-    CHECK_STR(b[2].text, "Stack 2/3+"); CHECK_INT(b[2].glyph, 0xE81E); CHECK_INT(b[2].color, theme.accent);
-    CHECK(b[2].text == stack_text);
-    CHECK_STR(b[3].text, "Approved"); CHECK_INT(b[3].glyph, 0xE73E); CHECK_INT(b[3].color, theme.success);
-    CHECK_STR(b[4].text, "Draft"); CHECK_INT(b[4].glyph, 0xE70F); CHECK_INT(b[4].color, theme.secondary);
-    for (size_t i = 0; i < n; i++) CHECK(!b[i].chip);
-}
-
-static void test_pull_badges_stop_at_the_capacity(void) {
-    ensure_theme();
-    PullSummary p; memset(&p, 0, sizeof p);
-    p.mergeable = "conflicting"; p.checks = "failure"; p.draft = true;
-    BadgeSpec b[2]; char stack_text[32];
-    CHECK_INT(pull_badges(&p, NULL, b, 2, stack_text, sizeof stack_text), 2);
-    CHECK_STR(b[0].text, "Conflicts");
-    CHECK_STR(b[1].text, "Checks");
-    CHECK_INT(pull_badges(&p, NULL, b, 0, stack_text, sizeof stack_text), 0);
-}
-
-static void test_pull_badges_for_check_states(void) {
-    ensure_theme();
-    PullSummary p; memset(&p, 0, sizeof p);
-    BadgeSpec b[4]; char stack_text[32];
-    CHECK_INT(pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text), 0);
-    p.checks = "failure";
-    CHECK_INT(pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text), 1);
-    CHECK_INT(b[0].glyph, 0xE711); CHECK_INT(b[0].color, theme.danger);
-    p.checks = "error";
-    pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text);
-    CHECK_INT(b[0].glyph, 0xE711); CHECK_INT(b[0].color, theme.danger);
-    p.checks = "pending";
-    pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text);
-    CHECK_STR(b[0].text, "Checks"); CHECK_INT(b[0].glyph, 0xE823); CHECK_INT(b[0].color, theme.warning);
-}
-
-static void test_conflicts_badge_needs_githubs_answer_not_the_label(void) {
-    ensure_theme();
-    PullLabel label = { "has-conflicts", "ff0000" };
-    PullSummary p; memset(&p, 0, sizeof p);
-    p.labels = &label; p.label_count = 1; p.mergeable = "unknown";
-    BadgeSpec b[4]; char stack_text[32];
-    CHECK_INT(pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text), 0);
-}
-
-static void test_pull_badges_review_from_the_reviewers(void) {
-    ensure_theme();
-    Reviewer commented = { "ana", "COMMENTED" }, requested = { "bo", "REQUESTED" };
-    PullSummary p; memset(&p, 0, sizeof p);
-    BadgeSpec b[4]; char stack_text[32];
-    p.reviewers = &commented; p.reviewer_count = 1;
-    CHECK_INT(pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text), 1);
-    CHECK_STR(b[0].text, "Feedback given"); CHECK_INT(b[0].glyph, 0xE8BD); CHECK_INT(b[0].color, theme.warning);
-    p.reviewers = &requested;
-    pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text);
-    CHECK_STR(b[0].text, "Review requested"); CHECK_INT(b[0].color, theme.secondary);
-    p.reviewers = NULL; p.reviewer_count = 0; p.review_decision = "CHANGES_REQUESTED";
-    pull_badges(&p, NULL, b, 4, stack_text, sizeof stack_text);
-    CHECK_STR(b[0].text, "Changes requested"); CHECK_INT(b[0].glyph, 0xE711); CHECK_INT(b[0].color, theme.danger);
-}
-
-static void test_stack_badge_text_is_cut_to_its_buffer(void) {
-    ensure_theme();
-    PullSummary p; memset(&p, 0, sizeof p);
-    StackPosition stack; memset(&stack, 0, sizeof stack);
-    stack.position = 12; stack.total = 34;
-    BadgeSpec b[2]; char stack_text[8];
-    CHECK_INT(pull_badges(&p, &stack, b, 2, stack_text, sizeof stack_text), 1);
-    CHECK_STR(b[0].text, "Stack 1");
-}
-
 // MARK: - Poller
 
 static void test_poller_counts_failures_and_keeps_retry_after(void) {
@@ -548,14 +438,6 @@ void app_common_tests(void) {
     test_run("people lists logins up to a limit", test_people_lists_logins_up_to_a_limit);
     test_run("label colour is github's hex or secondary", test_label_colour_is_githubs_hex_or_secondary);
     test_run("review glyphs and colours", test_review_glyphs_and_colours);
-    test_run("tool glyphs follow the tool name", test_tool_glyphs_follow_the_tool_name);
-    test_run("tool glyph kind and errors come first", test_tool_glyph_kind_and_errors_come_first);
-    test_run("pull badges in order", test_pull_badges_in_order);
-    test_run("pull badges stop at the capacity", test_pull_badges_stop_at_the_capacity);
-    test_run("pull badges for check states", test_pull_badges_for_check_states);
-    test_run("conflicts badge needs github's answer, not the label", test_conflicts_badge_needs_githubs_answer_not_the_label);
-    test_run("pull badges review from the reviewers", test_pull_badges_review_from_the_reviewers);
-    test_run("stack badge text is cut to its buffer", test_stack_badge_text_is_cut_to_its_buffer);
     test_run("poller counts failures and keeps retry-after", test_poller_counts_failures_and_keeps_retry_after);
     test_run("a stopped poller never fires", test_a_stopped_poller_never_fires);
     test_run("session row lays out dot, title and subtitle", test_session_row_lays_out_dot_title_and_subtitle);

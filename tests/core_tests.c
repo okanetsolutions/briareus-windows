@@ -563,8 +563,6 @@ static void test_pull_file_pages_pin_later_pages_to_the_first_revision(void) {
     CHECK(list.file_count == 2); CHECK_STR(list.files[0].filename, "src/a.js"); CHECK_STR(list.files[1].filename, "logo.png");
     CHECK_STR(json_str(json_get(list.pr, "body")), "Why");
     CHECK(pull_file_list_arguments(&list, "o/r", 7) == NULL); CHECK(!list.truncated);
-    CHECK_STR(pull_file_name(&list.files[0]), "a.js"); char *dir = pull_file_directory(&list.files[0]); CHECK_STR(dir, "src"); free(dir);
-    CHECK(list.files[1].patch == NULL); dir = pull_file_directory(&list.files[1]); CHECK_STR(dir, ""); free(dir);
     pull_file_list_free(&list); json_free(first); json_free(second);
 }
 static void test_diff_lines_are_numbered_from_hunk_headers(void) {
@@ -809,15 +807,6 @@ static void test_issues_nest_under_their_epic_and_word_their_own_session(void) {
     prompt = issue_prompt(&issues[1], "o/r"); CHECK(strstr(prompt, "sub-issue of") == NULL); free(prompt);
     issue_summaries_free(issues, n); json_free(b);
 }
-static void test_merge_warnings_say_what_stands_in_the_way(void) {
-    Json *yes = json_bool(true), *no = json_bool(false), *unknown = json_null();
-    size_t n; char **w = merge_warnings(yes, "clean", &n); CHECK(n == 0); str_array_free(w, n);
-    w = merge_warnings(no, "dirty", &n); CHECK(n == 1); str_array_free(w, n);
-    w = merge_warnings(unknown, "unknown", &n); CHECK(n == 1 && strstr(w[0], "still checking")); str_array_free(w, n);
-    w = merge_warnings(yes, "behind", &n); CHECK(n == 1 && strstr(w[0], "behind")); str_array_free(w, n);
-    w = merge_warnings(yes, "blocked", &n); CHECK(n == 1 && strstr(w[0], "blocked")); str_array_free(w, n);
-    json_free(yes); json_free(no); json_free(unknown);
-}
 static void test_review_status_and_stacks(void) {
     Json *reviews = json_parsez("[{\"state\":\"COMMENTED\"},{\"state\":\"approved\"}]");
     CHECK(review_status(NULL, reviews) == REVIEW_APPROVED);
@@ -898,7 +887,6 @@ int main(void) {
         { "board filter counts each picker against the others", test_board_filter_counts_each_picker_against_the_others },
         { "board offers the errands a pull request is in a state for", test_board_offers_the_errands_a_pull_request_is_in_a_state_for },
         { "issues nest under their epic and word their own session", test_issues_nest_under_their_epic_and_word_their_own_session },
-        { "merge warnings say what stands in the way", test_merge_warnings_say_what_stands_in_the_way },
         { "review status and stacks", test_review_status_and_stacks },
         { "JSON round trips", test_json_round_trips },
     };
