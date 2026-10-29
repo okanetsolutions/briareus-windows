@@ -10,6 +10,26 @@ typedef struct { AttachFile *files; size_t count; char *error; } Selection;
 static void selected(void *ctx, AttachFile *files, size_t count, char *error) {
     Selection *s = ctx; s->files = files; s->count = count; s->error = error;
 }
+static void selection_and_read_allow_open_writer(void) {
+    UploadFixture f; init(&f); wchar_t path[MAX_PATH]; temp(path);
+    HANDLE writer = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    CHECK(writer != INVALID_HANDLE_VALUE); DWORD written = 0;
+    CHECK(WriteFile(writer, "saved", 5, &written, NULL)); CHECK_INT(written, 5);
+    CHECK(FlushFileBuffers(writer));
+    Selection s = {0}; Attacher *a = attacher_new(selected, &s); const wchar_t *p = path;
+    attacher_from_paths(a, &p, 1); pump(&f, WM_APP_ASYNC_DONE);
+    CHECK(!attacher_pending(a)); CHECK(s.error == NULL); CHECK_INT(s.count, 1);
+    if (s.count == 1) {
+        CHECK_INT(s.files[0].len, 5); CHECK(s.files[0].bytes == NULL);
+        volatile LONG stop = 0; char *error = attach_file_read(&s.files[0], &stop);
+        CHECK(error == NULL); free(error); CHECK_INT(s.files[0].len, 5);
+        CHECK(s.files[0].bytes != NULL);
+        if (s.files[0].bytes) CHECK(memcmp(s.files[0].bytes, "saved", 5) == 0);
+    }
+    attach_files_free(s.files, s.count); free(s.error); attacher_free(a);
+    CloseHandle(writer); DeleteFileW(path); screen_fixture_clear(&f.screen);
+}
 static void metadata_boundary_and_grouped_refusals(void) {
     UploadFixture f; init(&f); wchar_t paths[4][MAX_PATH];
     for (size_t i = 0; i < 4; i++) temp(paths[i]);
@@ -140,6 +160,7 @@ static void conversation_gates_pending_selection(void) {
 }
 void app_attach_tests(void) {
     screen_fixture_prepare();
+    test_run("attachment selection and read allow an open writer", selection_and_read_allow_open_writer);
     test_run("attachment metadata boundary and grouped refusals", metadata_boundary_and_grouped_refusals);
     test_run("attachment selections serialize and read current bytes", serialized_selections_read_current_bytes);
     test_run("removed active and queued attachment chips never return", removed_active_and_queued_chips_never_return);

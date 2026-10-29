@@ -132,7 +132,7 @@ static const char *open_path(const wchar_t *path, HANDLE *out, size_t *len) {
     DWORD attrs = GetFileAttributesW(path);
     if (attrs == INVALID_FILE_ATTRIBUTES) return "could not be read";
     if (attrs & FILE_ATTRIBUTE_DIRECTORY) return "is a folder; attach its files";
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return "could not be opened";
     BY_HANDLE_FILE_INFORMATION info = {0};
     LARGE_INTEGER size = {0};
@@ -203,7 +203,7 @@ char *attach_file_read(AttachFile *file, volatile LONG *stop) {
                 if (!ReadFile(f, bytes + got, want, &chunk, NULL) || !chunk) break;
                 got += chunk;
             }
-            // Writers/deletion are excluded for the lifetime of this handle; detect an unexpected length anyway.
+            // Writers may keep the file open; reject short reads or a changed length.
             LARGE_INTEGER end;
             bool same = GetFileSizeEx(f, &end) && end.QuadPart == (LONGLONG)len;
             CloseHandle(f);
