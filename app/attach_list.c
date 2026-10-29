@@ -18,13 +18,14 @@ bool attach_list_paste(AttachList *l) {
         unsupported();
         return true;
     }
-    bool taken = attacher_from_clipboard(attach_list_attacher(l), owner(l));
-    if (taken) attach_list_changed(l);
-    return taken;
+    Attacher *a = attach_list_attacher(l); HWND hwnd = owner(l);
+    attach_list_changed(l);
+    return attacher_from_clipboard(a, hwnd);
 }
 void attach_list_drop(AttachList *l, HDROP drop) {
     if (!attach_list_supported(l)) { DragFinish(drop); unsupported(); return; }
-    attacher_from_drop(attach_list_attacher(l), drop); attach_list_changed(l);
+    Attacher *a = attach_list_attacher(l); attach_list_changed(l);
+    attacher_from_drop(a, drop);
 }
 void attach_list_pick(AttachList *l) {
     if (!attach_list_supported(l)) { unsupported(); return; }

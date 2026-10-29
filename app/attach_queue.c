@@ -166,5 +166,6 @@ Attacher *attach_list_attacher(AttachList *l) {
 }
 void attach_list_paths(AttachList *l, const wchar_t *const *paths, size_t count) {
     if (!attach_list_supported(l)) return;
-    attacher_from_paths(attach_list_attacher(l), paths, count); attach_list_changed(l);
+    Attacher *a = attach_list_attacher(l); attach_list_changed(l);
+    attacher_from_paths(a, paths, count);
 }
