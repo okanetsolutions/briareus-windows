@@ -4,7 +4,7 @@
 #include "suites.h"
 #include <windowsx.h>
 
-static Route routes[] = { { "GET", "/projects", "read" } };
+static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/settings/ssh/servers", "admin" } };
 static wchar_t cache_directory[MAX_PATH];
 
 static void draw(Pane *pane) {
@@ -192,9 +192,53 @@ static void test_session_sidebar(void) {
     pane_relayout(f.pane); draw(f.pane); check_strip(f.pane); CHECK_INT(pane_scroll_y(f.pane), 0);
     finish(&f); theme_set_dpi(96);
 }
+static void test_footer_controls(void) {
+    ScreenFixture f; start(&f); Screen *s = load_projects(&f);
+    int dpi = theme_dpi();
+    for (int scale = 1; scale <= 2; scale++) {
+        theme_set_dpi(dpi * scale);
+        int widths[] = {268, 220};
+        for (size_t n = 0; n < 2; n++) {
+            resize(f.pane, widths[n], 400);
+            HWND buttons[3];
+            buttons[0] = GetDlgItem(pane_hwnd(f.pane), ACT_SSH);
+            buttons[1] = GetDlgItem(pane_hwnd(f.pane), ACT_SETTINGS);
+            buttons[2] = GetDlgItem(pane_hwnd(f.pane), ACT_SIGN_OUT);
+            RECT previous = {0};
+            for (int i = 0; i < 3; i++) {
+                CHECK(buttons[i] != NULL); CHECK(IsWindowVisible(buttons[i]));
+                RECT r; GetWindowRect(buttons[i], &r); MapWindowPoints(NULL, pane_hwnd(f.pane), (POINT *)&r, 2);
+                CHECK(r.left >= previous.right); CHECK(r.right <= px(widths[n]));
+                CHECK(r.bottom <= px(400)); CHECK(r.right - r.left >= px(26));
+                wchar_t name[40]; GetWindowTextW(buttons[i], name, 40); CHECK(wcslen(name) > 0);
+                previous = r;
+            }
+            HDC dc = GetDC(buttons[0]); RECT button_bounds; GetClientRect(buttons[0], &button_bounds);
+            DRAWITEMSTRUCT item = {0}; item.CtlType = ODT_BUTTON; item.CtlID = ACT_SSH;
+            item.hwndItem = buttons[0]; item.hDC = dc; item.rcItem = button_bounds;
+            item.itemState = ODS_SELECTED | ODS_FOCUS;
+            CHECK_INT(SendMessageW(pane_hwnd(f.pane), WM_DRAWITEM, ACT_SSH, (LPARAM)&item), TRUE);
+            item.CtlType = ODT_LISTBOX; CHECK(!s->vt->draw_control(s, &item));
+            ReleaseDC(buttons[0], dc);
+            CHECK(s->vt->key(s, VK_TAB, false, false)); CHECK(GetFocus() == buttons[0]);
+            SendMessageW(buttons[0], WM_KEYDOWN, VK_TAB, 0); CHECK(GetFocus() == buttons[1]);
+            SendMessageW(buttons[1], WM_KEYDOWN, VK_ESCAPE, 0); CHECK(GetFocus() == pane_hwnd(f.pane));
+        }
+    }
+    theme_set_dpi(dpi);
+    HWND gear = GetDlgItem(pane_hwnd(f.pane), ACT_SETTINGS);
+    SendMessageW(gear, BM_CLICK, 0, 0);
+    // Settings reads the offered SSH catalog; consume it before destroying the fixture dispatcher.
+    screen_fixture_pump(&f, 1);
+    CHECK(pane_top(f.pane) != s); CHECK_STR(pane_top(f.pane)->id, "settings");
+    CHECK(!IsWindowVisible(gear));
+    pane_pop(f.pane); draw(f.pane); CHECK(IsWindowVisible(gear));
+    finish(&f);
+}
 void app_sidebar_tests(void) {
     screen_fixture_prepare();
     test_run("project sidebar pins actions above scrolling rows and survives navigation and resize (Swift #113)", test_project_sidebar);
+    test_run("Sidebar native footer buttons fit at narrow DPI, traverse focus and route Settings", test_footer_controls);
     test_run("sidebar recount preserves live projects when cache writes fail", test_recount_preserves_live_projects);
     test_run("session sidebar pins actions through wheel, keyboard, drag, DPI and selection changes (Swift #113)", test_session_sidebar);
 }

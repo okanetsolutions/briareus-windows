@@ -25,7 +25,7 @@ void project_ssh_global_list(ProjectSsh *p, Doc *doc, int w) {
         const char *repo = json_str(json_get(folder, "repo"));
         bool open = ssh_server_folder_open(p->folded, repo, "");
         char *label = xstrfmt("%s %s (%u)", open ? "▾" : "▸", json_str(json_get(folder, "title")), (unsigned)json_count(indices));
-        doc_space(doc, px(10));
+        if (f) doc_space(doc, px(10));
         int item = doc_box_begin(doc, 0, w, px(8), theme.raise, theme.line, px(7));
         doc_text(doc, px(8), w - px(16), label, FONT_SUBHEADLINE_SEMIBOLD, theme.secondary, DT_WORDBREAK);
         doc_box_end(doc, item, px(8)); doc_box_action(doc, item, p->base + A_FOLDER, (intptr_t)f);

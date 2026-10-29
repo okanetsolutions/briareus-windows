@@ -31,14 +31,17 @@ typedef enum { MARK_NONE, MARK_WHATSAPP, MARK_MAIL } StripMark;
 enum { PLAYER_ROW = 36, PLAYER_BUTTON = 26, VOLUME_ROW = 22, VOLUME_STEP = 5 };
 
 typedef struct {
-    RECT select_rc, version_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc;
+    RECT select_rc, version_rc, ssh_rc, settings_rc, signout_rc, previous_rc, toggle_rc, next_rc;
     RECT player_rc, mute_rc, volume_rc;     // the whole player for the wheel; the slider's track takes clicks around it
+    HWND buttons[3], tip;
     int track_left, track_right;
 } FooterRects;
 
 /// The foot: `☑ Select` 13px muted and the version (the waiting release's in the accent, opening the updates menu), then
 /// at the right the ⚙ Settings icon button and the `⎋ Sign out` button, above a border, under the player.
-enum { FOOT_BUTTON = 26 };
+// SignOut in both Segoe Fluent Icons and Segoe MDL2 Assets:
+// https://learn.microsoft.com/en-us/windows/apps/design/iconography/segoe-ui-symbol-font#pua-f300-f500
+enum { FOOT_BUTTON = 32, FOOT_SIGN_OUT_GLYPH = 0xF3B1 };
 
 // MARK: - Projects
 
@@ -67,6 +70,12 @@ typedef struct {
     char *bulk_error;
 } SessionsScreen;
 
+bool screen_projects_footer_draw(Screen *s, const DRAWITEMSTRUCT *item);
+bool screen_projects_footer_key(FooterRects *f, WPARAM vk, bool ctrl, bool shift);
+void screen_projects_footer_controls(Screen *s, FooterRects *f);
+void screen_projects_footer_hide(FooterRects *f);
+void screen_projects_footer_free(FooterRects *f);
+void screen_projects_footer_command(Screen *s, int id, int code, HWND control);
 void screen_projects_sidebar_top(Doc *doc, int w, const char *selected);
 bool screen_projects_player_click(Pane *pane, const FooterRects *f, POINT pt);
 bool screen_projects_player_press(Pane *pane, const FooterRects *f, POINT pt);

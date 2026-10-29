@@ -88,6 +88,29 @@ static void sessions_shared(void) {
     CHECK_OWNED_STR(project_ssh_tab_label(global, one), "Web · o/one");
     CHECK_OWNED_STR(project_ssh_tab_label(global, two), "Web · o/two");
     CHECK(project_ssh_shown_term(project) == one); CHECK(project_ssh_shown_term(global) == two);
+    Doc layout; doc_init(&layout); global->loaded = true;
+    json_array_push(global->rows, json_clone(row));
+    RECT content = pane_content_rect(f.pane);
+    doc_begin(&layout, NULL, pane_content_width(f.pane));
+    project_ssh_layout(global, &layout, layout.width); doc_end(&layout);
+    CHECK_INT(layout.region_count, 1);
+    int folder_top = -1;
+    for (size_t i = 0; i < layout.count; i++) if (layout.items[i].action == 700 + A_FOLDER) folder_top = layout.items[i].rc.top;
+    CHECK_INT(folder_top, layout.regions[0].view.top);
+    bool tab = false;
+    for (size_t i = 0; i < layout.count; i++) if (layout.items[i].action == 700 + A_TAB) {
+        CHECK_INT(layout.items[i].rc.top, folder_top);
+        CHECK(layout.items[i].rc.bottom < global->term_rc.top); tab = true;
+    }
+    CHECK(tab); CHECK(global->term_rc.top > layout.regions[0].view.top);
+    CHECK(global->term_rc.bottom <= content.bottom - content.top);
+    project_ssh_place(global, &content, 0, true);
+    RECT terminal; GetWindowRect(term_hwnd(two), &terminal);
+    MapWindowPoints(NULL, pane_hwnd(f.pane), (POINT *)&terminal, 2);
+    CHECK_INT(terminal.top, content.top + global->term_rc.top);
+    CHECK(terminal.bottom <= content.bottom);
+    doc_free(&layout);
+
     term_cycle_all(two, true); term_cycle(two, false); CHECK(term_active() == one);
     term_cycle_all(one, false); term_cycle(one, false); CHECK(term_active() == one);
     term_cycle_all(one, true); term_cycle(one, true); CHECK(term_active() == two);
@@ -102,10 +125,17 @@ static void sessions_shared(void) {
 static void navigation_gated(void) {
     ScreenFixture f; screen_fixture_init(&f, routes, 1);
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400); screen_projects_sidebar_top(&doc, 400, "ssh-servers"); doc_end(&doc);
-    int found = screen_fixture_find(&doc, "❯ SSH servers"); CHECK(found >= 0); if (found >= 0) CHECK_INT(doc.items[found].action, ACT_SSH);
+    for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != ACT_SSH);
+    FooterRects footer = {0}; RECT bounds = {0, 0, 268, 80};
+    screen_projects_sidebar_footer_paint(NULL, &bounds, &footer, false);
+    CHECK(!IsRectEmpty(&footer.ssh_rc));
+    CHECK(footer.ssh_rc.right < footer.settings_rc.left);
+    CHECK(footer.settings_rc.right < footer.signout_rc.left);
     doc_free(&doc); g_store.device.permission = "read";
     doc_init(&doc); doc_begin(&doc, NULL, 400); screen_projects_sidebar_top(&doc, 400, NULL); doc_end(&doc);
-    CHECK_INT(screen_fixture_find(&doc, "❯ SSH servers"), -1); doc_free(&doc); screen_fixture_clear(&f);
+    CHECK_INT(screen_fixture_find(&doc, "❯ SSH servers"), -1);
+    screen_projects_sidebar_footer_paint(NULL, &bounds, &footer, false); CHECK(IsRectEmpty(&footer.ssh_rc));
+    doc_free(&doc); screen_fixture_clear(&f);
 }
 static void sidebar_scroll_survives_resize(void) {
     ScreenFixture f; screen_fixture_init(&f, routes, 1);
@@ -118,6 +148,8 @@ static void sidebar_scroll_survives_resize(void) {
     }
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 900); project_ssh_layout(p, &doc, 900); doc_end(&doc);
     CHECK_INT(doc.region_count, 1); CHECK(doc.regions[0].max > 0);
+    CHECK(doc.regions[0].view.top > 0);
+    CHECK(doc.regions[0].view.bottom <= pane_content_rect(f.pane).bottom - pane_content_rect(f.pane).top);
     CHECK(doc_region_wheel(&doc, 1, doc.regions[0].view.top + 1, 100000));
     int scroll = doc.regions[0].scroll; CHECK(scroll > 0);
     bool reached = false;

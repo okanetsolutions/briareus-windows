@@ -22,25 +22,22 @@ static void paint_option(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     bool pressed = it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it;
     COLORREF fill = pressed ? blend(theme.accent, theme.raise, 0.2) : theme.canvas;
     fill_round_rect(cv, rc, px(7), fill, hover || pressed ? theme.accent : theme.line);
-    RECT text = *rc; InflateRect(&text, -px(12), -px(8));
-    text.right -= px(24);
-    RECT arrow = *rc; arrow.left = arrow.right - px(28);
-    draw_text(cv, "→", &arrow, FONT_BODY, hover || pressed ? theme.accent : theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT text = *rc; InflateRect(&text, -px(12), -px(12));
     draw_text(cv, it->text, &text, FONT_BODY, it->action ? theme.ink : theme.muted, DT_LEFT | DT_WORDBREAK);
 }
 static void option_button(StatusScreen *s, Doc *doc, int x, int w, const char *label, size_t index, int option, bool can) {
-    int h = measure_text(doc->cv, label, w - px(48), FONT_BODY, DT_WORDBREAK) + px(16);
+    int h = measure_text(doc->cv, label, w - px(24), FONT_BODY, DT_WORDBREAK) + px(24);
     int i = doc_custom(doc, x, w, h, paint_option, NULL, NULL, can ? STATUS_OPTION : 0, status_action_add(s, index, option));
     doc_item(doc, i)->text = xstrdup(label);
     doc_space(doc, px(6));
 }
 static void waiting(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
     StatusCard *c = s->cards[index];
-    int pad = px(16), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
-    int iw = w - pad * 2; pad += x; heading(s, doc, index, pad, iw, FONT_HEADLINE); doc_space(doc, px(8));
+    int pad = px(20), box = doc_box_begin(doc, x, w, pad, theme.raise, theme.line, px(12));
+    int iw = w - pad * 2; pad += x; heading(s, doc, index, pad, iw, FONT_SUBHEADLINE); doc_space(doc, px(20));
     const Event *question = session_state(&c->session) == SESSION_WAITING ? transcript_pending_question(&c->transcript) : NULL;
     const char *text = question ? question->question ? question->question : question->text : json_str(json_get(c->session.raw, "lastText"));
-    if (text) doc_text(doc, pad, iw, text, FONT_BODY, theme.ink, DT_WORDBREAK);
+    if (text) doc_text(doc, pad, iw, text, FONT_HEADLINE, theme.ink, DT_WORDBREAK);
     doc_space(doc, px(12));
     if (session_state(&c->session) == SESSION_FINDINGS) {
         doc_button(doc, pad, 0, "Decide findings →", BUTTON_BORDERED, STATUS_OPEN, status_action_add(s, index, -1), true);
@@ -50,22 +47,21 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
             const char *label = json_str_nonempty(json_get(json_at(question->options, i), "label"));
             if (label) option_button(s, doc, pad, iw, label, index, (int)i, can);
         }
-        doc_space(doc, px(6));
-        int send_w = text_width(doc->cv, "Send reply", FONT_FOOTNOTE) + px(24) + 2;
-        bool inline_send = iw >= send_w + px(180);
-        int editor_w = inline_send ? iw - send_w - px(10) : iw;
-        int top = doc->y;
-        int editor = doc_box_begin(doc, pad, editor_w, px(8), theme.raise, theme.secondary, px(7));
-        c->laid = true; c->rect = (RECT){ pad + px(8), doc->y, pad + editor_w - px(8), doc->y + px(28) };
-        doc_space(doc, px(28)); doc_box_end(doc, editor, px(8));
-        int bottom = doc->y;
+        doc_space(doc, px(12));
+        c->label_rect = (RECT){ pad, doc->y, pad + iw, doc->y + px(20) };
+        doc_space(doc, px(20));
+        doc_space(doc, px(8));
+        int send_w = text_width(doc->cv, "Send reply", FONT_BODY) + px(32) + 2;
+        int editor = doc_box_begin(doc, pad, iw, px(10), theme.raise, theme.secondary, px(7));
+        c->laid = true; c->rect = (RECT){ pad + px(10), doc->y, pad + iw - px(10), doc->y + px(28) };
+        doc_space(doc, px(28)); doc_box_end(doc, editor, px(10));
+        doc_space(doc, px(12));
         c->reply_action = status_action_add(s, index, -1);
         char *trim = str_trim(c->draft ? c->draft : "");
         bool ready = can && *trim; free(trim);
-        if (inline_send) doc->y = top + px(6);
-        else doc_space(doc, px(8));
-        doc_button(doc, inline_send ? pad + editor_w + px(10) : pad, send_w, "Send reply", ready ? BUTTON_PROMINENT : BUTTON_BORDERED, STATUS_SEND, c->reply_action, ready);
-        if (doc->y < bottom) doc->y = bottom;
+        int send = doc_button(doc, pad, send_w, "Send reply", ready ? BUTTON_PROMINENT : BUTTON_BORDERED, STATUS_SEND, c->reply_action, ready);
+        doc_item(doc, send)->rc.bottom = doc_item(doc, send)->rc.top + px(40);
+        doc->y = doc_item(doc, send)->rc.bottom;
     }
     if (c->read_error) doc_notice(doc, pad, iw, c->read_error);
     if (c->error) doc_notice(doc, pad, iw, c->error);
@@ -80,30 +76,32 @@ void status_layout(Screen *base, Doc *doc) {
     s->action_first = s->action_next; s->action_count = 0;
     for (size_t i = 0; i < s->card_count; i++) s->cards[i]->laid = false;
     if (!status_current(s)) { doc_notice(doc, 0, w, "The connection changed. Reopen Status on the current server."); return; }
-    char *counts = xstrfmt("Need you  %u     Working  %u     Ready  %u", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count, (unsigned)s->overview.ready);
-    doc_text(doc, 0, w, counts, FONT_SUBHEADLINE, theme.ink, DT_WORDBREAK); free(counts); doc_space(doc, px(12));
-    if (s->error) doc_notice(doc, 0, w, s->error);
-    if (s->missing) doc_notice(doc, 0, w, "Some project lists are unavailable. Counts reflect the saved lists available here.");
-    if (!s->loaded) doc_loading(doc, 0, w, "Loading Status…");
-    // Decide from the pane's available logical width, including split panes and DPI changes.
+    int available = w;
+    if (w > px(1440)) w = px(1440);
+    int origin = (available - w) / 2;
+    doc_space(doc, px(20));
+    if (s->error) doc_notice(doc, origin, w, s->error);
+    if (s->missing) doc_notice(doc, origin, w, "Some project lists are unavailable. Showing saved sessions; totals may be incomplete.");
+    if (!s->loaded) doc_loading(doc, origin, w, "Loading Status…");
+    bool complete = s->loaded && !s->error && !s->missing;
+    char *ready = complete ? xstrfmt("Need you  %u     Working  %u     Ready  %u", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count, (unsigned)s->overview.ready) : xstrdup("Need you  —     Working  —     Ready  —");
+    doc_text(doc, origin, w, ready, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK); free(ready);
+    doc_space(doc, px(20));
     bool columns = w >= px(1040);
-    int gap = px(28), working_w = columns ? (w - gap) * 36 / 100 : w;
+    int gap = px(32), working_w = columns ? (w - gap) * 36 / 100 : w;
     int waiting_w = columns ? w - gap - working_w : w;
     int top = doc->y;
-    bool complete = s->loaded && !s->error && !s->missing;
-    char *title = xstrfmt("Waiting for you · %u", (unsigned)s->overview.waiting_count);
-    doc_section(doc, 0, waiting_w, title); free(title);
-    if (complete && !s->overview.waiting_count) doc_text(doc, 0, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    doc_section(doc, origin, waiting_w, "Need you");
+    if (complete && !s->overview.waiting_count) doc_text(doc, origin, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.waiting_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.waiting[i]]);
-        if (index < s->card_count) waiting(s, doc, index, 0, waiting_w);
+        if (index < s->card_count) waiting(s, doc, index, origin, waiting_w);
     }
     int waiting_bottom = doc->y;
     if (columns) doc->y = top;
     else doc_space(doc, px(8));
-    int x = columns ? waiting_w + gap : 0;
-    title = xstrfmt("Working · %u", (unsigned)s->overview.working_count);
-    doc_section(doc, x, working_w, title); free(title);
+    int x = origin + (columns ? waiting_w + gap : 0);
+    doc_section(doc, x, working_w, "Working");
     if (complete && !s->overview.working_count) doc_text(doc, x, working_w, "No sessions running.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.working_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.working[i]]);
@@ -117,7 +115,12 @@ void status_layout(Screen *base, Doc *doc) {
     }
     if (doc->y < waiting_bottom) doc->y = waiting_bottom;
 }
-void status_controls_hide(StatusScreen *s) { for (size_t i = 0; i < s->card_count; i++) if (s->cards[i]->edit) ShowWindow(s->cards[i]->edit, SW_HIDE); }
+void status_controls_hide(StatusScreen *s) {
+    for (size_t i = 0; i < s->card_count; i++) {
+        if (s->cards[i]->label) ShowWindow(s->cards[i]->label, SW_HIDE);
+        if (s->cards[i]->edit) ShowWindow(s->cards[i]->edit, SW_HIDE);
+    }
+}
 static LRESULT CALLBACK reply_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     StatusScreen *s = (StatusScreen *)ref;
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
@@ -145,10 +148,12 @@ static LRESULT CALLBACK reply_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
 }
 static void ensure_edit(StatusScreen *s, StatusCard *c) {
     if (c->edit) return;
+    c->label = CreateWindowExW(0, L"STATIC", L"Your reply", WS_CHILD | SS_LEFT, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
+    theme_apply_control(c->label);
     c->edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
     SetWindowSubclass(c->edit, reply_proc, 0, (DWORD_PTR)s);
     theme_apply_control(c->edit);
-    SendMessageW(c->edit, EM_SETCUEBANNER, TRUE, (LPARAM)L"Write a reply…");
+
     SendMessageW(c->edit, EM_SETLIMITTEXT, 100000, 0);
     wchar_t *text = utf8_to_wide(c->draft ? c->draft : ""); SetWindowTextW(c->edit, text); free(text);
 }
@@ -162,6 +167,13 @@ void status_place(Screen *base, const RECT *content, int scroll_y) {
         if (!c->edit) continue;
         SendMessageW(c->edit, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
         HWND parent = pane_hwnd(base->pane);
+        if (GetParent(c->label) != parent) SetParent(c->label, parent);
+        SendMessageW(c->label, WM_SETFONT, (WPARAM)font(FONT_FOOTNOTE_SEMIBOLD), TRUE);
+        RECT lr = c->label_rect, clipped = {0}; OffsetRect(&lr, content->left + margin, content->top - scroll_y);
+        bool label_visible = show && IntersectRect(&clipped, &lr, content);
+        MoveWindow(c->label, lr.left, lr.top, lr.right - lr.left, lr.bottom - lr.top, TRUE);
+        if (label_visible) SetWindowRgn(c->label, CreateRectRgn(clipped.left - lr.left, clipped.top - lr.top, clipped.right - lr.left, clipped.bottom - lr.top), TRUE);
+        ShowWindow(c->label, label_visible ? SW_SHOWNA : SW_HIDE);
         if (GetParent(c->edit) != parent) SetParent(c->edit, parent);
         EnableWindow(c->edit, status_can_answer(s, c));
         RECT r = c->rect, visible; OffsetRect(&r, content->left + margin, content->top - scroll_y);

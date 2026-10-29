@@ -100,7 +100,7 @@ static void header(Screen *base, HeaderInfo *info) {
     StatusScreen *s = (StatusScreen *)base;
     snprintf(info->title, sizeof info->title, "\xE2\x97\x89 Status");
     if (status_current(s) && store_supports("server_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D9, .action = STATUS_SERVER, .enabled = true, .tip = "Server resources"};
-    if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%u waiting for you · %u working", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count);
+    if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->loaded ? "Answer questions and follow active sessions" : "Loading sessions…");
 }
 static void action(Screen *base, int action, intptr_t arg, POINT point) {
     (void)point; StatusScreen *s = (StatusScreen *)base;
@@ -150,6 +150,7 @@ static void destroy(Screen *base) {
     StatusScreen *s = (StatusScreen *)base; visible(base, false);
     for (size_t i = 0; i < s->card_count; i++) {
         StatusCard *c = s->cards[i];
+        if (c->label) DestroyWindow(c->label);
         if (c->edit) DestroyWindow(c->edit);
         session_free(&c->session); json_free(c->identity); json_free(c->answered_question); json_free(c->unsaved_events); transcript_free(&c->transcript); free(c->draft); free(c->error); free(c->read_error); free(c);
     }

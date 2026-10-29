@@ -424,6 +424,8 @@ static void test_responsive_layout_and_controls(void) {
     ShowWindow(dispatcher, SW_SHOWNA);
     StatusCard *c = s->cards[card(s, "wait")];
     set_string(&c->draft, "Retain this draft across reflow");
+    const char *long_title = "Review the complete release plan, including keyboard navigation, documentation and accessibility improvements across the desktop application";
+    json_set_str(c->session.raw, "title", long_title);
     const char *long_option = "Use the complete proposed release plan, including the extended documentation and the accessibility improvements, and preserve all of this answer when the layout wraps across multiple lines in a split pane.";
     Json *event = json_clone(transcript_pending_question(&c->transcript)->raw);
     Json *option_data = json_object(); json_set_str(option_data, "label", long_option);
@@ -434,15 +436,20 @@ static void test_responsive_layout_and_controls(void) {
     Doc doc; doc_init(&doc); int dpi = theme_dpi();
     for (int scale = 1; scale <= 2; scale++) {
         theme_set_dpi(dpi * scale);
-        int wide_option_height = 0;
-        for (int narrow = 0; narrow < 2; narrow++) {
-            int width = px(narrow ? 390 : 1440);
+        int wide_option_height = 0, wide_option_width = 0, wide_title_height = 0;
+        for (int mode = 0; mode < 3; mode++) {
+            bool narrow = mode == 1;
+            int width = px(mode == 2 ? 2400 : narrow ? 390 : 1440);
             RECT bounds = {0, 0, width + px(36), px(1200)}; pane_set_bounds(pane, &bounds);
             doc_begin(&doc, NULL, width); status_layout(&s->base, &doc); doc_end(&doc);
             Item *work = card_item(s, &doc, STATUS_OPEN, card(s, "work"));
             Item *wait = card_item(s, &doc, STATUS_OPEN, card(s, "wait"));
             CHECK(work != NULL); CHECK(wait != NULL);
             if (!work || !wait) continue;
+            CHECK_STR(wait->text, long_title);
+            int title_height = wait->rc.bottom - wait->rc.top;
+            if (narrow) CHECK(title_height > wide_title_height);
+            else if (!mode) wide_title_height = title_height;
             if (narrow) CHECK(work->rc.top > c->rect.bottom);
             else { CHECK(work->rc.left > c->rect.right); CHECK(work->rc.top < c->rect.top); }
             CHECK(doc_height(&doc) >= work->rc.bottom); CHECK(doc_height(&doc) >= c->rect.bottom);
@@ -452,7 +459,12 @@ static void test_responsive_layout_and_controls(void) {
             if (!option) continue;
             int option_height = option->rc.bottom - option->rc.top;
             if (narrow) CHECK(option_height > wide_option_height);
-            else wide_option_height = option_height;
+            else if (!mode) { wide_option_height = option_height; wide_option_width = option->rc.right - option->rc.left; }
+            else {
+                CHECK_INT(option_height, wide_option_height);
+                CHECK_INT(option->rc.right - option->rc.left, wide_option_width);
+                CHECK(option->rc.left > px(100));
+            }
             CHECK(option->rc.right <= width);
             int hit = doc_hit(&doc, option->rc.left + 1, option->rc.bottom - 1);
             CHECK(hit >= 0);
@@ -473,6 +485,11 @@ static void test_responsive_layout_and_controls(void) {
             MapWindowPoints(NULL, pane_hwnd(pane), (POINT *)&after, 2);
             CHECK_INT(after.top, before.top - px(12)); CHECK_INT(after.left, before.left);
             CHECK(c->edit == edit); CHECK(GetFocus() == edit);
+            RECT label; GetWindowRect(c->label, &label);
+            MapWindowPoints(NULL, pane_hwnd(pane), (POINT *)&label, 2);
+            CHECK(label.bottom <= after.top);
+            CHECK_INT(label.left, c->label_rect.left + content.left + margin);
+            CHECK(GetWindow(c->edit, GW_HWNDPREV) == c->label);
             CHECK_STR(c->draft, "Retain this draft across reflow");
         }
     }
