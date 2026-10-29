@@ -78,7 +78,7 @@ void servers_ssh_scope_changed(void) {
         request_cancel(&p->req);
         json_free(p->rows); p->rows = json_array();
         json_free(p->folded); p->folded = json_object();
-        set_string(&p->query, ""); set_string(&p->error, NULL);
+        set_string(&p->error, NULL);
         p->loaded = p->loading = false; p->focused = NULL;
         api_client_release(p->account); p->account = g_store.client; api_client_retain(p->account);
         free(p->scope); p->scope = project_ssh_scope();
@@ -158,12 +158,11 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
     if (!project_ssh_current(p) || !project_ssh_offered()) return false;
     if (action < p->base || action >= p->base + PROJECT_SSH_ACTIONS) return false;
     switch (action - p->base) {
-    case A_CLEAR: set_string(&p->query, ""); relayout(p); break;
     case A_FOLDER: {
         size_t count; const Project *projects = projects_list(&count);
-        Json *folders = ssh_server_folders(p->rows, projects, count, p->query);
+        Json *folders = ssh_server_folders(p->rows, projects, count, "");
         const char *repo = json_str(json_get(json_at(folders, (size_t)arg), "repo"));
-        if (repo) ssh_server_folder_toggle(p->folded, repo, p->query);
+        if (repo) ssh_server_folder_toggle(p->folded, repo, "");
         json_free(folders); relayout(p); break;
     }
     case A_SERVER: project_ssh_connect_row(p, json_at(p->rows, (size_t)arg)); break;
@@ -190,7 +189,7 @@ ProjectSsh *project_ssh_new(const char *repo, Screen *host, int action_base) {
     p->repo = xstrdup(repo ? repo : "");
     p->account = g_store.client; api_client_retain(p->account);
     p->scope = project_ssh_scope();
-    p->folded = json_object(); p->query = xstrdup("");
+    p->folded = json_object();
     p->host = host; p->base = action_base;
     p->rows = json_array();
     for (int i = 0; i < MAX_INSTANCES; i++) if (!g_instances[i]) { g_instances[i] = p; break; }
@@ -209,7 +208,7 @@ void project_ssh_free(ProjectSsh *p) {
     request_cancel(&p->req);
     json_free(p->rows);
     api_client_release(p->account); free(p->scope);
-    json_free(p->folded); free(p->query);
+    json_free(p->folded);
     free(p->repo); free(p->error);
     free(p);
 }

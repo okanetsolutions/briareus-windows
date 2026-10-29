@@ -5,14 +5,14 @@
 #include "ssh_servers.h"
 
 // The actions, from the host's `action_base` up.
-enum { A_SERVER, A_TAB, A_TAB_CLOSE, A_RECONNECT, A_CLOSE, A_FOLDER, A_CLEAR };
+enum { A_SERVER, A_TAB, A_TAB_CLOSE, A_RECONNECT, A_CLOSE, A_FOLDER };
 enum { LIST_W = 260, TAB_H = 30, TAB_CLOSE_W = 22, MAX_INSTANCES = 16 };
 
 struct ProjectSsh {
     char *repo;
     bool global;
     ApiClient *account;
-    char *scope, *query;
+    char *scope;
     Json *folded;
     Screen *host;
     int base;
