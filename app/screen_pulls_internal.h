@@ -90,7 +90,7 @@ enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
-    ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
+    ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_METADATA,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -112,7 +112,8 @@ typedef struct {
     char *scope, *error; bool read, visible;
     time_t next_poll, retry_at;
     time_t (*clock)(void); // NULL uses the system clock; deadlines share this clock.
-    int64_t review_id, finding_id;
+    int64_t review_id, finding_id, row_review_id;
+    bool metadata_open, reveal_row, reset_inspector;
 } PullReviews;
 
 typedef struct {
@@ -294,6 +295,13 @@ void screen_pulls_reviews_load(PullScreen *s, bool refresh);
 void screen_pulls_reviews_poll(PullScreen *s);
 void screen_pulls_reviews_visible(Screen *base, bool shown);
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c);
+void screen_pulls_paint_review_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
+void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c);
+char *screen_pulls_review_amount(CodeReviewAmount amount, bool money, bool estimated, size_t unpriced);
+COLORREF screen_pulls_review_color(const char *text, bool severity);
+void screen_pulls_review_badge(Doc *doc, int x, int w, const char *text, bool severity, COLORREF background);
+char *screen_pulls_review_date(const Json *r, const char *name);
+void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, bool header);
 void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c);
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
 void screen_pulls_layout_findings(PullScreen *s, Doc *doc, Col c);

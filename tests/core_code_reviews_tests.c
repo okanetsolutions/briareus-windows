@@ -84,7 +84,39 @@ static void terminal_null_verdicts(void) {
     CHECK_STR(code_review_verdict(mixed, f), "no verdict"); CHECK_STR(code_review_verification(mixed, f), "plausible");
     json_free(mixed); json_free(running_payload); json_free(running); json_free(reviews);
 }
+static void usage_totals_preserve_unknowns(void) {
+    Json *payload = json_parsez(CODE_REVIEWS_FIXTURE), *rows = code_reviews_parse(payload);
+    CodeReviewTotals t = code_reviews_totals(rows);
+    CHECK_INT(t.reviews, 2); CHECK_INT(t.findings, 3);
+    CHECK_INT(t.input.known, 1); CHECK_INT(t.input.unknown, 1); CHECK(t.input.value == 1240);
+    CHECK_INT(t.output.known, 2); CHECK_INT(t.output.unknown, 0); CHECK(t.output.value == 180);
+    CHECK_INT(t.cost.known, 1); CHECK_INT(t.cost.unknown, 1); CHECK(t.cost.value == 0.0123);
+    CHECK(t.estimated); CHECK_INT(t.unpriced_turns, 3);
+    // Adding findings to one review never multiplies its usage or cost.
+    Json *r = (Json *)json_at(rows, 1), *findings = (Json *)json_get(r, "findings");
+    json_array_push(findings, json_clone(json_at(findings, 0)));
+    t = code_reviews_totals(rows); CHECK_INT(t.findings, 4); CHECK(t.cost.value == 0.0123); CHECK(t.input.value == 1240);
+    Json *zero = json_parsez("{\"inputTokens\":0,\"outputTokens\":0,\"costUsd\":0,\"costEstimated\":false,\"unpricedTurns\":0}");
+    CodeReviewTotals z = code_review_totals(zero);
+    CHECK_INT(z.input.known, 1); CHECK_INT(z.output.known, 1); CHECK_INT(z.cost.known, 1);
+    CHECK(z.input.value == 0); CHECK(z.output.value == 0); CHECK(z.cost.value == 0); CHECK(!z.estimated);
+    json_array_push(rows, zero); t = code_reviews_totals(rows);
+    CHECK_INT(t.reviews, 3); CHECK_INT(t.cost.known, 2); CHECK_INT(t.cost.unknown, 1); CHECK(t.cost.value == 0.0123);
+    json_free(rows); json_free(payload);
+    rows = json_parsez("[{\"costUsd\":null,\"inputTokens\":null,\"outputTokens\":null,\"costEstimated\":true,\"unpricedTurns\":2},{}]");
+    t = code_reviews_totals(rows);
+    CHECK_INT(t.input.known, 0); CHECK_INT(t.input.unknown, 2);
+    CHECK_INT(t.output.known, 0); CHECK_INT(t.output.unknown, 2);
+    CHECK_INT(t.cost.known, 0); CHECK_INT(t.cost.unknown, 2); CHECK(!t.estimated); CHECK_INT(t.unpriced_turns, 2);
+    json_free(rows); rows = json_array(); t = code_reviews_totals(rows);
+    CHECK_INT(t.reviews, 0); CHECK_INT(t.cost.known, 0); json_free(rows);
+    Json *r1 = json_parsez("{\"status\":\"failed\",\"findings\":[{\"severity\":\"high\"}]}");
+    CHECK_OWNED_STR(code_review_counts_compact(r1), "1 finding\n1 high\n1 no verdict");
+    json_set_str(r1, "status", "running");
+    CHECK_OWNED_STR(code_review_counts_compact(r1), "1 finding\n1 high\n1 pending"); json_free(r1);
+}
 void core_code_reviews_tests(void) {
+    test_run("review totals sum each review once and preserve zero, unknown, estimated and unpriced values", usage_totals_preserve_unknowns);
     test_run("terminal null review verdicts remain inconclusive and only running nulls are pending", terminal_null_verdicts);
     test_run("stored code review nested public contract and null semantics", stored_contract);
     test_run("code reviews malformed is distinct from empty", malformed_and_empty);

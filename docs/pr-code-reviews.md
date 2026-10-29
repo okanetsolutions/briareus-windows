@@ -25,12 +25,27 @@ cost fields remain unknown; partial cost is marked only when a cost value exists
 Empty results, malformed payloads, unsupported capability and HTTP failures have
 distinct states. A failed refresh labels the retained snapshot and its totals stale.
 
-Selecting a row shows stored Markdown, rationale and review metadata below the
-compact table. The Code reviews details include the summary and every finding.
-Up/Down and Home/End move selection; native document scrolling, selection and
-copying apply. Rows use stable record IDs, and replaced findings lose selection.
-Small panes use fewer columns, with horizontal scrolling below the minimum table
-width. Full titles and locations remain available in tooltips and selected details.
+Code reviews immediately precedes Findings in the tab strip; tab IDs and the default
+PR Body selection are unchanged. Code reviews keeps a full-width overview table with
+visible per-review input/output tokens and cost. Its footer sums each displayed review
+once, scopes totals to the latest 20 stored reviews, and includes historical/dismissed
+findings. Known zero is zero; all-missing usage is Unknown, while mixed totals show
+the known sum with the missing-review count and a partial label. Estimated costs and
+unpriced turns remain visible; exact usage is available in cost tooltips and metadata.
+
+Findings groups table rows by reviewed commit, with semantic severity/verdict badges.
+A persistent accent outline identifies selection; hover only changes the fill. The old
+orange hover outline could appear on a different row from the selected detail and was
+not a data-selection mismatch. On wide panes a balanced table and independently
+scrollable inspector share the viewport; on narrow panes a bounded table stacks above
+the detail. The selected title, source with intact line range, body and rationale precede
+secondary review metadata. Full paths and titles remain copyable and available in tips.
+
+Each tab retains its own stable selection across refreshes. Removed records select a
+remaining record; Up/Down and Home/End reveal the selected row with minimal scrolling.
+The Code reviews report remains below its table and includes every stored finding.
+Native document text selection, Markdown links, code wrapping and copying apply.
+Narrow Code reviews panes scroll horizontally to preserve readable usage columns.
 
 Reads coalesce across tabs. Either visible review tab refreshes at most once per
 30 seconds on the existing screen poller, including empty or completed-only lists
@@ -53,10 +68,14 @@ route encoding, shared reads, errors, unsupported capability, stable selection,
 replacement IDs, stale scopes, polling, retry deadlines, cancellation, hit targets
 and narrow/DPI fallback. No real reviews or paid requests are used.
 
-Synthetic previews use the existing native screen fixture with a temporary runner,
-Wine and Xvfb, with screen polling stopped for static captures. The baseline
-preview uses `origin/main`'s pull screen and the retired schema; after previews use
-the committed fixture above. Wine substitutes fonts and lacks some Segoe icon
-glyphs. These previews cannot prove native Windows font metrics or accessibility;
-Windows CI remains authoritative for Windows execution, MSVC and memory checks.
-No new Win32 APIs are introduced, so no new Switch shim declarations are needed.
+`scripts/preview_pull_reviews.sh` builds the synthetic native screen harness and captures
+Findings and Code reviews at 1652px, 390px and 192-DPI/780px with Wine and Xvfb;
+set DISPLAY, WINEPREFIX and optionally BUILD first. The harness stops polling and
+uses only fake transport responses, including nine findings and four reviews. It can
+run the focused suite with PREVIEW_TESTS=1. The optional BRIAREUS_WINE_PREVIEW_TIME
+flag supplies a harness-only UTC fallback for Wine 9's unimplemented existing time-zone
+API; it is never linked into the app or Windows CI tests. PREVIEW_WINE_TIME=0 disables
+that workaround. Wine substitutes fonts and lacks some Segoe icon glyphs, so these
+renders do not establish native Windows font metrics, accessibility, or Windows test
+results. Windows CI remains authoritative for both toolchains and memory checks.
+No new production Win32 APIs or Switch shim declarations are needed.

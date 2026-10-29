@@ -105,3 +105,39 @@ char *code_reviews_counts(const Json *reviews) {
     for (size_t i = 0; i < json_count(reviews); i++) count_findings(&c, json_at(reviews, i));
     return counts_text(&c);
 }
+
+static CodeReviewAmount amount(const Json *review, const char *name) {
+    double n;
+    if (!json_num(json_get(review, name), &n) || !isfinite(n) || n < 0) return (CodeReviewAmount){0, 0, 1};
+    return (CodeReviewAmount){n, 1, 0};
+}
+CodeReviewTotals code_review_totals(const Json *review) {
+    CodeReviewTotals t = {0};
+    t.reviews = 1; t.findings = json_count(json_get(review, "findings"));
+    t.input = amount(review, "inputTokens"); t.output = amount(review, "outputTokens"); t.cost = amount(review, "costUsd");
+    t.estimated = t.cost.known && json_bool_is(json_get(review, "costEstimated"), true);
+    int unpriced = json_int_or(json_get(review, "unpricedTurns"), 0);
+    t.unpriced_turns = unpriced > 0 ? (size_t)unpriced : 0;
+    return t;
+}
+static void add_amount(CodeReviewAmount *to, CodeReviewAmount from) {
+    to->value += from.value; to->known += from.known; to->unknown += from.unknown;
+}
+CodeReviewTotals code_reviews_totals(const Json *reviews) {
+    CodeReviewTotals t = {0};
+    for (size_t i = 0; i < json_count(reviews); i++) {
+        CodeReviewTotals r = code_review_totals(json_at(reviews, i));
+        t.reviews++; t.findings += r.findings; t.unpriced_turns += r.unpriced_turns;
+        add_amount(&t.input, r.input); add_amount(&t.output, r.output); add_amount(&t.cost, r.cost);
+        t.estimated = t.estimated || r.estimated;
+    }
+    return t;
+}
+char *code_review_counts_compact(const Json *review) {
+    Counts c = {0}; count_findings(&c, review);
+    Str text; str_init(&text); str_appendf(&text, "%zu finding%s", c.total, c.total == 1 ? "" : "s");
+    const size_t values[] = {c.critical, c.high, c.medium, c.low, c.pending, c.no_verdict};
+    const char *labels[] = {"critical", "high", "medium", "low", "pending", "no verdict"};
+    for (size_t i = 0; i < 6; i++) if (values[i]) str_appendf(&text, "\n%zu %s", values[i], labels[i]);
+    return str_detach(&text);
+}

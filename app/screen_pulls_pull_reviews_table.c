@@ -1,101 +1,92 @@
 #include "screen_pulls_internal.h"
 
-// Uses document cells and whole-row hit targets, like its native Markdown tables.
-static void table_row(Doc *doc, Col c, char **cells, const int *widths, int columns, bool heading, bool selected, int action, int64_t id) {
-    int top = doc->y, h = px(38), x = c.ix, pad = px(8);
-    FontId font = heading ? FONT_CAPTION_SEMIBOLD : FONT_FOOTNOTE;
-    for (int i = 0; i < columns; i++) {
-        int want = measure_text(doc->cv, cells[i], c.iw * widths[i] / 100 - 2 * pad, font, DT_WORDBREAK) + 2 * pad;
-        if (want > h) h = want;
-    }
-    if (h > px(110)) h = px(110);
-    RECT row = {c.ix, top, c.ix + c.iw, top + h};
-    int box = doc_box_begin(doc, c.ix, c.iw, 0, selected ? theme.sunken : heading ? theme.raise : theme.canvas, theme.line, 0);
-    if (action) doc_box_action(doc, box, action, (intptr_t)id);
-    Item *it;
-    for (int i = 0; i < columns; i++) {
-        int w = i + 1 == columns ? row.right - x : c.iw * widths[i] / 100;
-        RECT cell = {x + pad, top + pad, x + w - pad, top + h - pad};
-        UINT flags = DT_WORDBREAK;
-        if (measure_text(doc->cv, cells[i], w - 2 * pad, font, DT_WORDBREAK) > h - 2 * pad) flags |= DT_END_ELLIPSIS;
-        int index = doc_text_at(doc, &cell, cells[i], font, heading ? theme.secondary : theme.ink, flags);
-        it = doc_item(doc, index); it->cell = true;
-        it->tip = xstrdup(cells[i]);
-        x += w;
-    }
-    doc->y = top + h; doc_box_end(doc, box, 0);
-}
 static const char *field(const Json *r, const char *name) {
     const char *v = json_str(json_get(r, name)); return str_empty(v) ? "unknown" : v;
 }
-static char *context(PullScreen *s, const Json *r) {
-    return xstrfmt("#%lld · %.10s\n%s", (long long)code_review_id(r), field(r, "headSha"), code_review_head(r, json_str(json_get(s->pr, "headSha"))));
+static void cell(Doc *doc, int x, int y, int w, int h, const char *text, FontId font, COLORREF color, UINT flags) {
+    RECT rc = {x, y, x + w, y + h};
+    int i = doc_text_at(doc, &rc, text, font, color, flags);
+    Item *it = doc_item(doc, i); it->cell = true; it->tip = xstrdup(text);
 }
-static void findings_table(PullScreen *s, Doc *doc, Col c, bool wide) {
-    int wide_widths[] = {34, 10, 22, 17, 17}, small_widths[] = {44, 28, 28};
-    char *wide_heads[] = {"Finding", "Severity", "Location", "Verdict / verification", "Review / commit"};
-    char *small_heads[] = {"Finding / severity / review", "Location", "Verdict / verification"};
-    table_row(doc, c, wide ? wide_heads : small_heads, wide ? wide_widths : small_widths, wide ? 5 : 3, true, false, 0, 0);
+COLORREF screen_pulls_review_color(const char *text, bool severity) {
+    COLORREF color = theme.secondary;
+    if (str_eq(text, "critical") || str_eq(text, "high")) color = theme.danger;
+    else if (str_eq(text, "medium") || str_eq(text, "pending") || str_eq(text, "running")) color = theme.warn;
+    else if (str_eq(text, "fix") || str_eq(text, "failed")) color = theme.danger;
+    else if (str_eq(text, "confirmed") || str_eq(text, "completed")) color = theme.ok;
+    else if (severity || str_eq(text, "optional")) color = theme.accent;
+    return color;
+}
+void screen_pulls_review_badge(Doc *doc, int x, int w, const char *text, bool severity, COLORREF background) {
+    BadgeSpec badge = {0, text, screen_pulls_review_color(text, severity), false};
+    int i = doc_badges(doc, x, w, &badge, 1, background);
+    // Keep badge text available to document copying, find and assistive names.
+    doc_item(doc, i)->text = xstrfmt("%s: %s", severity ? "Severity" : "Verdict", text); doc_item(doc, i)->tip = xstrdup(doc_item(doc, i)->text);
+    doc_item(doc, i)->cell = true;
+}
+char *screen_pulls_review_date(const Json *r, const char *name) {
+    time_t when;
+    return board_date_parse(json_str(json_get(r, name)), &when) ? format_event_time(when) : xstrdup("Unknown date");
+}
+static void heading(Doc *doc, Col c) {
+    int top = doc->y, pad = px(10), status = px(78), last = px(112);
+    int first = c.iw - status - last;
+    int box = doc_box_begin(doc, c.ix, c.iw, 0, theme.raise, theme.line, 0);
+    cell(doc, c.ix + pad, top + pad, first - pad, px(18), "Finding / source", FONT_CAPTION_SEMIBOLD, theme.secondary, DT_SINGLELINE);
+    cell(doc, c.ix + first, top + pad, status, px(18), "Severity", FONT_CAPTION_SEMIBOLD, theme.secondary, DT_SINGLELINE);
+    cell(doc, c.ix + first + status, top + pad, last - pad, px(18), "Verdict", FONT_CAPTION_SEMIBOLD, theme.secondary, DT_SINGLELINE);
+    doc->y = top + px(38); doc_box_end(doc, box, 0);
+}
+void screen_pulls_paint_review_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    COLORREF fill = it->fill;
+    if (it->border != theme.accent && doc_item_hovered(doc, it)) fill = theme.raise;
+    fill_round_rect(cv, rc, 0, fill, it->border);
+}
+static int row_begin(Doc *doc, Col c, bool selected, int action, int64_t id) {
+    COLORREF bg = selected ? blend(theme.accent, theme.canvas, 0.10) : theme.canvas;
+    int box = doc_box_begin(doc, c.ix, c.iw, 0, bg, selected ? theme.accent : theme.line, 0);
+    doc_box_action(doc, box, action, (intptr_t)id);
+    // Hover changes the fill, never the selection outline.
+    doc_item(doc, box)->paint = screen_pulls_paint_review_row;
+    return box;
+}
+static void finding_row(PullScreen *s, Doc *doc, Col c, const Json *r, const Json *f) {
+    int top = doc->y, pad = px(10), first = c.iw - px(190);
+    int title_h = measure_text(doc->cv, field(f, "title"), first - 2 * pad, FONT_FOOTNOTE_SEMIBOLD, DT_WORDBREAK);
+    int max_title = 3 * font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD);
+    if (title_h > max_title) title_h = max_title;
+    int h = title_h + px(58); if (h < px(88)) h = px(88);
+    bool selected = code_review_id(r) == s->reviews.review_id && code_review_id(f) == s->reviews.finding_id;
+    int box = row_begin(doc, c, selected, ACT_REVIEW_FINDING, code_review_id(f));
+    cell(doc, c.ix + pad, top + pad, first - 2 * pad, title_h, field(f, "title"), FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_WORDBREAK | DT_END_ELLIPSIS);
+    char *where = code_review_location(f);
+    const char *path = json_str(json_get(f, "filePath"));
+    const char *base = path ? strrchr(path, '/') : NULL; base = base ? base + 1 : path ? path : "No location";
+    cell(doc, c.ix + pad, top + h - px(40), first - 2 * pad, px(20), base, FONT_CAPTION, theme.secondary, DT_SINGLELINE | DT_PATH_ELLIPSIS);
+    free(doc_item(doc, (int)doc->count - 1)->tip); doc_item(doc, (int)doc->count - 1)->tip = where;
+    double start, end;
+    if (json_num(json_get(f, "startLine"), &start)) {
+        char *lines = json_num(json_get(f, "endLine"), &end) && end != start ? xstrfmt("%.0f–%.0f", start, end) : xstrfmt("%.0f", start);
+        cell(doc, c.ix + pad, top + h - px(22), first - 2 * pad, px(18), lines, FONT_CAPTION, theme.secondary, DT_SINGLELINE); free(lines);
+    }
+    doc->y = top + pad;
+    screen_pulls_review_badge(doc, c.ix + first, px(72), field(f, "severity"), true, theme.canvas);
+    doc->y = top + pad;
+    screen_pulls_review_badge(doc, c.ix + first + px(78), px(102), code_review_verdict(r, f), false, theme.canvas);
+    if (!str_eq(code_review_verdict(r, f), code_review_verification(r, f))) cell(doc, c.ix + first + px(78), top + px(38), px(102), px(30), code_review_verification(r, f), FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    doc->y = top + h; doc_box_end(doc, box, 0);
+}
+void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, bool header) {
+    if (header) { heading(doc, c); return; }
     for (size_t i = 0; i < json_count(s->reviews.items); i++) {
-        const Json *r = json_at(s->reviews.items, i), *findings = json_get(r, "findings");
-        for (size_t j = 0; j < json_count(findings); j++) {
-            const Json *f = json_at(findings, j);
-            char *where = code_review_location(f), *ctx = context(s, r);
-            char *verdict = xstrfmt("%s\n%s", code_review_verdict(r, f), code_review_verification(r, f));
-            char *title = wide ? xstrdup(field(f, "title")) : xstrfmt("%s\n%s · %s", field(f, "title"), field(f, "severity"), ctx);
-            char *wide_cells[] = {title, (char *)field(f, "severity"), where, verdict, ctx};
-            char *small_cells[] = {title, where, verdict};
-            bool selected = code_review_id(r) == s->reviews.review_id && code_review_id(f) == s->reviews.finding_id;
-            table_row(doc, c, wide ? wide_cells : small_cells, wide ? wide_widths : small_widths, wide ? 5 : 3, false, selected, ACT_REVIEW_FINDING, code_review_id(f));
-            free(where); free(ctx); free(verdict); free(title);
+        const Json *r = json_at(s->reviews.items, i), *rows = json_get(r, "findings");
+        char *context = xstrfmt("Review #%lld · %.10s · %s", (long long)code_review_id(r), field(r, "headSha"), code_review_head(r, json_str(json_get(s->pr, "headSha"))));
+        if (json_count(rows)) {
+            doc_space(doc, px(10));
+            doc_text(doc, c.ix + px(10), c.iw - px(20), context, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_WORDBREAK);
+            doc_space(doc, px(6));
         }
+        for (size_t j = 0; j < json_count(rows); j++) finding_row(s, doc, c, r, json_at(rows, j));
+        free(context);
     }
-}
-static void reviews_table(PullScreen *s, Doc *doc, Col c, bool wide) {
-    int wide_widths[] = {17, 10, 18, 23, 32}, small_widths[] = {32, 33, 35};
-    char *wide_heads[] = {"Date (UTC)", "Status", "Review / commit", "Provider / model", "Findings"};
-    char *small_heads[] = {"Date (UTC) / status", "Review / commit / provider", "Findings"};
-    table_row(doc, c, wide ? wide_heads : small_heads, wide ? wide_widths : small_widths, wide ? 5 : 3, true, false, 0, 0);
-    for (size_t i = 0; i < json_count(s->reviews.items); i++) {
-        const Json *r = json_at(s->reviews.items, i);
-        char *ctx = context(s, r), *counts = code_review_counts(r);
-        char *provider = xstrfmt("%s\n%s", field(r, "provider"), str_empty(json_str(json_get(r, "model"))) ? "Provider default model" : field(r, "model"));
-        char *date = xstrfmt("%s%s%s", field(r, "createdAt"), wide ? "" : "\n", wide ? "" : field(r, "status"));
-        char *compact = xstrfmt("%s\n%s", ctx, provider);
-        char *wide_cells[] = {date, (char *)field(r, "status"), ctx, provider, counts};
-        char *small_cells[] = {date, compact, counts};
-        table_row(doc, c, wide ? wide_cells : small_cells, wide ? wide_widths : small_widths, wide ? 5 : 3, false, code_review_id(r) == s->reviews.review_id, ACT_REVIEW_ROW, code_review_id(r));
-        free(ctx); free(counts); free(provider); free(date); free(compact);
-    }
-}
-void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c) {
-    if (!screen_pulls_reviews_sync(s)) {
-        doc_notice(doc, c.ix, c.iw, "Stored code reviews are not supported by this server or token. Update the server or check project read access."); return;
-    }
-    PullReviews *r = &s->reviews;
-    if (r->error) {
-        doc_notice(doc, c.ix, c.iw, r->error);
-        doc_text(doc, c.ix, c.iw, r->items ? "Previous snapshot below; totals may be stale. F5 retries." : "Review results are unavailable. F5 retries.", FONT_FOOTNOTE, theme.secondary, DT_WORDBREAK);
-    }
-    if (!r->items) { if (!r->error) doc_loading(doc, c.ix, c.iw, "Loading stored code reviews…"); return; }
-    char *scope = xstrfmt("%zu findings across %zu stored reviews · latest 20 reviews, newest first", code_reviews_findings(r->items), json_count(r->items));
-    doc_text(doc, c.ix, c.iw, scope, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_WORDBREAK); free(scope);
-    char *totals = code_reviews_counts(r->items);
-    doc_text(doc, c.ix, c.iw, totals, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK); free(totals);
-    doc_text(doc, c.ix, c.iw, "Totals include historical duplicates and dismissed findings. Verdicts are verification results, not fixed status. Select a row for details; Up/Down or Home/End moves selection.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-    if (r->req) doc_text(doc, c.ix, c.iw, "Refreshing stored reviews…", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-    doc_space(doc, px(12));
-    if (!json_count(r->items)) { doc_text(doc, c.ix, c.iw, "No stored code reviews.", FONT_BODY, theme.secondary, DT_WORDBREAK); return; }
-    bool findings = s->tab == PR_TAB_FINDINGS;
-    if (findings && !code_reviews_findings(r->items)) doc_text(doc, c.ix, c.iw, "No findings registered in these reviews; check review status in Code reviews.", FONT_BODY, theme.secondary, DT_WORDBREAK);
-    else {
-        bool wide = c.iw >= px(900);
-        Col table = c;
-        if (table.iw < px(540)) {
-            doc_text(doc, c.ix, c.iw, "Scroll horizontally to see all columns.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
-            table.iw = px(540);
-        }
-        if (findings) findings_table(s, doc, table, wide); else reviews_table(s, doc, table, wide);
-    }
-    doc_space(doc, px(18)); screen_pulls_reviews_details(s, doc, c);
 }
