@@ -20,6 +20,7 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         default: s->tab = PR_TAB_BODY; break;
         }
         screen_pulls_reviews_load(s, false);
+        screen_pulls_reviews_poll(s);
         if (s->tab == PR_TAB_FILES) pull_files_load(s->files);
         if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s);
         pane_relayout(base->pane); pane_header_changed(base->pane);

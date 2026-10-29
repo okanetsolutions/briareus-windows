@@ -46,13 +46,15 @@ const char *code_review_head(const Json *review, const char *current_head) {
     if (str_empty(head) || str_empty(current_head)) return "head unknown";
     return str_eq(head, current_head) ? "current head" : "older head";
 }
-const char *code_review_verdict(const Json *finding) {
+const char *code_review_verdict(const Json *review, const Json *finding) {
     const char *v = json_str(json_get(finding, "shouldFix"));
-    return str_empty(v) ? "pending" : v;
+    if (!str_empty(v)) return v;
+    return str_eq(json_str(json_get(review, "status")), "running") ? "pending" : "no verdict";
 }
-const char *code_review_verification(const Json *finding) {
+const char *code_review_verification(const Json *review, const Json *finding) {
     const char *v = json_str(json_get(finding, "verification"));
-    return str_empty(v) ? "pending" : v;
+    if (!str_empty(v)) return v;
+    return str_eq(json_str(json_get(review, "status")), "running") ? "pending" : "not verified";
 }
 char *code_review_location(const Json *finding) {
     const char *path = json_str(json_get(finding, "filePath"));
@@ -69,12 +71,13 @@ static char *number(const Json *review, const char *field) {
 char *code_review_usage(const Json *review) {
     double cost;
     char *in = number(review, "inputTokens"), *out = number(review, "outputTokens");
-    char *price = json_num(json_get(review, "costUsd"), &cost) ? xstrfmt("$%.4f%s", cost, json_bool_is(json_get(review, "costEstimated"), true) ? " estimated" : "") : xstrdup("Cost unknown");
+    bool has_cost = json_num(json_get(review, "costUsd"), &cost);
+    char *price = has_cost ? xstrfmt("$%.4f%s", cost, json_bool_is(json_get(review, "costEstimated"), true) ? " estimated" : "") : xstrdup("Cost unknown");
     int unpriced = json_int_or(json_get(review, "unpricedTurns"), 0);
-    char *text = xstrfmt("%s in / %s out; %s; %d unpriced turns%s", in, out, price, unpriced, unpriced ? " (partial cost)" : "");
+    char *text = xstrfmt("%s in / %s out; %s; %d unpriced turns%s", in, out, price, unpriced, unpriced && has_cost ? " (partial cost)" : "");
     free(in); free(out); free(price); return text;
 }
-typedef struct { size_t critical, high, medium, low, pending, total; } Counts;
+typedef struct { size_t critical, high, medium, low, pending, no_verdict, total; } Counts;
 static void count_findings(Counts *c, const Json *review) {
     const Json *findings = json_get(review, "findings");
     c->total += json_count(findings);
@@ -84,11 +87,15 @@ static void count_findings(Counts *c, const Json *review) {
         if (str_eq(s, "high")) c->high++;
         if (str_eq(s, "medium")) c->medium++;
         if (str_eq(s, "low")) c->low++;
-        if (str_eq(code_review_verdict(f), "pending")) c->pending++;
+        if (str_empty(json_str(json_get(f, "shouldFix")))) {
+            if (str_eq(json_str(json_get(review, "status")), "running")) c->pending++;
+            else c->no_verdict++;
+        }
     }
 }
 static char *counts_text(const Counts *c) {
-    return xstrfmt("%zu findings: %zu critical, %zu high, %zu medium, %zu low; %zu pending verdicts", c->total, c->critical, c->high, c->medium, c->low, c->pending);
+    return xstrfmt("%zu finding%s: %zu critical, %zu high, %zu medium, %zu low; %zu pending verdict%s; %zu without verdict",
+        c->total, c->total == 1 ? "" : "s", c->critical, c->high, c->medium, c->low, c->pending, c->pending == 1 ? "" : "s", c->no_verdict);
 }
 char *code_review_counts(const Json *review) {
     Counts c = {0}; count_findings(&c, review); return counts_text(&c);

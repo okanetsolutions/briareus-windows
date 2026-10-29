@@ -18,8 +18,10 @@ to the currently loaded PR head accompany each row. An absent SHA is unknown.
 A different SHA is shown as an older head; the client does not attempt ancestry analysis.
 
 A verification verdict (`shouldFix`) is not a user's triage decision or evidence
-that code was fixed. Null verdicts and verification are pending. Null token and
-cost fields remain unknown; estimated and partially priced costs are marked.
+that code was fixed. Null verdicts and verification are pending only while a review
+is running; completed or failed reviews show no verdict / not verified, retaining
+inconclusive rationale. Only running findings count as pending verdicts. Null token and
+cost fields remain unknown; partial cost is marked only when a cost value exists.
 Empty results, malformed payloads, unsupported capability and HTTP failures have
 distinct states. A failed refresh labels the retained snapshot and its totals stale.
 
@@ -30,8 +32,9 @@ copying apply. Rows use stable record IDs, and replaced findings lose selection.
 Small panes use fewer columns, with horizontal scrolling below the minimum table
 width. Full titles and locations remain available in tooltips and selected details.
 
-Reads coalesce across tabs. Running reviews and failed reads refresh at most once
-per 30 seconds on the existing screen poller, honoring Retry-After. F5 refreshes the
+Reads coalesce across tabs. Either visible review tab refreshes at most once per
+30 seconds on the existing screen poller, including empty or completed-only lists
+that can gain reviews started elsewhere, honoring Retry-After. F5 refreshes the
 shared read. Hiding/destroying the owner cancels requests; connection, device,
 permission, repository and capability changes clear data and reject stale replies.
 
@@ -44,7 +47,7 @@ from provider labels. This change adds no review trigger or write endpoint.
 ## Verification
 
 `tests/fixtures/code_reviews.h` contains synthetic public records only, including
-deleted session IDs, null usage and verdicts, running/completed reviews, historical
+deleted session IDs, null usage and verdicts, running/completed/failed reviews, historical
 heads, Markdown, rationale and line ranges. Core and app suites cover parsing,
 route encoding, shared reads, errors, unsupported capability, stable selection,
 replacement IDs, stale scopes, polling, retry deadlines, cancellation, hit targets

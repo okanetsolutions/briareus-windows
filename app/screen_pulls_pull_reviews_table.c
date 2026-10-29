@@ -41,7 +41,7 @@ static void findings_table(PullScreen *s, Doc *doc, Col c, bool wide) {
         for (size_t j = 0; j < json_count(findings); j++) {
             const Json *f = json_at(findings, j);
             char *where = code_review_location(f), *ctx = context(s, r);
-            char *verdict = xstrfmt("%s\n%s", code_review_verdict(f), code_review_verification(f));
+            char *verdict = xstrfmt("%s\n%s", code_review_verdict(r, f), code_review_verification(r, f));
             char *title = wide ? xstrdup(field(f, "title")) : xstrfmt("%s\n%s · %s", field(f, "title"), field(f, "severity"), ctx);
             char *wide_cells[] = {title, (char *)field(f, "severity"), where, verdict, ctx};
             char *small_cells[] = {title, where, verdict};

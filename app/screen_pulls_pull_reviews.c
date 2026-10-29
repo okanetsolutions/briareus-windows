@@ -1,6 +1,8 @@
 #include "screen_pulls_internal.h"
 #include <math.h>
 
+static time_t review_time(const PullScreen *s) { return s->reviews.clock ? s->reviews.clock() : time(NULL); }
+
 static char *scope(PullScreen *s) {
     char *base = xstrfmt("%s|%s|%s|%s|%s", g_store.server ? g_store.server : "", g_store.device.id ? g_store.device.id : "",
         g_store.device.permission ? g_store.device.permission : "", s->project.repo, store_supports("code_reviews") ? "supported" : "unsupported");
@@ -17,7 +19,9 @@ void screen_pulls_reviews_clear(PullScreen *s) {
 bool screen_pulls_reviews_sync(PullScreen *s) {
     PullReviews *r = &s->reviews; char *now = scope(s);
     if (r->client != g_store.client || !str_eq(r->scope, now)) {
+        bool visible = r->visible; time_t (*clock)(void) = r->clock;
         screen_pulls_reviews_clear(s);
+        r->visible = visible; r->clock = clock;
         r->scope = now; now = NULL;
         r->client = g_store.client ? api_client_retain(g_store.client) : NULL;
     }
@@ -33,9 +37,8 @@ static void done(void *owner, Request *req) {
     PullReviews *r = &s->reviews; r->read = true;
     if (!req->ok) {
         request_error_into(&r->error, req);
-        if (req->error.retry_after > 0) r->retry_at = time(NULL) + (time_t)ceil(req->error.retry_after);
-    }
-    else {
+        if (req->error.retry_after > 0) r->retry_at = review_time(s) + (time_t)ceil(req->error.retry_after);
+    } else {
         Json *items = code_reviews_parse(req->result);
         if (!items) set_string(&r->error, "The server returned an invalid code review list.");
         else {
@@ -50,18 +53,27 @@ static void done(void *owner, Request *req) {
 void screen_pulls_reviews_load(PullScreen *s, bool refresh) {
     if (!screen_pulls_reviews_sync(s)) return;
     PullReviews *r = &s->reviews;
-    if (r->req || r->retry_at > time(NULL)) return;
+    if (!r->visible || r->req || r->retry_at > review_time(s)) return;
     bool visible = s->tab == PR_TAB_FINDINGS || s->tab == PR_TAB_CODE_REVIEWS;
     if (!visible && !r->read) return;
-    if (!refresh && r->read) return;
+    if (!refresh && (r->read || r->next_poll > review_time(s))) return;
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
-    r->next_poll = time(NULL) + 30;
+    r->next_poll = review_time(s) + 30;
     store_call("code_reviews", args, 0, s, done, 0, &r->req);
 }
 void screen_pulls_reviews_poll(PullScreen *s) {
     if (!screen_pulls_reviews_sync(s)) return;
-    if (s->reviews.next_poll > time(NULL)) return;
-    if (s->reviews.error || code_reviews_running(s->reviews.items)) screen_pulls_reviews_load(s, true);
+    if (!s->reviews.visible || s->reviews.next_poll > review_time(s)) return;
+    if (s->tab != PR_TAB_FINDINGS && s->tab != PR_TAB_CODE_REVIEWS) return;
+    // Even completed-only or empty snapshots can gain reviews started elsewhere.
+    screen_pulls_reviews_load(s, true);
+}
+void screen_pulls_reviews_visible(Screen *base, bool shown) {
+    PullScreen *s = (PullScreen *)base;
+    s->reviews.visible = shown;
+    if (!shown) { request_cancel(&s->reviews.req); return; }
+    screen_pulls_reviews_load(s, false);
+    screen_pulls_reviews_poll(s);
 }
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     PullScreen *s = (PullScreen *)base;

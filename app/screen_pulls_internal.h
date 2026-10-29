@@ -109,8 +109,9 @@ typedef struct { Json *items, *incoming; bool read; char *error; Request *req; }
 
 typedef struct {
     Json *items; Request *req; ApiClient *client;
-    char *scope, *error; bool read;
+    char *scope, *error; bool read, visible;
     time_t next_poll, retry_at;
+    time_t (*clock)(void); // NULL uses the system clock; deadlines share this clock.
     int64_t review_id, finding_id;
 } PullReviews;
 
@@ -291,6 +292,7 @@ void screen_pulls_reviews_clear(PullScreen *s);
 bool screen_pulls_reviews_sync(PullScreen *s);
 void screen_pulls_reviews_load(PullScreen *s, bool refresh);
 void screen_pulls_reviews_poll(PullScreen *s);
+void screen_pulls_reviews_visible(Screen *base, bool shown);
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c);
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);

@@ -4,6 +4,8 @@
 #include "fixtures/code_reviews.h"
 
 static const char *retry_header;
+static time_t clock_now;
+static time_t fake_clock(void) { return clock_now; }
 static bool review_transport(void *ctx, const char *method, const char *url, const char *const *headers,
     const void *body, size_t bytes, int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
     bool ok = screen_fixture_transport(ctx, method, url, headers, body, bytes, timeout, status, type, retry, response, len, error);
@@ -17,7 +19,8 @@ static PullScreen *setup(ScreenFixture *f) {
     screen_fixture_pane(f, &s->base);
     json_free(s->pr); s->pr = json_parsez("{\"title\":\"Synthetic PR\",\"state\":\"open\",\"headSha\":\"aaaaaaaaaa1111\"}");
     f->read_response = CODE_REVIEWS_FIXTURE;
-    s->tab = PR_TAB_FINDINGS; return s;
+    s->tab = PR_TAB_FINDINGS; s->shown = true; s->reviews.visible = true;
+    clock_now = 1000; s->reviews.clock = fake_clock; return s;
 }
 static void cleanup(ScreenFixture *f, PullScreen *s) { s->base.vt->destroy(&s->base); screen_fixture_clear(f); }
 static bool contains(Doc *d, const char *text) {
@@ -123,29 +126,120 @@ static void bounded_polling_retry_and_visibility(void) {
     CHECK_INT(f.reads, 2);
     f.read_status = 503; retry_header = "60"; f.read_response = "{\"error\":\"Unavailable\"}";
     s->reviews.next_poll = 0; screen_pulls_reviews_poll(s); screen_fixture_pump(&f, 1);
-    CHECK(s->reviews.items != NULL); CHECK(s->reviews.error != NULL); CHECK(s->reviews.retry_at >= time(NULL) + 59);
+    CHECK(s->reviews.items != NULL); CHECK(s->reviews.error != NULL); CHECK(s->reviews.retry_at >= fake_clock() + 59);
     for (int i = 0; i < 5; i++) screen_pulls_reviews_poll(s);
     CHECK_INT(f.reads, 3);
-    s->reviews.retry_at = time(NULL) + 60; s->reviews.next_poll = 0;
+    s->reviews.retry_at = fake_clock() + 60; s->reviews.next_poll = 0;
     screen_pulls_reviews_load(s, true); screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 3);
     s->reviews.retry_at = 0; retry_header = NULL; f.read_status = 200;
     f.read_response = "{\"codeReviews\":[{\"id\":21,\"status\":\"failed\",\"findings\":[]}]}";
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
-    s->reviews.next_poll = 0; screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 4);
+    screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 4);
     f.block_read = true; screen_pulls_reviews_load(s, true);
     CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
-    s->base.vt->visible(&s->base, false); CHECK(s->reviews.req == NULL);
+    s->base.vt->window_visible(&s->base, false); CHECK(s->reviews.req == NULL);
     SetEvent(f.resume); screen_fixture_pump(&f, 1);
     CHECK_STR(json_str(json_get(json_at(s->reviews.items, 0), "status")), "failed");
     Doc d; doc_init(&d); s->tab = PR_TAB_CODE_REVIEWS; theme_set_dpi(192); draw(s, &d, 780);
     CHECK(d.content_width > d.width); CHECK(contains(&d, "Scroll horizontally"));
     theme_set_dpi(96); doc_free(&d); cleanup(&f, s);
 }
+static void terminal_labels_across_tables_and_details(void) {
+    ScreenFixture f; PullScreen *s = setup(&f); f.read_response = CODE_REVIEWS_FINAL_NULL_FIXTURE;
+    screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+    Doc d; doc_init(&d);
+    for (int tab = 0; tab < 2; tab++) for (int review = 0; review < 2; review++) {
+        s->tab = tab ? PR_TAB_CODE_REVIEWS : PR_TAB_FINDINGS;
+        s->reviews.review_id = review ? 23 : 22; s->reviews.finding_id = review ? 202 : 201;
+        draw(s, &d, 1200);
+        CHECK(contains(&d, "no verdict")); CHECK(contains(&d, "not verified"));
+        CHECK(contains(&d, "0 pending verdicts; 2 without verdict"));
+        CHECK(!contains(&d, "1 pending verdict")); CHECK(!contains(&d, "partial cost"));
+        CHECK(contains(&d, review ? "stopped before verification" : "Inconclusive:"));
+        if (tab) CHECK(contains(&d, "1 finding:"));
+    }
+    json_free(s->reviews.items); s->reviews.items = NULL; s->reviews.read = false;
+    clock_now += 30; f.read_response = CODE_REVIEWS_FIXTURE;
+    screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+    s->tab = PR_TAB_FINDINGS; s->reviews.review_id = 21; s->reviews.finding_id = 101;
+    draw(s, &d, 390); CHECK(contains(&d, "1 pending verdict; 0 without verdict"));
+    CHECK(contains(&d, "Verification: pending")); CHECK(!contains(&d, "not verified"));
+    doc_free(&d); cleanup(&f, s);
+}
+static void completed_snapshots_discover_new_reviews(void) {
+    static Route action_routes[] = {{"GET", "/pulls/{number}/code-reviews", "read"}, {"POST", "/actions", "manage"}};
+    // PR start, board start, external review, new PR head, and an uncertain PR start.
+    for (int source = 0; source < 5; source++) {
+        ScreenFixture f; PullScreen *s = setup(&f);
+        g_store.routes = action_routes; g_store.route_count = 2;
+        g_store.device.permission = "admin"; json_set_str(s->pr, "headRef", "topic");
+        f.read_response = CODE_REVIEWS_FINAL_NULL_FIXTURE;
+        screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+        CHECK(!code_reviews_running(s->reviews.items));
+        s->reviews.review_id = 22; s->reviews.finding_id = 201;
+        BoardAction action = {.id = "review", .advertised = true};
+        if (source == 0 || source == 4) {
+            f.fail_write = source == 4;
+            screen_pulls_start_action(s, &action, NULL, NULL); screen_fixture_pump(&f, 1);
+            CHECK_INT(f.writes, 1); CHECK(!s->busy); CHECK(s->uncertain == (source == 4));
+        }
+        if (source == 1) {
+            PullsScreen board = {0}; board.project.repo = "o/r"; board.base.pane = f.pane;
+            screen_pulls_board_start(&board, 12, "topic", &action, NULL, NULL); screen_fixture_pump(&f, 1);
+            CHECK_INT(f.writes, 1); CHECK(!board.busy); CHECK(board.write_error == NULL);
+            free(board.start_device); free(board.starting_id); free(board.write_error);
+        }
+        if (source == 3) json_set_str(s->pr, "headSha", "new-head");
+        Json *payload = json_parsez(CODE_REVIEWS_FINAL_NULL_FIXTURE);
+        Json *rows = (Json *)json_get(payload, "codeReviews");
+        Json *r = json_object(); json_set_num(r, "id", 24); json_set_str(r, "status", "running");
+        json_set_str(r, "headSha", source == 3 ? "new-head" : "aaaaaaaaaa1111"); json_object_set(r, "findings", json_array());
+        Json *newest = json_array(); json_array_push(newest, r);
+        for (size_t i = 0; i < json_count(rows); i++) json_array_push(newest, json_clone(json_at(rows, i)));
+        json_object_set(payload, "codeReviews", newest); char *running = json_serialize(payload, false); f.read_response = running;
+        clock_now += 29;
+        screen_pulls_reviews_poll(s); screen_pulls_reviews_load(s, false); CHECK_INT(f.reads, 1);
+        clock_now++;
+        screen_pulls_reviews_poll(s); screen_pulls_reviews_poll(s);
+        screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 2);
+        CHECK(code_review_find(s->reviews.items, 24) != NULL); CHECK(code_reviews_running(s->reviews.items));
+        CHECK_INT(s->reviews.review_id, 22); CHECK_INT(s->reviews.finding_id, 201);
+        CHECK_STR(code_review_head(code_review_find(s->reviews.items, 24), json_str(json_get(s->pr, "headSha"))), "current head");
+        json_set_str(r, "status", "completed"); char *completed = json_serialize(payload, false); f.read_response = completed;
+        s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0});
+        CHECK_INT(f.reads, 2); // Switching tabs shares the snapshot and deadline.
+        clock_now += 30; screen_pulls_reviews_poll(s); screen_fixture_pump(&f, 1);
+        CHECK_INT(f.reads, 3); CHECK(!code_reviews_running(s->reviews.items));
+        s->base.vt->window_visible(&s->base, false); clock_now += 60;
+        screen_pulls_reviews_poll(s); screen_pulls_reviews_load(s, false); screen_pulls_reviews_load(s, true);
+        CHECK_INT(f.reads, 3);
+        s->base.vt->window_visible(&s->base, true); screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 4);
+        s->tab = PR_TAB_BODY; clock_now += 30; screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 4);
+        s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
+        screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 5);
+        CHECK_INT(f.writes, source == 0 || source == 1 || source == 4 ? 1 : 0);
+        CHECK(s->uncertain == (source == 4));
+        free(running); free(completed); json_free(payload); cleanup(&f, s);
+    }
+}
+static void cancelled_initial_read_keeps_cadence(void) {
+    ScreenFixture f; PullScreen *s = setup(&f); f.block_read = true;
+    screen_pulls_reviews_load(s, false); CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
+    s->base.vt->window_visible(&s->base, false); SetEvent(f.resume); screen_fixture_pump(&f, 1);
+    CHECK(!s->reviews.read); CHECK(s->reviews.items == NULL);
+    s->base.vt->window_visible(&s->base, true); screen_pulls_reviews_poll(s);
+    clock_now += 29; screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 1);
+    clock_now++; f.block_read = false; screen_pulls_reviews_poll(s); screen_fixture_pump(&f, 1);
+    CHECK_INT(f.reads, 2); CHECK(s->reviews.items != NULL); cleanup(&f, s);
+}
 void app_pull_reviews_tests(void) {
     screen_fixture_prepare();
+    test_run("cancelled initial review reads retain their deadline through hide and reveal", cancelled_initial_read_keeps_cadence);
+    test_run("completed and failed nullable findings are final across tables, details and totals", terminal_labels_across_tables_and_details);
+    test_run("completed-only PR snapshots discover started, external and new-head reviews on a fake clock", completed_snapshots_discover_new_reviews);
     test_run("PR review tabs share one read and render selectable wide/narrow tables without sessions", shared_read_and_tables);
     test_run("PR reviews distinguish unsupported, malformed, failed and empty reads", empty_failure_unsupported);
     test_run("PR reviews preserve stable selection and reject obsolete connection/project results", refresh_replacement_and_stale);
-    test_run("PR review polling is bounded, honors retry deadlines, stops after completion and cancels on hide", bounded_polling_retry_and_visibility);
+    test_run("PR review polling is bounded, honors retry deadlines, refreshes completed lists and cancels on hide", bounded_polling_retry_and_visibility);
     test_run("PR review destruction cancels held reads", cancel_on_destroy);
 }

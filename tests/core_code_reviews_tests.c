@@ -8,7 +8,7 @@
 static void stored_contract(void) {
     Json *payload = json_parsez(CODE_REVIEWS_FIXTURE), *reviews = code_reviews_parse(payload);
     json_free(payload); CHECK(reviews != NULL); CHECK_INT(json_count(reviews), 2);
-    CHECK_OWNED_STR(code_reviews_counts(reviews), "3 findings: 0 critical, 1 high, 1 medium, 1 low; 1 pending verdicts");
+    CHECK_OWNED_STR(code_reviews_counts(reviews), "3 findings: 0 critical, 1 high, 1 medium, 1 low; 1 pending verdict; 0 without verdict");
     CHECK_INT(code_reviews_findings(reviews), 3); CHECK(code_reviews_running(reviews));
     const Json *r = code_review_find(reviews, 21), *f = code_review_finding(r, 101);
     CHECK(r != NULL); CHECK(f != NULL); CHECK(code_review_finding(r, 99) == NULL); CHECK(code_review_find(reviews, 0) == NULL);
@@ -16,19 +16,19 @@ static void stored_contract(void) {
     CHECK_STR(code_review_head(r, "aaaaaaaaaa1111"), "current head");
     CHECK_STR(code_review_head(r, "new"), "older head"); CHECK_STR(code_review_head(r, NULL), "head unknown");
     CHECK_STR(code_review_head(NULL, "new"), "head unknown");
-    CHECK_STR(code_review_verdict(f), "pending"); CHECK_STR(code_review_verification(f), "pending");
+    CHECK_STR(code_review_verdict(r, f), "pending"); CHECK_STR(code_review_verification(r, f), "pending");
     CHECK_OWNED_STR(code_review_location(f), "app/screens/a/long/location/selected_record.c:120-128");
-    f = code_review_finding(r, 102); CHECK_STR(code_review_verdict(f), "fix"); CHECK_STR(code_review_verification(f), "confirmed");
+    f = code_review_finding(r, 102); CHECK_STR(code_review_verdict(r, f), "fix"); CHECK_STR(code_review_verification(r, f), "confirmed");
     CHECK_OWNED_STR(code_review_location(f), "core/connection.c:8");
-    CHECK_OWNED_STR(code_review_usage(r), "unknown in / 0 out; Cost unknown; 2 unpriced turns (partial cost)");
-    CHECK_OWNED_STR(code_review_counts(r), "2 findings: 0 critical, 1 high, 1 medium, 0 low; 1 pending verdicts");
+    CHECK_OWNED_STR(code_review_usage(r), "unknown in / 0 out; Cost unknown; 2 unpriced turns");
+    CHECK_OWNED_STR(code_review_counts(r), "2 findings: 0 critical, 1 high, 1 medium, 0 low; 1 pending verdict; 0 without verdict");
     r = code_review_find(reviews, 20); f = code_review_finding(r, 99);
-    CHECK_STR(code_review_verdict(f), "dismiss"); CHECK_STR(code_review_verification(f), "plausible");
+    CHECK_STR(code_review_verdict(r, f), "dismiss"); CHECK_STR(code_review_verification(r, f), "plausible");
     CHECK_OWNED_STR(code_review_location(f), "No location");
     CHECK_OWNED_STR(code_review_usage(r), "1240 in / 180 out; $0.0123 estimated; 1 unpriced turns (partial cost)");
     Json *changed = json_clone(code_review_find(reviews, 21));
     Json *critical = (Json *)json_at(json_get(changed, "findings"), 0); json_set_str(critical, "severity", "critical");
-    CHECK_OWNED_STR(code_review_counts(changed), "2 findings: 1 critical, 0 high, 1 medium, 0 low; 1 pending verdicts");
+    CHECK_OWNED_STR(code_review_counts(changed), "2 findings: 1 critical, 0 high, 1 medium, 0 low; 1 pending verdict; 0 without verdict");
     json_free(changed); json_free(reviews);
 }
 static void malformed_and_empty(void) {
@@ -63,7 +63,29 @@ static void limit_and_validation(void) {
         CHECK(code_reviews_parse(payload) == NULL); json_free(payload);
     }
 }
+static void terminal_null_verdicts(void) {
+    Json *payload = json_parsez(CODE_REVIEWS_FINAL_NULL_FIXTURE), *reviews = code_reviews_parse(payload);
+    json_free(payload); CHECK(reviews != NULL); CHECK(!code_reviews_running(reviews));
+    for (size_t i = 0; i < 2; i++) {
+        const Json *r = json_at(reviews, i), *f = json_at(json_get(r, "findings"), 0);
+        CHECK_STR(code_review_verdict(r, f), "no verdict");
+        CHECK_STR(code_review_verification(r, f), "not verified");
+        CHECK(json_str(json_get(f, "comments")) != NULL);
+        CHECK_OWNED_STR(code_review_counts(r), "1 finding: 0 critical, 0 high, 1 medium, 0 low; 0 pending verdicts; 1 without verdict");
+    }
+    CHECK_OWNED_STR(code_reviews_counts(reviews), "2 findings: 0 critical, 0 high, 2 medium, 0 low; 0 pending verdicts; 2 without verdict");
+    Json *running_payload = json_parsez(CODE_REVIEWS_FIXTURE), *running = code_reviews_parse(running_payload);
+    json_array_push(reviews, json_clone(json_at(running, 0)));
+    CHECK_OWNED_STR(code_reviews_counts(reviews), "4 findings: 0 critical, 1 high, 3 medium, 0 low; 1 pending verdict; 2 without verdict");
+    Json *mixed = json_clone(json_at(reviews, 0)); Json *f = (Json *)json_at(json_get(mixed, "findings"), 0);
+    json_set_str(f, "shouldFix", "optional");
+    CHECK_STR(code_review_verdict(mixed, f), "optional"); CHECK_STR(code_review_verification(mixed, f), "not verified");
+    json_set_str(f, "verification", "plausible"); json_object_set(f, "shouldFix", json_null());
+    CHECK_STR(code_review_verdict(mixed, f), "no verdict"); CHECK_STR(code_review_verification(mixed, f), "plausible");
+    json_free(mixed); json_free(running_payload); json_free(running); json_free(reviews);
+}
 void core_code_reviews_tests(void) {
+    test_run("terminal null review verdicts remain inconclusive and only running nulls are pending", terminal_null_verdicts);
     test_run("stored code review nested public contract and null semantics", stored_contract);
     test_run("code reviews malformed is distinct from empty", malformed_and_empty);
     test_run("code reviews latest twenty, unique stable IDs and required fields", limit_and_validation);
