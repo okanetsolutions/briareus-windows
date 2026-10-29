@@ -228,6 +228,8 @@ static void test_footer_controls(void) {
     theme_set_dpi(dpi);
     HWND gear = GetDlgItem(pane_hwnd(f.pane), ACT_SETTINGS);
     SendMessageW(gear, BM_CLICK, 0, 0);
+    // Settings reads the offered SSH catalog; consume it before destroying the fixture dispatcher.
+    screen_fixture_pump(&f, 1);
     CHECK(pane_top(f.pane) != s); CHECK_STR(pane_top(f.pane)->id, "settings");
     CHECK(!IsWindowVisible(gear));
     pane_pop(f.pane); draw(f.pane); CHECK(IsWindowVisible(gear));
