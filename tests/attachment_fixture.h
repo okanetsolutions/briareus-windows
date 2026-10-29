@@ -54,7 +54,8 @@ static inline void resize_file(const wchar_t *path, LONGLONG length) {
     CHECK(SetFilePointerEx(file, size, NULL, FILE_BEGIN)); CHECK(SetEndOfFile(file)); CloseHandle(file);
 }
 static inline void select_paths(AttachList *l, wchar_t paths[][MAX_PATH], size_t count) {
-    const wchar_t *p[12]; CHECK(count <= 12);
+    const wchar_t *p[12] = {0}; CHECK(count <= 12);
+    if (!count || count > 12) return;
     for (size_t i = 0; i < count; i++) p[i] = paths[i];
     attach_list_paths(l, p, count);
 }
