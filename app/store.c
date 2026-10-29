@@ -1,4 +1,5 @@
 #include "ssh_settings.h"
+#include "attach_list.h"
 #include "store.h"
 #include "credentials.h"
 #include "str.h"
@@ -16,6 +17,7 @@ static void set_error(const char *text) { free(g_store.connection_error); g_stor
 static void set_error_from(const ApiError *e) { char *t = api_error_description(e); set_error(t); free(t); }
 
 static void drop_client(void) {
+    attach_lists_disconnect();
     if (g_store.client) { api_client_release(g_store.client); g_store.client = NULL; }
     g_store.status_detail_retry_until = 0; g_store.status_message_retry_until = 0;
     json_free(g_store.mail_wake_state); g_store.mail_wake_state = NULL;
@@ -89,15 +91,21 @@ static DWORD WINAPI async_thread(LPVOID p) {
     if (cache) InterlockedDecrement(&cache_jobs);
     return 0;
 }
-static void async_queue(AsyncWork work, AsyncWork done, void *ctx, bool cache) {
+static bool async_try_queue(AsyncWork work, AsyncWork done, void *ctx, bool cache) {
     AsyncJob *job = xcalloc(1, sizeof *job);
     job->work = work; job->done = done; job->ctx = ctx; job->cache = cache;
     if (cache) InterlockedIncrement(&cache_jobs);
     if (!QueueUserWorkItem(async_thread, job, WT_EXECUTELONGFUNCTION)) {
-        work(ctx); if (done) done(ctx); free(job);
+        free(job);
         if (cache) InterlockedDecrement(&cache_jobs);
+        return false;
     }
+    return true;
 }
+static void async_queue(AsyncWork work, AsyncWork done, void *ctx, bool cache) {
+    if (!async_try_queue(work, done, ctx, cache)) { work(ctx); if (done) done(ctx); }
+}
+bool async_try_run(AsyncWork work, AsyncWork done, void *ctx) { return async_try_queue(work, done, ctx, false); }
 void async_run(AsyncWork work, AsyncWork done, void *ctx) { async_queue(work, done, ctx, false); }
 void async_run_cache(AsyncWork work, AsyncWork done, void *ctx) { async_queue(work, done, ctx, true); }
 
@@ -276,6 +284,7 @@ void store_voice_notes_off(void (*done)(void *ctx, const char *reason), void *ct
 static void request_free(Request *r) {
     if (str_eq(r->operation, "create_ssh_server") || str_eq(r->operation, "update_ssh_server")) ssh_secrets_scrub(r->args);
     free(r->operation); json_free(r->args); free(r->audio); free(r->audio_type); free(r->file); free(r->file_name);
+    if (r->upload_cancel) { api_stream_cancel_free(r->upload_cancel); free(r->upload_cancel); }
     json_free(r->result); free(r->text); api_error_clear(&r->error);
     if (r->client) api_client_release(r->client);
     free(r);
@@ -286,7 +295,8 @@ static DWORD WINAPI request_thread(LPVOID p) {
         r->text = api_transcribe(r->client, r->audio, r->audio_len, r->audio_type, &r->error);
         r->ok = r->text != NULL;
     } else if (r->file) {
-        r->text = api_upload(r->client, r->file_name, r->file, r->file_len, &r->error);
+        r->text = api_upload_cancellable(r->client, r->file_name, r->file, r->file_len, r->upload_cancel, &r->error);
+        free(r->file); r->file = NULL;
         r->ok = r->text != NULL;
     } else {
         r->result = api_call(r->client, r->operation, r->args, r->timeout_ms, &r->error);
@@ -308,7 +318,10 @@ static void request_refuse(Request *r, const char *message) {
 }
 static void request_start(Request *r) {
     r->client = api_client_retain(g_store.client);
-    if (!QueueUserWorkItem(request_thread, r, WT_EXECUTELONGFUNCTION)) request_thread(r);
+    if (!QueueUserWorkItem(request_thread, r, WT_EXECUTELONGFUNCTION)) {
+        if (r->upload_cancel) request_refuse(r, "The upload worker could not be started.");
+        else request_thread(r);
+    }
 }
 Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);
@@ -327,6 +340,7 @@ Request *store_transcribe(const void *audio, size_t len, const char *content_typ
 }
 Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);
+    r->upload_cancel = xmalloc(sizeof *r->upload_cancel); api_stream_cancel_init(r->upload_cancel);
     r->file = bytes ? bytes : xmalloc(1); r->file_len = len; r->file_name = xstrdup(name ? name : "file");
     if (!g_store.client || !store_can_manage() || !store_supports("upload")) { request_refuse(r, "This server does not take files with a message."); return r; }
     request_start(r);
@@ -365,6 +379,7 @@ void store_stream_free(StoreStream *stream) {
 
 void request_cancel(Request **slot) {
     if (!slot || !*slot) return;
+    if ((*slot)->upload_cancel) api_stream_cancel((*slot)->upload_cancel);
     (*slot)->cancelled = true; (*slot)->slot = NULL;
     *slot = NULL;
 }
@@ -379,6 +394,7 @@ void store_handle_message(UINT msg, WPARAM wp, LPARAM lp) {
     (void)wp;
     if (msg == WM_APP_REQUEST_DONE) {
         Request *r = (Request *)lp;
+        if (r->upload_cancel) { free(r->file); r->file = NULL; }
         if (r->completed) r->completed(r->completion_ctx, r);
         if (r->cancelled) { request_free(r); return; }
         if (r->slot) *r->slot = NULL;

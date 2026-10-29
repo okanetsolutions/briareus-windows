@@ -204,8 +204,14 @@ void api_client_release(ApiClient *c) {
 void api_client_set_transport(ApiClient *c, ApiTransport transport, void *ctx) { c->transport = transport; c->transport_ctx = ctx; }
 const ServerAddress *api_client_address(const ApiClient *c) { return &c->address; }
 
-static Json *send_request(ApiClient *c, const char *method, const char *url, const char *content_type, const void *body, size_t body_len,
-                          int timeout_ms, ApiError *error) {
+static bool stream_cancelled(ApiStreamCancel *c);
+static bool winhttp_transport(void *ctx, const char *method, const char *url, const char *const *headers,
+    const void *body, size_t body_len, int timeout_ms, int *status, char **content_type, char **retry_after,
+    char **response, size_t *response_len, char **error_message, ApiStreamCancel *cancel);
+
+static Json *send_request_cancellable(ApiClient *c, const char *method, const char *url, const char *content_type, const void *body, size_t body_len,
+                          int timeout_ms, ApiStreamCancel *cancel, ApiError *error) {
+    if (cancel && stream_cancelled(cancel)) { api_error_set(error, API_CANCELLED, 0, NULL, -1); return NULL; }
     char *auth = xstrfmt("Bearer %s", c->token);
     const char *headers[8]; size_t h = 0;
     headers[h++] = "Authorization"; headers[h++] = auth;
@@ -214,11 +220,18 @@ static Json *send_request(ApiClient *c, const char *method, const char *url, con
     headers[h] = NULL;
     int status = 0; char *type = NULL, *retry = NULL, *response = NULL, *why = NULL; size_t response_len = 0;
     // No automatic application-level retries, including for POST reads: the screen owns read backoff.
-    bool received = c->transport(c->transport_ctx, method, url, headers, body, body_len, timeout_ms ? timeout_ms : REQUEST_TIMEOUT_MS,
-                                 &status, &type, &retry, &response, &response_len, &why);
+    bool received;
+    if (cancel && c->transport == api_winhttp_transport)
+        received = winhttp_transport(c->transport_ctx, method, url, headers, body, body_len, timeout_ms,
+            &status, &type, &retry, &response, &response_len, &why, cancel);
+    else
+        received = c->transport(c->transport_ctx, method, url, headers, body, body_len, timeout_ms ? timeout_ms : REQUEST_TIMEOUT_MS,
+            &status, &type, &retry, &response, &response_len, &why);
     free(auth);
     Json *result = NULL;
-    if (!received) {
+    if (cancel && stream_cancelled(cancel)) {
+        api_error_set(error, API_CANCELLED, 0, NULL, -1);
+    } else if (!received) {
         api_error_set(error, API_NETWORK, 0, why ? why : "The server could not be reached.", -1);
     } else if (status >= 300 && status < 400) {
         api_error_set(error, API_REDIRECTED, status, NULL, -1);
@@ -245,6 +258,11 @@ static Json *send_request(ApiClient *c, const char *method, const char *url, con
     }
     free(type); free(retry); free(response); free(why);
     return result;
+}
+
+static Json *send_request(ApiClient *c, const char *method, const char *url, const char *content_type, const void *body, size_t body_len,
+                          int timeout_ms, ApiError *error) {
+    return send_request_cancellable(c, method, url, content_type, body, body_len, timeout_ms, NULL, error);
 }
 
 static Json *request(ApiClient *c, const char *path, const char *method, const Json *body, int timeout_ms, ApiError *error) {
@@ -681,13 +699,13 @@ char *api_transcribe(ApiClient *c, const void *audio, size_t len, const char *co
     return result;
 }
 
-char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, ApiError *error) {
-    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the server\xE2\x80\x99s 25 MB limit for an attachment.", -1); return NULL; }
+char *api_upload_cancellable(ApiClient *c, const char *name, const void *bytes, size_t len, ApiStreamCancel *cancel, ApiError *error) {
+    if (len > API_UPLOAD_LIMIT) { api_error_set(error, API_HTTP, 413, "The file exceeds the server\xE2\x80\x99s 500 MiB limit for an attachment.", -1); return NULL; }
     char *encoded = url_encode(str_empty(name) ? "file" : name);
     char *url = xstrfmt("%suploads?name=%s", c->address.base_url, encoded);
     free(encoded);
     // Always octet-stream, whatever the file is: the server reads the raw body.
-    Json *j = send_request(c, "POST", url, "application/octet-stream", bytes, len, 120000, error);
+    Json *j = send_request_cancellable(c, "POST", url, "application/octet-stream", bytes, len, 120000, cancel, error);
     free(url);
     if (!j) return NULL;
     const char *id = json_str_nonempty(json_get(json_get(j, "file"), "id"));
@@ -695,6 +713,10 @@ char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, 
     json_free(j);
     if (!result) api_error_set(error, API_NON_JSON, 0, NULL, -1);
     return result;
+}
+
+char *api_upload(ApiClient *c, const char *name, const void *bytes, size_t len, ApiError *error) {
+    return api_upload_cancellable(c, name, bytes, len, NULL, error);
 }
 
 // MARK: - Retry-After
@@ -760,10 +782,10 @@ char *api_winhttp_header(HINTERNET request, DWORD info) {
     return text;
 }
 
-bool api_winhttp_transport(void *ctx, const char *method, const char *url, const char *const *headers,
+static bool winhttp_transport(void *ctx, const char *method, const char *url, const char *const *headers,
                            const void *body, size_t body_len, int timeout_ms,
                            int *status, char **content_type, char **retry_after, char **response, size_t *response_len,
-                           char **error_message) {
+                           char **error_message, ApiStreamCancel *cancel) {
     HINTERNET session = ctx, own_session = NULL, connection = NULL, request = NULL;
     bool ok = false;
     *status = 0; *content_type = NULL; *retry_after = NULL; *response = NULL; *response_len = 0; *error_message = NULL;
@@ -796,10 +818,28 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
     for (size_t i = 0; headers && headers[i] && headers[i + 1]; i += 2) str_appendf(&header_block, "%s: %s\r\n", headers[i], headers[i + 1]);
     wchar_t *wheaders = utf8_to_wide(header_block.data ? header_block.data : "");
     str_free(&header_block);
+    if (cancel) {
+        EnterCriticalSection(&cancel->lock);
+        bool stopped = cancel->cancelled;
+        if (!stopped) cancel->request = request;
+        LeaveCriticalSection(&cancel->lock);
+        if (stopped) { free(wheaders); WinHttpCloseHandle(request); request = NULL; goto done; }
+    }
+    // Upload in bounded chunks without another whole-file transport buffer.
     BOOL sent = WinHttpSendRequest(request, *wheaders ? wheaders : WINHTTP_NO_ADDITIONAL_HEADERS, *wheaders ? (DWORD)-1 : 0,
-                                   body_len ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA, (DWORD)body_len, (DWORD)body_len, 0);
+                                   !cancel && body_len ? (LPVOID)body : WINHTTP_NO_REQUEST_DATA,
+                                   cancel ? 0 : (DWORD)body_len, (DWORD)body_len, 0);
     free(wheaders);
     if (!sent) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
+    size_t offset = cancel ? 0 : body_len;
+    while (offset < body_len) {
+        if (cancel && stream_cancelled(cancel)) goto done;
+        DWORD written = 0, chunk = (DWORD)(body_len - offset > (1u << 20) ? (1u << 20) : body_len - offset);
+        if (!WinHttpWriteData(request, (const char *)body + offset, chunk, &written) || !written) {
+            *error_message = api_winhttp_error_text(GetLastError()); goto done;
+        }
+        offset += written;
+    }
     if (!WinHttpReceiveResponse(request, NULL)) { *error_message = api_winhttp_error_text(GetLastError()); goto done; }
     DWORD code = 0, size = sizeof code;
     if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &size, WINHTTP_NO_HEADER_INDEX)) {
@@ -825,8 +865,19 @@ bool api_winhttp_transport(void *ctx, const char *method, const char *url, const
     ok = true;
 done:
     free(wurl);
-    if (request) WinHttpCloseHandle(request);
+    if (request && cancel) {
+        EnterCriticalSection(&cancel->lock);
+        if (cancel->request == request) { WinHttpCloseHandle(request); cancel->request = NULL; }
+        LeaveCriticalSection(&cancel->lock);
+    } else if (request) WinHttpCloseHandle(request);
     if (connection) WinHttpCloseHandle(connection);
     if (own_session) WinHttpCloseHandle(own_session);
     return ok;
+}
+
+bool api_winhttp_transport(void *ctx, const char *method, const char *url, const char *const *headers,
+    const void *body, size_t body_len, int timeout_ms, int *status, char **content_type, char **retry_after,
+    char **response, size_t *response_len, char **error_message) {
+    return winhttp_transport(ctx, method, url, headers, body, body_len, timeout_ms, status, content_type,
+        retry_after, response, response_len, error_message, NULL);
 }

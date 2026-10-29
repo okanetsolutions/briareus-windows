@@ -216,6 +216,8 @@ Screen *new_session_screen_new(const Project *project_, const Project *projects,
     theme_apply_control(s->composer);
     DragAcceptFiles(s->composer, TRUE);
     s->files = attach_list_new(&s->base, "start_session");
+    const Project *picked = screen_new_session_project(s);
+    attach_list_scope(s->files, picked ? picked->repo : NULL);
     if (store_can_transcribe()) s->voice = voice_new(screen_new_session_voice_changed, s);
     return &s->base;
 }

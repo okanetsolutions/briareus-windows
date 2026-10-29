@@ -193,6 +193,7 @@ void ssh_secrets_scrub(Json *body);
 #define api_stream heap_api_stream
 #define api_transcribe heap_api_transcribe
 #define api_upload heap_api_upload
+#define api_upload_cancellable heap_api_upload_cancellable
 #define api_retry_after heap_api_retry_after
 #define api_winhttp_transport heap_api_winhttp_transport
 #define api_winhttp_error_text heap_api_winhttp_error_text
@@ -224,6 +225,7 @@ void api_stream_cancel(ApiStreamCancel *cancel);
 bool api_stream(ApiClient *client, const char *name, const Json *arguments, ApiStreamCancel *cancel, SseEmit emit, void *ctx, ApiError *error);
 char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, ApiError *error);
 char *api_upload(ApiClient *client, const char *name, const void *bytes, size_t len, ApiError *error);
+char *api_upload_cancellable(ApiClient *client, const char *name, const void *bytes, size_t len, ApiStreamCancel *cancel, ApiError *error);
 double api_retry_after(const char *value, time_t now);
 bool api_winhttp_transport(void *ctx, const char *method, const char *url, const char *const *headers,
                            const void *body, size_t body_len, int timeout_ms,
