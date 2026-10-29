@@ -90,9 +90,10 @@ void status_layout(Screen *base, Doc *doc) {
     int gap = px(28), working_w = columns ? (w - gap) * 36 / 100 : w;
     int waiting_w = columns ? w - gap - working_w : w;
     int top = doc->y;
+    bool complete = s->loaded && !s->error && !s->missing;
     char *title = xstrfmt("Waiting for you · %u", (unsigned)s->overview.waiting_count);
     doc_section(doc, 0, waiting_w, title); free(title);
-    if (s->loaded && !s->overview.waiting_count) doc_text(doc, 0, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    if (complete && !s->overview.waiting_count) doc_text(doc, 0, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.waiting_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.waiting[i]]);
         if (index < s->card_count) waiting(s, doc, index, 0, waiting_w);
@@ -103,7 +104,7 @@ void status_layout(Screen *base, Doc *doc) {
     int x = columns ? waiting_w + gap : 0;
     title = xstrfmt("Working · %u", (unsigned)s->overview.working_count);
     doc_section(doc, x, working_w, title); free(title);
-    if (s->loaded && !s->overview.working_count) doc_text(doc, x, working_w, "No sessions running.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    if (complete && !s->overview.working_count) doc_text(doc, x, working_w, "No sessions running.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.working_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.working[i]]);
         if (index < s->card_count) {
