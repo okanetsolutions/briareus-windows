@@ -59,6 +59,7 @@ static BOOL WINAPI observed_read(HANDLE file, LPVOID bytes, DWORD count, LPDWORD
 #define attach_list_sync probe_attach_list_sync
 #define app_alert probe_app_alert
 void probe_app_alert(const char *title, const char *message);
+#include "attachment_fixture.h"
 #include "../app/attach_queue.c"
 #include <commdlg.h>
 static BOOL WINAPI observed_picker(LPOPENFILENAMEW args);
@@ -68,9 +69,34 @@ static BOOL WINAPI observed_picker(LPOPENFILENAMEW args);
 static AttachList *failed_owner;
 static int failure_alerts;
 static int picker_change;
+static bool capture_notices;
+static char *notice;
 void probe_app_alert(const char *title, const char *message) {
     (void)title; CHECK(message && *message); failure_alerts++;
+    if (capture_notices) { free(notice); notice = xstrdup(message); return; }
     attach_list_free(failed_owner); failed_owner = NULL;
+}
+static size_t notice_lines(void) {
+    size_t lines = notice ? 1 : 0;
+    for (const char *c = notice; c && *c; c++) if (*c == '\n') lines++;
+    return lines;
+}
+// Rejection behavior uses captured feedback: a real MessageBox would introduce an unbounded modal wait in CI.
+static void count_limit_uses_current_reserved_slots(void) {
+    UploadFixture f; init(&f); f.block_first = true; Screen screen = {0};
+    AttachList *l = attach_list_new(&screen, "message"); wchar_t path[MAX_PATH], empty[MAX_PATH];
+    temp(path); temp(empty); write_file(path, "x"); capture_notices = true; failure_alerts = 0;
+    const wchar_t *paths[12]; for (size_t i = 0; i < 11; i++) paths[i] = path; paths[11] = empty;
+    attach_list_paths(l, paths, 12); pump(&f, WM_APP_ASYNC_DONE);
+    CHECK_INT(attach_list_count(l), 10); CHECK(attach_list_uploading(l));
+    CHECK_INT(failure_alerts, 1); CHECK_INT(notice_lines(), 2);
+    pump(&f, WM_APP_ASYNC_DONE); CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    attach_list_paths(l, paths, 1); pump(&f, WM_APP_ASYNC_DONE);
+    CHECK_INT(attach_list_count(l), 10); CHECK_INT(f.calls, 1);
+    CHECK_INT(failure_alerts, 2); CHECK_INT(notice_lines(), 1);
+    attach_list_free(l); SetEvent(f.screen.resume); pump(&f, WM_APP_REQUEST_DONE);
+    capture_notices = false; free(notice); notice = NULL;
+    DeleteFileW(path); DeleteFileW(empty); screen_fixture_clear(&f.screen);
 }
 static BOOL WINAPI observed_picker(LPOPENFILENAMEW args) {
     if (picker_change == 0) { attach_list_free(failed_owner); failed_owner = NULL; }
@@ -116,6 +142,7 @@ static void bounded_reads_stop_on_cancellation(void) {
     CHECK_INT(largest_read, 1048576); attach_file_clear(&file); DeleteFileW(path);
 }
 void app_attach_read_probe_tests(void) {
+    test_run("attachment count limit counts reserved chips with grouped feedback", count_limit_uses_current_reserved_slots);
     test_run("attachment reads bounded chunks and stop during read", bounded_reads_stop_on_cancellation);
     test_run("failed attachment worker survives modal owner retirement", failed_selection_worker_survives_owner_retirement);
     test_run("attachment picker discards results after context replacement", picker_discards_results_after_context_replacement);

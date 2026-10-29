@@ -3,7 +3,6 @@
 #include "attach_list_internal.h"
 #include "screen_conversation_internal.h"
 #include "suites.h"
-#include "modal_driver.h"
 
 #include "attachment_fixture.h"
 
@@ -28,25 +27,6 @@ static void metadata_boundary_and_grouped_refusals(void) {
     for (size_t i = 0; i < 3; i++) DeleteFileW(paths[i]);
     RemoveDirectoryW(paths[3]);
     screen_fixture_clear(&f.screen);
-}
-static UploadFixture *limit_fixture;
-static void limit_action(Screen *screen, int action, intptr_t arg, POINT pt) {
-    (void)screen; (void)action; (void)arg; (void)pt; pump(limit_fixture, WM_APP_ASYNC_DONE);
-}
-static const ScreenVTable limit_vt = {.action = limit_action};
-static void count_limit_uses_current_reserved_slots(void) {
-    UploadFixture f; init(&f); f.block_first = true; Screen screen = {.vt = &limit_vt};
-    AttachList *l = attach_list_new(&screen, "message"); wchar_t path[MAX_PATH], empty[MAX_PATH];
-    temp(path); temp(empty); write_file(path, "x");
-    const wchar_t *paths[12]; for (size_t i = 0; i < 11; i++) paths[i] = path; paths[11] = empty;
-    attach_list_paths(l, paths, 12); limit_fixture = &f;
-    modal_driver_action(&screen, 1, 0, IDOK); CHECK_INT(attach_list_count(l), 10); CHECK(attach_list_uploading(l));
-    pump(&f, WM_APP_ASYNC_DONE); CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
-    // Queued chips count against the limit while the first file is uploading.
-    attach_list_paths(l, paths, 1); modal_driver_action(&screen, 1, 0, IDOK);
-    CHECK_INT(attach_list_count(l), 10);
-    attach_list_free(l); SetEvent(f.screen.resume); pump(&f, WM_APP_REQUEST_DONE);
-    DeleteFileW(path); DeleteFileW(empty); screen_fixture_clear(&f.screen); limit_fixture = NULL;
 }
 static void serialized_selections_read_current_bytes(void) {
     UploadFixture f; init(&f); f.block_first = true; Screen screen = {0};
@@ -114,7 +94,7 @@ static void owner_scope_account_and_endpoint_changes(void) {
         CHECK_INT(attach_list_count(l), 0); CHECK_INT(f.calls, 1);
         g_store.client = f.screen.client; attach_list_free(l);
         for (size_t i = 0; i < 2; i++) DeleteFileW(paths[i]);
-    screen_fixture_clear(&f.screen);
+        screen_fixture_clear(&f.screen);
     }
 }
 static void queued_read_revalidates_file_kind_and_size(void) {
@@ -161,7 +141,6 @@ static void conversation_gates_pending_selection(void) {
 void app_attach_tests(void) {
     screen_fixture_prepare();
     test_run("attachment metadata boundary and grouped refusals", metadata_boundary_and_grouped_refusals);
-    test_run("attachment count limit counts reserved chips", count_limit_uses_current_reserved_slots);
     test_run("attachment selections serialize and read current bytes", serialized_selections_read_current_bytes);
     test_run("removed active and queued attachment chips never return", removed_active_and_queued_chips_never_return);
     test_run("attachment cancellation at each worker boundary", cancellation_at_each_worker_boundary);

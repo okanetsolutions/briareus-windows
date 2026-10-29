@@ -2,7 +2,7 @@
 #define BRIAREUS_TEST_ATTACHMENT_FIXTURE_H
 #include "screen_fixture.h"
 #include "attach_list_internal.h"
-static Route routes[] = {{"POST", "/uploads", "manage"}, {"POST", "/sessions", "manage"},
+static Route attachment_routes[] = {{"POST", "/uploads", "manage"}, {"POST", "/sessions", "manage"},
     {"POST", "/sessions/{id}/messages", "manage"}};
 
 typedef struct {
@@ -26,7 +26,7 @@ static inline bool upload_transport(void *ctx, const char *method, const char *u
     return true;
 }
 static inline void init(UploadFixture *f) {
-    memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, routes, sizeof routes / sizeof *routes);
+    memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, attachment_routes, sizeof attachment_routes / sizeof *attachment_routes);
     api_client_set_transport(f->screen.client, upload_transport, f);
 }
 static inline void pump(UploadFixture *f, UINT message) {
