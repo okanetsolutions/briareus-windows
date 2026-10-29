@@ -414,6 +414,66 @@ static void test_transcript_persistence_retry(void) {
         transcript_free(&reopened); cleanup(&stub);
     }
 }
+static Item *card_item(StatusScreen *s, Doc *doc, int action, size_t index) {
+    intptr_t arg = card_action_arg(s, doc, action, index);
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].arg == arg && doc->items[i].action == action) return &doc->items[i];
+    return NULL;
+}
+static void test_responsive_layout_and_controls(void) {
+    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    ShowWindow(dispatcher, SW_SHOWNA);
+    StatusCard *c = s->cards[card(s, "wait")];
+    set_string(&c->draft, "Retain this draft across reflow");
+    const char *long_option = "Use the complete proposed release plan, including the extended documentation and the accessibility improvements, and preserve all of this answer when the layout wraps across multiple lines in a split pane.";
+    Json *event = json_clone(transcript_pending_question(&c->transcript)->raw);
+    Json *option_data = json_object(); json_set_str(option_data, "label", long_option);
+    Json *options = json_array(); json_array_push(options, option_data);
+    json_object_set(event, "options", options);
+    Json *events = json_array(); json_array_push(events, event);
+    transcript_free(&c->transcript); transcript_append(&c->transcript, events); json_free(events);
+    Doc doc; doc_init(&doc); int dpi = theme_dpi();
+    for (int scale = 1; scale <= 2; scale++) {
+        theme_set_dpi(dpi * scale);
+        int wide_option_height = 0;
+        for (int narrow = 0; narrow < 2; narrow++) {
+            int width = px(narrow ? 390 : 1440);
+            RECT bounds = {0, 0, width + px(36), px(1200)}; pane_set_bounds(pane, &bounds);
+            doc_begin(&doc, NULL, width); status_layout(&s->base, &doc); doc_end(&doc);
+            Item *work = card_item(s, &doc, STATUS_OPEN, card(s, "work"));
+            Item *wait = card_item(s, &doc, STATUS_OPEN, card(s, "wait"));
+            CHECK(work != NULL); CHECK(wait != NULL);
+            if (narrow) CHECK(work->rc.top > c->rect.bottom);
+            else { CHECK(work->rc.left > c->rect.right); CHECK(work->rc.top < c->rect.top); }
+            CHECK(doc_height(&doc) >= work->rc.bottom); CHECK(doc_height(&doc) >= c->rect.bottom);
+            Item *option = NULL;
+            for (size_t i = 0; i < doc.count; i++) if (str_eq(doc.items[i].text, long_option)) option = &doc.items[i];
+            CHECK(option != NULL);
+            int option_height = option->rc.bottom - option->rc.top;
+            if (narrow) CHECK(option_height > wide_option_height);
+            else wide_option_height = option_height;
+            CHECK(option->rc.right <= width);
+            int hit = doc_hit(&doc, option->rc.left + 1, option->rc.bottom - 1);
+            CHECK(hit >= 0); CHECK_INT(doc.items[hit].action, STATUS_OPTION);
+            CHECK_STR(doc.items[hit].text, long_option);
+            RECT content = pane_content_rect(pane);
+            status_place(&s->base, &content, 0); CHECK(c->edit != NULL);
+            HWND edit = c->edit; SetFocus(edit);
+            wchar_t text[100]; GetWindowTextW(edit, text, 100); CHECK(wcscmp(text, L"Retain this draft across reflow") == 0);
+            RECT before; GetWindowRect(edit, &before); MapWindowPoints(NULL, pane_hwnd(pane), (POINT *)&before, 2);
+            int margin = (bounds.right - pane_content_width(pane)) / 2;
+            CHECK_INT(before.left, c->rect.left + content.left + margin);
+            CHECK_INT(before.top, c->rect.top + content.top);
+            CHECK_INT(before.right - before.left, c->rect.right - c->rect.left);
+            status_place(&s->base, &content, px(12));
+            RECT after; GetWindowRect(edit, &after);
+            MapWindowPoints(NULL, pane_hwnd(pane), (POINT *)&after, 2);
+            CHECK_INT(after.top, before.top - px(12)); CHECK_INT(after.left, before.left);
+            CHECK(c->edit == edit); CHECK(GetFocus() == edit);
+            CHECK_STR(c->draft, "Retain this draft across reflow");
+        }
+    }
+    theme_set_dpi(dpi); doc_free(&doc); cleanup(&stub); ShowWindow(dispatcher, SW_HIDE);
+}
 static void test_reply_keyboard(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     ShowWindow(dispatcher, SW_SHOWNA);
@@ -525,6 +585,7 @@ void app_status_tests(void) {
     test_run("Status message Retry-After blocks replies across refresh and reopening until expiry", test_message_retry_after);
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
     test_run("Status retries failed transcript batches with later or empty reads", test_transcript_persistence_retry);
+    test_run("Status responsive columns preserve wrapped actions and native edit offsets", test_responsive_layout_and_controls);
     test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);
     test_run("Status keyboard rejects replacement asks until rendered", test_keyboard_rejects_unpainted_ask);
     test_run("Status unknown send interlocks survive root replacement and refresh", test_uncertainty_survives_reopen);
