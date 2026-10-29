@@ -78,26 +78,31 @@ char *sleep_path(const char *path, const char *repo) {
     if (!found || !out.len) { str_free(&out); return NULL; }
     return str_detach(&out);
 }
-SleepStep sleep_step(const Json *event, const char *repo) {
-    SleepStep out = {0};
+static bool write_tool(const char *name) {
+    if (str_eq(name, "Edit") || str_eq(name, "Write") || str_eq(name, "MultiEdit") || str_eq(name, "NotebookEdit")) return true;
+    return str_eq(name, "edit") || str_eq(name, "write") || str_eq(name, "patch");
+}
+SleepKind sleep_event_kind(const Json *event) {
     const char *kind = json_str(json_get(event, "kind"));
-    const char *name = json_str_or(json_get(event, "name"), "");
-    const char *summary = json_str(json_get(event, "summary"));
-    if (str_eq(kind, "cmd") || str_eq(kind, "git")) out.text = first(json_str(json_get(event, "text")), 512);
-    else if (str_eq(kind, "tool")) {
-        if (str_eq(name, "Bash") || str_eq(name, "Shell") || str_eq(name, "bash") || str_eq(name, "shell")) out.text = first(summary, 512);
-        else {
-            out.writes = str_eq(name, "Edit") || str_eq(name, "Write") || str_eq(name, "MultiEdit") || str_eq(name, "NotebookEdit");
-            if (str_eq(name, "edit") || str_eq(name, "write") || str_eq(name, "patch")) out.writes = true;
-            bool read = str_eq(name, "Read") || str_eq(name, "read") || str_eq(name, "view");
-            if (!out.writes && !read) return out;
-            char *path = summary ? xstrndup(summary, strcspn(summary, ",")) : NULL;
-            out.text = sleep_path(path, repo); free(path);
-            if (out.text) out.kind = SLEEP_FILE;
-            return out;
-        }
+    if (str_eq(kind, "cmd") || str_eq(kind, "git")) return SLEEP_COMMAND;
+    if (!str_eq(kind, "tool")) return SLEEP_NONE;
+    const char *name = json_str(json_get(event, "name"));
+    if (str_eq(name, "Bash") || str_eq(name, "Shell") || str_eq(name, "bash") || str_eq(name, "shell")) return SLEEP_COMMAND;
+    if (write_tool(name) || str_eq(name, "Read") || str_eq(name, "read") || str_eq(name, "view")) return SLEEP_FILE;
+    return SLEEP_NONE;
+}
+SleepStep sleep_step(const Json *event, const char *repo) {
+    SleepStep out = {0}; const char *summary = json_str(json_get(event, "summary"));
+    SleepKind kind = sleep_event_kind(event);
+    if (kind == SLEEP_COMMAND) {
+        const char *text = str_eq(json_str(json_get(event, "kind")), "tool") ? summary : json_str(json_get(event, "text"));
+        out.text = first(text, 512);
+    } else if (kind == SLEEP_FILE) {
+        out.writes = write_tool(json_str(json_get(event, "name")));
+        char *path = summary ? xstrndup(summary, strcspn(summary, ",")) : NULL;
+        out.text = sleep_path(path, repo); free(path);
     }
-    if (out.text) out.kind = SLEEP_COMMAND;
+    if (out.text) out.kind = kind;
     return out;
 }
 void sleep_step_free(SleepStep *s) { free(s->text); memset(s, 0, sizeof *s); }
@@ -111,7 +116,7 @@ void sleep_wall_free(SleepWall *w) {
     memset(w, 0, sizeof *w); w->serial = serial;
 }
 void sleep_remove(SleepWall *w, const char *id) {
-    for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(session_id(&w->panes[i].session), id)) pane_free(&w->panes[i]);
+    for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(session_id(&w->panes[i].session), id)) { pane_free(&w->panes[i]); return; }
 }
 static void drop_replay(SleepWall *w) {
     for (int i = 0; i < SLEEP_PANES; i++) if (w->panes[i].replay) pane_free(&w->panes[i]);
@@ -201,6 +206,17 @@ static time_t recency(const Session *s) {
     if (board_date_parse(json_str(json_get(s->raw, "updatedAt")), &t)) return t;
     if (board_date_parse(json_str(json_get(s->raw, "endedAt")), &t)) return t;
     board_date_parse(json_str(json_get(s->raw, "createdAt")), &t); return t;
+}
+static int session_rank(const Session *s) {
+    if (str_empty(session_id(s)) || str_empty(session_repo(s))) return -1;
+    if (session_is_active(s)) return 2;
+    return str_eq(session_status(s), "closed") ? 0 : 1;
+}
+int sleep_session_priority(const Session *a, const Session *b) {
+    int ar = session_rank(a), br = session_rank(b);
+    if (ar != br) return ar > br ? 1 : -1;
+    time_t at = recency(a), bt = recency(b);
+    return at > bt ? 1 : at < bt ? -1 : 0;
 }
 size_t sleep_select(const Session *items, size_t count, size_t out[SLEEP_PANES], bool working) {
     size_t n = 0;

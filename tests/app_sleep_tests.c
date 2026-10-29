@@ -155,13 +155,13 @@ static void record_delete_then_add(void) {
     event("session.deleted", "{\"id\":\"a\"}");
     event("session", "{\"id\":\"c\",\"repo\":\"o/r\",\"status\":\"idle\"}");
     event("transcript", "{\"sessionId\":\"b\",\"event\":{\"seq\":1,\"kind\":\"cmd\",\"text\":\"kept\"}}");
-    pulse(300180); CHECK_INT(g_sleep.record_count, 2); CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "kept");
+    pulse(300180); CHECK_INT(g_sleep.registry.count, 2); CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "kept");
     for (int k = 0; k < 140; k++) {
         char *data = xstrfmt("{\"id\":\"archive%d\",\"repo\":\"o/r\",\"status\":\"closed\"}", k);
         event("session", data); free(data);
     }
     event("transcript", "{\"sessionId\":\"b\",\"event\":{\"seq\":2,\"kind\":\"cmd\",\"text\":\"still live\"}}");
-    pulse(300260); CHECK_INT(g_sleep.record_count, 128); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "still live"); clear(&f);
+    pulse(300260); CHECK_INT(g_sleep.registry.count, 128); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "still live"); clear(&f);
 }
 static POINT native_mouse_point;
 static LRESULT CALLBACK inject_mouse_position(int code, WPARAM wp, LPARAM lp) {
@@ -214,14 +214,101 @@ static void large_connect_burst_reconciles_without_reconnecting(void) {
     pulse(300180); CHECK_INT(followed, 1); CHECK_INT(cancelled, 0);
     CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "first"); CHECK(!has_session("dropped"));
     SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK(!has_session("dropped")); // pre-burst snapshot is stale
-    f.block_read = false; pulse(301180);
+    f.block_read = false; pulse(330180);
     event("transcript", "{\"sessionId\":\"live\",\"event\":{\"seq\":2,\"kind\":\"cmd\",\"text\":\"second\"}}");
-    pulse(301260); screen_fixture_pump(&f, 1);
+    pulse(330260); screen_fixture_pump(&f, 1);
     CHECK(has_session("dropped")); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "second");
-    CHECK_INT(followed, 1); CHECK_INT(cancelled, 0); CHECK(g_sleep.record_count <= 128);
-    g_sleep.snapshot = 0; pulse(301340);
-    event("session.deleted", "{\"id\":\"dropped\"}"); pulse(301420); screen_fixture_pump(&f, 1);
+    CHECK_INT(followed, 1); CHECK_INT(cancelled, 0); CHECK(g_sleep.registry.count <= 128);
+    pulse(360180);
+    event("session.deleted", "{\"id\":\"dropped\"}"); pulse(360260); screen_fixture_pump(&f, 1);
     CHECK(!has_session("dropped")); clear(&f);
+}
+// The server orders listDevSessions by pinnedAt/createdAt descending, including the closed archive.
+static Json *newest_first_archive(void) {
+    Json *sessions = json_array();
+    for (int k = 0; k < 220; k++) {
+        Json *row = json_object(); char *id = xstrfmt("session%d", k);
+        char *date = xstrfmt("2026-10-29T10:%02d:%02dZ", (219 - k) / 60, (219 - k) % 60);
+        json_set_str(row, "id", id); json_set_str(row, "repo", "o/r");
+        json_set_str(row, "status", k < 5 ? "running" : "closed");
+        json_set_str(row, "createdAt", date); json_set_str(row, "updatedAt", date);
+        json_array_push(sessions, row); free(id); free(date);
+    }
+    return sessions;
+}
+static void fifth_active_session_rotates_without_refresh_storm(void) {
+    ScreenFixture f; init(&f);
+    Route stream_routes[] = {{"GET", "/events", "read"}, {"GET", "/sessions", "read"}};
+    g_store.routes = stream_routes; g_store.route_count = 2;
+    Json *list = newest_first_archive(), *answer = json_object();
+    json_object_set(answer, "sessions", json_clone(list));
+    char *response = json_serialize(answer, false); json_free(answer);
+    f.read_response = response; f.block_read = true;
+    pulse(300100); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+    for (size_t k = 0; k < json_count(list); k++) {
+        char *data = json_serialize(json_at(list, k), false); event("session", data); free(data);
+        CHECK(queued.count <= SLEEP_BACKLOG);
+    }
+    pulse(300180); SetEvent(f.resume); screen_fixture_pump(&f, 1); f.block_read = false;
+    char target[32] = "session4";
+    if (has_session(target)) {
+        for (int k = 0; k < 5; k++) {
+            char *id = xstrfmt("session%d", k);
+            if (!has_session(id)) { snprintf(target, sizeof target, "%s", id); free(id); break; }
+            free(id);
+        }
+    }
+    CHECK(!has_session(target));
+    bool rotated = false;
+    for (int second = 1; second <= 180; second++) {
+        char *line = xstrfmt("{\"sessionId\":\"%s\",\"event\":{\"seq\":%d,\"kind\":\"cmd\",\"text\":\"fifth active session\"}}", target, second);
+        event("transcript", line); free(line); pulse(300180 + (uint64_t)second * 1000);
+        rotated |= has_session(target);
+        if (g_sleep.sessions) screen_fixture_pump(&f, 1);
+        CHECK(g_sleep.registry.count <= 128); CHECK(queued.count <= SLEEP_BACKLOG);
+    }
+    printf("  newest-first archive: %ld snapshot reads, fifth pane takeover %s\n", (long)f.reads, rotated ? "yes" : "no");
+    CHECK(rotated); CHECK(f.reads <= 9); CHECK(f.reads >= 4);
+    CHECK_INT(followed, 1); CHECK_INT(cancelled, 0);
+    json_free(list); clear(&f); free(response);
+}
+static void unknown_work_and_stale_metadata_retries_are_bounded(void) {
+    ScreenFixture f; init(&f);
+    Route stream_routes[] = {{"GET", "/events", "read"}, {"GET", "/sessions", "read"}};
+    g_store.routes = stream_routes; g_store.route_count = 2;
+    Json *list = newest_first_archive(), *answer = json_object();
+    json_object_set(answer, "sessions", json_clone(list)); char *first = json_serialize(answer, false);
+    f.read_response = first; pulse(300100); screen_fixture_pump(&f, 1);
+    event("transcript", "{\"sessionId\":\"hidden\",\"event\":{\"seq\":7,\"kind\":\"cmd\",\"text\":\"recover one-off work\"}}");
+    event("transcript", "{\"sessionId\":\"hidden\",\"event\":{\"seq\":8,\"kind\":\"text\",\"text\":\"still working\"}}");
+    pulse(300180); CHECK_INT(f.reads, 1); CHECK(!has_session("hidden"));
+    Json *hidden = json_parsez("{\"id\":\"hidden\",\"repo\":\"o/r\",\"status\":\"running\",\"createdAt\":\"2026-01-01T00:00:00Z\"}");
+    json_array_push(list, hidden); json_object_set(answer, "sessions", json_clone(list));
+    char *response = json_serialize(answer, false); f.read_response = response;
+    pulse(330100); screen_fixture_pump(&f, 1); CHECK(has_session("hidden"));
+    CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "recover one-off work");
+    for (int second = 1; second <= 180; second++) {
+        uint64_t now = 330100 + (uint64_t)second * 1000;
+        char *line = xstrfmt("{\"sessionId\":\"unknown\",\"event\":{\"seq\":%d,\"kind\":\"cmd\",\"text\":\"unknown work\"}}", second);
+        event("transcript", line); free(line); pulse(now);
+        if (g_sleep.sessions) {
+            event("session", "{\"id\":\"session0\",\"repo\":\"o/r\",\"status\":\"running\",\"branch\":\"newer\",\"updatedAt\":\"2026-10-29T11:00:00Z\"}");
+            pulse(now + 1); screen_fixture_pump(&f, 1);
+        }
+        CHECK(g_sleep.registry.count <= 128); CHECK(g_sleep.registry.mark_count <= 128);
+    }
+    printf("  unknown transcripts plus metadata churn: %ld snapshot reads\n", (long)f.reads);
+    CHECK(f.reads <= 6); CHECK(f.reads >= 3);
+    pulse(570100); screen_fixture_pump(&f, 1); // quiet metadata permits reconciliation again
+    size_t commands = g_sleep.wall.commands;
+    event("transcript", "{\"sessionId\":\"hidden\",\"event\":{\"seq\":6,\"kind\":\"cmd\",\"text\":\"stale work\"}}");
+    pulse(570180); CHECK_INT(g_sleep.wall.commands, commands);
+    event("transcript", "{\"sessionId\":\"hidden\",\"event\":{\"seq\":9,\"kind\":\"cmd\",\"text\":\"new work\"}}");
+    pulse(570260); CHECK(has_session("hidden")); CHECK_STR(g_sleep.wall.ticker[g_sleep.wall.commands - 1].text, "new work");
+    pulse(600100);
+    event("session.deleted", "{\"id\":\"hidden\"}"); pulse(600180); screen_fixture_pump(&f, 1);
+    CHECK(!has_session("hidden")); CHECK_INT(followed, 1); CHECK_INT(cancelled, 0);
+    json_free(list); json_free(answer); clear(&f); free(first); free(response);
 }
 static void stream_failures_increase_backoff(void) {
     ScreenFixture f; init(&f); fake_ended = true;
@@ -235,6 +322,8 @@ static void stream_failures_increase_backoff(void) {
     test_sleep_modal(true); CHECK_INT(g_sleep.failures, 0); test_sleep_modal(false); clear(&f);
 }
 void app_sleep_tests(void) {
+    test_run("sleep unresolved work and stale metadata retries stay bounded without losing recovery", unknown_work_and_stale_metadata_retries_are_bounded);
+    test_run("sleep newest-first archive rotates fifth active session with bounded refreshes", fifth_active_session_rotates_without_refresh_storm);
     test_run("sleep large connect burst retains stream live events and snapshot reconciliation", large_connect_burst_reconciles_without_reconnecting);
     test_run("sleep genuine stream failures back off increasingly and reset after health", stream_failures_increase_backoff);
     test_run("sleep stationary native mouse moves survive overlay activation", stationary_moves_do_not_reset_or_wake);

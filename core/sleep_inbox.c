@@ -11,11 +11,25 @@ bool sleep_inbox_push(SleepInbox *q, const char *type, Json *data) {
     bool session = str_eq(type, "session");
     if (!session && !str_eq(type, "transcript") && !str_eq(type, "session.deleted")) { json_free(data); return true; }
     if (q->count == SLEEP_BACKLOG) {
-        size_t at = 0;
-        while (at < q->count && !str_eq(json_str(json_get(q->events[at], "type")), "session")) at++;
+        size_t at = q->count;
+        bool same = false;
+        for (size_t i = 0; i < q->count; i++) {
+            if (!str_eq(json_str(json_get(q->events[i], "type")), "session")) continue;
+            Session candidate = {(Json *)json_get(q->events[i], "data")};
+            if (session && str_eq(session_id(&candidate), json_str(json_get(data, "id")))) same = true;
+            if (at == q->count) at = i;
+            else {
+                Session worst = {(Json *)json_get(q->events[at], "data")};
+                if (sleep_session_priority(&candidate, &worst) < 0) at = i;
+            }
+        }
         q->reconcile = true;
         if (at == q->count) { json_free(data); return session; }
-        // Session records are snapshots, so discard one before sacrificing any ordered live event or deletion.
+        if (session && !same) {
+            Session incoming = {data}, worst = {(Json *)json_get(q->events[at], "data")};
+            if (sleep_session_priority(&incoming, &worst) < 0) { json_free(data); return true; }
+        }
+        // Preserve active/recent metadata even when the server sends its newest sessions first.
         remove_at(q, at);
     }
     Json *packet = json_object(); json_set_str(packet, "type", type); json_object_set(packet, "data", data);

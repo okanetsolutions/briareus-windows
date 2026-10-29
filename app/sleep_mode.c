@@ -20,9 +20,11 @@ static struct {
     SleepFollow *follow;
     Request *sessions, *history, *files[SLEEP_PANES];
     uint64_t events_seen;
-    uint64_t identities[SLEEP_PANES], revisions[SLEEP_PANES], retry, snapshot, replay_at, history_at[SLEEP_PANES];
+    uint64_t identities[SLEEP_PANES], revisions[SLEEP_PANES], retry, replay_at, history_at[SLEEP_PANES];
     SleepReplay replay;
-    struct { Session session; int cursor; } records[128]; size_t record_count;
+    SleepRecords registry;
+    SleepRefresh refresh;
+    Json *unknown[SLEEP_PANES]; int unknown_cursor[SLEEP_PANES]; size_t unknown_next;
 } g_sleep;
 
 static uint64_t now_ms(void) { return GetTickCount64(); }
@@ -49,8 +51,10 @@ static void wake(void) {
         g_sleep.history_at[i] = g_sleep.revisions[i] = g_sleep.identities[i] = 0;
     }
     sleep_wall_free(&g_sleep.wall);
-    for (size_t i = 0; i < g_sleep.record_count; i++) session_free(&g_sleep.records[i].session);
-    memset(g_sleep.records, 0, sizeof g_sleep.records); g_sleep.record_count = 0;
+    sleep_records_free(&g_sleep.registry);
+    memset(&g_sleep.refresh, 0, sizeof g_sleep.refresh);
+    for (int i = 0; i < SLEEP_PANES; i++) { json_free(g_sleep.unknown[i]); g_sleep.unknown[i] = NULL; }
+    memset(g_sleep.unknown_cursor, 0, sizeof g_sleep.unknown_cursor); g_sleep.unknown_next = 0;
     g_sleep.failures = 0;
     if (g_sleep.window) ShowWindow(g_sleep.window, SW_HIDE);
     if (g_sleep.focus && IsWindow(g_sleep.focus) && IsWindowVisible(g_sleep.focus)) SetFocus(g_sleep.focus);
@@ -82,16 +86,13 @@ static int find_pane(const char *id) {
     for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(session_id(&g_sleep.wall.panes[i].session), id)) return i;
     return -1;
 }
-static int record_index(const char *id) {
-    for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) return (int)k;
-    return -1;
-}
+static int record_index(const char *id) { return sleep_records_find(&g_sleep.registry, id); }
 static void apply_line(int i, const Json *line, bool replay) {
     SleepPane *p = &g_sleep.wall.panes[i];
     int seq = json_int_or(json_get(line, "seq"), 0), record_slot = record_index(session_id(&p->session));
     if (!replay && record_slot >= 0) {
-        if (seq <= g_sleep.records[record_slot].cursor) return;
-        g_sleep.records[record_slot].cursor = seq;
+        if (seq <= g_sleep.registry.items[record_slot].cursor) return;
+        g_sleep.registry.items[record_slot].cursor = seq; sleep_records_touch(&g_sleep.registry, record_slot);
     }
     SleepStep step = sleep_step(line, session_repo(&p->session));
     if (!replay && step.kind != SLEEP_NONE && p->replay) {
@@ -105,21 +106,26 @@ static void apply_line(int i, const Json *line, bool replay) {
     }
     sleep_apply(&g_sleep.wall, i, &step, now_ms(), replay); sleep_step_free(&step);
 }
-static int record(const Session *s) {
-    size_t slot = g_sleep.record_count;
-    for (size_t i = 0; i < g_sleep.record_count; i++) if (str_eq(session_id(s), session_id(&g_sleep.records[i].session))) { slot = i; break; }
-    if (slot < g_sleep.record_count) {
-        const char *old = json_str(json_get(g_sleep.records[slot].session.raw, "updatedAt"));
-        const char *next = json_str(json_get(s->raw, "updatedAt"));
-        if (old && next && strcmp(old, next) > 0) return -1;
-    } else if (slot == 128) {
-        // Displayed sessions keep their dedupe watermark even when the server has a long archive.
-        slot = 0;
-        while (find_pane(session_id(&g_sleep.records[slot].session)) >= 0) slot++;
+static int record(const Session *s) { return sleep_records_put(&g_sleep.registry, s, &g_sleep.wall, false); }
+static void remember_unknown(const Json *packet) {
+    const char *id = json_str_nonempty(json_get(packet, "sessionId")); if (!id) return;
+    size_t at = SLEEP_PANES, empty = SLEEP_PANES;
+    for (size_t i = 0; i < SLEEP_PANES; i++) {
+        if (!g_sleep.unknown[i] && empty == SLEEP_PANES) empty = i;
+        if (str_eq(id, json_str(json_get(g_sleep.unknown[i], "sessionId")))) { at = i; break; }
     }
-    else g_sleep.record_count++;
-    if (!str_eq(session_id(s), session_id(&g_sleep.records[slot].session))) g_sleep.records[slot].cursor = 0;
-    session_free(&g_sleep.records[slot].session); session_copy(&g_sleep.records[slot].session, s); return (int)slot;
+    if (at == SLEEP_PANES) at = empty < SLEEP_PANES ? empty : g_sleep.unknown_next++ % SLEEP_PANES;
+    const Json *old_event = json_get(g_sleep.unknown[at], "event"), *next_event = json_get(packet, "event");
+    bool same = str_eq(id, json_str(json_get(g_sleep.unknown[at], "sessionId")));
+    int old = json_int_or(json_get(old_event, "seq"), 0), next = json_int_or(json_get(next_event, "seq"), 0);
+    if (!same) g_sleep.unknown_cursor[at] = 0;
+    if (next > g_sleep.unknown_cursor[at]) g_sleep.unknown_cursor[at] = next;
+    bool useful = sleep_event_kind(next_event) != SLEEP_NONE, old_useful = sleep_event_kind(old_event) != SLEEP_NONE;
+    bool replace = !same;
+    if (useful) replace |= !old_useful || next > old;
+    else if (!old_useful) replace |= next > old;
+    if (replace) { json_free(g_sleep.unknown[at]); g_sleep.unknown[at] = json_clone(packet); }
+    sleep_refresh_hint(&g_sleep.refresh, now_ms());
 }
 static void receive(const char *type, const Json *j) {
     if (str_eq(type, "session")) {
@@ -133,23 +139,21 @@ static void receive(const char *type, const Json *j) {
         session_free(&s);
     } else if (str_eq(type, "session.deleted")) {
         const char *id = json_str(json_get(j, "id")); sleep_remove(&g_sleep.wall, id);
-        for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) {
-            session_free(&g_sleep.records[k].session);
-            size_t tail = --g_sleep.record_count;
-            if (k != tail) g_sleep.records[k] = g_sleep.records[tail];
-            memset(&g_sleep.records[tail], 0, sizeof g_sleep.records[tail]); break;
+        sleep_records_delete(&g_sleep.registry, id);
+        for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(id, json_str(json_get(g_sleep.unknown[i], "sessionId")))) {
+            json_free(g_sleep.unknown[i]); g_sleep.unknown[i] = NULL; g_sleep.unknown_cursor[i] = 0;
         }
     }
     else if (str_eq(type, "transcript")) {
         int i = find_pane(json_str(json_get(j, "sessionId")));
         const char *id = json_str(json_get(j, "sessionId"));
         int r = record_index(id);
-        if (r < 0) { if (g_sleep.snapshot > now_ms() + 1000) g_sleep.snapshot = now_ms() + 1000; return; }
-        if (json_int_or(json_get(json_get(j, "event"), "seq"), 0) <= g_sleep.records[r].cursor) return;
+        if (r < 0) { remember_unknown(j); return; }
+        if (json_int_or(json_get(json_get(j, "event"), "seq"), 0) <= g_sleep.registry.items[r].cursor) return;
         if (i < 0) {
-            for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) {
-                SleepStep step = sleep_step(json_get(j, "event"), session_repo(&g_sleep.records[k].session));
-                if (step.kind != SLEEP_NONE) i = sleep_assign(&g_sleep.wall, &g_sleep.records[k].session, now_ms(), false);
+            for (size_t k = 0; k < g_sleep.registry.count; k++) if (str_eq(id, session_id(&g_sleep.registry.items[k].session))) {
+                SleepStep step = sleep_step(json_get(j, "event"), session_repo(&g_sleep.registry.items[k].session));
+                if (step.kind != SLEEP_NONE) i = sleep_assign(&g_sleep.wall, &g_sleep.registry.items[k].session, now_ms(), false);
                 sleep_step_free(&step); break;
             }
         }
@@ -158,11 +162,37 @@ static void receive(const char *type, const Json *j) {
         }
     }
 }
+static void resolve_unknown(const Session *items, size_t count) {
+    for (int i = 0; i < SLEEP_PANES; i++) {
+        Json *packet = g_sleep.unknown[i]; if (!packet) continue;
+        const char *id = json_str(json_get(packet, "sessionId"));
+        for (size_t k = 0; k < count; k++) if (str_eq(id, session_id(&items[k]))) {
+            int at = sleep_records_put(&g_sleep.registry, &items[k], &g_sleep.wall, true);
+            if (at >= 0) {
+                receive("transcript", packet);
+                if (g_sleep.unknown_cursor[i] > g_sleep.registry.items[at].cursor) g_sleep.registry.items[at].cursor = g_sleep.unknown_cursor[i];
+                int pane = find_pane(id);
+                if (pane >= 0 && g_sleep.wall.panes[pane].cursor < g_sleep.unknown_cursor[i]) g_sleep.wall.panes[pane].cursor = g_sleep.unknown_cursor[i];
+            }
+            break;
+        }
+        json_free(packet); g_sleep.unknown[i] = NULL; g_sleep.unknown_cursor[i] = 0;
+    }
+}
 static void sessions_done(void *owner, Request *r) {
-    (void)owner; if (!current() || !r->ok) return;
-    if ((uint64_t)r->arg != g_sleep.events_seen) { g_sleep.snapshot = now_ms() + 1000; return; }
-    Session *items = NULL; size_t n = 0; if (!sessions_parse(r->result, &items, &n)) return;
-    for (size_t k = 0; k < n; k++) record(&items[k]);
+    (void)owner; if (!current()) return;
+    bool accepted = r->ok && (uint64_t)r->arg == g_sleep.events_seen;
+    Session *items = NULL; size_t n = 0;
+    if (accepted) accepted = sessions_parse(r->result, &items, &n);
+    sleep_refresh_finished(&g_sleep.refresh, now_ms(), accepted);
+    if (!accepted) return;
+    for (size_t k = 0; k < n; k++) {
+        int at = record(&items[k]);
+        if (at < 0) {
+            at = record_index(session_id(&items[k]));
+            if (at >= 0) { session_free(&items[k]); session_copy(&items[k], &g_sleep.registry.items[at].session); }
+        }
+    }
     size_t selected[SLEEP_PANES]; size_t count = sleep_select(items, n, selected, true);
     bool replay = !count || sleep_replay_due(&g_sleep.wall, now_ms());
     // Reconcile deletions without trusting a reconnect to replay deletion events.
@@ -174,21 +204,21 @@ static void sessions_done(void *owner, Request *r) {
     if (replay) {
         bool already = false;
         for (int i = 0; i < SLEEP_PANES; i++) already |= g_sleep.wall.panes[i].replay;
-        if (already) { sessions_free(items, n); return; }
+        if (already) { resolve_unknown(items, n); sessions_free(items, n); return; }
         count = sleep_select(items, n, selected, false);
     }
     int cursors[SLEEP_PANES] = {0};
     for (size_t k = 0; k < count; k++) {
         int at = record_index(session_id(&items[selected[k]]));
-        if (at >= 0) cursors[k] = g_sleep.records[at].cursor;
+        if (at >= 0) cursors[k] = g_sleep.registry.items[at].cursor;
     }
     if (replay) sleep_wall_free(&g_sleep.wall);
     for (size_t k = 0; k < count; k++) {
-        int at = record(&items[selected[k]]);
-        if (at >= 0 && cursors[k] > g_sleep.records[at].cursor) g_sleep.records[at].cursor = cursors[k];
+        int at = sleep_records_put(&g_sleep.registry, &items[selected[k]], &g_sleep.wall, true);
+        if (at >= 0 && cursors[k] > g_sleep.registry.items[at].cursor) g_sleep.registry.items[at].cursor = cursors[k];
         sleep_assign(&g_sleep.wall, &items[selected[k]], now_ms(), replay);
     }
-    sessions_free(items, n);
+    resolve_unknown(items, n); sessions_free(items, n);
 }
 static void history_done(void *owner, Request *r) {
     (void)owner; int i = r->tag; SleepPane *p = &g_sleep.wall.panes[i];
@@ -200,7 +230,7 @@ static void history_done(void *owner, Request *r) {
         int at = record_index(session_id(&p->session));
         for (size_t k = 0; at >= 0 && k < json_count(events); k++) {
             int seq = json_int_or(json_get(json_at(events, k), "seq"), 0);
-            if (seq > g_sleep.records[at].cursor) g_sleep.records[at].cursor = seq;
+            if (seq > g_sleep.registry.items[at].cursor) g_sleep.registry.items[at].cursor = seq;
         }
     }
     else {
@@ -211,7 +241,7 @@ static void history_done(void *owner, Request *r) {
         for (size_t k = 0; k < json_count(events); k++) {
             int seq = json_int_or(json_get(json_at(events, k), "seq"), 0);
             if (seq > p->cursor) p->cursor = seq;
-            if (at >= 0 && seq > g_sleep.records[at].cursor) g_sleep.records[at].cursor = seq;
+            if (at >= 0 && seq > g_sleep.registry.items[at].cursor) g_sleep.registry.items[at].cursor = seq;
         }
     }
 }
@@ -253,7 +283,8 @@ void sleep_pulse(uint64_t now) {
         if (!sleep_due(&g_sleep.idle, now, g_sleep.minutes, eligible)) return;
         g_sleep.client = api_client_retain(g_store.client); g_sleep.device = xstrdup(g_store.device.id); g_sleep.scope = scope_key();
         g_sleep.wall.last_live = now;
-        g_sleep.focus = GetFocus(); g_sleep.retry = g_sleep.snapshot = g_sleep.replay_at = 0;
+        g_sleep.focus = GetFocus(); g_sleep.retry = g_sleep.replay_at = 0;
+        memset(&g_sleep.refresh, 0, sizeof g_sleep.refresh);
         pointer_reset();
         ShowWindow(g_sleep.window, SW_SHOWNA);
     }
@@ -268,7 +299,7 @@ void sleep_pulse(uint64_t now) {
     }
     if (g_sleep.follow) {
         SleepFollowInfo info; Json *queue = sleep_follow_drain(g_sleep.follow, &info);
-        if (info.reconcile) { g_sleep.events_seen++; g_sleep.snapshot = 0; }
+        if (info.reconcile) { g_sleep.events_seen++; sleep_refresh_hint(&g_sleep.refresh, now); }
         for (size_t k = 0; k < json_count(queue); k++) {
             const Json *item = json_at(queue, k); const char *type = json_str(json_get(item, "type"));
             if (!str_eq(type, "transcript")) g_sleep.events_seen++;
@@ -281,13 +312,14 @@ void sleep_pulse(uint64_t now) {
             if (g_sleep.failures < 6) g_sleep.failures++;
             int delay = poll_delay_ms(3000, g_sleep.failures, info.retry_after);
             if (info.status >= 400 && info.status < 500 && delay < 60000) delay = 60000;
-            g_sleep.retry = now + (uint64_t)delay; g_sleep.snapshot = 0;
+            g_sleep.retry = now + (uint64_t)delay; sleep_refresh_hint(&g_sleep.refresh, now);
             // Catch up displayed transcripts from their last accepted seq after a real disconnect.
             for (int i = 0; i < SLEEP_PANES; i++) g_sleep.history_at[i] = 0;
         }
     }
-    if (!g_sleep.sessions && now >= g_sleep.snapshot && store_supports("sessions")) {
-        Request *r = store_call_background("sessions", json_object(), 15000, NULL, sessions_done, 0, &g_sleep.sessions); r->arg = (intptr_t)g_sleep.events_seen; g_sleep.snapshot = now + 30000;
+    if (!g_sleep.sessions && sleep_refresh_due(&g_sleep.refresh, now) && store_supports("sessions")) {
+        sleep_refresh_started(&g_sleep.refresh, now);
+        Request *r = store_call_background("sessions", json_object(), 15000, NULL, sessions_done, 0, &g_sleep.sessions); r->arg = (intptr_t)g_sleep.events_seen;
     }
     sleep_tick(&g_sleep.wall, now); reads(now);
     if (now >= g_sleep.replay_at) {

@@ -11,6 +11,7 @@ typedef struct { Json *events[SLEEP_BACKLOG]; size_t count; bool reconcile; } Sl
 bool sleep_inbox_push(SleepInbox *q, const char *type, Json *data);
 Json *sleep_inbox_take(SleepInbox *q, bool *reconcile); // owned FIFO batch; resets the backlog
 void sleep_inbox_free(SleepInbox *q);
+int sleep_session_priority(const Session *a, const Session *b); // active, open, closed, then recency
 extern const int sleep_choices[7];
 int sleep_minutes(int value); // invalid persisted values use the five minute default
 // Monotonic milliseconds; input is filtered before native accelerator/character dispatch.
@@ -27,6 +28,8 @@ typedef enum { SLEEP_NONE, SLEEP_FILE, SLEEP_COMMAND } SleepKind;
 typedef struct { SleepKind kind; bool writes; char *text; } SleepStep;
 // Owned normalized repository-relative path, or NULL for unsafe/outside paths.
 char *sleep_path(const char *path, const char *repo);
+// Classifies supported tools before repository metadata/path normalization is available.
+SleepKind sleep_event_kind(const Json *event);
 SleepStep sleep_step(const Json *event, const char *repo);
 void sleep_step_free(SleepStep *step);
 // Bounded normalized history. One step per beat, round robin across nonempty session queues.
@@ -65,4 +68,26 @@ Json *sleep_file_args(const SleepPane *p, bool fallback);
 bool sleep_loaded(SleepPane *p, uint64_t revision, const Json *answer);
 // Newest recent sessions first, stable for ties; includes closed sessions when replaying and excludes sessions without repositories.
 size_t sleep_select(const Session *items, size_t count, size_t out[SLEEP_PANES], bool working);
+// Connection-scoped metadata and sequence watermarks; displayed sessions are never eviction candidates.
+enum { SLEEP_RECORDS = 128 };
+typedef struct { Session session; int cursor; uint64_t used; bool live; } SleepRecord;
+typedef struct { char *id; int cursor; uint64_t used; } SleepWatermark;
+typedef struct {
+    SleepRecord items[SLEEP_RECORDS]; size_t count;
+    SleepWatermark marks[SLEEP_RECORDS]; size_t mark_count;
+    uint64_t serial;
+} SleepRecords;
+int sleep_records_find(const SleepRecords *r, const char *id);
+// Copies s; -1 rejects older metadata or a lower-priority admission. force admits requested/displayed sessions.
+int sleep_records_put(SleepRecords *r, const Session *s, const SleepWall *wall, bool force);
+void sleep_records_touch(SleepRecords *r, int slot);
+void sleep_records_delete(SleepRecords *r, const char *id);
+void sleep_records_free(SleepRecords *r);
+
+// All refresh triggers share a 30-second read-start floor; repeated rejected/failed snapshots back off to 60s.
+typedef struct { uint64_t due, not_before; unsigned failures; } SleepRefresh;
+void sleep_refresh_hint(SleepRefresh *r, uint64_t now);
+bool sleep_refresh_due(const SleepRefresh *r, uint64_t now);
+void sleep_refresh_started(SleepRefresh *r, uint64_t now);
+void sleep_refresh_finished(SleepRefresh *r, uint64_t now, bool accepted);
 #endif

@@ -37,7 +37,8 @@ static void paths_and_tools(void) {
     SleepStep step = sleep_step(e, "o/r"); CHECK_INT(step.kind, SLEEP_FILE); CHECK(step.writes); CHECK_STR(step.text, "src/a.c"); sleep_step_free(&step);
     json_set_str(e, "name", "Bash"); json_set_str(e, "summary", "make test\nignored");
     step = sleep_step(e, "o/r"); CHECK_INT(step.kind, SLEEP_COMMAND); CHECK_STR(step.text, "make test"); sleep_step_free(&step);
-    json_set_str(e, "name", "Grep"); step = sleep_step(e, "o/r"); CHECK_INT(step.kind, SLEEP_NONE); sleep_step_free(&step);
+    json_set_str(e, "name", "Read"); json_set_str(e, "summary", "/w/o__r/a.c"); CHECK_INT(sleep_event_kind(e), SLEEP_FILE);
+    json_set_str(e, "name", "Grep"); CHECK_INT(sleep_event_kind(e), SLEEP_NONE); step = sleep_step(e, "o/r"); CHECK_INT(step.kind, SLEEP_NONE); sleep_step_free(&step);
     json_set_str(e, "kind", "git"); json_set_str(e, "text", "git fetch"); step = sleep_step(e, "o/r"); CHECK_STR(step.text, "git fetch"); sleep_step_free(&step); json_free(e);
 }
 static void assignment_replay_and_ticker(void) {
@@ -50,7 +51,9 @@ static void assignment_replay_and_ticker(void) {
     CHECK_INT(w.commands, 30); CHECK_STR(w.ticker[29].project, "r"); CHECK_STR(w.panes[live].command, "make test");
     for (int k = 0; k < 4; k++) { char *id = xstrfmt("s%d", k); Session b = session(id, "running", NULL); sleep_assign(&w, &b, 3000 + (uint64_t)k, false); session_free(&b); free(id); }
     bool a_found = false; for (int k = 0; k < 4; k++) a_found |= str_eq(session_id(&w.panes[k].session), "a"); CHECK(!a_found);
-    sleep_remove(&w, "s3"); int occupied = 0; for (int k = 0; k < 4; k++) occupied += w.panes[k].session.raw != NULL; CHECK_INT(occupied, 3);
+    int remove = -1; for (int k = 0; k < 4; k++) if (str_eq(session_id(&w.panes[k].session), "s3")) remove = k;
+    if (remove >= 0) sleep_remove(&w, session_id(&w.panes[remove].session));
+    int occupied = 0; for (int k = 0; k < 4; k++) occupied += w.panes[k].session.raw != NULL; CHECK_INT(occupied, 3);
     sleep_wall_free(&w); CHECK_INT(w.commands, 0); session_free(&a);
 }
 static void file_revision_dwell_and_limits(void) {
@@ -138,7 +141,26 @@ static void bounded_connect_backlog(void) {
     CHECK(!sleep_inbox_push(&q, "transcript", json_number(128)));
     CHECK_INT(q.count, 128); sleep_inbox_free(&q); CHECK_INT(q.count, 0);
 }
+static void newest_active_connect_snapshots_survive(void) {
+    SleepInbox q = {0};
+    for (int k = 0; k < 220; k++) {
+        Json *s = json_object(); char *id = xstrfmt("s%d", k);
+        char *date = xstrfmt("2026-10-29T10:%02d:%02dZ", (219 - k) / 60, (219 - k) % 60);
+        json_set_str(s, "id", id); json_set_str(s, "repo", "o/r");
+        json_set_str(s, "status", k < 5 ? "running" : "closed"); json_set_str(s, "createdAt", date);
+        CHECK(sleep_inbox_push(&q, "session", s)); free(id); free(date);
+    }
+    bool reconcile; Json *batch = sleep_inbox_take(&q, &reconcile); CHECK(reconcile); CHECK_INT(json_count(batch), 128);
+    for (int k = 0; k < 5; k++) {
+        char *id = xstrfmt("s%d", k); bool found = false;
+        for (size_t i = 0; i < json_count(batch); i++) if (str_eq(json_str(json_get(json_get(json_at(batch, i), "data"), "id")), id)) found = true;
+        CHECK(found); free(id);
+    }
+    CHECK_STR(json_str(json_get(json_get(json_at(batch, 127), "data"), "id")), "s127");
+    json_free(batch); sleep_inbox_free(&q);
+}
 void sleep_tests(void) {
+    test_run("sleep newest-first backlog retains active sessions and recent archive", newest_active_connect_snapshots_survive);
     test_run("sleep bounded distinct connect records retain ordered live events", bounded_connect_backlog);
     test_run("sleep ignores stationary synthetic pointer moves and resets baseline", pointer_positions);
     test_run("sleep history seeds behind live text without rewinding live file", seed_behind_live_text);

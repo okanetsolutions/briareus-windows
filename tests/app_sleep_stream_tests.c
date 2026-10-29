@@ -12,7 +12,8 @@ static StoreStream *fake_stream_new(const char *operation, Json *args, ApiError 
 static bool fake_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiError *error) {
     (void)stream;
     for (int k = 0; k < 220; k++) {
-        char *data = xstrfmt("{\"id\":\"closed%d\",\"repo\":\"o/r\",\"status\":\"closed\"}", k);
+        char *data = xstrfmt("{\"id\":\"connect%d\",\"repo\":\"o/r\",\"status\":\"%s\",\"createdAt\":\"2026-10-29T10:%02d:%02dZ\"}",
+            k, k < 5 ? "running" : "closed", (219 - k) / 60, (219 - k) % 60);
         emit(ctx, "session", data, strlen(data)); free(data);
     }
     SetEvent(transport.burst); WaitForSingleObject(transport.resume, 10000);
@@ -22,7 +23,7 @@ static bool fake_stream_read(StoreStream *stream, SseEmit emit, void *ctx, ApiEr
         char *line = xstrfmt("{\"sessionId\":\"live\",\"event\":{\"seq\":%d,\"kind\":\"cmd\",\"text\":\"live\"}}", k);
         emit(ctx, "transcript", line, strlen(line)); free(line);
     }
-    data = "{\"id\":\"closed200\"}"; emit(ctx, "session.deleted", data, strlen(data));
+    data = "{\"id\":\"connect200\"}"; emit(ctx, "session.deleted", data, strlen(data));
     SetEvent(transport.live); WaitForSingleObject(transport.finish, 10000);
     api_error_set(error, API_CANCELLED, 0, NULL, 0); return false;
 }
@@ -52,7 +53,13 @@ static void connect_archive_does_not_cancel_stream(void) {
     CHECK_INT(WaitForSingleObject(transport.burst, 10000), WAIT_OBJECT_0);
     SleepFollowInfo info; Json *batch = probe_follow_drain(followed, &info);
     CHECK_INT(json_count(batch), SLEEP_BACKLOG); CHECK(info.reconcile); CHECK(!info.ended);
-    CHECK_INT(transport.cancels, 0); CHECK_INT(transport.opens, 1); json_free(batch);
+    CHECK_INT(transport.cancels, 0); CHECK_INT(transport.opens, 1);
+    for (int k = 0; k < 5; k++) {
+        char *id = xstrfmt("connect%d", k); bool found = false;
+        for (size_t i = 0; i < json_count(batch); i++) if (str_eq(json_str(json_get(json_get(json_at(batch, i), "data"), "id")), id)) found = true;
+        CHECK(found); free(id);
+    }
+    json_free(batch);
     SetEvent(transport.resume); CHECK_INT(WaitForSingleObject(transport.live, 10000), WAIT_OBJECT_0);
     batch = probe_follow_drain(followed, &info);
     CHECK(!info.ended); CHECK(!info.reconcile); CHECK_INT(json_count(batch), 4);

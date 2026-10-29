@@ -2,6 +2,7 @@
 #ifndef BRIAREUS_SUITES_H
 #define BRIAREUS_SUITES_H
 void sleep_tests(void);
+void sleep_records_tests(void);
 void app_sleep_tests(void);
 void app_sleep_stream_tests(void);
 void app_sftp_picker_tests(void);
