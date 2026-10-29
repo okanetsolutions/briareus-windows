@@ -14,7 +14,7 @@ bool canvas_startup(void);
 /// The DirectWrite format behind a FontId; `size` is in pixels at the current DPI.
 void canvas_set_font(FontId id, const wchar_t *face, float size, int weight, bool italic);
 
-/// A canvas drawing straight to a window's client area; its GPU target is made on the first paint.
+/// A canvas drawing to a window's client area, clipped around its child windows; its target is made on the first paint.
 Canvas *canvas_for_window(HWND hwnd);
 void canvas_free(Canvas *cv);
 void canvas_resize(Canvas *cv, int width, int height);

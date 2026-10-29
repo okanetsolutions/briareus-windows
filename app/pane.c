@@ -28,6 +28,7 @@ struct Pane {
     int pressed_button;
     bool root_back; void (*root_back_cb)(void *); void *root_back_ctx;
     bool overlay;           // a side panel over the main column: ✕ at its root, a line down its left edge
+    bool edge_left, edge_right;   // lines where the pane meets the next column
     bool titles_window; char *window_title;   // the title last given the window the pane fills
     wchar_t move_glyph; const char *move_tip; void (*move_cb)(void *); void *move_ctx;   // a detachable root's window button
     char *selected_id;
@@ -333,6 +334,11 @@ void pane_set_move_button(Pane *p, wchar_t glyph, const char *tip, void (*move)(
 }
 void pane_set_titles_window(Pane *p) { p->titles_window = true; pane_header_changed(p); }
 void pane_set_overlay(Pane *p, void (*close)(void *), void *ctx) { p->overlay = true; pane_set_root_back(p, true, close, ctx); }
+void pane_set_edges(Pane *p, bool left, bool right) {
+    if (p->edge_left == left && p->edge_right == right) return;
+    p->edge_left = left; p->edge_right = right;
+    pane_repaint(p);
+}
 void pane_set_selected_id(Pane *p, const char *id) {
     if (str_eq(p->selected_id, id)) return;
     free(p->selected_id); p->selected_id = xstrdup(id);
@@ -614,16 +620,6 @@ static BOOL CALLBACK retheme_child(HWND child, LPARAM lp) {
     return TRUE;
 }
 
-/// The HWND render target presents a new frame even when a control has not moved. WS_CLIPCHILDREN keeps controls out
-/// of the pane's GDI update region, so they need their own paint after the Direct2D frame has been presented.
-static BOOL CALLBACK repaint_child(HWND child, LPARAM lp) {
-    (void)lp;
-    wchar_t cls[16]; GetClassNameW(child, cls, 16);
-    if (IsWindowVisible(child) && (_wcsicmp(cls, L"Edit") == 0 || _wcsicmp(cls, L"Button") == 0 || _wcsicmp(cls, L"Static") == 0))
-        RedrawWindow(child, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
-    return TRUE;
-}
-
 static RECT scrollbar_rect(Pane *p) {
     RECT rc = pane_content_rect(p);
     rc.top += p->doc.pin_bottom;
@@ -698,7 +694,8 @@ static void paint(Pane *p) {
     } else memset(&p->bottom_button_rect, 0, sizeof p->bottom_button_rect);
     if (s && s->vt->footer_paint && p->footer_h) { RECT fr = { rc.left, content.bottom, rc.right, rc.bottom }; s->vt->footer_paint(s, cv, &fr); }
     paint_header(p, cv, &rc);
-    if (p->overlay) draw_line(cv, rc.left, rc.top, rc.left, rc.bottom, theme.line);
+    if (p->overlay || p->edge_left) draw_line(cv, rc.left, rc.top, rc.left, rc.bottom, theme.line);
+    if (p->edge_right) draw_line(cv, rc.right - 1, rc.top, rc.right - 1, rc.bottom, theme.line);
     canvas_end(cv);
 }
 
@@ -955,11 +952,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (!p) return DefWindowProcW(hwnd, msg, wp, lp);
     Screen *s = pane_top(p);
     switch (msg) {
-    case WM_PAINT: {
-        PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps);
-        EnumChildWindows(hwnd, repaint_child, 0);
-        return 0;
-    }
+    case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(hwnd, &ps); paint(p); EndPaint(hwnd, &ps); return 0; }
     case WM_SHOWWINDOW: visibility_changed(p, wp && IsWindowVisible(GetParent(hwnd)) && !IsIconic(GetAncestor(hwnd, GA_ROOT))); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_SIZE: canvas_resize(p->canvas, LOWORD(lp), HIWORD(lp)); p->dirty = true; InvalidateRect(hwnd, NULL, FALSE); return 0;

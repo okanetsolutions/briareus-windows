@@ -123,6 +123,8 @@ void pane_set_root_back(Pane *pane, bool show, void (*callback)(void *ctx), void
 /// The pane floats over the main column as a side panel, as GitHub's board opens an item: a line down its left edge,
 /// and at its root a ✕ (or Escape) that calls `close`.
 void pane_set_overlay(Pane *pane, void (*close)(void *ctx), void *ctx);
+/// Lines down the pane's left and right edges, where it meets the next column.
+void pane_set_edges(Pane *pane, bool left, bool right);
 /// A detachable root screen gets a header button, rightmost, that calls `move` (posted by the caller when it moves the
 /// screen, which must not happen inside the click): open in a new window from the main window, back to it from one.
 void pane_set_move_button(Pane *pane, wchar_t glyph, const char *tip, void (*move)(void *ctx), void *ctx);

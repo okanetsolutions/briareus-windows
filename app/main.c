@@ -112,6 +112,7 @@ static void layout(void) {
     if (narrow) {
         bool show_detail = g_narrow_detail && detail_has_content;
         pane_set_root_back(g_detail, true, back_to_sidebar, NULL);
+        pane_set_edges(g_sidebar, false, false);
         if (show_detail) { pane_set_bounds(g_detail, &rc); pane_show(g_detail, true); pane_show(g_sidebar, false); }
         else { pane_set_bounds(g_sidebar, &rc); pane_show(g_sidebar, true); pane_show(g_detail, false); }
         if (g_panel) pane_show(g_panel, false);
@@ -119,6 +120,8 @@ static void layout(void) {
         if (g_overlay && overlay_shown()) pane_set_bounds(g_overlay, &rc);
     } else {
         pane_set_root_back(g_detail, false, NULL, NULL);
+        pane_set_edges(g_sidebar, false, true);
+        if (g_panel) pane_set_edges(g_panel, true, false);
         int sw = px(SIDEBAR_WIDTH), pw = panel_shown() ? px(PANEL_WIDTH) : 0;
         RECT side = { rc.left, rc.top, rc.left + sw, rc.bottom }, main = { rc.left + sw, rc.top, rc.right - pw, rc.bottom };
         RECT panel = { rc.right - pw, rc.top, rc.right, rc.bottom };
@@ -146,12 +149,9 @@ static void layout(void) {
     }
 }
 
+/// The only gap between panes is the browser's splitter; the sidebar's and panel's lines are their panes' edges.
 static void paint_divider(Canvas *cv) {
-    if (!g_connected_layout || is_narrow()) return;
     RECT rc; GetClientRect(g_main, &rc);
-    int x = px(SIDEBAR_WIDTH);
-    draw_line(cv, x - 1, rc.top, x - 1, rc.bottom, theme.line);
-    if (panel_shown()) { int px_ = rc.right - px(PANEL_WIDTH); draw_line(cv, px_, rc.top, px_, rc.bottom, theme.line); }
     int left; RECT splitter;
     if (browser_split(&rc, &left, &splitter) && !IsRectEmpty(&splitter)) {
         int mx = (splitter.left + splitter.right) / 2;
@@ -547,7 +547,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP)); wc.hIconSm = wc.hIcon;
     RegisterClassExW(&wc);
     // Sized for the dashboard's three columns at the monitor's DPI.
-    HWND hwnd = CreateWindowExW(0, MAIN_CLASS, L"Briareus", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1400, 900, NULL, NULL, instance, NULL);
+    // WS_CLIPCHILDREN: the background paints only between panes, never over a pane before it draws its own frame.
+    HWND hwnd = CreateWindowExW(0, MAIN_CLASS, L"Briareus", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 1400, 900, NULL, NULL, instance, NULL);
     if (!hwnd) return 1;
     int dpi = GetDpiForWindow(hwnd);
     if (dpi != 96) {
