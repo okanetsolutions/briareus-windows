@@ -218,7 +218,7 @@ static void board_start_done(void *owner, Request *req) {
 
 void screen_pulls_board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input, const RuntimeChoice *runtime) {
     if (s->busy || s->uncertain || !store_can_manage() || str_empty(branch)) return;
-    if (!str_empty(action->binary) && (!runtime || runtime->provider_id <= 0)) return;
+    if (!str_empty(action->binary) && !runtime) return;
     set_string(&s->start_device, g_store.device.id);
     s->busy = true; s->starting_number = number; set_string(&s->starting_id, action->id);
     char *op = board_action_operation(action);

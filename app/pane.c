@@ -151,6 +151,11 @@ static bool pane_registered(Pane *p) {
     for (size_t i = 0; i < pane_count; i++) if (all_panes[i] == p) return true;
     return false;
 }
+bool pane_contains_screen(Pane *p, const Screen *screen) {
+    if (!pane_registered(p)) return false;
+    for (size_t i = 0; i < p->depth; i++) if (p->stack[i] == screen) return true;
+    return false;
+}
 bool pane_can_leave(Pane *p) {
     if (!p) return true;
     size_t depth = p->depth;

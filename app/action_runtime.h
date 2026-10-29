@@ -9,13 +9,14 @@ typedef struct ActionRuntime {
     RuntimeChoice choice;
     Json *raw;
     Request *read;
-    bool ready, closed;
+    bool ready, closed, allow_project_default, server_default;
     void (*changed)(void *ctx); void *ctx;
 } ActionRuntime;
-void action_runtime_init(ActionRuntime *s, const char *repo, const char *binary, void (*changed)(void *), void *ctx);
+void action_runtime_init(ActionRuntime *s, const char *repo, const char *binary, bool allow_project_default, void (*changed)(void *), void *ctx);
 void action_runtime_load(ActionRuntime *s);
 bool action_runtime_current(const ActionRuntime *s);
 bool action_runtime_select(ActionRuntime *s, int provider, const char *model, const char *effort);
+/// A confirmed server default returns a zero choice: omit provider, model and effort together.
 bool action_runtime_take(ActionRuntime *s, RuntimeChoice *out);
 void action_runtime_free(ActionRuntime *s);
 #endif

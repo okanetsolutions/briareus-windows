@@ -10,7 +10,7 @@ typedef struct {
     ActionRuntime runtime; RuntimeChoice *out;
 } ActionDialog;
 static bool source_current(ActionDialog *d) {
-    return IsWindow(d->source_window) && pane_top(d->pane) == d->source;
+    return IsWindow(d->source_window) && pane_contains_screen(d->pane, d->source) && pane_top(d->pane) == d->source;
 }
 static void add(HWND window, int control, const char *text) {
     wchar_t *w = utf8_to_wide(text); SendDlgItemMessageW(window, control, CB_ADDSTRING, 0, (LPARAM)w); free(w);
@@ -27,9 +27,19 @@ static void efforts(ActionDialog *d) {
 static void loaded(void *ctx) {
     ActionDialog *d = ctx;
     if (!source_current(d)) { EndDialog(d->window, IDCANCEL); return; }
+    const char *fallback_note = "Start uses the project's action default and runs a paid review. CLI identity is unavailable here; the server checks for Claude and refuses incompatible runtimes before paid work.";
     const char *note = d->runtime.error ? d->runtime.error : "Starts a paid agent on the PR head. Published comments remain on the pull request after the review session is deleted.";
+    if (d->runtime.server_default) note = fallback_note;
     wchar_t *w = utf8_to_wide(note); SetDlgItemTextW(d->window, IDC_NOTE, w); free(w);
     SendDlgItemMessageW(d->window, IDC_MODEL, CB_RESETCONTENT, 0, 0);
+    if (d->runtime.server_default) {
+        char *runtime = runtime_catalog_label(&d->runtime.catalog, &d->runtime.choice);
+        char *label = xstrfmt("Project action default: %s", runtime); add(d->window, IDC_MODEL, label); free(label); free(runtime);
+        SendDlgItemMessageW(d->window, IDC_MODEL, CB_SETCURSEL, 0, 0);
+        EnableWindow(GetDlgItem(d->window, IDC_MODEL), FALSE);
+        efforts(d); EnableWindow(GetDlgItem(d->window, IDC_EFFORT), FALSE);
+        EnableWindow(GetDlgItem(d->window, IDC_START), TRUE); return;
+    }
     int row = 0;
     for (size_t p = 0; p < d->runtime.catalog.provider_count; p++) {
         const RuntimeProvider *provider = &d->runtime.catalog.providers[p];
@@ -83,9 +93,10 @@ static INT_PTR CALLBACK action_proc(HWND window, UINT msg, WPARAM wp, LPARAM lp)
     }
     return FALSE;
 }
-bool dialog_action_runtime(HWND owner, Screen *source, const char *repo, const char *binary, RuntimeChoice *out) {
+bool dialog_action_runtime(HWND owner, Screen *source, const char *repo, const BoardAction *action, RuntimeChoice *out) {
     ActionDialog d = {0}; d.source = source; d.pane = source->pane; d.source_window = pane_hwnd(d.pane); d.out = out;
-    action_runtime_init(&d.runtime, repo, binary, loaded, &d);
+    bool allow_default = action->advertised && str_eq(action->id, "review") && str_eq(action->binary, "claude");
+    action_runtime_init(&d.runtime, repo, action->binary, allow_default, loaded, &d);
     if (owner) app_modal_begin(owner);
     INT_PTR result = DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_ACTION_RUNTIME), owner, action_proc, (LPARAM)&d);
     if (owner) app_modal_end();

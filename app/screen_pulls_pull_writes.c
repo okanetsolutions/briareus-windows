@@ -26,7 +26,7 @@ static void start_done(void *owner, Request *req) {
 void screen_pulls_start_action(PullScreen *s, const BoardAction *action, const char *input, const RuntimeChoice *runtime) {
     const char *branch = json_str(json_get(s->pr, "headRef"));
     if (s->busy || s->uncertain || !store_can_manage() || !branch) return;
-    if (!str_empty(action->binary) && (!runtime || runtime->provider_id <= 0)) return;
+    if (!str_empty(action->binary) && !runtime) return;
     set_string(&s->start_device, g_store.device.id);
     s->busy = true;
     char *op = board_action_operation(action);

@@ -19,7 +19,7 @@ bool dialog_mail_reply(HWND owner, const char *context, char **text);
 char *dialog_password(HWND owner, const char *caption, const char *label);
 /// What an errand needs to be told; true with the text (possibly empty when optional) when started.
 struct Screen;
-bool dialog_action_runtime(HWND owner, struct Screen *source, const char *repo, const char *binary, RuntimeChoice *out);
+bool dialog_action_runtime(HWND owner, struct Screen *source, const char *repo, const BoardAction *action, RuntimeChoice *out);
 bool dialog_action_input(HWND owner, struct Screen *source, const char *repo, const BoardAction *action, int number, char **input);
 /// The meeting assistant's system prompt and first message, written before joining a meeting about `project`, from
 /// `*prompt` and `*first_message`; Reset puts the defaults back. True with the texts on Join.

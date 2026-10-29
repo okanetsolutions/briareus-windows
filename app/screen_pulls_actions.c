@@ -17,12 +17,12 @@ const char *screen_pulls_action_icon(const char *id) {
     return "";
 }
 
-/// Collects input and, for a restricted CLI, a verified runtime. True to go ahead.
+/// Collects input and, for a restricted CLI, a runtime confirmed by the user. True to go ahead.
 bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input, RuntimeChoice *runtime) {
     *input = NULL; memset(runtime, 0, sizeof *runtime);
     if (!store_can_manage()) return false;
     if (a->has_input && !dialog_action_input(app_dialog_owner(), source, repo, a, number, input)) return false;
-    if (!str_empty(a->binary)) return dialog_action_runtime(app_dialog_owner(), source, repo, a->binary, runtime);
+    if (!str_empty(a->binary)) return dialog_action_runtime(app_dialog_owner(), source, repo, a, runtime);
     return true;
 }
 

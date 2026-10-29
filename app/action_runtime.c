@@ -4,11 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-void action_runtime_init(ActionRuntime *s, const char *repo, const char *binary, void (*changed)(void *), void *ctx) {
+void action_runtime_init(ActionRuntime *s, const char *repo, const char *binary, bool allow_project_default, void (*changed)(void *), void *ctx) {
     memset(s, 0, sizeof *s);
     s->client = g_store.client; if (s->client) api_client_retain(s->client);
     s->device = xstrdup(g_store.device.id); s->repo = xstrdup(repo); s->binary = xstrdup(binary);
-    s->changed = changed; s->ctx = ctx;
+    s->changed = changed; s->ctx = ctx; s->allow_project_default = allow_project_default;
 }
 bool action_runtime_current(const ActionRuntime *s) {
     if (s->closed || !s->client || s->client != g_store.client || !str_eq(s->device, g_store.device.id)) return false;
@@ -28,10 +28,26 @@ static void catalog_ready(ActionRuntime *s, const Json *providers) {
     if (!s->ready) set_string(&s->error, "No available provider with a verified matching CLI and model. Check the server's provider configuration and login.");
     changed(s);
 }
+// /actions resolves omitted runtime fields from actionRuntime and rejects non-Claude reviews before creating a job.
+static void project_default_ready(ActionRuntime *s) {
+    if (!s->allow_project_default) {
+        set_string(&s->error, "CLI identity is unavailable for this action."); changed(s); return;
+    }
+    if (!runtime_catalog_parse(s->raw, &s->catalog)) {
+        set_string(&s->error, "The server returned an invalid runtime catalog."); changed(s); return;
+    }
+    bool available = s->catalog.has_default && runtime_catalog_offered(&s->catalog, &s->catalog.def, &s->choice);
+    s->server_default = s->ready = available;
+    if (!available) set_string(&s->error, "No available project action default. Ask a project admin to configure its action provider, model and effort.");
+    changed(s);
+}
 static void providers_done(void *owner, Request *req) {
     ActionRuntime *s = owner;
     if (!action_runtime_current(s)) { set_string(&s->error, "Connection or permission changed. Close and reopen this action."); changed(s); return; }
-    if (!req->ok) { request_error_into(&s->error, req); changed(s); return; }
+    if (!req->ok) {
+        if (req->error.kind == API_HTTP && req->error.status == 403) { project_default_ready(s); return; }
+        request_error_into(&s->error, req); changed(s); return;
+    }
     catalog_ready(s, req->result);
 }
 static void runtimes_done(void *owner, Request *req) {
@@ -43,10 +59,7 @@ static void runtimes_done(void *owner, Request *req) {
     for (size_t i = 0; i < json_count(providers); i++)
         if (str_empty(json_str(json_get(json_at(providers, i), "binary")))) missing = true;
     if (!missing) { catalog_ready(s, NULL); return; }
-    if (!store_supports("providers")) {
-        set_string(&s->error, "This server omits CLI identity from runtimes. Verifying it requires access to GET /providers (admin on current servers). No action was started.");
-        changed(s); return;
-    }
+    if (!store_supports("providers")) { project_default_ready(s); return; }
     store_call("providers", json_object(), 0, s, providers_done, 0, &s->read);
 }
 void action_runtime_load(ActionRuntime *s) {
@@ -58,7 +71,7 @@ void action_runtime_load(ActionRuntime *s) {
     store_call("runtimes", args, 0, s, runtimes_done, 0, &s->read);
 }
 bool action_runtime_select(ActionRuntime *s, int provider, const char *model, const char *effort) {
-    if (!s->ready || !action_runtime_current(s)) return false;
+    if (!s->ready || s->server_default || !action_runtime_current(s)) return false;
     RuntimeChoice proposed = {provider, (char *)model, (char *)effort}, valid;
     if (!runtime_catalog_offered(&s->catalog, &proposed, &valid)) return false;
     if (effort && !str_eq(effort, valid.effort)) { runtime_choice_free(&valid); return false; }
@@ -66,6 +79,7 @@ bool action_runtime_select(ActionRuntime *s, int provider, const char *model, co
 }
 bool action_runtime_take(ActionRuntime *s, RuntimeChoice *out) {
     if (!s->ready || !action_runtime_current(s)) return false;
+    if (s->server_default) { memset(out, 0, sizeof *out); return true; }
     return runtime_catalog_offered(&s->catalog, &s->choice, out);
 }
 void action_runtime_free(ActionRuntime *s) {

@@ -97,8 +97,9 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         Pane *source_pane = base->pane; HWND source_window = pane_hwnd(source_pane);
         s->dialog_open = true;
         bool ok = screen_pulls_action_prompt(base, s->project.repo, &a, s->number, &input, &runtime);
-        bool current = IsWindow(source_window) && pane_top(source_pane) == base;
-        if (current) s->dialog_open = false;
+        bool live = IsWindow(source_window) && pane_contains_screen(source_pane, base);
+        bool current = live && pane_top(source_pane) == base;
+        if (live) s->dialog_open = false;
         if (ok && current) screen_pulls_start_action(s, &a, input, &runtime);
         runtime_choice_free(&runtime); free(input); board_action_free(&a);
         break;
