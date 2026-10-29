@@ -442,18 +442,22 @@ static void test_responsive_layout_and_controls(void) {
             Item *work = card_item(s, &doc, STATUS_OPEN, card(s, "work"));
             Item *wait = card_item(s, &doc, STATUS_OPEN, card(s, "wait"));
             CHECK(work != NULL); CHECK(wait != NULL);
+            if (!work || !wait) continue;
             if (narrow) CHECK(work->rc.top > c->rect.bottom);
             else { CHECK(work->rc.left > c->rect.right); CHECK(work->rc.top < c->rect.top); }
             CHECK(doc_height(&doc) >= work->rc.bottom); CHECK(doc_height(&doc) >= c->rect.bottom);
             Item *option = NULL;
             for (size_t i = 0; i < doc.count; i++) if (str_eq(doc.items[i].text, long_option)) option = &doc.items[i];
             CHECK(option != NULL);
+            if (!option) continue;
             int option_height = option->rc.bottom - option->rc.top;
             if (narrow) CHECK(option_height > wide_option_height);
             else wide_option_height = option_height;
             CHECK(option->rc.right <= width);
             int hit = doc_hit(&doc, option->rc.left + 1, option->rc.bottom - 1);
-            CHECK(hit >= 0); CHECK_INT(doc.items[hit].action, STATUS_OPTION);
+            CHECK(hit >= 0);
+            if (hit < 0) continue;
+            CHECK_INT(doc.items[hit].action, STATUS_OPTION);
             CHECK_STR(doc.items[hit].text, long_option);
             RECT content = pane_content_rect(pane);
             status_place(&s->base, &content, 0); CHECK(c->edit != NULL);
