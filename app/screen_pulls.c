@@ -99,10 +99,12 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (k < an && str_eq(actions[k].id, "run")) screen_pulls_board_open_run(s, index);
         else if (k < an) {
             char *input = NULL;
+            Pane *source_pane = base->pane; HWND source_window = pane_hwnd(source_pane);
             s->dialog_open = true;
-            bool ok = screen_pulls_action_prompt(&actions[k], number, &input);
-            s->dialog_open = false;
-            if (ok) screen_pulls_board_start(s, number, branch, &actions[k], input);
+            bool ok = screen_pulls_action_prompt(base, s->project.repo, &actions[k], number, &input);
+            bool current = IsWindow(source_window) && pane_top(source_pane) == base;
+            if (current) s->dialog_open = false;
+            if (ok && current) screen_pulls_board_start(s, number, branch, &actions[k], input);
             free(input);
         }
         board_actions_free(actions, an); free(branch);

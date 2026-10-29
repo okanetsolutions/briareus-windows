@@ -8,7 +8,7 @@
 #include <string.h>
 enum { PICK_SAVE = 1, PICK_EDIT, PICK_DELETE, PICK_RETRY, PICK_RESUME, PICK_ROW = 100 };
 struct PromptPicker {
-    Screen *owner; ApiClient *client; Json *device;
+    Screen *owner; HWND window; ApiClient *client; Json *device;
     char *repo, *identity, *key; void *ctx;
     PromptOwnerCurrent current; PromptDraft draft; PromptInsert insert;
     Request *read, *write;

@@ -6,11 +6,15 @@ static bool account(ApiClient *client, const Json *device) {
     if (client != g_store.client || !g_store.has_device) return false;
     Json *current = device_json(&g_store.device); bool same = json_equal(current, device); json_free(current); return same;
 }
+bool prompt_picker_owner_current(PromptPicker *p) {
+    if (!p || p->retired || !p->shown || !account(p->client, p->device)) return false;
+    return p->current(p->ctx, p->repo, p->identity);
+}
 bool prompt_picker_current(PromptPicker *p) {
-    if (p->retired || !p->shown || !account(p->client, p->device)) return false;
+    if (!prompt_picker_owner_current(p)) return false;
     if (!store_supports("prompts")) return false;
     if (!saved_prompt_scope_allowed(g_store.device.permission, g_store.device.repos, g_store.device.repo_count, p->repo)) return false;
-    return p->current(p->ctx, p->repo, p->identity);
+    return true;
 }
 const Json *prompt_picker_state(PromptPicker *p) { return json_get(g_store.prompt_state, p->key); }
 bool prompt_picker_offered(PromptPicker *p) { return p && prompt_picker_current(p); }
@@ -27,7 +31,7 @@ static Json *state(const char *key) {
     if (!json_is_object(json_get(g_store.prompt_state, key))) json_object_set(g_store.prompt_state, key, json_object());
     return (Json *)json_get(g_store.prompt_state, key);
 }
-void prompt_picker_changed(PromptPicker *p) { if (prompt_picker_current(p) && p->owner->pane) pane_footer_changed(p->owner->pane); }
+void prompt_picker_changed(PromptPicker *p) { if (prompt_picker_current(p) && p->owner && p->owner->pane) pane_footer_changed(p->owner->pane); }
 void prompt_picker_clear_edit(PromptPicker *p) {
     free(p->title); free(p->body); json_free(p->original); p->title = p->body = NULL; p->original = NULL; p->editing = -1;
 }
@@ -51,6 +55,11 @@ PromptPicker *prompt_picker_new(Screen *owner, const char *repo, const char *ide
     p->client = api_client_retain(g_store.client); p->device = device_json(&g_store.device);
     p->key = json_serialize(p->device, true); p->repo = xstrdup(repo); p->identity = xstrdup(identity);
     p->current = current; p->draft = draft; p->insert = insert; p->editing = -1; return p;
+}
+PromptPicker *prompt_picker_dialog_new(HWND window, const char *repo, const char *identity,
+    PromptOwnerCurrent current, PromptDraft draft, PromptInsert insert, void *ctx) {
+    PromptPicker *p = prompt_picker_new(NULL, repo, identity, current, draft, insert, ctx);
+    p->window = window; return p;
 }
 // A finalizer survives navigation and records cooldown/interlocks even when the owner
 // was cancelled. It never applies an old account's result to a replacement connection.
