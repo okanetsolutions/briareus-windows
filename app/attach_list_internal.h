@@ -20,11 +20,13 @@ struct AttachList {
     Attachment *active;
     ApiClient *client;
     Json *device;
-    size_t refs;
+    size_t refs, generation;
     bool retired;
     struct AttachList *next;
 };
 void attach_list_changed(AttachList *l);
 Attacher *attach_list_attacher(AttachList *l);
 void attach_list_sync(AttachList *l);
+/// Picker implementation; caller retains the list across its modal loop.
+void attach_list_pick_files(AttachList *l);
 #endif

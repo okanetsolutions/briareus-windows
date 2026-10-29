@@ -134,8 +134,8 @@ static const char *open_path(const wchar_t *path, HANDLE *out, size_t *len) {
     if (attrs & FILE_ATTRIBUTE_DIRECTORY) return "is a folder; attach its files";
     HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return "could not be opened";
-    BY_HANDLE_FILE_INFORMATION info;
-    LARGE_INTEGER size;
+    BY_HANDLE_FILE_INFORMATION info = {0};
+    LARGE_INTEGER size = {0};
     const char *why = NULL;
     if (!GetFileInformationByHandle(f, &info) || !GetFileSizeEx(f, &size)) why = "could not be read";
     else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) why = "is a folder; attach its files";

@@ -27,8 +27,9 @@ void attach_list_drop(AttachList *l, HDROP drop) {
     Attacher *a = attach_list_attacher(l); attach_list_changed(l);
     attacher_from_drop(a, drop);
 }
-void attach_list_pick(AttachList *l) {
+void attach_list_pick_files(AttachList *l) {
     if (!attach_list_supported(l)) { unsupported(); return; }
+    attach_list_attacher(l); size_t generation = l->generation;
     // Several files come back as the folder, then each name, NUL-separated, ending in two NULs; one as its full path.
     enum { CHARS = 32768 };
     wchar_t *buf = xcalloc(CHARS, sizeof *buf);
@@ -42,6 +43,8 @@ void attach_list_pick(AttachList *l) {
         if (CommDlgExtendedError() == FNERR_BUFFERTOOSMALL) app_alert("Attachments", "Too many files at once. Pick fewer.");
         free(buf); return;
     }
+    if (!l->retired) attach_list_sync(l);
+    if (l->retired || l->generation != generation) { free(buf); return; }
     const wchar_t *dir = buf, *name = buf + wcslen(buf) + 1;
     if (!*name) { attach_list_paths(l, &dir, 1); free(buf); return; }
     wchar_t **paths = NULL; size_t n = 0;

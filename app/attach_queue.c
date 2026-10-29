@@ -25,6 +25,7 @@ void attach_list_remove(AttachList *l, size_t i) {
     attach_list_changed(l);
 }
 static void clear(AttachList *l) {
+    l->generation++;
     if (l->attacher) { attacher_free(l->attacher); l->attacher = NULL; }
     while (l->count) attach_list_remove(l, l->count - 1);
 }
@@ -163,6 +164,9 @@ Attacher *attach_list_attacher(AttachList *l) {
         l->attacher = attacher_new(arrived, l);
     }
     return l->attacher;
+}
+void attach_list_pick(AttachList *l) {
+    l->refs++; attach_list_pick_files(l); release(l);
 }
 void attach_list_paths(AttachList *l, const wchar_t *const *paths, size_t count) {
     if (!attach_list_supported(l)) return;
