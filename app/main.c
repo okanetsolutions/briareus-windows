@@ -1,6 +1,7 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
 #include "briareus_tokens.h"
 #include "canvas.h"
+#include "sleep_mode.h"
 #include "crash.h"
 #include "dialogs.h"
 #include "media.h"
@@ -51,6 +52,7 @@ HWND app_window(void) { return g_main; }
 HWND app_dialog_owner(void) { HWND active = GetActiveWindow(); return active ? active : g_main; }
 // The dialog disables its owner itself, and enables it again before it hands the foreground back.
 void app_modal_begin(HWND owner) {
+    sleep_modal(true);
     if (g_modal++) return;
     if (owner) owner = GetAncestor(owner, GA_ROOT);   // a pane passed as the owner stands for its window
     // A window already disabled (by a file picker) is left for whoever disabled it to enable again.
@@ -59,6 +61,7 @@ void app_modal_begin(HWND owner) {
     detached_enable(owner, false);
 }
 void app_modal_end(void) {
+    sleep_modal(false);
     if (--g_modal) return;
     if (g_modal_disabled && g_main) EnableWindow(g_main, TRUE);
     g_modal_disabled = false;
@@ -215,6 +218,7 @@ static void drop_browser_unless(const char *detail_id) {
 }
 
 static void rebuild_for_connection(void) {
+    sleep_scope_changed();
     servers_ssh_scope_changed();
     bool connected = store_connected();
     if (connected == g_connected_layout && (connected || g_pairing)) {
@@ -397,6 +401,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         pane_set_overlay(g_overlay, close_overlay, NULL);
         pane_set_move_button(g_detail, 0xE8A7, "Open in a new window", post_pop_out, NULL);
         store_init(hwnd);
+        sleep_start(hwnd);
         g_connected_layout = true;   // forces the first rebuild
         rebuild_for_connection();
         store_restore();
@@ -417,7 +422,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (g_detail && IsWindowVisible(pane_hwnd(g_detail))) SetFocus(pane_hwnd(g_detail));
         else break;
         return 0;
-    case WM_ACTIVATEAPP: set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
+    case WM_ACTIVATEAPP: sleep_deactivated(); set_active(wp != 0 && (!IsIconic(hwnd) || detached_any_shown())); return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps; HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc; GetClientRect(hwnd, &rc);
@@ -499,6 +504,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp) DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        sleep_stop();
         meeting_shutdown();
         detached_close_all();
         servers_ssh_sessions_reset();

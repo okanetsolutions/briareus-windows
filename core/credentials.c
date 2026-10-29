@@ -1,4 +1,5 @@
 #include "credentials.h"
+#include "sleep.h"
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
@@ -109,3 +110,20 @@ bool settings_read_review_loop(void) {
     return on;
 }
 void settings_write_review_loop(bool on) { settings_write(L"reviewLoop", on ? "on" : "off"); }
+
+int settings_read_sleep(void) {
+    char *value = settings_read(L"sleepAfterMinutes");
+    int minutes = 5;
+    if (value) {
+        for (int i = 0; i < 7; i++) {
+            char *choice = xstrfmt("%d", sleep_choices[i]);
+            if (str_eq(value, choice)) minutes = sleep_choices[i];
+            free(choice);
+        }
+    }
+    free(value); return minutes;
+}
+void settings_write_sleep(int minutes) {
+    char *value = xstrfmt("%d", sleep_minutes(minutes));
+    settings_write(L"sleepAfterMinutes", value); free(value);
+}

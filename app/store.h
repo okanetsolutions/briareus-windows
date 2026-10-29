@@ -75,6 +75,7 @@ struct Request {
     void *owner; RequestDone done; int tag; intptr_t arg;
     Request **slot;                                    // cleared when the request finishes or is cancelled
     bool cancelled;
+    bool worker_required; // never perform network IO on the caller when scheduling fails
     ApiStreamCancel *upload_cancel; // upload worker lifetime, initialized before scheduling
     bool auth_checked;                 // completion finalizer applied its own connection/device auth scope
     // UI-thread finalizer runs even after cancellation; context must outlive the screen and be freed here.
@@ -85,6 +86,8 @@ struct Request {
 /// Makes a call (api_call) on a worker thread; `done` is called on the UI thread unless the request is cancelled first.
 /// A token that cannot make the call gets a 403 without a network call. Takes ownership of `args`.
 Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot);
+/// Same call, but a failed worker allocation completes quietly as an error without calling the transport.
+Request *store_call_background(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot);
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot);
 /// Stores a file on the server for the next message; the answer's `text` is the id to send. Takes ownership of `bytes`.
 Request *store_upload(const char *name, void *bytes, size_t len, void *owner, RequestDone done, int tag, Request **slot);

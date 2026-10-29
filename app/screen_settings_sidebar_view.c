@@ -1,4 +1,5 @@
 #include "screen_settings_internal.h"
+#include "sleep_mode.h"
 
 static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected);
@@ -143,6 +144,9 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(16));
     // This computer's own settings come first: they need no Admin token.
     screen_settings_section_title(doc, w, "This computer", NULL, 0);
+    char *sleep_label = sleep_after() ? xstrfmt("Sleep after: %d min", sleep_after()) : xstrdup("Sleep after: Never");
+    doc_button(doc, px(8), w - px(16), sleep_label, BUTTON_BORDERED, ACT_SLEEP, 0, true);
+    free(sleep_label); doc_space(doc, px(8));
     ProjectRowData *meeting = xcalloc(1, sizeof *meeting);
     meeting->label = xstrdup("\xF0\x9F\x8E\x99 Meeting assistant");
     meeting->repo = xstrdup(meeting_has_key(MEETING_KEY_ELEVENLABS) ? "ElevenLabs API key saved" : "add an ElevenLabs API key");

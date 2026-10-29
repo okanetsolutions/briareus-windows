@@ -860,6 +860,8 @@ static void test_json_round_trips(void) {
 }
 
 int main(void) {
+    sleep_tests();
+    sleep_records_tests();
     core_stats_tests();
     core_server_stats_tests();
     core_session_overview_tests();

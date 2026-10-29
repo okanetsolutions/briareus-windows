@@ -1,6 +1,11 @@
 // Each suite file runs its own tests through test_run; the two programs' main functions call the suites in turn.
 #ifndef BRIAREUS_SUITES_H
 #define BRIAREUS_SUITES_H
+void sleep_tests(void);
+void sleep_records_tests(void);
+void app_sleep_tests(void);
+void app_sleep_stream_tests(void);
+void app_sftp_picker_tests(void);
 void core_stats_tests(void);
 void core_server_stats_tests(void);
 void app_resources_tests(void);

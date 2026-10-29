@@ -10,6 +10,8 @@ bool credentials_remove(const char *origin);
 /// What a failed store access should say.
 const char *credentials_failure_text(void);
 
+int settings_read_sleep(void);
+void settings_write_sleep(int minutes);
 char *settings_read_origin(void);
 void settings_write_origin(const char *origin);
 void settings_remove_origin(void);
