@@ -260,7 +260,7 @@ static void test_done(void *owner, Request *req) {
     char *joined = list.data ? str_detach(&list) : xstrdup("");
     char *now = s->edits[F_MODELS] ? screen_provider_settings_field_now(s, F_MODELS) : xstrdup("");
     bool same = str_eq(now, joined);
-    if (!same && s->edits[F_MODELS]) { screen_provider_settings_set_edit_text(s->edits[F_MODELS], joined); s->lines[F_MODELS] = screen_provider_settings_line_count(joined); }
+    if (!same && s->edits[F_MODELS]) { screen_provider_settings_set_edit_text(s->edits[F_MODELS], joined); s->lines[F_MODELS] = screen_provider_settings_line_count(joined); screen_provider_settings_form_changed(s); }
     char *t = xstrfmt("OK: the endpoint offers %zu model%s%s", n, n == 1 ? "" : "s", same ? "; the Models tab already matches" : "; they are in the Models tab, save to keep them");
     set_string(&s->test_result, t);
     free(t); free(now); free(joined);
@@ -268,11 +268,11 @@ static void test_done(void *owner, Request *req) {
 }
 
 void screen_provider_settings_test_endpoint(FormScreen *s) {
-    if (s->req_test || !store_supports("test_provider")) return;
+    if (s->req_test || !screen_provider_settings_uses_token(s) || !store_supports("test_provider")) return;
     Json *args = json_object();
     json_set_str(args, "binary", s->binary);
     char *v = screen_provider_settings_field_now(s, F_BASE_URL); json_set_str(args, "baseUrl", v); free(v);
-    v = s->edits[F_API_KEY] ? screen_provider_settings_edit_text(s->edits[F_API_KEY]) : xstrdup(""); json_set_str(args, "apiKey", v); free(v);
+    v = screen_provider_settings_field_now(s, F_API_KEY); json_set_str(args, "apiKey", v); free(v);
     v = screen_provider_settings_field_now(s, F_DEFAULT_MODEL); json_set_str(args, "defaultModel", v); free(v);
     v = screen_provider_settings_field_now(s, F_MODELS); json_object_set(args, "models", screen_provider_settings_list_from_text(v)); free(v);
     // The saved row's id lets the server probe as the model it resolves for it.

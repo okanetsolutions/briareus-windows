@@ -927,6 +927,7 @@ int main(void) {
     repo_index_tests();
     usage_tests();
     provider_status_tests();
+    provider_settings_tests();
     session_working_tests();
     pull_conversation_tests();
     core_ssh_servers_tests();

@@ -397,6 +397,7 @@ static const ApiRoute ROUTES[] = {
     { "create_provider", "POST", "settings/providers" },
     { "update_provider", "PUT", "settings/providers/{id}" },
     { "delete_provider", "DELETE", "settings/providers/{id}" },
+    { "provider_binary_catalog", "GET", "openapi.json" },
     { "test_provider", "POST", "settings/providers/test" },
     { "provider_status", "GET", "settings/providers/{id}/status" },
     { "provider_login", "POST", "settings/providers/{id}/login" },
