@@ -51,23 +51,26 @@ static void paint_tab_close(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_glyph(cv, 0xE711, rc, FONT_ICON_SMALL, hovered ? theme.ink : theme.muted);
 }
 
+void project_ssh_layout_server(ProjectSsh *p, Doc *doc, int x, int w, size_t i) {
+    const Json *row = json_at(p->rows, i);
+    ServerRowData *d = xcalloc(1, sizeof *d);
+    d->name = ssh_server_name(row);
+    const char *user = json_str(json_get(row, "username")), *host = json_str(json_get(row, "host"));
+    d->target = xstrfmt("%s@%s:%d", user ? user : "", host ? host : "", project_ssh_server_port(row));
+    d->enabled = !json_bool_is(json_get(row, "enabled"), false);
+    char *key = ssh_server_key(row);
+    d->sessions = (int)term_count_for(key);
+    for (size_t t = 0; t < term_count(); t++) if (str_eq(term_key(term_at(t)), key) && term_running(term_at(t))) d->live = true;
+    free(key);
+    doc_custom(doc, x, w, px(46), paint_server, d, server_row_free, p->base + A_SERVER, (intptr_t)i);
+}
+
 /// The servers down the left, each with its name, user@host:port and its open sessions.
 static void layout_list(ProjectSsh *p, Doc *doc, int x, int w) {
     if (p->error) { doc_notice(doc, x, w, p->error); doc_space(doc, px(8)); }
     if (!p->loaded) { doc_loading(doc, x, w, "Loading servers\xE2\x80\xA6"); return; }
-    for (size_t i = 0; i < json_count(p->rows); i++) {
-        const Json *row = json_at(p->rows, i);
-        ServerRowData *d = xcalloc(1, sizeof *d);
-        d->name = project_ssh_server_name(row);
-        const char *user = json_str(json_get(row, "username")), *host = json_str(json_get(row, "host"));
-        d->target = xstrfmt("%s@%s:%d", user ? user : "", host ? host : "", project_ssh_server_port(row));
-        d->enabled = !json_bool_is(json_get(row, "enabled"), false);
-        char *key = project_ssh_server_key(row);
-        d->sessions = (int)term_count_for(key);
-        for (size_t t = 0; t < term_count(); t++) if (str_eq(term_key(term_at(t)), key) && term_running(term_at(t))) d->live = true;
-        free(key);
-        doc_custom(doc, x, w, px(46), paint_server, d, server_row_free, p->base + A_SERVER, (intptr_t)i);
-    }
+    if (p->global) { project_ssh_global_list(p, doc, w); return; }
+    for (size_t i = 0; i < json_count(p->rows); i++) project_ssh_layout_server(p, doc, x, w, i);
     if (!json_count(p->rows) && !p->error) {
         doc_text(doc, x + px(6), w - px(12), "No SSH servers for this project. Register one under \xE2\x9A\x99 Settings.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
         return;
@@ -80,9 +83,9 @@ static void layout_tabs(ProjectSsh *p, Doc *doc, int x0, int w) {
     Term *shown = project_ssh_shown_term(p);
     for (size_t i = 0; i < term_count(); i++) {
         Term *t = term_at(i);
-        if (!str_eq(term_group(t), p->repo)) continue;
+        if (!p->global && !str_eq(term_group(t), p->repo)) continue;
         TabData *d = xcalloc(1, sizeof *d);
-        d->label = xstrdup(term_label(t)); d->active = t == shown; d->live = term_running(t);
+        d->label = project_ssh_tab_label(p, t); d->active = t == shown; d->live = term_running(t);
         int tw = text_width(doc->cv, d->label, FONT_CAPTION_SEMIBOLD) + px(10 + 12 + TAB_CLOSE_W + 6);
         if (tw > px(240)) tw = px(240);
         if (tw < px(110)) tw = px(110);
@@ -99,6 +102,7 @@ static void layout_tabs(ProjectSsh *p, Doc *doc, int x0, int w) {
 }
 
 void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
+    servers_ssh_scope_changed();
     SetRectEmpty(&p->term_rc);
     if (!project_ssh_offered()) {
         doc_text(doc, 0, w, "The SSH servers are read from Settings, which needs an Admin token. Create one on the web dashboard under Settings \xE2\x86\x92 Devices and clients and connect with it.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
@@ -117,7 +121,7 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
     doc_add(doc, &rule, paint_rule);
     int rx = lw + px(18), rw = w - rx;
     doc->y = top;
-    if (!project_ssh_session_count(p->repo)) {
+    if (!(p->global ? term_count() : project_ssh_session_count(p->repo))) {
         doc_space(doc, px(40));
         doc_empty_state(doc, rx, rw, 0xE7F4, "No open sessions",
                         "Click a server on the left to open an SSH session here. It connects from this PC straight to the server with your own "
@@ -131,6 +135,7 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
 }
 
 void project_ssh_header(ProjectSsh *p, HeaderInfo *info) {
+    if (!project_ssh_current(p) || !project_ssh_offered()) return;
     Term *t = project_ssh_shown_term(p);
     if (!t) return;
     const char *title = term_title(t);

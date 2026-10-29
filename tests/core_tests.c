@@ -927,6 +927,7 @@ int main(void) {
     provider_status_tests();
     session_working_tests();
     pull_conversation_tests();
+    core_ssh_servers_tests();
     core_ssh_settings_tests();
     core_ssh_approval_tests();
     core_secret_cleanup_tests();
