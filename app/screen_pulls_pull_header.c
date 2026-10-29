@@ -161,7 +161,12 @@ void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c) {
     // The files are a tab here, or GitHub's page when the server cannot list them.
     if (store_supports("pull_files")) doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, s->tab == PR_TAB_FILES, ACT_PR_TAB, PR_TAB_FILES);
     else if (safe_web_url(json_str(json_get(s->pr, "url")))) doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Files changed", has_files ? count : NULL, false, ACT_OPEN_URL, 1);
-    if (store_supports("findings")) { snprintf(count, sizeof count, "%zu", json_count(s->findings)); doc_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", count, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS); }
+    screen_pulls_reviews_sync(s);
+    bool counted = s->reviews.items && !s->reviews.error;
+    if (counted) snprintf(count, sizeof count, "%zu", code_reviews_findings(s->reviews.items));
+    doc_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", counted ? count : NULL, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS);
+    if (counted) snprintf(count, sizeof count, "%zu", json_count(s->reviews.items));
+    doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Code reviews", counted ? count : NULL, s->tab == PR_TAB_CODE_REVIEWS, ACT_PR_TAB, PR_TAB_CODE_REVIEWS);
     if (store_supports("serve_pull") || s->run_url) {
         // With run profiles, the tab names the one chosen and, once open, picks another.
         bool on = s->tab == PR_TAB_RUN;

@@ -496,6 +496,8 @@ static void test_a_missing_or_unusable_path_argument_is_refused_before_the_netwo
 static void test_query_arguments_of_reads(void) {
     Stub stub = { 0 }; stub_json(&stub, 200, "{}");
     ApiClient *c = client(&stub);
+    check_url(c, &stub, "code_reviews", "{\"pr\":12,\"repo\":\"owner/name\"}", BASE "pulls/12/code-reviews?repo=owner%2Fname");
+    CHECK_STR(stub.last_method, "GET");
     check_url(c, &stub, "projects", NULL, BASE "projects");
     check_url(c, &stub, "projects", "{}", BASE "projects");
     check_url(c, &stub, "projects", "[1,2]", BASE "projects");

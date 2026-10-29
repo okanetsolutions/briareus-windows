@@ -31,6 +31,7 @@ int main(void) {
     app_mail_inbox_tests();
     app_mail_delete_tests();
     app_mail_reply_tests();
+    app_pull_reviews_tests();
     app_pulls_tests();
     app_projects_tests();
     app_ssh_servers_tests();

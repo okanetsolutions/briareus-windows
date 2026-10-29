@@ -27,7 +27,7 @@ static void efforts(ActionDialog *d) {
 static void loaded(void *ctx) {
     ActionDialog *d = ctx;
     if (!source_current(d)) { EndDialog(d->window, IDCANCEL); return; }
-    const char *fallback_note = "Start uses the project's action default and runs a paid review. CLI identity is unavailable here; the server checks for Claude and refuses incompatible runtimes before paid work.";
+    const char *fallback_note = "Start uses the project's action default and runs a paid review. CLI identity is unavailable here; the server validates the review runtime before paid work.";
     const char *note = d->runtime.error ? d->runtime.error : "Starts a paid agent on the PR head. Published comments remain on the pull request after the review session is deleted.";
     if (d->runtime.server_default) note = fallback_note;
     wchar_t *w = utf8_to_wide(note); SetDlgItemTextW(d->window, IDC_NOTE, w); free(w);
@@ -95,7 +95,7 @@ static INT_PTR CALLBACK action_proc(HWND window, UINT msg, WPARAM wp, LPARAM lp)
 }
 bool dialog_action_runtime(HWND owner, Screen *source, const char *repo, const BoardAction *action, RuntimeChoice *out) {
     ActionDialog d = {0}; d.source = source; d.pane = source->pane; d.source_window = pane_hwnd(d.pane); d.out = out;
-    bool allow_default = action->advertised && str_eq(action->id, "review") && str_eq(action->binary, "claude");
+    bool allow_default = action->advertised && str_eq(action->id, "review") && (str_eq(action->binary, "codex") || str_eq(action->binary, "claude"));
     action_runtime_init(&d.runtime, repo, action->binary, allow_default, loaded, &d);
     if (owner) app_modal_begin(owner);
     INT_PTR result = DialogBoxParamW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDD_ACTION_RUNTIME), owner, action_proc, (LPARAM)&d);

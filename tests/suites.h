@@ -81,4 +81,6 @@ void app_saved_prompt_tests(void);
 void app_attach_tests(void);
 void app_attach_read_probe_tests(void);
 void app_attach_initial_tests(void);
+void core_code_reviews_tests(void);
+void app_pull_reviews_tests(void);
 #endif

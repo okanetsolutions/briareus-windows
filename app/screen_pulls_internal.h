@@ -1,6 +1,7 @@
 #ifndef BRIAREUS_SCREEN_PULLS_INTERNAL_H
 #define BRIAREUS_SCREEN_PULLS_INTERNAL_H
 #include "credentials.h"
+#include "code_reviews.h"
 #include "dialogs.h"
 #include "meeting.h"
 #include "markdown.h"
@@ -89,7 +90,7 @@ enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_FINDING_TOGGLE, ACT_FINDING_DECISION, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_FINDING_URL, ACT_RELOAD, ACT_SOLVE_FINDINGS, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
-    ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
+    ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -98,13 +99,21 @@ enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
 enum { TAG_PULL = 1, TAG_FINDINGS, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_DECIDE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
 
 // Keep existing IDs: retired Commits (4) and Checks (5) fall back to PR Body.
-enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_FINDINGS = 6, PR_TAB_RUN };
+enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_FINDINGS = 6, PR_TAB_RUN, PR_TAB_CODE_REVIEWS };
 
 typedef struct { const char *op, *field; } screen_pulls_conv_feeds_type;
 extern const screen_pulls_conv_feeds_type screen_pulls_conv_feeds[CONV_FEEDS];
 enum { LINKED_ISSUES_MAX = 10 };
 
 typedef struct { Json *items, *incoming; bool read; char *error; Request *req; } ConvFeed;
+
+typedef struct {
+    Json *items; Request *req; ApiClient *client;
+    char *scope, *error; bool read, visible;
+    time_t next_poll, retry_at;
+    time_t (*clock)(void); // NULL uses the system clock; deadlines share this clock.
+    int64_t review_id, finding_id;
+} PullReviews;
 
 typedef struct {
     Screen base;
@@ -117,6 +126,7 @@ typedef struct {
     Session *runs; size_t run_count;
     char *deleting_run, *run_error;   // the conversation being deleted from the Sessions tab, and why the last one failed
     Json *findings;
+    PullReviews reviews;
     PullFiles *files;   // the Files changed tab
     ConvFeed conv[CONV_FEEDS];   // the Conversation tab
     char *error, *findings_error, *write_error, *merge_error;
@@ -278,6 +288,14 @@ void screen_pulls_layout_conversation(PullScreen *s, Doc *doc, Col c);
 size_t screen_pulls_findings_unfixed(PullScreen *s);
 size_t screen_pulls_findings_to_fix(PullScreen *s);
 bool screen_pulls_solve_findings_offered(PullScreen *s);
+void screen_pulls_reviews_clear(PullScreen *s);
+bool screen_pulls_reviews_sync(PullScreen *s);
+void screen_pulls_reviews_load(PullScreen *s, bool refresh);
+void screen_pulls_reviews_poll(PullScreen *s);
+void screen_pulls_reviews_visible(Screen *base, bool shown);
+void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c);
+void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c);
+bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
 void screen_pulls_layout_findings(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_layout_runs(PullScreen *s, Doc *doc, Col c);
