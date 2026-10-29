@@ -40,7 +40,7 @@ struct Term {
     bool exited;                   // the program ended; its pseudoconsole is closing
     DWORD exit_code;
     int offset;                    // lines scrolled back from the bottom
-    bool selecting, has_sel;
+    bool selecting, has_sel, cycle_all;
     Mark sel_a, sel_b;
     wchar_t high_surrogate;
 };
@@ -50,6 +50,9 @@ typedef struct { int term, spawn; HANDLE out_read; } ReaderArgs;
 
 static Term **g_terms; static size_t g_count, g_cap;
 static Term *g_active;
+static bool (*g_launcher)(void *, const TermTarget *, char **);
+static void *g_launcher_ctx;
+void term_set_launcher(bool (*launch)(void *, const TermTarget *, char **), void *ctx) { g_launcher = launch; g_launcher_ctx = ctx; }
 static int g_next_id = 1, g_next_spawn = 1;
 static HWND g_events;
 static struct { void (*fn)(void *); void *ctx; } g_listeners[MAX_LISTENERS];
@@ -318,6 +321,11 @@ static void size_cells(Term *t, int *cols, int *rows) {
 }
 
 static bool spawn(Term *t, char **error) {
+    if (g_launcher) {
+        TermTarget target; term_get_target(t, &target);
+        return g_launcher(g_launcher_ctx, &target, error);
+    }
+
     if (!conpty_available()) { *error = xstrdup("This version of Windows has no pseudoconsole (ConPTY); Windows 10 1809 or later is needed."); return false; }
     wchar_t client[MAX_PATH];
     if (!term_find_program(L"ssh.exe", client, MAX_PATH)) {
@@ -596,13 +604,7 @@ static bool key_down(Term *t, WPARAM vk, bool alt) {
     if (shift && vk == VK_INSERT) { paste(t); return true; }
     if (ctrl && vk == VK_INSERT) { copy_selection(t); return true; }
     if (ctrl && vk == VK_TAB) {
-        // The next (or previous) tab of the same project.
-        size_t i = 0;
-        while (i < g_count && g_terms[i] != t) i++;
-        for (size_t step = 1; step < g_count; step++) {
-            Term *next = g_terms[(i + (shift ? g_count - step : step)) % g_count];
-            if (str_eq(next->group, t->group)) { term_set_active(next); break; }
-        }
+        term_cycle(t, shift);
         eat_char(t->hwnd);
         return true;
     }
@@ -939,3 +941,14 @@ void term_place(Term *t, const RECT *rc, bool shown) {
     if (shown != (IsWindowVisible(t->hwnd) != 0)) ShowWindow(t->hwnd, shown ? SW_SHOWNA : SW_HIDE);
 }
 void term_focus(Term *t) { if (t && IsWindowVisible(t->hwnd)) SetFocus(t->hwnd); }
+
+void term_cycle_all(Term *t, bool all) { t->cycle_all = all; }
+void term_cycle(Term *t, bool reverse) {
+    size_t i = 0;
+    while (i < g_count && g_terms[i] != t) i++;
+    if (i == g_count) return;
+    for (size_t step = 1; step < g_count; step++) {
+        Term *next = g_terms[(i + (reverse ? g_count - step : step)) % g_count];
+        if (t->cycle_all || str_eq(next->group, t->group)) { term_set_active(next); break; }
+    }
+}

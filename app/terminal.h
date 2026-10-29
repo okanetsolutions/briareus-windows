@@ -53,6 +53,11 @@ HWND term_hwnd(const Term *t);
 /// Shows the window over `rc` (the parent's client coordinates) or hides it.
 void term_place(Term *t, const RECT *rc, bool shown);
 void term_focus(Term *t);
+/// Ctrl+Tab spans all projects only while hosted by the global page.
+void term_cycle_all(Term *t, bool all);
+void term_cycle(Term *t, bool reverse);
+/// Optional fake program launcher for harnesses; NULL restores the native OpenSSH launcher.
+void term_set_launcher(bool (*launch)(void *ctx, const TermTarget *target, char **error), void *ctx);
 /// Whether a window is one of the terminals, so app-wide shortcuts leave its keys alone.
 bool term_is_window(HWND hwnd);
 

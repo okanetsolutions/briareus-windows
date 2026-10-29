@@ -215,6 +215,7 @@ static void drop_browser_unless(const char *detail_id) {
 }
 
 static void rebuild_for_connection(void) {
+    servers_ssh_scope_changed();
     bool connected = store_connected();
     if (connected == g_connected_layout && (connected || g_pairing)) {
         if (!connected && g_pairing) pane_relayout(g_pairing);
@@ -500,6 +501,7 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         meeting_shutdown();
         detached_close_all();
+        servers_ssh_sessions_reset();
         term_shutdown();
         sftp_shutdown();
         media_stop();
@@ -555,6 +557,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     UpdateWindow(hwnd);
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0) {
+        if (m.message == WM_KEYDOWN && m.wParam == 'H' && (GetKeyState(VK_CONTROL) < 0) && (GetKeyState(VK_SHIFT) < 0)) {
+            if (project_ssh_offered()) { app_show_detail(ssh_servers_screen_new()); continue; }
+        }
         if (pane_find_message(&m)) continue;
         if (m.message == WM_KEYDOWN && (GetKeyState(VK_MENU) & 0x8000) && m.wParam == VK_LEFT) {
             // Alt+Left goes back in whichever pane has the focus: the detail's, or a window of its own's.

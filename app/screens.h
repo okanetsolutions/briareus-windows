@@ -109,6 +109,10 @@ ProjectSsh *project_ssh_new(const char *repo, Screen *host, int action_base);
 void project_ssh_free(ProjectSsh *p);
 /// Whether this token may read the SSH servers (an Admin token, on a server that lists them).
 bool project_ssh_offered(void);
+Screen *ssh_servers_screen_new(void);
+/// Cancel stale lists and retire sessions when the connection or device scope changes.
+void servers_ssh_scope_changed(void);
+void servers_ssh_sessions_reset(void);
 /// How many sessions are open on a project's servers.
 size_t project_ssh_session_count(const char *repo);
 /// Reads the servers once; the refresh reads them again.

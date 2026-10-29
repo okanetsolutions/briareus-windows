@@ -98,6 +98,11 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
     RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
     doc->y = y + h;
     doc_space(doc, px(14));
+    if (project_ssh_offered()) {
+        int item = doc_button(doc, 0, w, "❯ SSH servers", BUTTON_PLAIN, ACT_SSH, 0, true);
+        doc_item(doc, item)->tip = xstrdup("SSH servers (Ctrl+Shift+H)");
+        doc_space(doc, px(8));
+    }
     doc_pin(doc, (int)doc->count, doc->y);
 }
 
@@ -244,6 +249,7 @@ static void sign_out(void) {
 /// The strip's own actions, the same on both screens. True when handled.
 bool screen_projects_sidebar_common_action(Pane *pane, int action) {
     switch (action) {
+    case ACT_SSH: if (project_ssh_offered()) app_show_detail(ssh_servers_screen_new()); return true;
     case ACT_MAIL: if (mail_inbox_offered() || mail_settings_offered()) app_show_detail(mail_inbox_offered() ? mail_screen_new() : mail_settings_screen_new()); return true;
     case ACT_STATUS: app_show_detail(status_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
