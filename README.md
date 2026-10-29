@@ -114,3 +114,5 @@ Mail account settings for configured Gmail/Outlook providers are in Settings →
 ## Crash reports
 
 Unhandled Windows exceptions save a timestamped `.txt` report and a `.dmp` minidump under `%LOCALAPPDATA%\Okanet\Briareus\Crashes`; the report includes the app version, exception code, address and dump status. Reports stay on your machine and are never uploaded automatically. Keep the matching executable when reporting a crash. Dumps contain process memory and may include private data. Forced termination and Windows fail-fast errors can bypass the handler; a damaged process may also prevent a dump from being written.
+
+Idle session files and commands are available under **Settings → This computer → Sleep after**; see [sleep mode behavior, limits and portability](docs/sleep-mode.md).

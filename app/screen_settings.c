@@ -1,4 +1,5 @@
 #include "screen_settings_internal.h"
+#include "sleep.h"
 
 static void sign_out(void);
 static bool in_rect(const RECT *r, POINT pt);
@@ -150,6 +151,7 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
         break;
     }
     case ACT_OPEN_HOME: if (home_assistant_offered()) app_show_detail(home_assistant_screen_new()); break;
+    case ACT_SLEEP: sleep_settings_action(); pane_relayout(base->pane); break;
     case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: screen_settings_settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: screen_settings_settings_move(s, (size_t)arg, 1); break;

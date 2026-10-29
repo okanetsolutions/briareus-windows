@@ -3,6 +3,7 @@
 #include "test.h"
 
 int main(void) {
+    app_sleep_tests();
     app_resources_tests();
     app_server_resources_tests();
     app_status_tests();

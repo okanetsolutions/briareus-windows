@@ -319,16 +319,24 @@ static void request_refuse(Request *r, const char *message) {
 static void request_start(Request *r) {
     r->client = api_client_retain(g_store.client);
     if (!QueueUserWorkItem(request_thread, r, WT_EXECUTELONGFUNCTION)) {
-        if (r->upload_cancel) request_refuse(r, "The upload worker could not be started.");
+        if (r->worker_required) request_refuse(r, "The read worker could not be started.");
+        else if (r->upload_cancel) request_refuse(r, "The upload worker could not be started.");
         else request_thread(r);
     }
 }
-Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
+static Request *store_call_impl(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot, bool background) {
     Request *r = request_new(owner, done, tag, slot);
+    r->worker_required = background;
     r->operation = xstrdup(operation); r->args = args; r->timeout_ms = timeout_ms;
     if (!g_store.client || !store_supports(operation)) { request_refuse(r, "This token cannot perform that action."); return r; }
     request_start(r);
     return r;
+}
+Request *store_call(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
+    return store_call_impl(operation, args, timeout_ms, owner, done, tag, slot, false);
+}
+Request *store_call_background(const char *operation, Json *args, int timeout_ms, void *owner, RequestDone done, int tag, Request **slot) {
+    return store_call_impl(operation, args, timeout_ms, owner, done, tag, slot, true);
 }
 Request *store_transcribe(const void *audio, size_t len, const char *content_type, void *owner, RequestDone done, int tag, Request **slot) {
     Request *r = request_new(owner, done, tag, slot);

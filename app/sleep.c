@@ -1,0 +1,301 @@
+#include "sleep_internal.h"
+#include "credentials.h"
+#include "screens.h"
+#include "str.h"
+#include <stdlib.h>
+#include <string.h>
+
+#define SLEEP_CLASS L"BriareusSleep"
+#define SLEEP_TIMER 0x534c
+static struct {
+    HWND main, window, focus;
+    HHOOK hook;
+    SleepIdle idle;
+    SleepWall wall;
+    ApiClient *client;
+    char *device, *scope;
+    int minutes, modals;
+    SleepFollow *follow;
+    Request *sessions, *history, *files[SLEEP_PANES];
+    uint64_t events_seen;
+    uint64_t identities[SLEEP_PANES], revisions[SLEEP_PANES], retry, snapshot, replay_at, history_at[SLEEP_PANES];
+    SleepReplay replay;
+    struct { Session session; int cursor; } records[128]; size_t record_count;
+} g_sleep;
+
+static uint64_t now_ms(void) { return GetTickCount64(); }
+static char *scope_key(void) {
+    Json *j = g_store.has_device ? device_json(&g_store.device) : json_null();
+    char *key = json_serialize(j, true); json_free(j); return key;
+}
+static bool current(void) {
+    if (g_sleep.client != g_store.client || !str_eq(g_sleep.device, g_store.device.id)) return false;
+    char *key = scope_key(); bool same = str_eq(key, g_sleep.scope); free(key); return same;
+}
+static void wake(void) {
+    g_sleep.idle.asleep = false; g_sleep.idle.input = now_ms();
+    sleep_follow_cancel(g_sleep.follow); sleep_follow_release(g_sleep.follow); g_sleep.follow = NULL;
+    request_cancel(&g_sleep.sessions); request_cancel(&g_sleep.history);
+    for (int i = 0; i < SLEEP_PANES; i++) {
+        request_cancel(&g_sleep.files[i]); sleep_replay_clear(&g_sleep.replay, i);
+        g_sleep.history_at[i] = g_sleep.revisions[i] = g_sleep.identities[i] = 0;
+    }
+    sleep_wall_free(&g_sleep.wall);
+    for (size_t i = 0; i < g_sleep.record_count; i++) session_free(&g_sleep.records[i].session);
+    memset(g_sleep.records, 0, sizeof g_sleep.records); g_sleep.record_count = 0;
+    if (g_sleep.window) ShowWindow(g_sleep.window, SW_HIDE);
+    if (g_sleep.focus && IsWindow(g_sleep.focus) && IsWindowVisible(g_sleep.focus)) SetFocus(g_sleep.focus);
+    g_sleep.focus = NULL;
+    api_client_release(g_sleep.client); g_sleep.client = NULL;
+    free(g_sleep.device); g_sleep.device = NULL; free(g_sleep.scope); g_sleep.scope = NULL;
+}
+void sleep_scope_changed(void) { if (g_sleep.idle.asleep && (!current() || IsIconic(g_sleep.main))) wake(); }
+void sleep_deactivated(void) {
+    memset(g_sleep.idle.held, 0, sizeof g_sleep.idle.held);
+    memset(g_sleep.idle.blocked, 0, sizeof g_sleep.idle.blocked);
+}
+void sleep_modal(bool begin) {
+    if (begin) { if (g_sleep.idle.asleep) wake(); g_sleep.modals++; }
+    else if (g_sleep.modals) g_sleep.modals--;
+    g_sleep.idle.input = now_ms();
+}
+int sleep_after(void) { return g_sleep.minutes; }
+void sleep_set_after(int minutes) { g_sleep.minutes = sleep_minutes(minutes); settings_write_sleep(g_sleep.minutes); wake(); }
+void sleep_settings_action(void) {
+    const char *choices[] = {"Never", "1 min", "2 min", "5 min", "10 min", "15 min", "30 min"};
+    int chosen = app_choose("Sleep after", "Minutes without input on this computer.", choices, 7);
+    if (chosen >= 0) sleep_set_after(sleep_choices[chosen]);
+}
+static int find_pane(const char *id) {
+    if (str_empty(id)) return -1;
+    for (int i = 0; i < SLEEP_PANES; i++) if (str_eq(session_id(&g_sleep.wall.panes[i].session), id)) return i;
+    return -1;
+}
+static int record_index(const char *id) {
+    for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) return (int)k;
+    return -1;
+}
+static void apply_line(int i, const Json *line, bool replay) {
+    SleepPane *p = &g_sleep.wall.panes[i];
+    int seq = json_int_or(json_get(line, "seq"), 0), record_slot = record_index(session_id(&p->session));
+    if (!replay && record_slot >= 0) {
+        if (seq <= g_sleep.records[record_slot].cursor) return;
+        g_sleep.records[record_slot].cursor = seq;
+    }
+    SleepStep step = sleep_step(line, session_repo(&p->session));
+    if (!replay && step.kind != SLEEP_NONE && p->replay) {
+        Session copy = {0}; session_copy(&copy, &p->session);
+        i = sleep_assign(&g_sleep.wall, &copy, now_ms(), false); session_free(&copy); p = &g_sleep.wall.panes[i];
+    }
+    if (!replay) {
+        p->cursor = seq;
+        if (step.kind == SLEEP_FILE) p->file_cursor = seq;
+        if (step.kind == SLEEP_COMMAND) p->command_cursor = seq;
+    }
+    sleep_apply(&g_sleep.wall, i, &step, now_ms(), replay); sleep_step_free(&step);
+}
+static int record(const Session *s) {
+    size_t slot = g_sleep.record_count;
+    for (size_t i = 0; i < g_sleep.record_count; i++) if (str_eq(session_id(s), session_id(&g_sleep.records[i].session))) { slot = i; break; }
+    if (slot < g_sleep.record_count) {
+        const char *old = json_str(json_get(g_sleep.records[slot].session.raw, "updatedAt"));
+        const char *next = json_str(json_get(s->raw, "updatedAt"));
+        if (old && next && strcmp(old, next) > 0) return -1;
+    } else if (slot == 128) slot = 0;
+    else g_sleep.record_count++;
+    if (!str_eq(session_id(s), session_id(&g_sleep.records[slot].session))) g_sleep.records[slot].cursor = 0;
+    session_free(&g_sleep.records[slot].session); session_copy(&g_sleep.records[slot].session, s); return (int)slot;
+}
+static void receive(const char *type, const Json *j) {
+    if (str_eq(type, "session")) {
+        Session s = {0}; if (!session_parse(j, &s)) return;
+        if (record(&s) < 0) { session_free(&s); return; }
+        int i = find_pane(session_id(&s));
+        if (session_is_active(&s) || i >= 0) {
+            bool replay = i >= 0 && g_sleep.wall.panes[i].replay && !session_is_active(&s);
+            sleep_assign(&g_sleep.wall, &s, now_ms(), replay);
+        }
+        session_free(&s);
+    } else if (str_eq(type, "session.deleted")) {
+        const char *id = json_str(json_get(j, "id")); sleep_remove(&g_sleep.wall, id);
+        for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) {
+            session_free(&g_sleep.records[k].session);
+            size_t tail = --g_sleep.record_count;
+            if (k != tail) g_sleep.records[k] = g_sleep.records[tail];
+            memset(&g_sleep.records[tail], 0, sizeof g_sleep.records[tail]); break;
+        }
+    }
+    else if (str_eq(type, "transcript")) {
+        int i = find_pane(json_str(json_get(j, "sessionId")));
+        const char *id = json_str(json_get(j, "sessionId"));
+        int r = record_index(id);
+        if (r < 0 || json_int_or(json_get(json_get(j, "event"), "seq"), 0) <= g_sleep.records[r].cursor) return;
+        if (i < 0) {
+            for (size_t k = 0; k < g_sleep.record_count; k++) if (str_eq(id, session_id(&g_sleep.records[k].session))) {
+                SleepStep step = sleep_step(json_get(j, "event"), session_repo(&g_sleep.records[k].session));
+                if (step.kind != SLEEP_NONE) i = sleep_assign(&g_sleep.wall, &g_sleep.records[k].session, now_ms(), false);
+                sleep_step_free(&step); break;
+            }
+        }
+        if (i >= 0) {
+            apply_line(i, json_get(j, "event"), false);
+        }
+    }
+}
+static void sessions_done(void *owner, Request *r) {
+    (void)owner; if (!current() || !r->ok || (uint64_t)r->arg != g_sleep.events_seen) return;
+    Session *items = NULL; size_t n = 0; if (!sessions_parse(r->result, &items, &n)) return;
+    for (size_t k = 0; k < n; k++) record(&items[k]);
+    size_t selected[SLEEP_PANES]; size_t count = sleep_select(items, n, selected, true);
+    bool replay = !count || sleep_replay_due(&g_sleep.wall, now_ms());
+    // Reconcile deletions without trusting a reconnect to replay deletion events.
+    for (int i = 0; i < SLEEP_PANES; i++) {
+        const char *id = session_id(&g_sleep.wall.panes[i].session); bool found = false;
+        for (size_t k = 0; k < n; k++) if (str_eq(id, session_id(&items[k]))) found = true;
+        if (id && !found) sleep_remove(&g_sleep.wall, id);
+    }
+    if (replay) {
+        bool already = false;
+        for (int i = 0; i < SLEEP_PANES; i++) already |= g_sleep.wall.panes[i].replay;
+        if (already) { sessions_free(items, n); return; }
+        sleep_wall_free(&g_sleep.wall); count = sleep_select(items, n, selected, false); }
+    for (size_t k = 0; k < count; k++) sleep_assign(&g_sleep.wall, &items[selected[k]], now_ms(), replay);
+    sessions_free(items, n);
+}
+static void history_done(void *owner, Request *r) {
+    (void)owner; int i = r->tag; SleepPane *p = &g_sleep.wall.panes[i];
+    if (!current() || !r->ok || (uint64_t)r->arg != p->identity) return;
+    if (!str_eq(json_str(json_get(r->args, "sessionId")), session_id(&p->session))) return;
+    const Json *events = json_get(r->result, "events");
+    if (p->replay) {
+        sleep_replay_load(&g_sleep.replay, i, events, session_repo(&p->session));
+        int at = record_index(session_id(&p->session));
+        for (size_t k = 0; at >= 0 && k < json_count(events); k++) {
+            int seq = json_int_or(json_get(json_at(events, k), "seq"), 0);
+            if (seq > g_sleep.records[at].cursor) g_sleep.records[at].cursor = seq;
+        }
+    }
+    else {
+        bool bootstrap = !p->seeded;
+        if (bootstrap) sleep_seed(&g_sleep.wall, i, events, now_ms());
+        else for (size_t k = 0; k < json_count(events); k++) apply_line(i, json_at(events, k), false);
+        int at = record_index(session_id(&p->session));
+        for (size_t k = 0; k < json_count(events); k++) {
+            int seq = json_int_or(json_get(json_at(events, k), "seq"), 0);
+            if (seq > p->cursor) p->cursor = seq;
+            if (at >= 0 && seq > g_sleep.records[at].cursor) g_sleep.records[at].cursor = seq;
+        }
+    }
+}
+static void file_done(void *owner, Request *r) {
+    (void)owner; int i = r->tag; SleepPane *p = &g_sleep.wall.panes[i];
+    if (!current() || (uint64_t)r->arg != p->revision) return;
+    if (!r->ok && r->error.status == 404 && json_str_nonempty(json_get(r->args, "ref"))) {
+        Request *next = store_call_background("repo_file", sleep_file_args(p, true), 15000, NULL, file_done, i, &g_sleep.files[i]);
+        next->arg = r->arg; return;
+    }
+    sleep_loaded(p, (uint64_t)r->arg, r->ok ? r->result : NULL);
+}
+static void reads(uint64_t now) {
+    for (int i = 0; i < SLEEP_PANES; i++) {
+        SleepPane *p = &g_sleep.wall.panes[i]; if (!p->session.raw) continue;
+        if (p->identity != g_sleep.identities[i]) {
+            g_sleep.identities[i] = p->identity;
+            sleep_replay_clear(&g_sleep.replay, i); g_sleep.history_at[i] = 0;
+        }
+        if (p->revision != g_sleep.revisions[i]) {
+            request_cancel(&g_sleep.files[i]); g_sleep.revisions[i] = p->revision;
+        }
+        if (p->path && !p->loaded && !g_sleep.files[i]) {
+            if (store_supports("repo_file")) {
+                Request *r = store_call_background("repo_file", sleep_file_args(p, false), 15000, NULL, file_done, i, &g_sleep.files[i]); r->arg = (intptr_t)p->revision;
+            } else sleep_loaded(p, p->revision, NULL);
+        }
+        if (!g_sleep.history && store_supports("session") && now >= g_sleep.history_at[i]) {
+            Json *args = json_object(); json_set_str(args, "sessionId", session_id(&p->session)); json_set_num(args, "since", p->replay || !p->seeded ? 0 : p->cursor);
+            Request *r = store_call_background("session", args, 15000, NULL, history_done, i, &g_sleep.history); r->arg = (intptr_t)p->identity;
+            g_sleep.history_at[i] = now + 30000;
+        }
+    }
+}
+void sleep_pulse(uint64_t now) {
+    if (g_sleep.idle.asleep && (!current() || IsIconic(g_sleep.main))) wake();
+    if (!g_sleep.idle.asleep) {
+        bool eligible = store_connected() && store_supports("events") && !g_sleep.modals && !IsIconic(g_sleep.main);
+        if (!sleep_due(&g_sleep.idle, now, g_sleep.minutes, eligible)) return;
+        g_sleep.client = api_client_retain(g_store.client); g_sleep.device = xstrdup(g_store.device.id); g_sleep.scope = scope_key();
+        g_sleep.wall.last_live = now;
+        g_sleep.focus = GetFocus(); g_sleep.retry = g_sleep.snapshot = g_sleep.replay_at = 0;
+        ShowWindow(g_sleep.window, SW_SHOWNA);
+    }
+    RECT rc; GetClientRect(g_sleep.main, &rc);
+    SetWindowPos(g_sleep.window, HWND_TOP, 0, 0, rc.right, rc.bottom, SWP_NOACTIVATE);
+    if (!g_sleep.follow && now >= g_sleep.retry) { g_sleep.follow = sleep_follow_new(); g_sleep.retry = now + 30000; }
+    if (g_sleep.follow) {
+        bool ended; int delay; Json *queue = sleep_follow_drain(g_sleep.follow, &ended, &delay);
+        for (size_t k = 0; k < json_count(queue); k++) {
+            g_sleep.events_seen++;
+            const Json *item = json_at(queue, k); receive(json_str(json_get(item, "type")), json_get(item, "data"));
+        }
+        json_free(queue);
+        if (ended) { sleep_follow_release(g_sleep.follow); g_sleep.follow = NULL; g_sleep.retry = now + (uint64_t)delay; g_sleep.snapshot = 0; }
+    }
+    if (!g_sleep.sessions && now >= g_sleep.snapshot && store_supports("sessions")) {
+        Request *r = store_call_background("sessions", json_object(), 15000, NULL, sessions_done, 0, &g_sleep.sessions); r->arg = (intptr_t)g_sleep.events_seen; g_sleep.snapshot = now + 30000;
+    }
+    sleep_tick(&g_sleep.wall, now); reads(now);
+    if (now >= g_sleep.replay_at) {
+        g_sleep.replay_at = now + 2400;
+        int i; const SleepStep *step = sleep_replay_next(&g_sleep.replay, &i);
+        if (step && g_sleep.wall.panes[i].replay) sleep_apply(&g_sleep.wall, i, step, now, true);
+    }
+    InvalidateRect(g_sleep.window, NULL, FALSE);
+}
+static LRESULT CALLBACK input_hook(int code, WPARAM wp, LPARAM lp) {
+    if (code >= 0 && wp == PM_REMOVE) {
+        MSG *m = (MSG *)lp; UINT msg = m->message;
+        bool key = msg >= WM_KEYFIRST && msg <= WM_KEYLAST;
+        bool mouse = msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST;
+        bool nc = msg >= WM_NCLBUTTONDOWN && msg <= WM_NCXBUTTONDBLCLK;
+        if (key || mouse || nc) {
+            unsigned button = 0;
+            if (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) button = (unsigned)m->wParam + 1;
+            if (msg >= WM_LBUTTONDOWN && msg <= WM_LBUTTONDBLCLK) button = 257;
+            if (msg >= WM_RBUTTONDOWN && msg <= WM_RBUTTONDBLCLK) button = 258;
+            if (msg >= WM_MBUTTONDOWN && msg <= WM_MBUTTONDBLCLK) button = 259;
+            if (msg >= WM_XBUTTONDOWN && msg <= WM_XBUTTONDBLCLK) button = HIWORD(m->wParam) == XBUTTON1 ? 260 : 261;
+            if (msg >= WM_NCLBUTTONDOWN && msg <= WM_NCLBUTTONDBLCLK) button = 257;
+            if (msg >= WM_NCRBUTTONDOWN && msg <= WM_NCRBUTTONDBLCLK) button = 258;
+            if (msg >= WM_NCMBUTTONDOWN && msg <= WM_NCMBUTTONDBLCLK) button = 259;
+            if (msg >= WM_NCXBUTTONDOWN && msg <= WM_NCXBUTTONDBLCLK) button = HIWORD(m->wParam) == XBUTTON1 ? 260 : 261;
+            bool up = msg == WM_KEYUP || msg == WM_SYSKEYUP || msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP || msg == WM_XBUTTONUP;
+            bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN || msg == WM_XBUTTONDOWN;
+            if (msg == WM_NCLBUTTONUP || msg == WM_NCRBUTTONUP || msg == WM_NCMBUTTONUP || msg == WM_NCXBUTTONUP) up = true;
+            if (msg == WM_NCLBUTTONDOWN || msg == WM_NCRBUTTONDOWN || msg == WM_NCMBUTTONDOWN || msg == WM_NCXBUTTONDOWN) down = true;
+            if (msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDBLCLK || msg == WM_MBUTTONDBLCLK || msg == WM_XBUTTONDBLCLK) down = true;
+            bool asleep = g_sleep.idle.asleep;
+            bool consume = sleep_input(&g_sleep.idle, now_ms(), button, down, up);
+            if (asleep) wake();
+            if (consume) { m->message = WM_NULL; m->wParam = m->lParam = 0; }
+        }
+    }
+    return CallNextHookEx(g_sleep.hook, code, wp, lp);
+}
+static LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_PAINT) { sleep_paint(hwnd, &g_sleep.wall); return 0; }
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_TIMER && wp == SLEEP_TIMER) { sleep_pulse(now_ms()); return 0; }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+void sleep_start(HWND main) {
+    g_sleep.main = main; g_sleep.minutes = settings_read_sleep(); g_sleep.idle.input = now_ms();
+    WNDCLASSW wc = {0}; wc.hInstance = GetModuleHandleW(NULL); wc.lpfnWndProc = window_proc; wc.lpszClassName = SLEEP_CLASS; wc.hCursor = LoadCursorW(NULL, IDC_ARROW); RegisterClassW(&wc);
+    g_sleep.window = CreateWindowExW(0, SLEEP_CLASS, L"Session activity", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, main, NULL, wc.hInstance, NULL);
+    g_sleep.hook = SetWindowsHookExW(WH_GETMESSAGE, input_hook, NULL, GetCurrentThreadId());
+    if (g_sleep.hook && g_sleep.window) SetTimer(g_sleep.window, SLEEP_TIMER, 80, NULL);
+}
+void sleep_stop(void) {
+    if (g_sleep.hook) UnhookWindowsHookEx(g_sleep.hook);
+    wake(); if (g_sleep.window) { KillTimer(g_sleep.window, SLEEP_TIMER); DestroyWindow(g_sleep.window); }
+    memset(&g_sleep, 0, sizeof g_sleep);
+}
