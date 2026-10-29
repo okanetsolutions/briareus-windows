@@ -75,6 +75,7 @@ struct Request {
     void *owner; RequestDone done; int tag; intptr_t arg;
     Request **slot;                                    // cleared when the request finishes or is cancelled
     bool cancelled;
+    ApiStreamCancel *upload_cancel; // upload worker lifetime, initialized before scheduling
     bool auth_checked;                 // completion finalizer applied its own connection/device auth scope
     // UI-thread finalizer runs even after cancellation; context must outlive the screen and be freed here.
     void *completion_ctx; RequestDone completed;
@@ -110,6 +111,8 @@ char *request_error_or_unexpected(const Request *req);
 /// Any work on a thread with a UI-thread completion.
 typedef void (*AsyncWork)(void *ctx);
 void async_run(AsyncWork work, AsyncWork done, void *ctx);
+/// Never executes work on the UI thread; false leaves ctx with the caller.
+bool async_try_run(AsyncWork work, AsyncWork done, void *ctx);
 /// The same for work on `g_store.cache`: store_shutdown waits for it before freeing the cache.
 void async_run_cache(AsyncWork work, AsyncWork done, void *ctx);
 

@@ -89,8 +89,10 @@ bool api_stream(ApiClient *client, const char *name, const Json *arguments, ApiS
 char *api_transcribe(ApiClient *client, const void *audio, size_t len, const char *content_type, ApiError *error);
 /// Stores a file to attach to a message, as the dashboard's composer does: the bytes are the body and the name rides in the
 /// query. The answer is the id a message takes in `attachments`. Files larger than API_UPLOAD_LIMIT are refused here.
-#define API_UPLOAD_LIMIT (25 * 1024 * 1024)
+#define API_UPLOAD_LIMIT (500 * 1024 * 1024)
 char *api_upload(ApiClient *client, const char *name, const void *bytes, size_t len, ApiError *error);
+/// Same contract, with cancellation during upload; the cancel object outlives this call.
+char *api_upload_cancellable(ApiClient *client, const char *name, const void *bytes, size_t len, ApiStreamCancel *cancel, ApiError *error);
 
 /// Seconds to wait from a Retry-After header, or -1 when it cannot be read.
 double api_retry_after(const char *value, time_t now);

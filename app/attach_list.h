@@ -1,5 +1,5 @@
 // The files for a composer's next message or first prompt, as the dashboard's `.attach-list`: each taken from a paste,
-// a drop or the 📎 button's dialog, uploaded at once, and shown as a chip with ✕ above the text until it is sent.
+// a drop or the 📎 button's dialog, uploaded in turn, and shown as a chip with ✕ above the text until it is sent.
 #ifndef BRIAREUS_ATTACH_LIST_H
 #define BRIAREUS_ATTACH_LIST_H
 #include "pane.h"
@@ -22,6 +22,14 @@ bool attach_list_paste(AttachList *l);
 void attach_list_drop(AttachList *l, HDROP drop);
 /// The 📎 button: the open dialog, several files at once.
 void attach_list_pick(AttachList *l);
+/// Copies paths for background metadata checks, using the same path as picker/drop/paste.
+void attach_list_paths(AttachList *l, const wchar_t *const *paths, size_t count);
+/// Removes the current chip at index, cancelling queued reads or an active upload.
+void attach_list_remove(AttachList *l, size_t index);
+/// Changing composer scope clears its selection, including pending metadata.
+void attach_list_scope(AttachList *l, const char *scope);
+/// Store calls this before dropping a connection, including signout and credential invalidation.
+void attach_lists_disconnect(void);
 
 size_t attach_list_count(const AttachList *l);
 bool attach_list_uploading(const AttachList *l);

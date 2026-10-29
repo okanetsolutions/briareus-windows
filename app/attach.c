@@ -19,7 +19,7 @@ static const GUID wic_bgra = { 0x6fddc324, 0x4e03, 0x4bfe, { 0xb1, 0x85, 0x3d, 0
 
 #define MAX_SIDE 16384
 
-struct Attacher { AttachDone done; void *ctx; int refs; };
+struct Attacher { AttachDone done; void *ctx; int refs; size_t pending; volatile LONG cancelled; };
 
 typedef struct {
     Attacher *a;
@@ -31,10 +31,12 @@ typedef struct {
 
 static void attacher_release(Attacher *a) { if (--a->refs == 0) free(a); }
 Attacher *attacher_new(AttachDone done, void *ctx) { Attacher *a = xcalloc(1, sizeof *a); a->done = done; a->ctx = ctx; a->refs = 1; return a; }
-void attacher_free(Attacher *a) { if (!a) return; a->done = NULL; a->ctx = NULL; attacher_release(a); }
+void attacher_free(Attacher *a) { if (!a) return; a->done = NULL; a->ctx = NULL; InterlockedExchange(&a->cancelled, 1); attacher_release(a); }
 
+bool attacher_pending(const Attacher *a) { return a && a->pending > 0; }
+void attach_file_clear(AttachFile *f) { free(f->name); free(f->bytes); free(f->path); free(f->pixels); memset(f, 0, sizeof *f); }
 void attach_files_free(AttachFile *files, size_t count) {
-    for (size_t i = 0; i < count; i++) { free(files[i].name); free(files[i].bytes); }
+    for (size_t i = 0; i < count; i++) attach_file_clear(&files[i]);
     free(files);
 }
 char *format_file_size(size_t bytes) {
@@ -43,7 +45,7 @@ char *format_file_size(size_t bytes) {
     return xstrfmt("%zu KB", kb ? kb : 1);
 }
 
-static AttachJob *job_new(Attacher *a) { AttachJob *job = xcalloc(1, sizeof *job); job->a = a; a->refs++; str_init(&job->errors); return job; }
+static AttachJob *job_new(Attacher *a) { AttachJob *job = xcalloc(1, sizeof *job); job->a = a; a->refs++; a->pending++; str_init(&job->errors); return job; }
 static void job_free(AttachJob *job) {
     for (size_t i = 0; i < job->path_count; i++) free(job->paths[i]);
     free(job->paths); free(job->pixels); str_free(&job->errors);
@@ -52,6 +54,7 @@ static void job_free(AttachJob *job) {
 }
 static void push_file(AttachJob *job, char *name, void *bytes, size_t len) {
     job->files = xrealloc(job->files, (job->count + 1) * sizeof *job->files);
+    memset(&job->files[job->count], 0, sizeof *job->files);
     job->files[job->count].name = name; job->files[job->count].bytes = bytes; job->files[job->count].len = len;
     job->count++;
 }
@@ -122,29 +125,37 @@ static bool take_bitmap(HBITMAP hbm, AttachJob *job) {
 
 // MARK: - The worker
 
-static void read_path(AttachJob *job, const wchar_t *path) {
+static bool cancelled(volatile LONG *flag) { return InterlockedCompareExchange(flag, 0, 0) != 0; }
+
+// Check using the opened handle too: the path can change between enumeration and opening.
+static const char *open_path(const wchar_t *path, HANDLE *out, size_t *len) {
+    DWORD attrs = GetFileAttributesW(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return "could not be read";
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) return "is a folder; attach its files";
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return "could not be opened";
+    BY_HANDLE_FILE_INFORMATION info = {0};
+    LARGE_INTEGER size = {0};
+    const char *why = NULL;
+    if (!GetFileInformationByHandle(f, &info) || !GetFileSizeEx(f, &size)) why = "could not be read";
+    else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) why = "is a folder; attach its files";
+    else if (GetFileType(f) != FILE_TYPE_DISK || size.QuadPart < 0) why = "is not a regular file";
+    else if (size.QuadPart == 0) why = "is empty";
+    else if (size.QuadPart > API_UPLOAD_LIMIT) why = "is larger than 500 MiB, the most a message takes";
+    if (why) { CloseHandle(f); return why; }
+    *out = f; *len = (size_t)size.QuadPart;
+    return NULL;
+}
+static void check_path(AttachJob *job, const wchar_t *path) {
     const wchar_t *slash = wcsrchr(path, L'\\'), *fwd = wcsrchr(path, L'/');
     if (fwd && (!slash || fwd > slash)) slash = fwd;
     char *name = wide_to_utf8(slash ? slash + 1 : path);
-    DWORD attrs = GetFileAttributesW(path);
-    if (attrs == INVALID_FILE_ATTRIBUTES) { refuse(job, name, "could not be read"); free(name); return; }
-    if (attrs & FILE_ATTRIBUTE_DIRECTORY) { refuse(job, name, "is a folder; attach its files"); free(name); return; }
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) { refuse(job, name, "could not be opened"); free(name); return; }
-    LARGE_INTEGER size;
-    if (!GetFileSizeEx(f, &size) || size.QuadPart < 0) { CloseHandle(f); refuse(job, name, "could not be read"); free(name); return; }
-    if (size.QuadPart == 0) { CloseHandle(f); refuse(job, name, "is empty"); free(name); return; }
-    if (size.QuadPart > API_UPLOAD_LIMIT) { CloseHandle(f); refuse(job, name, "is larger than 25 MB, the most a message takes"); free(name); return; }
-    size_t len = (size_t)size.QuadPart, got = 0;
-    unsigned char *bytes = xmalloc(len);
-    while (got < len) {
-        DWORD chunk = 0, want = (DWORD)(len - got > (1u << 20) ? (1u << 20) : len - got);
-        if (!ReadFile(f, bytes + got, want, &chunk, NULL) || chunk == 0) break;
-        got += chunk;
-    }
+    HANDLE f; size_t len;
+    const char *why = open_path(path, &f, &len);
+    if (why) { refuse(job, name, why); free(name); return; }
     CloseHandle(f);
-    if (got != len) { free(bytes); refuse(job, name, "could not be read"); free(name); return; }
-    push_file(job, name, bytes, len);
+    push_file(job, name, NULL, len);
+    job->files[job->count - 1].path = _wcsdup(path);
 }
 
 static bool encode_png(const unsigned char *pixels, int w, int h, void **out, size_t *out_len) {
@@ -178,26 +189,59 @@ out:
     return ok;
 }
 
+char *attach_file_read(AttachFile *file, volatile LONG *stop) {
+    if (cancelled(stop)) return NULL;
+    const char *why = NULL;
+    if (file->path) {
+        HANDLE f; size_t len;
+        why = open_path(file->path, &f, &len);
+        if (!why) {
+            size_t got = 0;
+            unsigned char *bytes = xmalloc(len);
+            while (got < len && !cancelled(stop)) {
+                DWORD chunk = 0, want = (DWORD)(len - got > (1u << 20) ? (1u << 20) : len - got);
+                if (!ReadFile(f, bytes + got, want, &chunk, NULL) || !chunk) break;
+                got += chunk;
+            }
+            // Writers may keep the file open; reject short reads or a changed length.
+            LARGE_INTEGER end;
+            bool same = GetFileSizeEx(f, &end) && end.QuadPart == (LONGLONG)len;
+            CloseHandle(f);
+            if (got == len && same && !cancelled(stop)) { file->bytes = bytes; file->len = len; }
+            else { free(bytes); why = "could not be read"; }
+        }
+    } else if (file->pixels) {
+        if (!encode_png(file->pixels, file->width, file->height, &file->bytes, &file->len)) why = "could not be encoded as PNG";
+        free(file->pixels); file->pixels = NULL;
+    }
+    return why ? xstrfmt("%s %s.", file->name, why) : NULL;
+}
+
 static void attach_work(void *p) {
     AttachJob *job = p;
-    CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    for (size_t i = 0; i < job->path_count; i++) read_path(job, job->paths[i]);
-    if (job->pixels) {
-        // The browser's pasted image is "image.png"; the dashboard names it by the moment, and so does this.
+    for (size_t i = 0; i < job->path_count && !cancelled(&job->a->cancelled); i++) check_path(job, job->paths[i]);
+    if (job->pixels && !cancelled(&job->a->cancelled)) {
         char name[48]; time_t now = time(NULL); struct tm *lt = localtime(&now);
         strftime(name, sizeof name, "pasted-%Y%m%d%H%M%S.png", lt);
-        void *png = NULL; size_t len = 0;
-        if (encode_png(job->pixels, job->width, job->height, &png, &len)) push_file(job, xstrdup(name), png, len);
-        else refuse(job, "The image", "could not be encoded as PNG");
+        push_file(job, xstrdup(name), NULL, 0);
+        AttachFile *file = &job->files[job->count - 1];
+        file->pixels = job->pixels; job->pixels = NULL;
+        file->width = job->width; file->height = job->height;
     }
-    CoUninitialize();
 }
 static void attach_done(void *p) {
     AttachJob *job = p;
     Attacher *a = job->a;
+    a->pending--;
     if (a->done) a->done(a->ctx, job->files, job->count, job->errors.len ? xstrdup(job->errors.data) : NULL);
     else attach_files_free(job->files, job->count);
     job_free(job);
+}
+
+static void start_selection(AttachJob *job) {
+    if (async_try_run(attach_work, attach_done, job)) return;
+    refuse(job, "The files", "could not be checked because the worker could not be started");
+    attach_done(job);
 }
 
 // MARK: - API
@@ -219,21 +263,21 @@ bool attacher_from_clipboard(Attacher *a, HWND owner) {
         if (!got && (h = GetClipboardData(CF_BITMAP)) != NULL) got = take_bitmap((HBITMAP)h, job);
     }
     CloseClipboard();
-    if (!got) { job_free(job); return false; }
-    async_run(attach_work, attach_done, job);
+    if (!got) { a->pending--; job_free(job); return false; }
+    start_selection(job);
     return true;
 }
 void attacher_from_drop(Attacher *a, HDROP drop) {
     AttachJob *job = job_new(a);
     take_drop(drop, job);
     DragFinish(drop);
-    if (!job->path_count) { job_free(job); return; }
-    async_run(attach_work, attach_done, job);
+    if (!job->path_count) { a->pending--; job_free(job); return; }
+    start_selection(job);
 }
 void attacher_from_paths(Attacher *a, const wchar_t *const *paths, size_t count) {
     if (!count) return;
     AttachJob *job = job_new(a);
     job->paths = xmalloc(count * sizeof *job->paths);
     for (size_t i = 0; i < count; i++) job->paths[job->path_count++] = _wcsdup(paths[i]);
-    async_run(attach_work, attach_done, job);
+    start_selection(job);
 }

@@ -18,6 +18,7 @@ static const char *TOKEN = "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 typedef struct {
     int status; const char *content_type; const char *retry_after; const char *body;
     bool fail; const char *fail_message;
+    bool record_only; ApiStreamCancel *cancel_on_send;
     int calls, last_timeout, last_header_count;
     char *last_method, *last_url, *last_body, *last_content_type, *last_authorization, *last_accept;
     size_t last_body_len;
@@ -36,7 +37,7 @@ static bool stub_transport(void *ctx, const char *method, const char *url, const
     free(s->last_method); s->last_method = xstrdup(method);
     free(s->last_url); s->last_url = xstrdup(url);
     free(s->last_body); s->last_body = NULL; s->last_body_len = body_len;
-    if (body_len) { s->last_body = xmalloc(body_len + 1); memcpy(s->last_body, body, body_len); s->last_body[body_len] = 0; }
+    if (body_len && !s->record_only) { s->last_body = xmalloc(body_len + 1); memcpy(s->last_body, body, body_len); s->last_body[body_len] = 0; }
     free(s->last_content_type); s->last_content_type = NULL;
     free(s->last_authorization); s->last_authorization = NULL;
     free(s->last_accept); s->last_accept = NULL;
@@ -49,6 +50,7 @@ static bool stub_transport(void *ctx, const char *method, const char *url, const
     }
     *status = 0; *content_type = NULL; *retry_after = NULL; *response = NULL; *response_len = 0; *error_message = NULL;
     if (s->fail) { *error_message = xstrdup(s->fail_message); return false; }
+    if (s->cancel_on_send) api_stream_cancel(s->cancel_on_send);
     *status = s->status;
     *content_type = xstrdup(s->content_type);
     *retry_after = xstrdup(s->retry_after);
@@ -938,17 +940,27 @@ static void test_upload_limit_boundary(void) {
     Stub stub = { 0 }; stub_json(&stub, 201, "{\"file\":{\"id\":\"big\"}}");
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
-    CHECK_INT(API_UPLOAD_LIMIT, 26214400);
-    unsigned char *bytes = xcalloc(1, (size_t)API_UPLOAD_LIMIT + 1);
-    bytes[0] = 0x89; bytes[API_UPLOAD_LIMIT - 1] = 0x42;
+    CHECK_INT(API_UPLOAD_LIMIT, 524288000);
+    // The fake records only the length: boundary checks must not allocate/copy two 500 MiB buffers.
+    stub.record_only = true;
+    const unsigned char bytes[] = {0x89};
     char *id = api_upload(c, "max.bin", bytes, API_UPLOAD_LIMIT, &e);
     CHECK_STR(id, "big"); free(id);
     CHECK_INT(stub.calls, 1); CHECK_INT(stub.last_body_len, API_UPLOAD_LIMIT);
-    CHECK((unsigned char)stub.last_body[API_UPLOAD_LIMIT - 1] == 0x42);
+    CHECK(stub.last_body == NULL);
     CHECK(api_upload(c, "over.bin", bytes, (size_t)API_UPLOAD_LIMIT + 1, &e) == NULL);
-    CHECK(e.kind == API_HTTP && e.status == 413); CHECK(api_error_is_refusal(&e)); CHECK_STR(e.message, "The file exceeds the server\xE2\x80\x99s 25 MB limit for an attachment.");
+    CHECK(e.kind == API_HTTP && e.status == 413); CHECK(api_error_is_refusal(&e)); CHECK_STR(e.message, "The file exceeds the server\xE2\x80\x99s 500 MiB limit for an attachment.");
     CHECK_INT(stub.calls, 1);
-    free(bytes);
+    ApiStreamCancel cancel; api_stream_cancel_init(&cancel);
+    api_stream_cancel(&cancel);
+    api_error_clear(&e);
+    CHECK(api_upload_cancellable(c, "cancelled", bytes, 1, &cancel, &e) == NULL);
+    CHECK(e.kind == API_CANCELLED); CHECK_INT(stub.calls, 1);
+    api_stream_cancel_free(&cancel); api_stream_cancel_init(&cancel);
+    stub.cancel_on_send = &cancel;
+    CHECK(api_upload_cancellable(c, "late", bytes, 1, &cancel, &e) == NULL);
+    CHECK(e.kind == API_CANCELLED); CHECK_INT(stub.calls, 2);
+    api_stream_cancel_free(&cancel);
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
 

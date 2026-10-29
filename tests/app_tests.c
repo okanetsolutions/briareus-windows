@@ -34,5 +34,6 @@ int main(void) {
     app_ssh_approval_tests();
     app_secret_cleanup_tests();
     app_saved_prompt_tests();
+    app_attach_tests();
     return test_summary();
 }
