@@ -127,8 +127,24 @@ static void test_destroy_during_save(void) {
     next->base.vt->destroy(&next->base);
     doc_free(&f.doc); screen_fixture_clear(&f.fixture); json_free(row); screen_settings_g_tab = T_PROJECT;
 }
+static void test_current_action_defaults_and_pr_author(void) {
+    Json *row = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"prAuthor\":\"octocat\",\"actionProviderId\":2,\"actionModel\":\"opus\",\"actionEffort\":\"high\"}");
+    Form f; setup(&f, row, false);
+    CHECK_INT(f.form->picks[R_REVIEW].provider_id, 2); CHECK_STR(f.form->picks[R_REVIEW].model, "opus");
+    CHECK_STR(f.form->picks[R_REVIEW].effort, "high"); CHECK(screen_settings_field_offered(f.form, F_REVIEW_AUTHOR));
+    CHECK_OWNED_STR(screen_settings_field_text(row, F_REVIEW_AUTHOR), "octocat");
+    set_string(&f.form->picks[R_REVIEW].model, "sonnet"); set_string(&f.form->picks[R_REVIEW].effort, "medium");
+    char *why = NULL; int tab = 0; Json *body = screen_settings_form_body(f.form, &why, &tab);
+    CHECK(body != NULL); CHECK(why == NULL); CHECK_INT(json_int_or(json_get(body, "actionProviderId"), 0), 2);
+    CHECK_STR(json_str(json_get(body, "actionModel")), "sonnet"); CHECK_STR(json_str(json_get(body, "actionEffort")), "medium");
+    CHECK_STR(json_str(json_get(body, "prAuthor")), "octocat");
+    CHECK(json_is_null(json_get(body, "reviewProviderId"))); CHECK(json_is_null(json_get(body, "reviewAuthor")));
+    free(why); json_free(body); cleanup(&f); json_free(row);
+}
+
 void app_project_settings_tests(void) {
     screen_fixture_prepare();
+    test_run("project settings round trip current action defaults and PR author", test_current_action_defaults_and_pr_author);
     test_run("project babysit edit save refill and reopen", test_supported_edit_save_reopen);
     test_run("project babysit defaults clone and unsupported absence", test_create_clone_and_unsupported);
     test_run("project babysit failure keeps edits and discard preserves saved value", test_failure_and_discard);

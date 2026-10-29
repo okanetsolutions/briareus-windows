@@ -65,6 +65,7 @@
 #define IDC_USAGE_TO            802
 
 #define IDD_MAIL_REPLY          900
+#define IDD_ACTION_RUNTIME      1000
 
 #define IDS_APP_TITLE           1000
 

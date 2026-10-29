@@ -78,7 +78,7 @@ static void side_actions(PullScreen *s, Doc *doc, Col c, int *count) {
         free(label);
     }
     doc_space(doc, px(8));
-    doc_text(doc, c.x, c.w, "Uses the provider and model configured for this project. These actions run paid agents and may write to GitHub.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+    doc_text(doc, c.x, c.w, "Actions run paid agents and may write to GitHub. CLI-restricted actions ask for a compatible provider, model and effort.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
 }
 
 /// The checks as counts only: passed, pending and failed.

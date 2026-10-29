@@ -145,12 +145,15 @@ Json *transcript_json(const Transcript *t);
 // MARK: - Runtimes
 
 typedef struct { char *id, *label; char **efforts; size_t effort_count; char *default_effort; } RuntimeModel;
-typedef struct { int id; char *label; int available; RuntimeModel *models; size_t model_count; char *default_model; } RuntimeProvider;
+typedef struct { int id; char *label; int available; RuntimeModel *models; size_t model_count; char *default_model; char *binary; } RuntimeProvider;
 /// What a start is asked to run on (`provider`, `model`, `effort`). The server may still fall back to a default model or effort.
 typedef struct { int provider_id; char *model; char *effort; } RuntimeChoice;
 typedef struct { bool has_default; RuntimeChoice def; RuntimeProvider *providers; size_t provider_count; } RuntimeCatalog;
 
 bool runtime_catalog_parse(const Json *value, RuntimeCatalog *out);
+/// Filters runtimes by explicit CLI metadata, joined by provider id when older runtimes omit it.
+/// Owns out; never infers identity from a label or model name.
+bool runtime_catalog_for_binary(const Json *value, const Json *providers, const char *binary, RuntimeCatalog *out);
 Json *runtime_catalog_json(const RuntimeCatalog *catalog);
 void runtime_catalog_free(RuntimeCatalog *catalog);
 void runtime_choice_free(RuntimeChoice *choice);

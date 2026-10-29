@@ -20,7 +20,7 @@ static void pull_destroy(Screen *base) {
     poller_stop(&s->poller);
     project_free(&s->project); if (s->has_stack) stack_position_free(&s->stack); if (s->has_summary) pull_summary_free(&s->summary);
     json_free(s->pr); if (s->has_row) pull_summary_free(&s->row); json_free(s->catalog); sessions_free(s->runs, s->run_count); json_free(s->findings);
-    free(s->error); free(s->findings_error); free(s->write_error); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
+    free(s->error); free(s->findings_error); free(s->write_error); free(s->start_device); free(s->merge_error); free(s->deciding); free(s->open_findings); free(s->body); free(s->body_author);
     board_actions_free(s->actions, s->action_count);
     pull_files_free(s->files);
     request_cancel(&s->req_run); request_cancel(&s->req_profiles); request_cancel(&s->req_log);

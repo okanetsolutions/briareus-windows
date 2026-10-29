@@ -83,7 +83,36 @@ static void background_poll_lifecycle(void) {
     cache_remove_all(g_store.cache); cache_free(g_store.cache); g_store.cache = NULL;
     RemoveDirectoryW(directory); screen_fixture_clear(&f);
 }
+static void deleted_review_stops_polling_preserves_pr_navigation(void) {
+    for (int review = 0; review < 2; review++) {
+        ScreenFixture f; screen_fixture_init(&f, ROUTES, 1);
+        wchar_t temp[MAX_PATH], directory[MAX_PATH]; CHECK(GetTempPathW(MAX_PATH, temp));
+        CHECK(GetTempFileNameW(temp, L"rmd", 0, directory)); DeleteFileW(directory);
+        CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
+        Session initial = {0}; initial.raw = json_parsez("{\"id\":\"ephemeral\",\"status\":\"running\",\"activity\":\"review\",\"repo\":\"o/r\",\"startedOnPr\":12}");
+        if (!review) json_set_str(initial.raw, "activity", "chat");
+        Screen *screen = conversation_screen_new(&initial); session_free(&initial); screen_fixture_pane(&f, screen);
+        ConversationScreen *s = (ConversationScreen *)screen; Doc doc; doc_init(&doc);
+        f.read_status = 404; f.read_response = "{\"error\":\"Session not found\"}";
+        screen_conversation_refresh(s, false); screen_fixture_pump(&f, 1);
+        CHECK(s->loaded); CHECK(!s->loading); CHECK_INT(s->removed, review);
+        if (review) {
+            CHECK(s->error == NULL); CHECK(!session_is_active(screen_conversation_session(s))); CHECK(!s->poller.running);
+            screen_fixture_draw(screen, &doc); CHECK(working_item(&doc) == NULL);
+            CHECK(!screen_conversation_can_message(s));
+            screen_conversation_refresh(s, true); CHECK(s->req_refresh == NULL); CHECK_INT(f.reads, 1);
+            screen_conversation_mutate(s, "reopen", NULL); CHECK(s->req_mutate == NULL); CHECK_INT(f.writes, 0);
+            HeaderInfo info = {0}; screen->vt->header(screen, &info); CHECK_INT(info.button_count, 1);
+            CHECK_INT(info.buttons[0].action, ACT_MENU_ITEM + MENU_PULL); CHECK(info.buttons[0].enabled);
+        } else { CHECK(s->error != NULL); CHECK(session_is_active(screen_conversation_session(s))); }
+        doc_free(&doc); screen->vt->destroy(screen);
+        cache_remove_all(g_store.cache); cache_free(g_store.cache); g_store.cache = NULL;
+        RemoveDirectoryW(directory); screen_fixture_clear(&f);
+    }
+}
+
 void app_conversation_tests(void) {
     screen_fixture_prepare();
+    test_run("deleted review stops polling without claiming verdict and keeps PR navigation", deleted_review_stops_polling_preserves_pr_navigation);
     test_run("conversation polls replace background work with unchanged transcript and teardown", background_poll_lifecycle);
 }
