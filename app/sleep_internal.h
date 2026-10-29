@@ -1,6 +1,6 @@
 #ifndef BRIAREUS_SLEEP_INTERNAL_H
 #define BRIAREUS_SLEEP_INTERNAL_H
-#include "sleep.h"
+#include "sleep_mode.h"
 typedef struct SleepFollow SleepFollow;
 SleepFollow *sleep_follow_new(void);
 void sleep_follow_cancel(SleepFollow *f);

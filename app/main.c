@@ -1,7 +1,7 @@
 // Briareus for Windows: the main window, its two columns, and the navigation between them.
 #include "briareus_tokens.h"
 #include "canvas.h"
-#include "sleep.h"
+#include "sleep_mode.h"
 #include "crash.h"
 #include "dialogs.h"
 #include "media.h"

@@ -1,5 +1,5 @@
 #include "screen_settings_internal.h"
-#include "sleep.h"
+#include "sleep_mode.h"
 
 static void sign_out(void);
 static bool in_rect(const RECT *r, POINT pt);

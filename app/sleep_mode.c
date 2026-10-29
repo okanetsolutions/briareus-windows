@@ -101,7 +101,11 @@ static int record(const Session *s) {
         const char *old = json_str(json_get(g_sleep.records[slot].session.raw, "updatedAt"));
         const char *next = json_str(json_get(s->raw, "updatedAt"));
         if (old && next && strcmp(old, next) > 0) return -1;
-    } else if (slot == 128) slot = 0;
+    } else if (slot == 128) {
+        // Displayed sessions keep their dedupe watermark even when the server has a long archive.
+        slot = 0;
+        while (find_pane(session_id(&g_sleep.records[slot].session)) >= 0) slot++;
+    }
     else g_sleep.record_count++;
     if (!str_eq(session_id(s), session_id(&g_sleep.records[slot].session))) g_sleep.records[slot].cursor = 0;
     session_free(&g_sleep.records[slot].session); session_copy(&g_sleep.records[slot].session, s); return (int)slot;
@@ -158,8 +162,19 @@ static void sessions_done(void *owner, Request *r) {
         bool already = false;
         for (int i = 0; i < SLEEP_PANES; i++) already |= g_sleep.wall.panes[i].replay;
         if (already) { sessions_free(items, n); return; }
-        sleep_wall_free(&g_sleep.wall); count = sleep_select(items, n, selected, false); }
-    for (size_t k = 0; k < count; k++) sleep_assign(&g_sleep.wall, &items[selected[k]], now_ms(), replay);
+        count = sleep_select(items, n, selected, false);
+    }
+    int cursors[SLEEP_PANES] = {0};
+    for (size_t k = 0; k < count; k++) {
+        int at = record_index(session_id(&items[selected[k]]));
+        if (at >= 0) cursors[k] = g_sleep.records[at].cursor;
+    }
+    if (replay) sleep_wall_free(&g_sleep.wall);
+    for (size_t k = 0; k < count; k++) {
+        int at = record(&items[selected[k]]);
+        if (at >= 0 && cursors[k] > g_sleep.records[at].cursor) g_sleep.records[at].cursor = cursors[k];
+        sleep_assign(&g_sleep.wall, &items[selected[k]], now_ms(), replay);
+    }
     sessions_free(items, n);
 }
 static void history_done(void *owner, Request *r) {

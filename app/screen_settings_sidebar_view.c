@@ -1,5 +1,5 @@
 #include "screen_settings_internal.h"
-#include "sleep.h"
+#include "sleep_mode.h"
 
 static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected);

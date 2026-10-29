@@ -44,7 +44,7 @@ int test_sleep_after(void);
 void test_sleep_set_after(int minutes);
 void test_sleep_settings_action(void);
 void test_sleep_pulse(uint64_t now);
-#include "../app/sleep.c"
+#include "../app/sleep_mode.c"
 #undef GetTickCount64
 
 static Route routes[] = {{"GET", "/events", "read"}, {"GET", "/repo/file", "read"}, {"GET", "/sessions/{id}", "read"}};
@@ -153,7 +153,13 @@ static void record_delete_then_add(void) {
     event("session.deleted", "{\"id\":\"a\"}");
     event("session", "{\"id\":\"c\",\"repo\":\"o/r\",\"status\":\"idle\"}");
     event("transcript", "{\"sessionId\":\"b\",\"event\":{\"seq\":1,\"kind\":\"cmd\",\"text\":\"kept\"}}");
-    pulse(300180); CHECK_INT(g_sleep.record_count, 2); CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "kept"); clear(&f);
+    pulse(300180); CHECK_INT(g_sleep.record_count, 2); CHECK_INT(g_sleep.wall.commands, 1); CHECK_STR(g_sleep.wall.ticker[0].text, "kept");
+    for (int k = 0; k < 140; k++) {
+        char *data = xstrfmt("{\"id\":\"archive%d\",\"repo\":\"o/r\",\"status\":\"closed\"}", k);
+        event("session", data); free(data);
+    }
+    event("transcript", "{\"sessionId\":\"b\",\"event\":{\"seq\":2,\"kind\":\"cmd\",\"text\":\"still live\"}}");
+    pulse(300260); CHECK_INT(g_sleep.record_count, 128); CHECK_INT(g_sleep.wall.commands, 2); CHECK_STR(g_sleep.wall.ticker[1].text, "still live"); clear(&f);
 }
 void app_sleep_tests(void) {
     test_run("sleep record deletion transfers ownership before reuse", record_delete_then_add);
