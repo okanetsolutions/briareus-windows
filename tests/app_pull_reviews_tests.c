@@ -247,7 +247,7 @@ static void inspector_selection_and_scroll(void) {
     const int widths[] = {1652, 390, 780};
     for (size_t n = 0; n < 3; n++) {
         theme_set_dpi(n == 2 ? 192 : 96);
-        RECT bounds = {0, 0, widths[n], 1009}; pane_set_bounds(f.pane, &bounds);
+        RECT bounds = {0, 0, widths[n], 800}; pane_set_bounds(f.pane, &bounds);
         draw(s, &d, widths[n]); CHECK_INT(d.content_width, d.width);
         CHECK_INT(d.region_count, n == 0 ? 2 : 1);
         // Every row remains reachable inside a bounded table; the inspector has its own region on wide panes.
@@ -285,7 +285,42 @@ static void inspector_selection_and_scroll(void) {
     draw(s, &d, 1652);
     CHECK(contains(&d, "Finding #105"));
     CHECK_INT(f.writes, 0);
-    doc_free(&d); free(fixture); json_free(payload); cleanup(&f, s);
+    s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 202, (POINT){0});
+    s->reviews.reveal_row = true; draw(s, &d, 390);
+    int old_scroll = d.regions[0].scroll; CHECK(old_scroll > 0);
+    Json *removed = (Json *)json_at(json_get(payload, "codeReviews"), 2);
+    json_object_set(removed, "findings", json_array());
+    char *updated = json_serialize(payload, false); f.read_response = updated;
+    screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); draw(s, &d, 390);
+    CHECK_INT(s->reviews.finding_id, 101); CHECK(d.regions[0].scroll < old_scroll);
+    doc_free(&d); free(updated); free(fixture); json_free(payload); cleanup(&f, s);
+}
+static void inspector_keyboard_page_visibility(void) {
+    ScreenFixture f; PullScreen *s = setup(&f);
+    Json *payload = pull_review_polish_fixture(); char *fixture = json_serialize(payload, false); f.read_response = fixture;
+    screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+    pane_set_root(f.pane, &s->base); poller_stop(&s->poller);
+    RECT bounds = {0, 0, 390, 800}; pane_set_bounds(f.pane, &bounds);
+    UpdateWindow(pane_hwnd(f.pane));
+    Doc *doc = pane_doc(f.pane); CHECK_INT(doc->region_count, 1);
+    pane_scroll_to(f.pane, doc_height(doc)); UpdateWindow(pane_hwnd(f.pane));
+    int before = pane_scroll_y(f.pane); CHECK(before > 0);
+    CHECK(s->base.vt->key(&s->base, VK_HOME, false, false)); UpdateWindow(pane_hwnd(f.pane));
+    CHECK(pane_scroll_y(f.pane) < before);
+    CHECK(doc->regions[0].view.top >= pane_scroll_y(f.pane) + doc->pin_bottom);
+    // Force a long stored report so PageDown must scroll the inspector, not the page.
+    Json *finding = (Json *)code_review_finding(code_review_find(s->reviews.items, 21), 101);
+    Str body; str_init(&body);
+    for (int i = 0; i < 50; i++) str_appendz(&body, "A synthetic paragraph with **evidence** and a [reference](https://example.com/synthetic).\n\n");
+    json_set_str(finding, "body", body.data); str_free(&body);
+    bounds.right = 1652; pane_set_bounds(f.pane, &bounds); pane_relayout(f.pane); UpdateWindow(pane_hwnd(f.pane));
+    CHECK_INT(doc->region_count, 2); CHECK(doc->regions[1].max > 0);
+    int table = doc->regions[0].scroll, page = pane_scroll_y(f.pane);
+    CHECK(s->base.vt->key(&s->base, VK_NEXT, false, false)); CHECK(doc->regions[1].scroll > 0);
+    CHECK_INT(doc->regions[0].scroll, table); CHECK_INT(pane_scroll_y(f.pane), page);
+    CHECK(s->base.vt->key(&s->base, VK_PRIOR, false, false)); CHECK_INT(doc->regions[1].scroll, 0);
+    CHECK_INT(s->reviews.finding_id, 101); CHECK_INT(f.writes, 0);
+    pane_set_root(f.pane, NULL); screen_fixture_clear(&f); json_free(payload); free(fixture);
 }
 static void usage_cells_and_totals(void) {
     CodeReviewAmount unknown = {0, 0, 2}, zero = {0, 2, 0}, partial = {1240, 1, 2};
@@ -294,7 +329,7 @@ static void usage_cells_and_totals(void) {
     CHECK_OWNED_STR(screen_pulls_review_amount(zero, true, false, 0), "$0.00");
     CHECK_OWNED_STR(screen_pulls_review_amount(partial, false, false, 0), "1.2k\npartial · 2 unknown");
     CodeReviewAmount price = {0.0042, 1, 1};
-    CHECK_OWNED_STR(screen_pulls_review_amount(price, true, true, 3), "<$0.01 estimated\npartial · 1 unknown\npartial · 3 unpriced turns");
+    CHECK_OWNED_STR(screen_pulls_review_amount(price, true, true, 3), "<$0.01 estimated\npartial · 1 unknown · 3 unpriced turns");
     ScreenFixture f; PullScreen *s = setup(&f);
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1); s->tab = PR_TAB_CODE_REVIEWS;
     Doc d; doc_init(&d); draw(s, &d, 1652);
@@ -306,6 +341,7 @@ static void usage_cells_and_totals(void) {
 }
 void app_pull_reviews_tests(void) {
     screen_fixture_prepare();
+    test_run("finding keyboard navigation reveals the table and pages the wide inspector independently", inspector_keyboard_page_visibility);
     test_run("review history shows usage columns and scoped totals with honest unknown and zero formatting", usage_cells_and_totals);
     test_run("review inspector retains independent tab selections and bounded scrolling across refresh and DPI", inspector_selection_and_scroll);
     test_run("cancelled initial review reads retain their deadline through hide and reveal", cancelled_initial_read_keeps_cadence);

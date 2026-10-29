@@ -55,5 +55,12 @@ void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c) {
     char *cost = screen_pulls_review_amount(t.cost, true, t.estimated, t.unpriced_turns);
     char *cells[] = {scope, "", "Latest 20 stored reviews", "Includes historical / dismissed", counts, input, output, cost};
     history_row(doc, table, cells, true, false, 0, NULL);
+    // Exact aggregate values stay available alongside abbreviated table cells.
+    for (size_t i = 0; i < 3; i++) {
+        CodeReviewAmount a = i == 0 ? t.input : i == 1 ? t.output : t.cost;
+        Item *item = doc_item(doc, (int)doc->count - 3 + (int)i);
+        free(item->tip);
+        item->tip = a.known ? xstrfmt("Known sum: %.6f · %zu unknown reviews", a.value, a.unknown) : xstrdup("Unknown");
+    }
     free(scope); free(counts); free(input); free(output); free(cost);
 }

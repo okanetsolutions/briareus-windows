@@ -24,6 +24,8 @@ int main(void) {
     if (getenv("PREVIEW_DPI")) theme_set_dpi(atoi(getenv("PREVIEW_DPI")));
     MoveWindow(f.parent, 0, 0, width, 1009, TRUE);
     RECT bounds = {0, 0, width, 1009}; pane_set_bounds(f.pane, &bounds);
+    UpdateWindow(pane_hwnd(f.pane));
+    if (getenv("PREVIEW_USAGE")) SendMessageW(pane_hwnd(f.pane), WM_MOUSEHWHEEL, MAKEWPARAM(0, 32760), 0);
     DWORD until = GetTickCount() + 12000;
     while (GetTickCount() < until) {
         MSG msg;

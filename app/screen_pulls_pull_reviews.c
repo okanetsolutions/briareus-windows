@@ -53,7 +53,7 @@ static void done(void *owner, Request *req) {
                     if (!code_review_id(f)) continue;
                     r->review_id = code_review_id(item); r->finding_id = code_review_id(f); break;
                 }
-                r->reset_inspector = true;
+                r->reset_inspector = true; r->reveal_row = true;
             }
         }
     }
@@ -88,6 +88,16 @@ bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     PullScreen *s = (PullScreen *)base;
     if (ctrl || shift) return false;
     if (s->tab != PR_TAB_FINDINGS && s->tab != PR_TAB_CODE_REVIEWS) return false;
+    if (s->tab == PR_TAB_FINDINGS && (vk == VK_PRIOR || vk == VK_NEXT)) {
+        Doc *doc = base->pane ? pane_doc(base->pane) : NULL;
+        if (!doc || doc->region_count < 2) return false;
+        DocRegion *detail = &doc->regions[1];
+        int step = detail->view.bottom - detail->view.top - px(32);
+        if (step < px(32)) step = px(32);
+        bool moved = doc_region_wheel(doc, detail->view.left, detail->view.top, vk == VK_NEXT ? step : -step);
+        if (moved) InvalidateRect(pane_hwnd(base->pane), NULL, FALSE);
+        return moved;
+    }
     if (vk != VK_UP && vk != VK_DOWN && vk != VK_HOME && vk != VK_END) return false;
     if (!screen_pulls_reviews_sync(s)) return false;
     bool findings = s->tab == PR_TAB_FINDINGS;
@@ -120,6 +130,16 @@ bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
     }
     s->reviews.reveal_row = true; s->reviews.reset_inspector = true;
     pane_relayout(base->pane);
+    if (findings && base->pane) {
+        Doc *doc = pane_doc(base->pane);
+        if (doc->region_count) {
+            RECT region = doc->regions[0].view, view = pane_content_rect(base->pane);
+            int scroll = pane_scroll_y(base->pane), target = scroll;
+            if (region.top < scroll + doc->pin_bottom) target = region.top - doc->pin_bottom;
+            else if (region.bottom > scroll + view.bottom - view.top) target = region.bottom - (view.bottom - view.top);
+            if (target != scroll) pane_scroll_to(base->pane, target);
+        }
+    }
     if (!findings && base->pane) {
         Doc d; doc_init(&d); doc_begin(&d, NULL, pane_content_width(base->pane)); base->vt->layout(base, &d);
         int scroll = pane_scroll_y(base->pane); RECT view = pane_content_rect(base->pane);

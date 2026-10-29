@@ -138,6 +138,10 @@ char *code_review_counts_compact(const Json *review) {
     Str text; str_init(&text); str_appendf(&text, "%zu finding%s", c.total, c.total == 1 ? "" : "s");
     const size_t values[] = {c.critical, c.high, c.medium, c.low, c.pending, c.no_verdict};
     const char *labels[] = {"critical", "high", "medium", "low", "pending", "no verdict"};
-    for (size_t i = 0; i < 6; i++) if (values[i]) str_appendf(&text, "\n%zu %s", values[i], labels[i]);
+    bool first = true;
+    for (size_t i = 0; i < 4; i++) if (values[i]) {
+        str_appendf(&text, "%s%zu %s", first ? "\n" : ", ", values[i], labels[i]); first = false;
+    }
+    for (size_t i = 4; i < 6; i++) if (values[i]) str_appendf(&text, "\n%zu %s", values[i], labels[i]);
     return str_detach(&text);
 }

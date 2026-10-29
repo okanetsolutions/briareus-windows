@@ -8,6 +8,9 @@ char *screen_pulls_review_amount(CodeReviewAmount amount, bool money, bool estim
     Str text; str_init(&text); str_appendz(&text, value); free(value);
     if (money && amount.known && estimated) str_appendz(&text, " estimated");
     if (amount.known && amount.unknown) str_appendf(&text, "\npartial · %zu unknown", amount.unknown);
-    if (unpriced) str_appendf(&text, "\n%s%zu unpriced turns", amount.known ? "partial · " : "", unpriced);
+    if (unpriced) {
+        const char *join = amount.known && amount.unknown ? " · " : amount.known ? "\npartial · " : "\n";
+        str_appendf(&text, "%s%zu unpriced turns", join, unpriced);
+    }
     return str_detach(&text);
 }

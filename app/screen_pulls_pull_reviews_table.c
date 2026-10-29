@@ -20,8 +20,10 @@ COLORREF screen_pulls_review_color(const char *text, bool severity) {
 void screen_pulls_review_badge(Doc *doc, int x, int w, const char *text, bool severity, COLORREF background) {
     BadgeSpec badge = {0, text, screen_pulls_review_color(text, severity), false};
     int i = doc_badges(doc, x, w, &badge, 1, background);
-    // Keep badge text available to document copying, find and assistive names.
-    doc_item(doc, i)->text = xstrfmt("%s: %s", severity ? "Severity" : "Verdict", text); doc_item(doc, i)->tip = xstrdup(doc_item(doc, i)->text);
+    // Keep descriptive names alongside the painted badge.
+    const char *label = severity ? "Severity" : "Verdict";
+    if (str_eq(text, "running") || str_eq(text, "completed") || str_eq(text, "failed")) label = "Status";
+    doc_item(doc, i)->text = xstrfmt("%s: %s", label, text); doc_item(doc, i)->tip = xstrdup(doc_item(doc, i)->text);
     doc_item(doc, i)->cell = true;
 }
 char *screen_pulls_review_date(const Json *r, const char *name) {
@@ -55,7 +57,7 @@ static void finding_row(PullScreen *s, Doc *doc, Col c, const Json *r, const Jso
     int title_h = measure_text(doc->cv, field(f, "title"), first - 2 * pad, FONT_FOOTNOTE_SEMIBOLD, DT_WORDBREAK);
     int max_title = 3 * font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD);
     if (title_h > max_title) title_h = max_title;
-    int h = title_h + px(58); if (h < px(88)) h = px(88);
+    int h = title_h + px(52); if (h < px(72)) h = px(72);
     bool selected = code_review_id(r) == s->reviews.review_id && code_review_id(f) == s->reviews.finding_id;
     int box = row_begin(doc, c, selected, ACT_REVIEW_FINDING, code_review_id(f));
     cell(doc, c.ix + pad, top + pad, first - 2 * pad, title_h, field(f, "title"), FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_WORDBREAK | DT_END_ELLIPSIS);

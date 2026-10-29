@@ -33,7 +33,7 @@ static void finding_details(PullScreen *s, Doc *doc, Col c, const Json *r, const
     const char *path = json_str(json_get(f, "filePath"));
     if (!str_empty(path)) {
         // The full source can be copied or inspected in the tooltip; line ranges never wrap mid-number.
-        int index = doc_text(doc, c.ix, c.iw, path, FONT_MONO_SMALL, theme.secondary, DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        int index = doc_text(doc, c.ix, c.iw, path, FONT_MONO_SMALL, theme.secondary, DT_WORDBREAK);
         doc_item(doc, index)->tip = code_review_location(f);
         double start, end;
         if (json_num(json_get(f, "startLine"), &start)) {
@@ -55,7 +55,7 @@ static void review_summary(PullScreen *s, Doc *doc, Col c, const Json *r) {
     CodeReviewTotals t = code_review_totals(r);
     char *price = screen_pulls_review_amount(t.cost, true, t.estimated, t.unpriced_turns);
     char *in = screen_pulls_review_amount(t.input, false, false, 0), *out = screen_pulls_review_amount(t.output, false, false, 0);
-    char *usage = xstrfmt("%s · %s in / %s out", price, in, out);
+    char *usage = xstrfmt("Cost: %s · %s in / %s out", price, in, out);
     int i = doc_text(doc, c.ix, c.iw, usage, FONT_CAPTION, theme.secondary, DT_WORDBREAK);
     doc_item(doc, i)->tip = code_review_usage(r);
     free(price); free(in); free(out); free(usage);

@@ -44,6 +44,7 @@ secondary review metadata. Full paths and titles remain copyable and available i
 Each tab retains its own stable selection across refreshes. Removed records select a
 remaining record; Up/Down and Home/End reveal the selected row with minimal scrolling.
 The Code reviews report remains below its table and includes every stored finding.
+PageUp/PageDown scroll the wide inspector; arrow keys continue to select rows.
 Native document text selection, Markdown links, code wrapping and copying apply.
 Narrow Code reviews panes scroll horizontally to preserve readable usage columns.
 
