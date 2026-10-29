@@ -404,11 +404,12 @@ static const BoardAction known_actions[] = {
 const BoardAction *board_actions_known(size_t *count) { *count = KNOWN_COUNT; return known_actions; }
 void board_action_free(BoardAction *a) {
     if (!a) return;
-    free(a->id); free(a->label); free(a->hint); free(a->input.label); free(a->input.placeholder);
+    free(a->binary); free(a->id); free(a->label); free(a->hint); free(a->input.label); free(a->input.placeholder);
     memset(a, 0, sizeof *a);
 }
 void board_action_copy(BoardAction *into, const BoardAction *from) {
     into->id = xstrdup(from->id); into->label = xstrdup(from->label); into->hint = xstrdup(from->hint ? from->hint : "");
+    into->binary = xstrdup(from->binary); into->advertised = from->advertised;
     into->has_input = from->has_input;
     into->input.label = from->has_input && from->input.label ? xstrdup(from->input.label) : NULL;
     into->input.placeholder = from->has_input && from->input.placeholder ? xstrdup(from->input.placeholder) : NULL;
@@ -416,15 +417,15 @@ void board_action_copy(BoardAction *into, const BoardAction *from) {
 }
 char *board_action_operation(const BoardAction *a) {
     if (str_eq(a->id, "run")) return xstrdup("serve_pull");
-    if (str_eq(a->id, "review")) return xstrdup("review");
+    if (str_eq(a->id, "review") && !a->advertised) return xstrdup("review");
     return xstrdup("action");
 }
 int board_action_timeout_ms(const BoardAction *a) { return str_eq(a->id, "run") ? 170000 : 0; }
 Json *board_action_arguments(const BoardAction *a, const char *repo, int number, const char *branch, const char *input) {
     Json *args = json_object();
     json_set_str(args, "repo", repo); json_set_num(args, "prNumber", number);
-    if (str_eq(a->id, "review") && branch) json_set_str(args, "branch", branch);
-    else if (!str_eq(a->id, "run") && !str_eq(a->id, "review")) json_set_str(args, "action", a->id);
+    if (str_eq(a->id, "review") && !a->advertised && branch) json_set_str(args, "branch", branch);
+    else if (!str_eq(a->id, "run") && (a->advertised || !str_eq(a->id, "review"))) json_set_str(args, "action", a->id);
     if (a->has_input && input) {
         char *trimmed = str_trim(input);
         if (*trimmed) json_set_str(args, "input", trimmed);
@@ -446,6 +447,7 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
         BoardAction *a = &served[k];
         memset(a, 0, sizeof *a);
         a->id = xstrdup(id); a->label = xstrdup(label);
+        a->binary = json_dup_str(json_get(entry, "binary")); a->advertised = true;
         a->hint = xstrdup(json_str_or(json_get(entry, "hint"), ""));
         const char *input_label = json_str(json_get(json_get(entry, "input"), "label"));
         if (input_label) {
@@ -469,7 +471,8 @@ BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull,
         else offered = true;
         if (!offered) continue;
         BoardAction *a = &out[n++];
-        a->id = xstrdup(k->id); a->label = xstrdup(k->label); a->hint = xstrdup(k->hint);
+        a->id = xstrdup(k->id); a->label = xstrdup(k->label); a->hint = xstrdup(s ? s->hint : k->hint);
+        a->binary = xstrdup(s ? s->binary : NULL); a->advertised = s != NULL;
         // The server words the question and adds errands this app predates.
         const BoardAction *input_source = s && s->has_input ? s : k;
         a->has_input = input_source->has_input;

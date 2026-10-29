@@ -158,7 +158,7 @@ static void rows_done(void *owner, Request *req) {
 
 static void actions_done(void *owner, Request *req) {
     PullScreen *s = owner;
-    if (!req->ok) return;
+    if (req->client != g_store.client || !store_supports(req->operation) || !req->ok) return;
     json_free(s->catalog); s->catalog = json_clone(json_get(req->result, "actions"));
     cache_store(g_store.cache, req->result, "actions");
     rebuild_actions(s);

@@ -27,6 +27,7 @@ static void refresh_done(void *owner, Request *req) {
     bool full = req->arg != 0;
     bool read = false;
     if (!req->ok) {
+        if (screen_conversation_review_removed(s, req)) return;
         request_error_into(&s->error, req);
         s->loaded = true;
         poller_finished(&s->poller, true, req->error.retry_after);
@@ -58,6 +59,7 @@ static void refresh_done(void *owner, Request *req) {
 }
 
 void screen_conversation_refresh(ConversationScreen *s, bool full) {
+    if (s->removed) return;
     // A poll already reading must not swallow a refresh, which waits its turn.
     if (s->loading) { if (full) s->pending_full = true; else s->pending_refresh = true; return; }
     // A read still queued (after a failed one, or one the hidden screen cancelled) is this one, not a second after it.
@@ -125,7 +127,7 @@ static void mutate_done(void *owner, Request *req) {
 }
 
 void screen_conversation_mutate(ConversationScreen *s, const char *name, Json *extra) {
-    if (s->busy || s->uncertain) { json_free(extra); return; }
+    if (s->busy || s->uncertain || s->removed) { json_free(extra); return; }
     s->busy = true; set_string(&s->write_error, NULL);
     Json *args = json_object();
     json_set_str(args, "sessionId", session_id(&s->initial));
@@ -199,7 +201,7 @@ static void conversation_visible(Screen *base, bool shown) {
         if (GetParent(s->composer) != pane_hwnd(base->pane)) SetParent(s->composer, pane_hwnd(base->pane));
         show_panel(s);
         pane_stick_to_bottom(base->pane, true); pane_show_bottom_button(base->pane, true);
-        poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(screen_conversation_session(s)) ? 2000 : 7000);
+        if (!s->removed) poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(screen_conversation_session(s)) ? 2000 : 7000);
         if (session_is_active(screen_conversation_session(s))) SetTimer(pane_hwnd(base->pane), TIMER_WORKING, 120, NULL);
         pane_scroll_to_bottom(base->pane);
     } else {
@@ -224,7 +226,7 @@ static void conversation_activated(Screen *base, bool active) {
     ConversationScreen *s = (ConversationScreen *)base;
     // Recording cannot go on in the background: what was said until then is transcribed, as if stopped.
     if (!active && s->voice && voice_state(s->voice) == VOICE_RECORDING) voice_stop(s->voice);
-    if (active) poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(screen_conversation_session(s)) ? 2000 : 7000);
+    if (active && !s->removed) poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(screen_conversation_session(s)) ? 2000 : 7000);
 }
 
 static bool conversation_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {

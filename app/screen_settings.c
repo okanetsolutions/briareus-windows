@@ -240,7 +240,7 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_DB_POOL] = { "dbPoolEnabled", K_BOOL, "Give each session a database server of its own" },
     [F_DB_RESTORE] = { "dbRestoreSql", K_TEXT, "Restore from .sql", "/home/you/dumps/my_app.sql",
         "A dump on this machine, piped into the database every time a server is claimed, right after it is created, before the setup steps run. Leave empty to skip. The servers themselves are added under Database pool in the sidebar.", 0, true },
-    [F_REVIEW_AUTHOR] = { "reviewAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
+    [F_REVIEW_AUTHOR] = { "prAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
     [F_BABYSIT] = { "babysitPrs", K_BOOL, "Babysit pull requests" },
@@ -265,7 +265,7 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
 };
 
 const RuntimeDef screen_settings_RUNTIMES[R_COUNT] = {
-    [R_REVIEW] = { "reviewProviderId", "reviewModel", "reviewEffort", NULL, "Pick a provider", "Provider" },
+    [R_REVIEW] = { "actionProviderId", "actionModel", "actionEffort", NULL, "Pick a provider", "Provider" },
     [R_TEST_SHEET] = { NULL, NULL, NULL, "testSheet", "Same as the code review", "Provider" },
     [R_TEST_RUN] = { NULL, NULL, NULL, "testRun", "Same as the code review", "Provider" },
     [R_WORKER] = { "workerProviderId", "workerModel", "workerEffort", NULL, "Same as the orchestrator", "Worker provider" },

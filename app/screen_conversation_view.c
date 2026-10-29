@@ -8,6 +8,7 @@ void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     ConversationScreen *s = (ConversationScreen *)base;
     int x = screen_conversation_column_x(doc->width), w = screen_conversation_column_w(doc->width);
     doc_space(doc, px(18));
+    if (s->removed) doc_notice_box(doc, x, w, "This review session is no longer available. Published output remains in the pull request comments.");
     if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
     if (s->write_error) {
         int box = doc_box_begin(doc, x, w, px(10), blend(theme.danger, theme.canvas, 0.15), theme.danger, px(8));
@@ -173,9 +174,10 @@ void screen_conversation_conversation_header(Screen *base, HeaderInfo *info) {
     char *sub = status_line(ss);
     snprintf(info->subtitle, sizeof info->subtitle, "%s", sub);
     free(sub);
-    if (store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
-    bool can = !s->busy && !s->uncertain;
+    if (!s->removed && store_supports("rename")) info->title_action = ACT_MENU_ITEM + MENU_RENAME;
+    bool can = !s->busy && !s->uncertain && !s->removed;
     bool closed = str_eq(session_status(ss), "closed");
+    if (s->removed) { header_button(info, 0xE8A7, "Pull request", ACT_MENU_ITEM + MENU_PULL, true, false); return; }
     if (store_supports("session_stats")) header_button(info, 0xE9D9, "Resources", ACT_MENU_ITEM + MENU_RESOURCES, true, false);
     if (browser_offered()) {
         bool running = false, on = browser_session_on(ss->raw, &running);

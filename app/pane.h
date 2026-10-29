@@ -93,6 +93,8 @@ void pane_pop(Pane *pane);
 void pane_pop_to_root(Pane *pane);
 /// Replaces the whole stack with one screen (NULL empties the pane).
 void pane_set_root(Pane *pane, Screen *screen);
+/// True only while this registered pane still owns the screen, including below its top.
+bool pane_contains_screen(Pane *pane, const Screen *screen);
 Screen *pane_top(Pane *pane);
 Screen *pane_root(Pane *pane);
 size_t pane_depth(Pane *pane);

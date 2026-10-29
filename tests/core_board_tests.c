@@ -1441,7 +1441,26 @@ static void test_assign_me_adds_or_takes_off_the_login(void) {
     t = json_serialize(out, false); CHECK_STR(t, "[\"nadin\"]"); free(t); json_free(out);
 }
 
+static void test_advertised_review_routes_as_action(void) {
+    Json *catalog = json_parsez("[{\"id\":\"review\",\"label\":\"Code review\",\"binary\":\"claude\",\"hint\":\"Current review\"}]");
+    size_t n; BoardAction *actions = board_actions_offered(catalog, NULL, 0, &n);
+    const BoardAction *review = NULL;
+    for (size_t i = 0; i < n; i++) if (str_eq(actions[i].id, "review")) review = &actions[i];
+    CHECK(review != NULL);
+    if (review) {
+        BoardAction copy; board_action_copy(&copy, review);
+        CHECK(copy.advertised); CHECK_STR(copy.binary, "claude"); CHECK_STR(copy.hint, "Current review");
+        CHECK_OWNED_STR(board_action_operation(&copy), "action");
+        Json *args = board_action_arguments(&copy, "o/r", 12, "ignored-branch", NULL);
+        CHECK_INT(json_count(args), 3); CHECK_STR(json_str(json_get(args, "action")), "review");
+        CHECK(json_is_null(json_get(args, "branch"))); CHECK_INT(json_int_or(json_get(args, "prNumber"), 0), 12);
+        json_free(args); board_action_free(&copy);
+    }
+    board_actions_free(actions, n); json_free(catalog);
+}
+
 void board_tests(void) {
+    test_run("advertised review uses actions and preserves binary", test_advertised_review_routes_as_action);
     test_run("labels read from an object or a bare name", test_labels_read_from_an_object_or_a_bare_name);
     test_run("label colours read as six hex digits", test_label_colours_read_as_six_hex_digits);
     test_run("board links need a number and default their title", test_board_links_need_a_number_and_default_their_title);

@@ -90,17 +90,18 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
     }
     case ACT_RELOAD: screen_pulls_pull_refresh(base); break;
     case ACT_START_ACTION: {
-        if ((size_t)arg >= s->action_count) break;
+        if ((size_t)arg >= s->action_count || s->busy || s->uncertain || s->dialog_open) break;
         // The list may be rebuilt while the prompt is up, so the errand is copied first.
         BoardAction a; board_action_copy(&a, &s->actions[arg]);
-        char *input = NULL;
+        char *input = NULL; RuntimeChoice runtime = {0};
         Pane *source_pane = base->pane; HWND source_window = pane_hwnd(source_pane);
         s->dialog_open = true;
-        bool ok = screen_pulls_action_prompt(base, s->project.repo, &a, s->number, &input);
-        bool current = IsWindow(source_window) && pane_top(source_pane) == base;
-        if (current) s->dialog_open = false;
-        if (ok && current) screen_pulls_start_action(s, &a, input);
-        free(input); board_action_free(&a);
+        bool ok = screen_pulls_action_prompt(base, s->project.repo, &a, s->number, &input, &runtime);
+        bool live = IsWindow(source_window) && pane_contains_screen(source_pane, base);
+        bool current = live && pane_top(source_pane) == base;
+        if (live) s->dialog_open = false;
+        if (ok && current) screen_pulls_start_action(s, &a, input, &runtime);
+        runtime_choice_free(&runtime); free(input); board_action_free(&a);
         break;
     }
     case ACT_SOLVE_FINDINGS: {
@@ -119,7 +120,7 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         bool ok = app_confirm(title, message, "Solve findings", false);
         s->dialog_open = false;
         free(title); free(message);
-        if (ok) screen_pulls_start_action(s, &a, NULL);
+        if (ok) screen_pulls_start_action(s, &a, NULL, NULL);
         board_action_free(&a);
         break;
     }

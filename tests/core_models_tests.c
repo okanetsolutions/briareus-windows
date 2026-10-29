@@ -956,7 +956,28 @@ static void test_project_babysit_optional_state(void) {
     }
 }
 
+static void test_runtime_binary_uses_identity_and_valid_defaults(void) {
+    Json *raw = json_parsez("{\"default\":{\"providerId\":1,\"model\":\"gpt\",\"effort\":\"high\"},\"providers\":["
+        "{\"id\":1,\"label\":\"Claude\",\"models\":[{\"id\":\"gpt\"}]},"
+        "{\"id\":2,\"label\":\"Custom login\",\"defaultModel\":\"opus\",\"models\":[{\"id\":\"opus\",\"efforts\":[\"low\",\"high\"],\"defaultEffort\":\"high\"}]},"
+        "{\"id\":3,\"label\":\"Claude unavailable\",\"binary\":\"claude\",\"available\":false,\"models\":[{\"id\":\"opus\"}]},"
+        "{\"id\":4,\"label\":\"Empty\",\"binary\":\"claude\",\"models\":[]}]}");
+    Json *providers = json_parsez("{\"providers\":[{\"id\":1,\"binary\":\"codex\"},{\"id\":2,\"binary\":\"claude\",\"available\":true}]}");
+    RuntimeCatalog c; CHECK(runtime_catalog_for_binary(raw, providers, "claude", &c));
+    CHECK_INT(c.provider_count, 1); CHECK(!c.has_default); CHECK_INT(c.providers[0].id, 2);
+    RuntimeChoice choice; CHECK(runtime_catalog_first_available(&c, &choice));
+    CHECK_STR(choice.model, "opus"); CHECK_STR(choice.effort, "high"); runtime_choice_free(&choice);
+    runtime_catalog_free(&c);
+    Json *def = (Json *)json_get(raw, "default"); json_set_num(def, "providerId", 2); json_set_str(def, "model", "opus");
+    CHECK(runtime_catalog_for_binary(raw, providers, "claude", &c)); CHECK(c.has_default); CHECK_STR(c.def.effort, "high");
+    Json *saved = runtime_catalog_json(&c); CHECK_STR(json_str(json_get(json_at(json_get(saved, "providers"), 0), "binary")), "claude");
+    json_free(saved); runtime_catalog_free(&c);
+    CHECK(runtime_catalog_for_binary(raw, NULL, "claude", &c)); CHECK_INT(c.provider_count, 0); CHECK(!c.has_default); runtime_catalog_free(&c);
+    json_free(raw); json_free(providers);
+}
+
 void models_tests(void) {
+    test_run("runtime CLI identity joins by id and keeps eligible defaults", test_runtime_binary_uses_identity_and_valid_defaults);
     test_run("project babysit capability, toggles and body preserve other fields", test_project_babysit_optional_state);
     test_run("device reads every field", test_device_reads_every_field);
     test_run("device rejects missing or mistyped fields", test_device_rejects_missing_or_mistyped_fields);
