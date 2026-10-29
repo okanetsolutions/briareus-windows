@@ -123,6 +123,27 @@ static void test_option_and_text_wire(void) {
     body = json_parsez(stub.body); CHECK_STR(json_str(json_get(body, "text")), "Typed fixture"); json_free(body);
     CHECK_STR(s->cards[index]->draft, ""); cleanup(&stub);
 }
+static void test_blank_reply_and_long_option(void) {
+    const char *label = "Apply the proposed changes to the preview and export, including the extended description, then keep the remaining work in separate pull requests. Preserve punctuation: ≥ 70%, max. 10.";
+    Json *payload = json_parsez(question);
+    Json *choice = json_object(); json_set_str(choice, "label", label);
+    Json *options = json_array(); json_array_push(options, choice);
+    Json *event = json_clone(json_at(json_get(payload, "events"), 0));
+    json_object_set(event, "options", options);
+    Json *events = json_array(); json_array_push(events, event); json_object_set(payload, "events", events);
+    char *answer = json_serialize(payload, false); json_free(payload);
+    Stub stub = {.answer = answer}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
+    StatusCard *c = s->cards[card(s, "wait")];
+    set_string(&c->draft, "  \t  ");
+    Doc doc; doc_init(&doc); draw(s, &doc);
+    for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != STATUS_SEND);
+    status_send(s, card(s, "wait"), c->draft); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 0);
+    doc_begin(&doc, NULL, 360); s->base.vt->layout(&s->base, &doc); doc_end(&doc);
+    intptr_t option = item_arg(&doc, STATUS_OPTION, label);
+    s->base.vt->action(&s->base, STATUS_OPTION, option, (POINT){0}); pump(5);
+    Json *body = json_parsez(stub.body); CHECK_STR(json_str(json_get(body, "text")), label); json_free(body);
+    doc_free(&doc); cleanup(&stub); free(answer);
+}
 static void test_permissions_and_changed_ask(void) {
     for (int i = 0; i < 2; i++) {
         Stub stub = {0}; StatusScreen *s = setup(&stub, i ? "manage" : "read", i ? 3 : 4); pump(3);
@@ -490,6 +511,7 @@ void app_status_tests(void) {
     pane_set_root(pane, status_screen_new()); pane_set_root(pane, NULL);
     Pane *warm = detached_open(status_screen_new(), NULL, false); CHECK(warm != NULL);
     if (warm) DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
+    test_run("Status blank replies stay disabled and long option values survive rendering", test_blank_reply_and_long_option);
     test_run("Status option/text sends use message contract and suppress duplicates", test_option_and_text_wire);
     test_run("Status respects catalog/token and rejects changed questions and stale actions", test_permissions_and_changed_ask);
     test_run("Status refreshes counts, isolates badges and rejects pre-paint stale actions", test_refresh_and_cached_questions);

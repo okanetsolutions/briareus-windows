@@ -42,9 +42,9 @@ static void reset_and_destroy(void) {
     ProjectSsh *p = project_ssh_new(NULL, &host, 700);
     f.read_response = old_rows; f.block_read = true;
     project_ssh_load(p); CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
-    Request *old = p->req; set_string(&p->query, "old"); ssh_server_folder_toggle(p->folded, "o/one", "");
+    Request *old = p->req; ssh_server_folder_toggle(p->folded, "o/one", "");
     g_store.device.id = "another-device"; servers_ssh_scope_changed(); CHECK(old->cancelled);
-    CHECK_INT(json_count(p->rows), 0); CHECK_STR(p->query, ""); CHECK_INT(json_count(p->folded), 0);
+    CHECK_INT(json_count(p->rows), 0); CHECK_INT(json_count(p->folded), 0);
     SetEvent(f.resume); screen_fixture_pump(&f, 1); CHECK_INT(json_count(p->rows), 0);
     // Same client, changed project scope must invalidate an in-flight list too.
     ResetEvent(f.entered); ResetEvent(f.resume); project_ssh_refresh(p);
@@ -107,21 +107,41 @@ static void navigation_gated(void) {
     doc_init(&doc); doc_begin(&doc, NULL, 400); screen_projects_sidebar_top(&doc, 400, NULL); doc_end(&doc);
     CHECK_INT(screen_fixture_find(&doc, "❯ SSH servers"), -1); doc_free(&doc); screen_fixture_clear(&f);
 }
-static void search_control_keys_and_reset(void) {
+static void sidebar_scroll_survives_resize(void) {
+    ScreenFixture f; screen_fixture_init(&f, routes, 1);
+    Screen host = {0}; screen_fixture_pane(&f, &host);
+    ProjectSsh *p = project_ssh_new(NULL, &host, 700); p->loaded = true;
+    for (int i = 0; i < 40; i++) {
+        Json *row = json_object(); json_set_num(row, "id", i); json_set_str(row, "repo", "o/one");
+        json_set_str(row, "label", "Synthetic server"); json_set_str(row, "host", "fake.example");
+        json_array_push(p->rows, row);
+    }
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 900); project_ssh_layout(p, &doc, 900); doc_end(&doc);
+    CHECK_INT(doc.region_count, 1); CHECK(doc.regions[0].max > 0);
+    CHECK(doc_region_wheel(&doc, 1, doc.regions[0].view.top + 1, 100000));
+    int scroll = doc.regions[0].scroll; CHECK(scroll > 0);
+    bool reached = false;
+    for (size_t i = 0; i < doc.count; i++) {
+        Item *it = &doc.items[i];
+        if (it->action == 700 + A_SERVER && it->arg == 39) {
+            CHECK(doc_hit(&doc, it->rc.left + 1, it->rc.top + 1) == (int)i); reached = true;
+        }
+    }
+    CHECK(reached);
+    doc_begin(&doc, NULL, 600); project_ssh_layout(p, &doc, 600); doc_end(&doc);
+    CHECK_INT(doc.regions[0].scroll, scroll);
+    doc_free(&doc); project_ssh_free(p); screen_fixture_clear(&f);
+}
+static void global_list_without_search(void) {
     ScreenFixture f; screen_fixture_init(&f, routes, 1); f.read_response = new_rows;
     Screen *s = ssh_servers_screen_new(); screen_fixture_pane(&f, s); pane_set_root(f.pane, s);
     screen_fixture_pump(&f, 1);
     Doc doc; doc_init(&doc); screen_fixture_draw(s, &doc);
     RECT content = pane_content_rect(f.pane); s->vt->place(s, &content, 0);
-    HWND edit = FindWindowExW(pane_hwnd(f.pane), NULL, L"EDIT", NULL); CHECK(edit != NULL);
-    SetFocus(edit); SetWindowTextW(edit, L"missing"); CHECK(GetWindowTextLengthW(edit) > 0);
-    SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE, 0); CHECK_INT(GetWindowTextLengthW(edit), 0);
-    CHECK(GetFocus() == pane_hwnd(f.pane));
-    SetFocus(edit); SendMessageW(edit, WM_KEYDOWN, VK_TAB, 0); CHECK(GetFocus() == pane_hwnd(f.pane));
-    SetFocus(edit); SendMessageW(edit, WM_KEYDOWN, VK_F5, 0); screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 2);
-    SetWindowTextW(edit, L"previous account"); g_store.device.id = "replacement";
-    screen_fixture_draw(s, &doc); CHECK_INT(GetWindowTextLengthW(edit), 0);
-    screen_fixture_pump(&f, 1);
+    CHECK(FindWindowExW(pane_hwnd(f.pane), NULL, L"EDIT", NULL) == NULL);
+    s->vt->refresh(s); screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 2);
+    g_store.device.id = "replacement";
+    screen_fixture_draw(s, &doc); screen_fixture_pump(&f, 1);
     doc_free(&doc); screen_fixture_clear(&f);
 }
 void app_ssh_servers_tests(void) {
@@ -134,6 +154,7 @@ void app_ssh_servers_tests(void) {
     test_run("SSH Settings and refresh supersede blocked reads", refresh_race);
     test_run("SSH auth and project resets cancel stale reads and destruction releases ownership", reset_and_destroy);
     test_run("SSH global and project views reuse sessions and preserve cycling and reconnect", sessions_shared);
-    test_run("SSH native search handles Escape, Tab, refresh and auth scope reset", search_control_keys_and_reset);
+    test_run("SSH sidebar reaches the last server and retains scroll on resize", sidebar_scroll_survives_resize);
+    test_run("SSH global page refreshes and resets without a search control", global_list_without_search);
     test_run("SSH global navigation uses admin capability gating", navigation_gated);
 }

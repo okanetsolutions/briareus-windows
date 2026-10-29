@@ -5,12 +5,12 @@
 
 // MARK: - Layout
 
-typedef struct { char *name, *target; int sessions; bool live, enabled; } ServerRowData;
+typedef struct { char *name, *target; int sessions; bool live, enabled, selected; } ServerRowData;
 static void server_row_free(void *v) { ServerRowData *d = v; free(d->name); free(d->target); free(d); }
 static void paint_server(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     ServerRowData *d = it->data;
-    if (doc_item_hovered(doc, it)) fill_round_rect(cv, rc, px(6), theme.raise, theme.raise);
-    int x = rc->left + px(6), top = rc->top + px(5);
+    if (d->selected || doc_item_hovered(doc, it)) fill_round_rect(cv, rc, px(7), theme.raise, d->selected ? theme.accent_dim : theme.raise);
+    int x = rc->left + px(6), top = rc->top + px(9);
     RECT icon = { x, rc->top, x + px(20), rc->bottom };
     draw_glyph(cv, 0xE7F4, &icon, FONT_ICON_SMALL, d->live ? theme.accent : theme.secondary);
     int right = rc->right - px(8);
@@ -27,7 +27,7 @@ static void paint_server(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     RECT t = { tx, top, right, top + px(20) };
     draw_text(cv, d->name, &t, FONT_SUBHEADLINE, d->enabled ? theme.ink : theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT sub = { tx, top + px(20), right, top + px(36) };
-    draw_text(cv, d->target, &sub, FONT_CAPTION2, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    draw_text(cv, d->target, &sub, FONT_CAPTION, theme.secondary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 static void paint_rule(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { (void)doc; (void)it; fill_rect(cv, rc, theme.line); }
@@ -61,8 +61,10 @@ void project_ssh_layout_server(ProjectSsh *p, Doc *doc, int x, int w, size_t i) 
     char *key = ssh_server_key(row);
     d->sessions = (int)term_count_for(key);
     for (size_t t = 0; t < term_count(); t++) if (str_eq(term_key(term_at(t)), key) && term_running(term_at(t))) d->live = true;
+    Term *shown = project_ssh_shown_term(p);
+    d->selected = shown && str_eq(term_key(shown), key);
     free(key);
-    doc_custom(doc, x, w, px(46), paint_server, d, server_row_free, p->base + A_SERVER, (intptr_t)i);
+    doc_custom(doc, x, w, px(58), paint_server, d, server_row_free, p->base + A_SERVER, (intptr_t)i);
 }
 
 /// The servers down the left, each with its name, user@host:port and its open sessions.
@@ -87,8 +89,9 @@ static void layout_tabs(ProjectSsh *p, Doc *doc, int x0, int w) {
         TabData *d = xcalloc(1, sizeof *d);
         d->label = project_ssh_tab_label(p, t); d->active = t == shown; d->live = term_running(t);
         int tw = text_width(doc->cv, d->label, FONT_CAPTION_SEMIBOLD) + px(10 + 12 + TAB_CLOSE_W + 6);
+        if (tw > w) tw = w;
         if (tw > px(240)) tw = px(240);
-        if (tw < px(110)) tw = px(110);
+        if (tw < px(110) && w >= px(110)) tw = px(110);
         if (x > x0 && x + tw > x0 + w) { x = x0; y += h + gap; }
         RECT tr = { x, y, x + tw, y + h };
         Item *it = doc_item(doc, doc_add(doc, &tr, paint_tab));
@@ -112,10 +115,12 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
     RECT view = pane_content_rect(p->host->pane);
     int top = doc->y, bottom = top + (view.bottom - view.top) - top - px(14);
     if (bottom < top + px(240)) bottom = top + px(240);
-    int lw = px(LIST_W);
-    if (lw > w / 3) lw = w / 3;
-    layout_list(p, doc, 0, lw);
-    int list_bottom = doc->y;
+    int lw = p->global ? px(320) : px(LIST_W);
+    if (lw > w * 2 / 5) lw = w * 2 / 5;
+    int first = (int)doc->count;
+    layout_list(p, doc, 0, lw - px(10));
+    RECT list_view = { 0, top, lw, bottom };
+    doc_region(doc, first, (int)doc->count, &list_view, doc->y);
     // A rule between the list and the sessions.
     RECT rule = { lw + px(8), top, lw + px(9), bottom };
     doc_add(doc, &rule, paint_rule);
@@ -131,7 +136,7 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
         doc_space(doc, px(8));
         SetRect(&p->term_rc, rx, doc->y, w, bottom);
     }
-    doc->y = bottom > list_bottom ? bottom : list_bottom;
+    doc->y = bottom;
 }
 
 void project_ssh_header(ProjectSsh *p, HeaderInfo *info) {

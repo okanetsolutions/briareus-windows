@@ -11,29 +11,51 @@ static size_t card_index(StatusScreen *s, const Session *session) {
 }
 static void heading(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
     StatusCard *c = s->cards[index]; const Session *session = &c->session;
-    int i = doc_text(doc, x, w, session_display_title(session), FONT_SUBHEADLINE, theme.ink, DT_SINGLELINE | DT_END_ELLIPSIS);
+    int i = doc_text(doc, x, w, session_display_title(session), FONT_HEADLINE, theme.ink, DT_WORDBREAK);
     Item *it = doc_item(doc, i); it->action = STATUS_OPEN; it->arg = status_action_add(s, index, -1); it->hand = true;
     char *detail = xstrfmt("%s · %s", session_repo(session), session_state_label(session_state(session)));
     doc_text(doc, x, w, detail, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(detail);
 }
+// Options are immediate answers, like the conversation's existing option actions.
+static void paint_option(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    bool hover = it->action && doc_item_hovered(doc, it);
+    bool pressed = it->action && doc->pressed >= 0 && &doc->items[doc->pressed] == it;
+    COLORREF fill = pressed ? blend(theme.accent, theme.raise, 0.2) : theme.canvas;
+    fill_round_rect(cv, rc, px(7), fill, hover || pressed ? theme.accent : theme.line);
+    RECT text = *rc; InflateRect(&text, -px(12), -px(10));
+    draw_text(cv, it->text, &text, FONT_BODY, it->action ? theme.ink : theme.muted, DT_LEFT | DT_WORDBREAK);
+}
+static void option_button(StatusScreen *s, Doc *doc, int x, int w, const char *label, size_t index, int option, bool can) {
+    int h = measure_text(doc->cv, label, w - px(24), FONT_BODY, DT_WORDBREAK) + px(20);
+    int i = doc_custom(doc, x, w, h, paint_option, NULL, NULL, can ? STATUS_OPTION : 0, status_action_add(s, index, option));
+    doc_item(doc, i)->text = xstrdup(label);
+    doc_space(doc, px(6));
+}
 static void waiting(StatusScreen *s, Doc *doc, size_t index, int w) {
     StatusCard *c = s->cards[index];
-    int pad = px(12), box = doc_box_begin(doc, 0, w, pad, theme.raise, theme.line, px(12));
+    int pad = px(16), box = doc_box_begin(doc, 0, w, pad, theme.raise, theme.line, px(12));
     int iw = w - pad * 2; heading(s, doc, index, pad, iw); doc_space(doc, px(8));
     const Event *question = session_state(&c->session) == SESSION_WAITING ? transcript_pending_question(&c->transcript) : NULL;
     const char *text = question ? question->question ? question->question : question->text : json_str(json_get(c->session.raw, "lastText"));
-    if (text) doc_text(doc, pad, iw, text, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (text) doc_text(doc, pad, iw, text, FONT_BODY, theme.ink, DT_WORDBREAK);
+    doc_space(doc, px(12));
     if (session_state(&c->session) == SESSION_FINDINGS) {
-        doc_button(doc, pad, iw, "Decide findings →", BUTTON_BORDERED, STATUS_OPEN, status_action_add(s, index, -1), true);
+        doc_button(doc, pad, 0, "Decide findings →", BUTTON_BORDERED, STATUS_OPEN, status_action_add(s, index, -1), true);
     } else if (store_supports("message") && question) {
         bool can = status_can_answer(s, c);
         for (size_t i = 0; i < json_count(question->options); i++) {
             const char *label = json_str_nonempty(json_get(json_at(question->options, i), "label"));
-            if (label) doc_button(doc, pad, iw, label, BUTTON_BORDERED, STATUS_OPTION, status_action_add(s, index, (int)i), can);
+            if (label) option_button(s, doc, pad, iw, label, index, (int)i, can);
         }
-        c->laid = true; c->rect = (RECT){ pad, doc->y, pad + iw, doc->y + px(36) }; doc_space(doc, px(40));
+        doc_space(doc, px(6));
+        doc_field_label(doc, pad, iw, "Reply", theme.secondary, NULL);
+        int editor = doc_box_begin(doc, pad, iw, px(8), theme.raise, theme.secondary, px(7));
+        c->laid = true; c->rect = (RECT){ pad + px(8), doc->y, pad + iw - px(8), doc->y + px(28) };
+        doc_space(doc, px(28)); doc_box_end(doc, editor, px(8)); doc_space(doc, px(10));
         c->reply_action = status_action_add(s, index, -1);
-        doc_button(doc, pad, iw, "Send reply", BUTTON_PROMINENT, STATUS_SEND, c->reply_action, can && !str_empty(c->draft));
+        char *trim = str_trim(c->draft ? c->draft : "");
+        bool ready = can && *trim; free(trim);
+        doc_button(doc, pad, 0, "Send reply", ready ? BUTTON_PROMINENT : BUTTON_BORDERED, STATUS_SEND, c->reply_action, ready);
     }
     if (c->read_error) doc_notice(doc, pad, iw, c->read_error);
     if (c->error) doc_notice(doc, pad, iw, c->error);
@@ -45,6 +67,7 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int w) {
 }
 void status_layout(Screen *base, Doc *doc) {
     StatusScreen *s = (StatusScreen *)base; int w = doc->width;
+    if (w > px(840)) w = px(840);
     s->action_first = s->action_next; s->action_count = 0;
     for (size_t i = 0; i < s->card_count; i++) s->cards[i]->laid = false;
     if (!status_current(s)) { doc_notice(doc, 0, w, "The connection changed. Reopen Status on the current server."); return; }
@@ -61,7 +84,10 @@ void status_layout(Screen *base, Doc *doc) {
     if (s->overview.working_count) doc_section(doc, 0, w, "Working");
     for (size_t i = 0; i < s->overview.working_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.working[i]]);
-        if (index < s->card_count) { heading(s, doc, index, 0, w); doc_space(doc, px(10)); }
+        if (index < s->card_count) {
+            int box = doc_box_begin(doc, 0, w, px(14), theme.raise, theme.line, px(10));
+            heading(s, doc, index, px(14), w - px(28)); doc_box_end(doc, box, px(14)); doc_space(doc, px(8));
+        }
     }
     if (s->loaded && !s->error && !s->missing && !s->overview.waiting_count && !s->overview.working_count) doc_text(doc, 0, w, "All quiet. Nothing is running and nothing waits for you.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
 }
