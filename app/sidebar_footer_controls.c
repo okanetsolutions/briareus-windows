@@ -5,7 +5,7 @@
 static const int actions[] = { ACT_SSH, ACT_SETTINGS, ACT_SIGN_OUT };
 static const wchar_t *names[] = { L"SSH servers", L"Settings", L"Sign out" };
 static const wchar_t *tips[] = { L"SSH servers (Ctrl+Shift+H)", L"Settings", L"Sign out" };
-static const wchar_t glyphs[] = { 0xE756, 0xE713, 0xE8AC };
+static const wchar_t glyphs[] = { 0xE756, 0xE713, FOOT_SIGN_OUT_GLYPH };
 
 static LRESULT CALLBACK button_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     FooterRects *f = (FooterRects *)ref;

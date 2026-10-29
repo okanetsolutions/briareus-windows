@@ -237,7 +237,7 @@ void screen_projects_sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRect
     fill_round_rect(cv, &g, px(7), theme.raise, theme.line);
     draw_text(cv, "\xE2\x9A\x99", &g, FONT_EMOJI, theme.ink, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     fill_round_rect(cv, &c, px(7), theme.raise, theme.line);
-    draw_glyph(cv, 0xE8AC, &c, FONT_ICON_SMALL, theme.ink);
+    draw_glyph(cv, FOOT_SIGN_OUT_GLYPH, &c, FONT_ICON_SMALL, theme.ink);
     InflateRect(&a, px(4), 0);
     out->select_rc = a; out->ssh_rc = ssh; out->settings_rc = g; out->signout_rc = c;
 }

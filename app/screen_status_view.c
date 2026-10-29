@@ -148,7 +148,7 @@ static LRESULT CALLBACK reply_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UI
 }
 static void ensure_edit(StatusScreen *s, StatusCard *c) {
     if (c->edit) return;
-    c->label = CreateWindowExW(0, L"STATIC", L"Your &reply", WS_CHILD | SS_LEFT, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
+    c->label = CreateWindowExW(0, L"STATIC", L"Your reply", WS_CHILD | SS_LEFT, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
     theme_apply_control(c->label);
     c->edit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
     SetWindowSubclass(c->edit, reply_proc, 0, (DWORD_PTR)s);
