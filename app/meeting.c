@@ -631,7 +631,6 @@ void meeting_shutdown(void) { if (M.state != MEETING_OFF) finish(NULL); }
 MeetingState meeting_state(void) { return M.state; }
 bool meeting_for(const char *repo) { return M.state != MEETING_OFF && str_eq(M.repo, repo); }
 void meeting_set_muted(bool muted) { M.muted = muted; if (M.audio) meet_audio_set_muted(M.audio, muted); changed(); }
-bool meeting_muted(void) { return M.muted; }
 void meeting_answer_now(void) { if (M.state == MEETING_LIVE) send_owned(meet_answer_now_event()); }
 
 char *meeting_status(void) {

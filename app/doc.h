@@ -86,8 +86,6 @@ typedef struct { size_t start, len; COLORREF color; } DocSpan;
 int doc_code_line(Doc *doc, const RECT *rc, const char *text, size_t len, const DocSpan *spans, size_t count, FontId f, int advance);
 /// Inline Markdown (bold, code, links) wrapped in `w`; advances. Links open on click.
 int doc_rich(Doc *doc, int x, int w, const char *inline_markdown, FontId base, COLORREF color);
-/// The height inline Markdown would take, without adding it.
-int doc_rich_height(Doc *doc, int w, const char *inline_markdown, FontId base);
 /// Block Markdown: paragraphs, headings, bullets, quotes, code with a copy button, rules; advances.
 void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base);
 /// A rounded box opened at the cursor and closed once its content is laid out; `pad` is inside it.
@@ -168,8 +166,6 @@ int doc_hit(Doc *doc, int x, int y);
 const char *doc_link_at(Doc *doc, int index, int x, int y);
 /// Plain text of an item, for copying; NULL when it has none.
 char *doc_item_plain_text(Doc *doc, int index);
-/// The first item with this id, or -1.
-int doc_find(Doc *doc, int id);
 
 /// Case-insensitive find in the rendered text (including Markdown and code); an empty query clears it.
 /// Matches and the current position survive layouts, independently of the mouse selection.

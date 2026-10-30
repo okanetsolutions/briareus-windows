@@ -259,12 +259,6 @@ int doc_rich(Doc *doc, int x, int w, const char *markdown, FontId base, COLORREF
     doc->y += r->height;
     return i;
 }
-int doc_rich_height(Doc *doc, int w, const char *markdown, FontId base) {
-    Rich *r = rich_layout(doc->cv, markdown ? markdown : "", w, base, theme.text, false, px(4), ALIGN_LEFT, 0);
-    int h = r->height;
-    rich_free(r);
-    return h;
-}
 const char *doc_link_at(Doc *doc, int index, int x, int y) {
     Item *it = doc_item(doc, index);
     if (!it || it->paint != paint_rich) return NULL;
@@ -1140,10 +1134,6 @@ char *doc_item_plain_text(Doc *doc, int index) {
     if (it->sel) return wide_to_utf8(it->sel->plain);
     if (!it->text) return NULL;
     return it->paint == paint_rich ? md_plain(it->text) : xstrdup(it->text);
-}
-int doc_find(Doc *doc, int id) {
-    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].id == id) return (int)i;
-    return -1;
 }
 
 // MARK: - Find

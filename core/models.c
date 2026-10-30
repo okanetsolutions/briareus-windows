@@ -636,14 +636,6 @@ void pull_file_free(PullFile *f) {
     memset(f, 0, sizeof *f);
 }
 void pull_file_copy(PullFile *into, const PullFile *from) { Json *j = pull_file_json(from); pull_file_parse(j, into); json_free(j); }
-const char *pull_file_name(const PullFile *f) {
-    const char *slash = strrchr(f->filename, '/');
-    return slash && slash[1] ? slash + 1 : (slash ? f->filename : f->filename);
-}
-char *pull_file_directory(const PullFile *f) {
-    const char *slash = strrchr(f->filename, '/');
-    return slash ? xstrndup(f->filename, (size_t)(slash - f->filename)) : xstrdup("");
-}
 
 static DEFINE_LIST_PARSE(PullFile, file_list_parse, pull_file_parse)
 static bool parse_files(const Json *list, PullFile **out, size_t *count) {

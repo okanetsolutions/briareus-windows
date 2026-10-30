@@ -214,4 +214,3 @@ const screen_pulls_conv_feeds_type screen_pulls_conv_feeds[CONV_FEEDS] = {
     { "pull_comments", "comments" }, { "pull_reviews", "reviews" }, { "pull_review_comments", "reviewComments" },
 };
 
-const char *const screen_pulls_decision_ids[] = { "", "fix", "optional", "dismissed" };

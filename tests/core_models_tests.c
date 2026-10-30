@@ -790,20 +790,6 @@ static void test_pull_file_reads_and_round_trips(void) {
     const char *bad[] = { "{}", "{\"filename\":3}", "{\"filename\":null}", "\"a\"" };
     for (size_t i = 0; i < 4; i++) { j = json_parsez(bad[i]); CHECK(!pull_file_parse(j, &f)); CHECK(f.filename == NULL); json_free(j); }
 }
-static void test_pull_file_name_and_directory(void) {
-    struct { const char *path, *name, *dir; } cases[] = {
-        { "README.md", "README.md", "" },
-        { "src/a.c", "a.c", "src" },
-        { "a/b/c/d.txt", "d.txt", "a/b/c" },
-        { "/rooted", "rooted", "" },
-        { ".github/workflows/ci.yml", "ci.yml", ".github/workflows" },
-    };
-    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        PullFile f = { 0 }; f.filename = (char *)cases[i].path;
-        CHECK_STR(pull_file_name(&f), cases[i].name);
-        CHECK_OWNED_STR(pull_file_directory(&f), cases[i].dir);
-    }
-}
 static void test_pull_files_page_reads_paging_and_rejects_without_files(void) {
     Json *j = json_parsez("{\"pr\":{\"headSha\":\"h\"},\"files\":[{\"filename\":\"a\"},{\"nope\":1},{\"filename\":\"b\"}],\"nextPage\":3,\"truncated\":true}");
     PullFilesPage p; CHECK(pull_files_page_parse(j, &p));
@@ -1030,7 +1016,6 @@ void models_tests(void) {
     test_run("runtime offered keeps only what the catalog still has", test_runtime_offered_keeps_only_what_the_catalog_still_has);
     test_run("runtime choice saves and reads back", test_runtime_choice_saves_and_reads_back);
     test_run("pull file reads and round trips", test_pull_file_reads_and_round_trips);
-    test_run("pull file name and directory", test_pull_file_name_and_directory);
     test_run("pull files page reads paging and rejects without files", test_pull_files_page_reads_paging_and_rejects_without_files);
     test_run("pull file list starts on page one and round trips", test_pull_file_list_starts_on_page_one_and_round_trips);
     test_run("pull file list arguments pin later pages", test_pull_file_list_arguments_pin_later_pages);

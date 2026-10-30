@@ -19,8 +19,6 @@ static void paint_stack_base(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 static void flow_push(FlowData *d, const char *text, size_t n, FontId font, COLORREF color, bool chip);
 static void paint_flow(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 
-bool screen_pulls_finding_open(PullScreen *s, int i) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == i) return true; return false; }
-
 void screen_pulls_paint_counts(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     CountsData *d = it->data;
     int x = rc->left;
@@ -39,8 +37,6 @@ int screen_pulls_section_box(Doc *doc, int w) { int b = doc_box_begin(doc, 0, w,
 Col screen_pulls_col_make(int x, int w) { Col c = { x, w, x + px(12), w - px(24) }; return c; }
 
 int screen_pulls_col_box(Doc *doc, Col c) { int b = doc_box_begin(doc, c.x, c.w, px(12), theme.raise, theme.line, px(8)); doc_item(doc, b)->hover_fill = false; return b; }
-
-void screen_pulls_col_gap(Doc *doc, Col c) { doc_space(doc, px(6)); doc_rule(doc, c.ix, c.iw); doc_space(doc, px(6)); }
 
 static void pill_free(void *p) { PillData *d = p; free(d->text); free(d); }
 

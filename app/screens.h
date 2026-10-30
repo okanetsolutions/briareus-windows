@@ -424,8 +424,6 @@ char *session_subtitle(const Session *session);
 /// A session row: status dot, title and subtitle, clickable. `trailing` keeps that much room at the right for an item laid
 /// over the row (a delete button). Advances the doc; returns the row's box.
 int doc_session_row(Doc *doc, int x, int w, const Session *session, int action, intptr_t arg, bool selected, COLORREF background, int trailing);
-/// A pull request's badges (conflicts, checks, stack, review, draft) as BadgeSpecs. Returns count.
-size_t pull_badges(const PullSummary *pull, const StackPosition *stack, BadgeSpec *out, size_t cap, char *stack_text, size_t stack_text_len);
 /// Adds label chips for GitHub labels. Returns nothing; advances when there are labels.
 void doc_label_chips(Doc *doc, int x, int w, const PullLabel *labels, size_t count, COLORREF background);
 /// "@a, @b +2"
@@ -445,13 +443,9 @@ void doc_epic_progress(Doc *doc, int x, int w, const IssueSummary *issue);
 /// A GitHub label's colour for the chips, or the secondary colour.
 COLORREF label_color(const PullLabel *label);
 wchar_t review_glyph(ReviewStatus status, COLORREF *color);
-/// The glyph a tool event shows, from its name.
-wchar_t tool_glyph(const char *kind, const char *name, bool is_error);
 /// One tab of a `tabnav` row: a glyph, a title and an optional count, the open one underlined in the accent. Tabs run
 /// left to right from `*x`, wrapping to a new line of height `h` past `right`; `*x` and `*y` follow. The open tab is not
 /// clickable.
 void doc_tab(Doc *doc, int *x, int *y, int left, int right, int h, wchar_t glyph, const char *title, const char *count, bool active, int action, intptr_t arg);
-/// "Never" for 0.
-int content_left(Pane *pane);
 
 #endif

@@ -48,20 +48,6 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         open_web_url(json_str(json_get(json_at(feed, (size_t)(arg & 0xFFFFFF)), "url")));
         break;
     }
-    case ACT_FINDING_TOGGLE: {
-        bool open = screen_pulls_finding_open(s, (int)arg);
-        if (open) { for (size_t k = 0; k < s->open_finding_count; k++) if (s->open_findings[k] == (int)arg) { s->open_findings[k] = s->open_findings[--s->open_finding_count]; break; } }
-        else { s->open_findings = xrealloc(s->open_findings, (s->open_finding_count + 1) * sizeof *s->open_findings); s->open_findings[s->open_finding_count++] = (int)arg; }
-        pane_relayout(base->pane);
-        break;
-    }
-    case ACT_FINDING_DECISION: {
-        size_t index = (size_t)(arg / 8); int d = (int)(arg % 8);
-        const char *key = json_str(json_get(json_at(s->findings, index), "key"));
-        if (key && d >= 0 && d < 4) screen_pulls_decide(s, key, d == 0 ? NULL : screen_pulls_decision_ids[d]);
-        break;
-    }
-    case ACT_FINDING_URL: open_web_url(json_str(json_get(json_at(s->findings, (size_t)arg), "url"))); break;
     case ACT_ISSUE_URL: {
         // An issue of this repository opens here, which reads the rest itself; any other on GitHub.
         const PullSummary *row = screen_pulls_board_row(s);
@@ -116,26 +102,6 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         if (live) s->dialog_open = false;
         if (ok && current) screen_pulls_start_action(s, &a, input, &runtime);
         runtime_choice_free(&runtime); free(input); board_action_free(&a);
-        break;
-    }
-    case ACT_SOLVE_FINDINGS: {
-        if (!screen_pulls_solve_findings_offered(s) || s->busy || s->uncertain || s->deciding) break;
-        // The errand as the server words it when it is on offer, else as this app knows it.
-        const BoardAction *src = NULL;
-        for (size_t i = 0; i < s->action_count && !src; i++) if (str_eq(s->actions[i].id, "implement-feedback")) src = &s->actions[i];
-        if (!src) { size_t kn; const BoardAction *known = board_actions_known(&kn); for (size_t i = 0; i < kn && !src; i++) if (str_eq(known[i].id, "implement-feedback")) src = &known[i]; }
-        if (!src) break;
-        BoardAction a; board_action_copy(&a, src);
-        size_t fixes = screen_pulls_findings_to_fix(s), open = screen_pulls_findings_unfixed(s);
-        char *title = fixes ? xstrfmt("Start a paid fix session for %zu finding%s?", fixes, fixes == 1 ? "" : "s")
-                            : xstrfmt("Start a paid fix session for %zu open finding%s?", open, open == 1 ? "" : "s");
-        char *message = xstrfmt("The agent addresses the findings on PR #%d, pushes the fixes to its branch and has them reviewed again. Uses the provider and model configured for this project.", s->number);
-        s->dialog_open = true;
-        bool ok = app_confirm(title, message, "Solve findings", false);
-        s->dialog_open = false;
-        free(title); free(message);
-        if (ok) screen_pulls_start_action(s, &a, NULL, NULL);
-        board_action_free(&a);
         break;
     }
     case ACT_DELETE_SERVED: {

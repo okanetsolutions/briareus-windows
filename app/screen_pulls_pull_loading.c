@@ -17,7 +17,6 @@ void screen_pulls_save_pull(PullScreen *s) {
     if (json_is_null(s->pr)) return;
     Json *saved = json_object();
     json_object_set(saved, "pr", json_clone(s->pr));
-    json_object_set(saved, "findings", json_clone(s->findings));
     const PullSummary *row = screen_pulls_board_row(s);
     json_object_set(saved, "row", row ? json_clone(row->raw) : json_null());
     json_object_set(saved, "stack", s->has_stack ? stack_position_json(&s->stack) : json_null());
@@ -43,7 +42,7 @@ static void rebuild_actions(PullScreen *s) {
 }
 
 static void pull_finish_poll(PullScreen *s) {
-    if (s->req_pull || s->req_findings) return;
+    if (s->req_pull) return;
     rebuild_actions(s);
     screen_pulls_save_pull(s);
     poller_finished(&s->poller, s->error != NULL, -1);
@@ -173,7 +172,6 @@ void screen_pulls_pull_load(PullScreen *s) {
         Json *saved = cache_value(g_store.cache, key);
         if (saved) {
             json_free(s->pr); s->pr = json_clone(json_get(saved, "pr"));
-            json_free(s->findings); s->findings = json_clone(json_get(saved, "findings"));
             if (!s->body && json_str(json_get(saved, "body"))) set_string(&s->body, json_str(json_get(saved, "body")));
             if (!s->body_author && json_str(json_get(saved, "bodyAuthor"))) set_string(&s->body_author, json_str(json_get(saved, "bodyAuthor")));
             if (!s->has_row) { PullSummary row; if (pull_summary_parse(json_get(saved, "row"), &row)) { s->row = row; s->has_row = true; } }

@@ -4,7 +4,6 @@ static void start_done(void *owner, Request *req);
 static void merge_done(void *owner, Request *req);
 static void edit_done(void *owner, Request *req);
 static void update_branch_done(void *owner, Request *req);
-static void decide_done(void *owner, Request *req);
 
 static void start_done(void *owner, Request *req) {
     PullScreen *s = owner;
@@ -124,23 +123,5 @@ void screen_pulls_update_branch(PullScreen *s) {
     json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);
     json_set_str(args, "headSha", head); json_set_str(args, "baseRef", base_ref);
     store_call("update_pull_branch", args, 0, s, update_branch_done, TAG_UPDATE_BRANCH, &s->req_update_branch);
-    pane_relayout(s->base.pane);
-}
-
-static void decide_done(void *owner, Request *req) {
-    PullScreen *s = owner;
-    set_string(&s->deciding, NULL);
-    if (req->ok) { json_free(s->findings); s->findings = json_clone(json_get(req->result, "findings")); set_string(&s->findings_error, NULL); }
-    else { request_error_into(&s->findings_error, req); }
-    pane_relayout(s->base.pane);
-}
-
-void screen_pulls_decide(PullScreen *s, const char *key, const char *decision) {
-    if (s->deciding) return;
-    set_string(&s->deciding, key);
-    Json *args = json_object();
-    json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number); json_set_str(args, "key", key);
-    json_object_set(args, "decision", json_string_or_null(decision));
-    store_call("finding_decision", args, 0, s, decide_done, TAG_DECIDE, &s->req_decide);
     pane_relayout(s->base.pane);
 }

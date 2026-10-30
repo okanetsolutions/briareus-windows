@@ -43,8 +43,6 @@ typedef struct {
 char *meet_instructions(const MeetPersona *p);
 /// What the assistant says as it joins: the user's, or when `introduce` is set the one made for it; "" otherwise.
 char *meet_first_message(const MeetPersona *p);
-/// The placeholders a prompt the user writes may hold, each filled from the persona.
-#define MEET_PLACEHOLDERS "{name}, {project} and {wake_words}"
 /// The default prompt and first message with their placeholders unfilled, as the user starts writing from. New strings.
 char *meet_default_prompt(bool independent);
 char *meet_default_first_message(bool introduce);

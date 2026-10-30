@@ -100,7 +100,6 @@ void pane_destroy(Pane *p) {
 HWND pane_hwnd(Pane *p) { return p->hwnd; }
 void pane_set_bounds(Pane *p, const RECT *rc) { MoveWindow(p->hwnd, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, TRUE); p->dirty = true; }
 void pane_show(Pane *p, bool shown) { ShowWindow(p->hwnd, shown ? SW_SHOW : SW_HIDE); }
-bool pane_is_sidebar(Pane *p) { return p->sidebar; }
 
 void screen_release(Screen *s) { if (!s) return; free(s->id); free(s); }
 

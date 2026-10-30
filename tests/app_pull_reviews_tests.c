@@ -42,7 +42,6 @@ static void shared_read_and_tables(void) {
         int rows = 0;
         for (size_t i = 0; i < d.count; i++) {
             Item *it = &d.items[i];
-            CHECK(it->action != ACT_FINDING_DECISION); CHECK(it->action != ACT_SOLVE_FINDINGS);
             if (it->action != ACT_REVIEW_FINDING) continue;
             rows++; RECT r = it->rc;
             int hit = doc_hit(&d, r.right - px(3), (r.top + r.bottom) / 2);
