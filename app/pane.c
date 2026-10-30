@@ -324,6 +324,8 @@ static void set_scroll(Pane *p, int y) {
 void pane_scroll_to_bottom(Pane *p) { p->stick_bottom = p->stick_bottom || false; set_scroll(p, max_scroll(p)); if (p->dirty) p->scroll_y = 0x3fffffff; }
 void pane_scroll_to_top(Pane *p) { set_scroll(p, 0); }
 void pane_scroll_to(Pane *p, int content_y) { set_scroll(p, content_y - px(8)); }
+// Until the pending layout, the old page would clamp the offset; the layout clamps it to the new one, as for the bottom.
+void pane_scroll_after_layout(Pane *p, int scroll_y) { if (p->dirty) p->scroll_y = scroll_y > 0 ? scroll_y : 0; else set_scroll(p, scroll_y); }
 void pane_stick_to_bottom(Pane *p, bool stick) { p->stick_bottom = stick; }
 void pane_show_bottom_button(Pane *p, bool show) { if (p->show_bottom_button != show) { p->show_bottom_button = show; InvalidateRect(p->hwnd, NULL, FALSE); } }
 void pane_set_root_back(Pane *p, bool show, void (*callback)(void *), void *ctx) { p->root_back = show; p->root_back_cb = callback; p->root_back_ctx = ctx; pane_relayout(p); }
@@ -905,6 +907,17 @@ static void mouse_down(Pane *p, int x, int y, bool right) {
         if (s && s->vt->footer_click) s->vt->footer_click(s, pt);
     }
 }
+/// The top screen leaves a view of its own, when it has one open, before the pane goes back.
+static bool screen_went_back(Pane *p) {
+    Screen *s = pane_top(p);
+    return s && s->vt->back && s->vt->back(s);
+}
+/// The header's back button; at the side panel's root it is a close button, which closes whatever the screen shows.
+static void header_back(Pane *p) {
+    bool closes = p->overlay && p->depth <= 1;
+    if (!closes && screen_went_back(p)) return;
+    if (p->depth > 1) pane_pop(p); else if (p->root_back_cb) p->root_back_cb(p->root_back_ctx);
+}
 static void mouse_up(Pane *p, int x, int y) {
     HWND hwnd = p->hwnd;
     if (p->doc.selecting) { end_selection(p); return; }
@@ -919,7 +932,7 @@ static void mouse_up(Pane *p, int x, int y) {
     if (p->pressed_button != -1) {
         int b = p->pressed_button; p->pressed_button = -1;
         if (header_hit(p, x, y) == b) {
-            if (b == -2) { if (p->depth > 1) pane_pop(p); else if (p->root_back_cb) p->root_back_cb(p->root_back_ctx); }
+            if (b == -2) header_back(p);
             else if (b == -3) { set_scroll(p, max_scroll(p)); }
             else if (b == -4) { if (s && s->vt->action) s->vt->action(s, p->header.title_action, 0, sp); }
             else if (p->header.buttons[b].action == ACTION_MOVE_WINDOW) { if (p->move_cb) p->move_cb(p->move_ctx); }
@@ -1049,6 +1062,7 @@ static LRESULT CALLBACK pane_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case VK_F5: if (s && s->vt->refresh) s->vt->refresh(s); return 0;
         case VK_BACK: case VK_ESCAPE: case VK_LEFT:
             if (wp == VK_LEFT && !(GetKeyState(VK_MENU) & 0x8000)) break;
+            if (screen_went_back(p)) return 0;
             if (p->depth > 1) pane_pop(p); else if (p->root_back && p->root_back_cb) p->root_back_cb(p->root_back_ctx);
             return 0;
         }

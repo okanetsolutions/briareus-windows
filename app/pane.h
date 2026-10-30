@@ -50,6 +50,9 @@ typedef struct ScreenVTable {
     bool (*draw_control)(Screen *s, const DRAWITEMSTRUCT *item);
     /// A key press while the pane has focus; return true when handled.
     bool (*key)(Screen *s, WPARAM vk, bool ctrl, bool shift);
+    /// The header's back button or a back key, before the pane goes back: true when the screen left a view of its own
+    /// instead, as a table row's detail returns to the table; optional. The side panel's close button skips it.
+    bool (*back)(Screen *s);
     /// F5 or the refresh button: read everything again.
     void (*refresh)(Screen *s);
     void (*scrolled)(Screen *s, bool at_bottom);
@@ -145,6 +148,9 @@ Doc *pane_doc(Pane *pane);
 int pane_scroll_x(Pane *pane);
 /// Scrolls so a content y is visible near the top.
 void pane_scroll_to(Pane *pane, int content_y);
+/// Scrolls to an offset once a pending layout has run, clamped to the page it lays out: a view that replaces another
+/// in the same screen, such as a table returning, keeps or reveals its place.
+void pane_scroll_after_layout(Pane *pane, int scroll_y);
 /// A screen asks the app to go to the foreground of the other pane, or to close itself.
 void pane_activate_all(bool active);
 /// Handles find shortcuts before TranslateMessage, including in detached windows and composers.

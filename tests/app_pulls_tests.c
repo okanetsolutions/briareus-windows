@@ -666,7 +666,7 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     for (size_t i = 0; i < d.count; i++) {
         Item *it = &d.items[i];
         if (it->action == ACT_PR_TAB) {
-            CHECK(it->arg != 4 && it->arg != 5); tabs++;
+            CHECK(it->arg != 4 && it->arg != 5 && it->arg != 6); tabs++;
         }
         if (it->paint == screen_pulls_paint_counts) {
             CountsData *cd = it->data;
@@ -679,7 +679,7 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
                 if (str_eq(f->runs[k].text, "9 ") && str_eq(f->runs[k + 1].text, "commits ")) commits = true;
         }
     }
-    CHECK_INT(tabs, 6); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
+    CHECK_INT(tabs, 5); CHECK_INT(counts, 1); CHECK(commits); doc_free(&d);
     CHECK(layout_contains(base, "Body marker"));
     CHECK_INT(files_calls, 0); CHECK_INT(comments_calls, 0);
     select_pull_tab(base, "Conversation"); drain(1);
@@ -688,19 +688,19 @@ static void test_pull_tabs_keep_destinations_and_summary(void) {
     select_pull_tab(base, "Files changed"); drain(1);
     CHECK_INT(files_calls, 1); CHECK(layout_contains(base, "No files changed"));
     CHECK(!layout_contains(base, "Timeline marker"));
-    select_pull_tab(base, "Findings");
+    select_pull_tab(base, "Code reviews");
     CHECK(layout_contains(base, "not supported"));
     select_pull_tab(base, "Sessions");
     CHECK(layout_has_action(base, ACT_OPEN_RUN));
     select_pull_tab(base, "Run");
     CHECK(layout_has_action(base, ACT_WEB_BROWSER)); CHECK(!layout_has_action(base, ACT_OPEN_RUN));
-    const intptr_t retired[] = { 4, 5, -1, 9, INTPTR_MAX };
+    const intptr_t retired[] = { 4, 5, 6, -1, 9, INTPTR_MAX };
     for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) {
         base->vt->action(base, ACT_PR_TAB, retired[i], (POINT){0});
         CHECK_INT(s->tab, PR_TAB_BODY); CHECK(layout_contains(base, "Body marker"));
         CHECK(!layout_has_action(base, ACT_WEB_BROWSER));
     }
-    select_pull_tab(base, "Findings");
+    select_pull_tab(base, "Code reviews");
     select_pull_tab(base, "PR Body"); CHECK(layout_contains(base, "Body marker"));
     pane_set_root(pane, NULL);
 }
