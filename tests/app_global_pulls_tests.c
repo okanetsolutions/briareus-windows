@@ -1,6 +1,8 @@
 #include "screen_fixture.h"
 #include "screen_global_pulls_internal.h"
 #include "suites.h"
+#include "resource.h"
+#include "credentials.h"
 
 typedef struct {
     ScreenFixture screen; wchar_t cache_directory[MAX_PATH];
@@ -315,6 +317,37 @@ static void global_popup_owner_lifetime(void) {
     Json *saved = cache_value(g_store.cache, "global-pulls-filters"); CHECK(saved == NULL); json_free(saved);
     pane_set_root(menu_pane, NULL); menu_pane = NULL; global_fixture_clear(&f);
 }
+static Pane *login_pane;
+static bool login_retire, login_seen;
+static VOID CALLBACK login_dialog_tick(HWND window, UINT message, UINT_PTR timer, DWORD time) {
+    (void)window; (void)message; (void)time;
+    HWND dialog = GetActiveWindow();
+    if (!GetDlgItem(dialog, IDC_TITLE)) return;
+    KillTimer(NULL, timer); login_seen = true;
+    if (login_retire) pane_set_root(login_pane, NULL);
+    SetDlgItemTextW(dialog, IDC_TITLE, L"global-login-test");
+    PostMessageW(dialog, WM_COMMAND, IDOK, 0);
+}
+static void global_login_owner_lifetime(void) {
+    char *prior = settings_read_github_login();
+    for (int retire = 0; retire < 2; retire++) {
+        GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+        pane_set_root(f.screen.pane, &s->base); login_pane = f.screen.pane;
+        login_retire = retire != 0; login_seen = false;
+        s->action_first = 0; s->action_next = 123;
+        UINT_PTR timer = SetTimer(NULL, 0, 10, login_dialog_tick); CHECK(timer != 0);
+        s->base.vt->action(&s->base, GLOBAL_LOGIN, 0, (POINT){0}); KillTimer(NULL, timer);
+        CHECK(login_seen); CHECK_STR(screen_pulls_github_login(), "global-login-test");
+        if (retire) CHECK(pane_top(login_pane) == NULL);
+        else {
+            CHECK(pane_top(login_pane) == &s->base);
+            Screen *stale = global_pulls_detail(s, 0); CHECK(stale == NULL);
+            if (stale) stale->vt->destroy(stale);
+        }
+        pane_set_root(login_pane, NULL); login_pane = NULL; global_fixture_clear(&f);
+    }
+    settings_write_github_login(prior ? prior : ""); free(prior);
+}
 void app_global_pulls_tests(void) {
     screen_fixture_prepare();
     test_run("global board tabs scoped issue and review navigation independent saved filters", global_board_tabs_identity_filters);
@@ -334,4 +367,11 @@ void app_global_pulls_tests(void) {
     test_run("global PR cancellation fresh coalescing and stale device", global_cancel_and_stale);
     test_run("global PR independent cooldowns and project retry", global_cooldown_and_projects_retry);
     test_run("global PR bounded sequential project pages", global_project_paging);
+    // Warm the process-lifetime login cache before the per-test CRT leak snapshot.
+    char *prior_login = settings_read_github_login();
+    login_retire = false;
+    UINT_PTR login_timer = SetTimer(NULL, 0, 10, login_dialog_tick); CHECK(login_timer != 0);
+    CHECK(screen_pulls_github_login_ask()); KillTimer(NULL, login_timer);
+    settings_write_github_login(prior_login ? prior_login : ""); free(prior_login);
+    test_run("global board login saves safely after modal owner retirement", global_login_owner_lifetime);
 }

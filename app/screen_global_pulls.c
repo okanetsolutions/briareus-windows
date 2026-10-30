@@ -162,7 +162,14 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
         global_pulls_filters_save(s); s->tab = (GlobalBoardTab)arg; s->visible_rows = 100;
         s->restore_scroll = false; pane_scroll_to(base->pane, 0); global_pulls_changed(s); return;
     }
-    if (id == GLOBAL_LOGIN) { if (screen_pulls_github_login_ask()) global_pulls_changed(s); return; }
+    if (id == GLOBAL_LOGIN) {
+        Pane *source = base->pane; HWND window = pane_hwnd(source);
+        bool saved = screen_pulls_github_login_ask();
+        // The modal dialog can dispatch a connection rebuild that destroys this screen.
+        if (!IsWindow(window) || !pane_contains_screen(source, base)) return;
+        if (saved) global_pulls_changed(s);
+        return;
+    }
     if (s->tab == GLOBAL_TAB_REVIEW) return;
     BoardFilter *filter = global_pulls_filter(s);
     if (id == GLOBAL_STACK && s->tab == GLOBAL_TAB_PULLS) s->hide_stacked = !s->hide_stacked;
