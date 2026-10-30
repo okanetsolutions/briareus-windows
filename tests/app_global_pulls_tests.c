@@ -1,6 +1,8 @@
 #include "screen_fixture.h"
 #include "screen_global_pulls_internal.h"
 #include "suites.h"
+#include "resource.h"
+#include "credentials.h"
 
 typedef struct {
     ScreenFixture screen; wchar_t cache_directory[MAX_PATH];
@@ -8,7 +10,7 @@ typedef struct {
     int statuses[2]; volatile LONG calls[3], active, peak;
     char *urls[3]; bool block_board, block_projects, reject_fresh;
 } GlobalFixture;
-static Route GLOBAL_ROUTES[] = {{"GET", "/projects", "read"}, {"GET", "/pulls", "read"}};
+static Route GLOBAL_ROUTES[] = {{"GET", "/projects", "read"}, {"GET", "/pulls", "read"}, {"GET", "/pulls/{pr}", "read"}, {"GET", "/issues/{issue}", "read"}};
 static bool global_transport(void *ctx, const char *method, const char *url, const char *const *headers,
     const void *body, size_t bytes, int timeout, int *status, char **type, char **retry, char **response, size_t *len, char **error) {
     (void)headers; (void)body; (void)bytes; (void)timeout; (void)error;
@@ -24,7 +26,7 @@ static bool global_transport(void *ctx, const char *method, const char *url, con
     InterlockedDecrement(&f->active); return true;
 }
 static GlobalPullsScreen *global_setup(GlobalFixture *f) {
-    memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, GLOBAL_ROUTES, 2); g_store.device.permission = "read";
+    memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, GLOBAL_ROUTES, 4); g_store.device.permission = "read";
     // Shared repository cooldowns are account scoped, including across test fixtures.
     static char ids[64][32]; static size_t id;
     snprintf(ids[id], sizeof ids[id], "global-test-%zu", id); g_store.device.id = ids[id++];
@@ -45,6 +47,61 @@ static void global_fixture_clear(GlobalFixture *f) {
 }
 static void global_cleanup(GlobalFixture *f, GlobalPullsScreen *s) { s->base.vt->destroy(&s->base); global_fixture_clear(f); }
 static void global_load(GlobalFixture *f, GlobalPullsScreen *s) { s->base.vt->visible(&s->base, true); screen_fixture_pump(&f->screen, 3); }
+static void global_board_tabs_identity_filters(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f);
+    f.boards[0] = "{\"author\":\"alice\",\"pulls\":[{\"number\":7,\"title\":\"Alpha PR\",\"labels\":[{\"name\":\"requires-dev-review\"}]}],\"issues\":[{\"number\":7,\"title\":\"Alpha issue\",\"author\":\"sam\",\"assignees\":[\"alice\"],\"labels\":[{\"name\":\"ready\"}],\"parent\":{\"number\":2,\"title\":\"Roadmap\",\"repo\":\"o/a\"}}]}";
+    f.boards[1] = "{\"author\":\"bob\",\"pulls\":[{\"number\":7,\"title\":\"Beta PR\",\"labels\":[{\"name\":\"requires-dev-review\"}]}],\"issues\":[{\"number\":7,\"title\":\"Beta issue\",\"author\":\"sam\"}],\"issuesTruncated\":true}";
+    global_load(&f, s); Doc doc; doc_init(&doc); screen_fixture_draw(&s->base, &doc);
+    intptr_t prior = s->action_first; s->base.vt->action(&s->base, GLOBAL_TAB, GLOBAL_TAB_ISSUES, (POINT){0});
+    CHECK(global_pulls_detail(s, prior) == NULL); screen_fixture_draw(&s->base, &doc); CHECK_INT(s->row_count, 2);
+    CHECK(global_board_incomplete(s, GLOBAL_TAB_ISSUES)); CHECK(!global_board_incomplete(s, GLOBAL_TAB_PULLS));
+    for (int i = 0; i < 2; i++) {
+        Screen *detail = global_pulls_detail(s, s->action_first + i); CHECK(detail != NULL);
+        if (!detail) continue;
+        IssueScreen *issue = (IssueScreen *)detail; CHECK_INT(issue->issue.number, 7);
+        CHECK_STR(issue->issue.title, i ? "Beta issue" : "Alpha issue"); CHECK_STR(issue->project.repo, i ? "o/b" : "o/a");
+        if (!i) { CHECK(issue->issue.has_parent); CHECK_INT(issue->issue.parent.number, 2); CHECK_STR(issue->issue.parent.repo, "o/a"); }
+        CHECK_INT(s->selected_kind, GLOBAL_TAB_ISSUES); detail->vt->destroy(detail);
+    }
+    board_filter_set(&s->issue_filter, FILTER_ASSIGNEE, "alice"); global_pulls_filters_save(s);
+    screen_fixture_draw(&s->base, &doc); CHECK_INT(s->row_count, 1); CHECK_INT(s->rows[0].project, 0);
+    s->base.vt->action(&s->base, GLOBAL_TAB, GLOBAL_TAB_PULLS, (POINT){0}); screen_fixture_draw(&s->base, &doc); CHECK_INT(s->row_count, 2);
+    board_filter_set(&s->filter, FILTER_AUTHOR, "nobody"); s->hide_stacked = true;
+    s->base.vt->action(&s->base, GLOBAL_TAB, GLOBAL_TAB_REVIEW, (POINT){0}); screen_fixture_draw(&s->base, &doc);
+    CHECK_INT(s->row_count, 2);
+    HeaderInfo header = {0}; s->base.vt->header(&s->base, &header);
+    for (int i = 0; i < header.button_count; i++) CHECK(header.buttons[i].action < GLOBAL_FILTER_BASE);
+    Screen *detail = global_pulls_detail(s, s->action_first); CHECK(detail != NULL);
+    if (detail) { CHECK_INT(((PullScreen *)detail)->number, 7); CHECK_STR(((PullScreen *)detail)->summary.title, "Alpha PR"); detail->vt->destroy(detail); }
+    CHECK_INT(f.calls[0], 1); CHECK_INT(f.calls[1], 1); CHECK_INT(f.calls[2], 1); CHECK_INT(f.peak, 1);
+    s->base.vt->destroy(&s->base); s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane;
+    CHECK_STR(board_filter_get(&s->filter, FILTER_AUTHOR), "nobody"); CHECK_STR(board_filter_get(&s->issue_filter, FILTER_ASSIGNEE), "alice");
+    CHECK_INT(s->state.projects[0].issue_count, 1); CHECK(!s->listed);
+    s->base.vt->action(&s->base, GLOBAL_TAB, GLOBAL_TAB_ISSUES, (POINT){0}); screen_fixture_draw(&s->base, &doc); CHECK_INT(s->row_count, 1);
+    // A catalog without detail reads still shows honest summaries, but has no broken open action.
+    g_store.route_count = 2; screen_fixture_draw(&s->base, &doc); CHECK(global_pulls_detail(s, s->action_first) == NULL);
+    g_store.route_count = 4; doc_free(&doc); global_cleanup(&f, s);
+}
+static void global_issue_refusal_and_cancelled_snapshot(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f);
+    f.boards[0] = "{\"pulls\":[{\"number\":7,\"title\":\"Usable PR\"}],\"issues\":[],\"issuesError\":\"Issues: read required\"}";
+    f.boards[1] = "{\"pulls\":[],\"issues\":[{\"number\":7,\"title\":\"Retained issue\"}]}";
+    global_load(&f, s); s->base.vt->action(&s->base, GLOBAL_TAB, GLOBAL_TAB_ISSUES, (POINT){0});
+    Doc doc; doc_init(&doc); screen_fixture_draw(&s->base, &doc); CHECK_INT(s->row_count, 1); CHECK_INT(s->rows[0].project, 1);
+    CHECK(global_board_incomplete(s, GLOBAL_TAB_ISSUES)); CHECK(!global_board_incomplete(s, GLOBAL_TAB_PULLS));
+    f.statuses[1] = 502; s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 3);
+    CHECK_INT(s->state.projects[1].issue_count, 1); CHECK(s->state.projects[1].error != NULL);
+    // A late cancelled refusal clears issues as well as PRs in a replacement controller.
+    f.block_board = true; f.statuses[0] = 403;
+    s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->destroy(&s->base); s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane;
+    SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(s->state.projects[0].count, 0); CHECK_INT(s->state.projects[0].issue_count, 0);
+    CHECK_INT(s->state.projects[1].issue_count, 1);
+    g_store.device.id = "different-device"; s->base.vt->visible(&s->base, true); CHECK_INT(s->state.count, 0);
+    doc_free(&doc); global_cleanup(&f, s);
+}
 static void global_navigation(void) {
     GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
     CHECK_INT(f.peak, 1); CHECK(!s->loading); CHECK_INT(s->state.count, 2);
@@ -117,25 +174,27 @@ static void global_project_paging(void) {
     CHECK_INT(f.calls[2], 27); CHECK(s->state.projects[26].loaded); CHECK_INT(f.peak, 1);
     free(text); global_cleanup(&f, s);
 }
-static void global_back_retains_context(void) {
-    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
-    Json *board = json_object(), *pulls = json_array(); json_object_set(board, "pulls", pulls);
+static void global_back_context(GlobalBoardTab tab) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s); s->tab = tab;
+    Json *board = json_object(), *pulls = json_array(); json_object_set(board, "pulls", tab == GLOBAL_TAB_ISSUES ? json_array() : pulls);
+    if (tab == GLOBAL_TAB_ISSUES) json_object_set(board, "issues", pulls);
     for (int i = 1; i <= 110; i++) { Json *p = json_object(); json_set_num(p, "number", i); json_set_str(p, "title", "Synthetic scroll row"); json_set_str(p, "author", "alice"); json_array_push(pulls, p); }
     CHECK(global_pulls_adopt(&s->state.projects[0], board)); json_free(board);
-    board_filter_set(&s->filter, FILTER_AUTHOR, "alice"); s->visible_rows = 100;
+    board_filter_set(global_pulls_filter(s), FILTER_AUTHOR, "alice"); s->visible_rows = 100;
     pane_set_root(f.screen.pane, &s->base);
     RedrawWindow(pane_hwnd(f.screen.pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
     pane_scroll_to(f.screen.pane, 508); int scroll = pane_scroll_y(f.screen.pane); CHECK(scroll > 0);
     Screen *detail = global_pulls_detail(s, s->action_first + 3); CHECK(detail != NULL);
     if (detail) {
-        int selected = s->selected_number; pane_push(f.screen.pane, detail); CHECK(!s->shown);
-        pane_pop(f.screen.pane); RedrawWindow(pane_hwnd(f.screen.pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+        int selected = s->selected_number; g_store.route_count = 2; pane_push(f.screen.pane, detail); CHECK(!s->shown);
+        pane_pop(f.screen.pane); g_store.route_count = 4; RedrawWindow(pane_hwnd(f.screen.pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
         CHECK(pane_top(f.screen.pane) == &s->base); CHECK_INT(pane_scroll_y(f.screen.pane), scroll);
-        CHECK_STR(board_filter_get(&s->filter, FILTER_AUTHOR), "alice"); CHECK_INT(s->selected_number, selected); CHECK_STR(s->selected_repo, "o/a");
+        CHECK_STR(board_filter_get(global_pulls_filter(s), FILTER_AUTHOR), "alice"); CHECK_INT(s->tab, tab); CHECK_INT(s->selected_kind, tab); CHECK_INT(s->selected_number, selected); CHECK_STR(s->selected_repo, "o/a");
     }
     CHECK(pane_take_root(f.screen.pane) == &s->base); s->base.pane = f.screen.pane;
     global_cleanup(&f, s);
 }
+static void global_back_retains_context(void) { global_back_context(GLOBAL_TAB_PULLS); global_back_context(GLOBAL_TAB_ISSUES); }
 static void global_failures_and_compatibility(void) {
     GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
     f.statuses[0] = 502; f.statuses[1] = 404;
@@ -208,15 +267,17 @@ static void global_cancelled_cooldowns_survive_reopening(void) {
     CHECK(s->req == NULL); CHECK_INT(f.calls[0], 1); global_cleanup(&f, s);
 }
 static void global_cancelled_refusal_clears_reopened_snapshot(void) {
-    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f);
+    f.boards[0] = "{\"pulls\":[{\"number\":7,\"title\":\"Alpha PR\"}],\"issues\":[{\"number\":7,\"title\":\"Alpha issue\"}]}";
+    global_load(&f, s);
     f.block_board = true; f.statuses[0] = 403;
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
     CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
     s->base.vt->destroy(&s->base);
     // A replacement can still be awaiting a leave confirmation, before it belongs to any pane.
     s = (GlobalPullsScreen *)global_pulls_screen_new();
-    CHECK_INT(s->state.projects[0].count, 1); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
-    CHECK_INT(s->state.projects[0].count, 0); CHECK(s->state.projects[0].error != NULL); CHECK_INT(s->state.projects[1].count, 1);
+    CHECK_INT(s->state.projects[0].count, 1); CHECK_INT(s->state.projects[0].issue_count, 1); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(s->state.projects[0].count, 0); CHECK_INT(s->state.projects[0].issue_count, 0); CHECK(s->state.projects[0].error != NULL); CHECK_INT(s->state.projects[1].count, 1);
     Json *cached = cache_value(g_store.cache, "pulls:o/a"); CHECK(cached == NULL); json_free(cached); global_cleanup(&f, s);
 }
 static void global_cancelled_old_device_cannot_set_cooldown(void) {
@@ -256,8 +317,41 @@ static void global_popup_owner_lifetime(void) {
     Json *saved = cache_value(g_store.cache, "global-pulls-filters"); CHECK(saved == NULL); json_free(saved);
     pane_set_root(menu_pane, NULL); menu_pane = NULL; global_fixture_clear(&f);
 }
+static Pane *login_pane;
+static bool login_retire, login_seen;
+static VOID CALLBACK login_dialog_tick(HWND window, UINT message, UINT_PTR timer, DWORD time) {
+    (void)window; (void)message; (void)time;
+    HWND dialog = GetActiveWindow();
+    if (!GetDlgItem(dialog, IDC_TITLE)) return;
+    KillTimer(NULL, timer); login_seen = true;
+    if (login_retire) pane_set_root(login_pane, NULL);
+    SetDlgItemTextW(dialog, IDC_TITLE, L"global-login-test");
+    PostMessageW(dialog, WM_COMMAND, IDOK, 0);
+}
+static void global_login_owner_lifetime(void) {
+    char *prior = settings_read_github_login();
+    for (int retire = 0; retire < 2; retire++) {
+        GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+        pane_set_root(f.screen.pane, &s->base); login_pane = f.screen.pane;
+        login_retire = retire != 0; login_seen = false;
+        s->action_first = 0; s->action_next = 123;
+        UINT_PTR timer = SetTimer(NULL, 0, 10, login_dialog_tick); CHECK(timer != 0);
+        s->base.vt->action(&s->base, GLOBAL_LOGIN, 0, (POINT){0}); KillTimer(NULL, timer);
+        CHECK(login_seen); CHECK_STR(screen_pulls_github_login(), "global-login-test");
+        if (retire) CHECK(pane_top(login_pane) == NULL);
+        else {
+            CHECK(pane_top(login_pane) == &s->base);
+            Screen *stale = global_pulls_detail(s, 0); CHECK(stale == NULL);
+            if (stale) stale->vt->destroy(stale);
+        }
+        pane_set_root(login_pane, NULL); login_pane = NULL; global_fixture_clear(&f);
+    }
+    settings_write_github_login(prior ? prior : ""); free(prior);
+}
 void app_global_pulls_tests(void) {
     screen_fixture_prepare();
+    test_run("global board tabs scoped issue and review navigation independent saved filters", global_board_tabs_identity_filters);
+    test_run("global issue partial refusals cached failures late cancellation and stale identity", global_issue_refusal_and_cancelled_snapshot);
     test_run("global PR old device 401 cannot invalidate the current client", global_old_device_401_cannot_invalidate_current_client);
     test_run("global PR cancelled Retry-After survives controller destruction", global_cancelled_cooldowns_survive_reopening);
     test_run("global PR cancelled refusal clears reopened snapshots", global_cancelled_refusal_clears_reopened_snapshot);
@@ -273,4 +367,11 @@ void app_global_pulls_tests(void) {
     test_run("global PR cancellation fresh coalescing and stale device", global_cancel_and_stale);
     test_run("global PR independent cooldowns and project retry", global_cooldown_and_projects_retry);
     test_run("global PR bounded sequential project pages", global_project_paging);
+    // Warm the process-lifetime login cache before the per-test CRT leak snapshot.
+    char *prior_login = settings_read_github_login();
+    login_retire = false;
+    UINT_PTR login_timer = SetTimer(NULL, 0, 10, login_dialog_tick); CHECK(login_timer != 0);
+    CHECK(screen_pulls_github_login_ask()); KillTimer(NULL, login_timer);
+    settings_write_github_login(prior_login ? prior_login : ""); free(prior_login);
+    test_run("global board login saves safely after modal owner retirement", global_login_owner_lifetime);
 }

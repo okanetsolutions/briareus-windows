@@ -132,12 +132,17 @@ Screen *global_pulls_detail(GlobalPullsScreen *s, intptr_t arg) {
     GlobalPullRow r = s->rows[arg - s->action_first];
     if (r.project >= s->state.count) return NULL;
     GlobalPullProject *p = &s->state.projects[r.project];
-    if (r.pull >= p->count) return NULL;
+    if (s->tab == GLOBAL_TAB_ISSUES) {
+        if (r.pull >= p->issue_count || !store_supports("issue")) return NULL;
+        set_string(&s->selected_repo, p->project.repo); s->selected_number = p->issues[r.pull].number; s->selected_kind = GLOBAL_TAB_ISSUES;
+        return issue_detail_screen_new(&p->project, &p->issues[r.pull]);
+    }
+    if (!store_supports("pull") || r.pull >= p->count) return NULL;
     PullSummary *pull = &p->pulls[r.pull]; StackPosition stack;
     bool stacked = stack_position_parse(json_get(pull->raw, "stack"), json_get(p->board, "stacks"), &stack);
     Screen *detail = pull_detail_screen_new(&p->project, pull->number, stacked ? &stack : NULL, pull);
     if (stacked) stack_position_free(&stack);
-    set_string(&s->selected_repo, p->project.repo); s->selected_number = pull->number;
+    set_string(&s->selected_repo, p->project.repo); s->selected_number = pull->number; s->selected_kind = GLOBAL_TAB_PULLS;
     return detail;
 }
 static void action(Screen *base, int id, intptr_t arg, POINT pt) {
@@ -152,15 +157,30 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
         restore_cached(s, s->cursor, s->limit); global_pulls_changed(s); global_pulls_next(s); return;
     }
     if (id >= GLOBAL_FILTER_BASE && id < GLOBAL_FILTER_BASE + FILTER_KIND_COUNT) { global_pulls_pick(s, (FilterKind)(id - GLOBAL_FILTER_BASE), pt); return; }
-    if (id == GLOBAL_STACK) s->hide_stacked = !s->hide_stacked;
-    else if (id == GLOBAL_CHECKS) s->filter.hide_failing_checks = !s->filter.hide_failing_checks;
-    else if (id == GLOBAL_CLEAR) { board_filter_free(&s->filter); board_filter_init(&s->filter); s->hide_stacked = false; }
+    if (id == GLOBAL_TAB) {
+        if (arg < 0 || arg >= GLOBAL_TAB_COUNT || s->tab == arg) return;
+        global_pulls_filters_save(s); s->tab = (GlobalBoardTab)arg; s->visible_rows = 100;
+        s->restore_scroll = false; pane_scroll_to(base->pane, 0); global_pulls_changed(s); return;
+    }
+    if (id == GLOBAL_LOGIN) {
+        Pane *source = base->pane; HWND window = pane_hwnd(source);
+        bool saved = screen_pulls_github_login_ask();
+        // The modal dialog can dispatch a connection rebuild that destroys this screen.
+        if (!IsWindow(window) || !pane_contains_screen(source, base)) return;
+        if (saved) global_pulls_changed(s);
+        return;
+    }
+    if (s->tab == GLOBAL_TAB_REVIEW) return;
+    BoardFilter *filter = global_pulls_filter(s);
+    if (id == GLOBAL_STACK && s->tab == GLOBAL_TAB_PULLS) s->hide_stacked = !s->hide_stacked;
+    else if (id == GLOBAL_CHECKS) filter->hide_failing_checks = !filter->hide_failing_checks;
+    else if (id == GLOBAL_CLEAR) { board_filter_free(filter); board_filter_init(filter); if (s->tab == GLOBAL_TAB_PULLS) s->hide_stacked = false; }
     else return;
     global_pulls_filters_save(s); global_pulls_changed(s);
 }
 static void destroy(Screen *base) {
     GlobalPullsScreen *s = (GlobalPullsScreen *)base; global_pulls_unregister(s); poller_stop(&s->poller); clear(s);
-    api_client_release(s->client); json_free(s->device); board_filter_free(&s->filter); free(s->error); free(s->selected_repo); screen_release(base);
+    api_client_release(s->client); json_free(s->device); board_filter_free(&s->filter); board_filter_free(&s->issue_filter); free(s->error); free(s->selected_repo); screen_release(base);
 }
 static void place(Screen *base, const RECT *content, int scroll_y) {
     (void)content; (void)scroll_y; GlobalPullsScreen *s = (GlobalPullsScreen *)base;
@@ -177,10 +197,7 @@ Screen *global_pulls_screen_new(void) {
     s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device);
     char *scope = json_serialize(s->device, true); s->base.id = xstrfmt("global-pulls:%p:%s", (void *)s->client, scope); free(scope);
     s->visible_rows = 100; s->limit = GLOBAL_PULLS_PROJECT_BATCH; board_filter_init(&s->filter);
-    Json *saved = cache_value(g_store.cache, "global-pulls-filters");
-    for (int k = 0; k < FILTER_KIND_COUNT; k++) board_filter_set(&s->filter, (FilterKind)k, json_str(json_get(saved, filter_kind_name((FilterKind)k))));
-    s->filter.hide_failing_checks = json_bool_is(json_get(saved, "hideFailingChecks"), true);
-    s->hide_stacked = json_bool_is(json_get(saved, "hideLaterStacked"), true); json_free(saved);
+    board_filter_init(&s->issue_filter); global_board_filters_restore(s);
     // Cached scope is provisional until /projects confirms it; errors must never call it complete.
     Json *catalog = cache_value(g_store.cache, "projects"); Project *projects = NULL; size_t count = 0;
     if (global_pulls_current(s) && projects_parse(catalog, &projects, &count)) {

@@ -11,9 +11,15 @@ int main(void) {
     if (getenv("PREVIEW_TESTS")) { app_global_pulls_tests(); core_global_pulls_tests(); return test_summary(); }
     GlobalFixture f; GlobalPullsScreen *s = global_setup(&f);
     f.projects = "{\"projects\":[{\"repo\":\"o/a\",\"label\":\"Synthetic storefront\"},{\"repo\":\"o/b\",\"label\":\"Synthetic mobile\"}]}";
-    f.boards[0] = "{\"pulls\":[{\"number\":42,\"title\":\"Keep checkout totals consistent when quantities change\",\"branch\":\"fix/cart-totals\",\"author\":\"alice\",\"checks\":\"success\",\"updatedAt\":\"2026-10-30T12:00:00Z\",\"labels\":[{\"name\":\"ready\",\"color\":\"22aa66\"}],\"recommended\":\"review\"},{\"number\":38,\"title\":\"Show delivery estimates before checkout\",\"author\":\"sam\",\"draft\":true,\"checks\":\"pending\"}],\"syncedAt\":\"2026-10-30T12:00:00Z\"}";
-    f.boards[1] = "{\"pulls\":[{\"number\":42,\"title\":\"Retain the selected workspace after reconnecting\",\"branch\":\"fix/workspace\",\"author\":\"bob\",\"checks\":\"failure\",\"updatedAt\":\"2026-10-30T11:00:00Z\",\"labels\":[{\"name\":\"needs-fix\",\"color\":\"dd6644\"}]}]}";
-    global_load(&f, s); set_string(&s->state.projects[1].error, "Synthetic rate limit; last successful snapshot retained. Retry after the project cooldown.");
+    f.boards[0] = "{\"author\":\"alice\",\"pulls\":[{\"number\":42,\"title\":\"Keep checkout totals consistent when quantities change\",\"branch\":\"fix/cart-totals\",\"author\":\"alice\",\"checks\":\"success\",\"updatedAt\":\"2026-10-30T12:00:00Z\",\"labels\":[{\"name\":\"requires-dev-review\",\"color\":\"22aa66\"}]},{\"number\":38,\"title\":\"Show delivery estimates before checkout\",\"author\":\"sam\",\"draft\":true,\"checks\":\"pending\",\"labels\":[{\"name\":\"requires-dev-review\",\"color\":\"22aa66\"}]}],\"issues\":[{\"number\":42,\"title\":\"Remember the delivery address after returning from payment\",\"author\":\"sam\",\"assignees\":[\"alice\"],\"labels\":[{\"name\":\"checkout\",\"color\":\"22aa66\"}],\"updatedAt\":\"2026-10-30T13:00:00Z\",\"parent\":{\"repo\":\"o/a\",\"number\":51,\"title\":\"Reliable checkout\"}},{\"number\":51,\"title\":\"Reliable checkout\",\"author\":\"alice\",\"subIssues\":{\"total\":4,\"completed\":2,\"open\":2},\"updatedAt\":\"2026-10-30T10:00:00Z\",\"labels\":[{\"name\":\"epic\",\"color\":\"8855bb\"}]}],\"syncedAt\":\"2026-10-30T12:00:00Z\"}";
+    f.boards[1] = "{\"author\":\"bob\",\"pulls\":[{\"number\":42,\"title\":\"Retain the selected workspace after reconnecting\",\"branch\":\"fix/workspace\",\"author\":\"bob\",\"checks\":\"failure\",\"updatedAt\":\"2026-10-30T11:00:00Z\",\"labels\":[{\"name\":\"requires-dev-review\",\"color\":\"dd6644\"}]}],\"issues\":[],\"issuesError\":\"Synthetic GitHub token lacks Issues: read.\"}";
+    global_load(&f, s);
+    const char *tab = getenv("PREVIEW_TAB");
+    if (tab && !strcmp(tab, "issues")) s->tab = GLOBAL_TAB_ISSUES;
+    if (tab && !strcmp(tab, "review")) {
+        s->tab = GLOBAL_TAB_REVIEW;
+        set_string(&s->state.projects[1].error, "Synthetic rate limit; last successful snapshot retained. Retry after the project cooldown.");
+    }
     int width = getenv("PREVIEW_WIDTH") ? atoi(getenv("PREVIEW_WIDTH")) : 1400;
     pane_set_root(f.screen.pane, &s->base); poller_stop(&s->poller);
     MoveWindow(f.screen.parent, 0, 0, width, 1000, TRUE);

@@ -2,13 +2,14 @@
 #define BRIAREUS_SCREEN_GLOBAL_PULLS_INTERNAL_H
 #include "screen_pulls_internal.h"
 #include "global_pulls.h"
-enum { GLOBAL_POLL = 1, GLOBAL_REFRESH = 2000, GLOBAL_MORE, GLOBAL_OPEN, GLOBAL_CLEAR, GLOBAL_STACK, GLOBAL_CHECKS, GLOBAL_FILTER, GLOBAL_MORE_ROWS, GLOBAL_FILTER_BASE = 2100 };
+enum { GLOBAL_POLL = 1, GLOBAL_REFRESH = 2000, GLOBAL_MORE, GLOBAL_OPEN, GLOBAL_CLEAR, GLOBAL_STACK, GLOBAL_CHECKS, GLOBAL_FILTER, GLOBAL_MORE_ROWS, GLOBAL_TAB, GLOBAL_LOGIN, GLOBAL_FILTER_BASE = 2100 };
 typedef struct GlobalPullsScreen {
     Screen base;
     struct GlobalPullsScreen *next_live;
     ApiClient *client; Json *device;
     GlobalPulls state;
-    BoardFilter filter; bool hide_stacked;
+    BoardFilter filter, issue_filter; bool hide_stacked;
+    GlobalBoardTab tab, selected_kind;
     Request *req;
     Poller poller;
     bool shown, listed, loading, fresh, queued_fresh, reading_projects;
@@ -19,6 +20,13 @@ typedef struct GlobalPullsScreen {
     GlobalPullRow *rows; size_t row_count;
     intptr_t action_first, action_next;
 } GlobalPullsScreen;
+bool global_board_incomplete(const GlobalPullsScreen *s, GlobalBoardTab tab);
+BoardFilter *global_pulls_filter(GlobalPullsScreen *s);
+const char *global_board_title(GlobalBoardTab tab);
+GlobalPullRow *global_pulls_active_rows(GlobalPullsScreen *s, bool filtered, size_t *count);
+void global_board_tabs(GlobalPullsScreen *s, Doc *doc);
+void global_board_card(GlobalPullsScreen *s, Doc *doc, GlobalPullRow row, intptr_t action);
+void global_board_filters_restore(GlobalPullsScreen *s);
 bool global_pulls_current(GlobalPullsScreen *s);
 void global_pulls_changed(GlobalPullsScreen *s);
 void global_pulls_register(GlobalPullsScreen *s);
