@@ -166,6 +166,23 @@ static void global_destroy_pending(void) {
     s->base.vt->destroy(&s->base); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
     CHECK_INT(f.calls[2], 0); global_fixture_clear(&f);
 }
+static void global_cached_scope_reconciliation(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+    s->base.vt->destroy(&s->base);
+    s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane;
+    CHECK(!s->listed); CHECK_INT(s->state.count, 2); CHECK_INT(s->state.projects[0].count, 1); CHECK_INT(s->state.projects[1].count, 1);
+    f.projects = "{\"projects\":[{\"repo\":\"o/b\",\"label\":\"Current Beta\"}]}"; f.block_board = true;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    CHECK(s->listed); CHECK_INT(s->state.count, 1); CHECK_STR(s->state.projects[0].project.repo, "o/b");
+    CHECK_STR(s->state.projects[0].project.label, "Current Beta"); CHECK_INT(s->state.projects[0].count, 1);
+    SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    s->base.vt->destroy(&s->base);
+    s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane;
+    f.screen.read_status = 502; s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 1);
+    CHECK(!s->listed); CHECK(s->error != NULL); CHECK_INT(s->state.projects[0].count, 1);
+    global_cleanup(&f, s);
+}
 static WNDPROC menu_original;
 static Pane *menu_pane;
 static bool menu_retired;
@@ -189,6 +206,7 @@ static void global_popup_owner_lifetime(void) {
 }
 void app_global_pulls_tests(void) {
     screen_fixture_prepare();
+    test_run("global PR provisional cached scope reconciles removals and retains failed reads", global_cached_scope_reconciliation);
     test_run("global PR filter popup survives owner retirement", global_popup_owner_lifetime);
     test_run("global PR destruction cancels both project and board owners", global_destroy_pending);
     test_run("global PR failed snapshots and fresh compatibility", global_failures_and_compatibility);

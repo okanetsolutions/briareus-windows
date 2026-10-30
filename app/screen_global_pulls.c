@@ -54,6 +54,16 @@ void global_pulls_next(GlobalPullsScreen *s) {
     poller_finished(&s->poller, false, -1); changed(s);
     if (s->queued_fresh) { s->queued_fresh = false; global_pulls_load(s, true); }
 }
+static void restore_cached(GlobalPullsScreen *s, size_t first, size_t end) {
+    if (end > s->state.count) end = s->state.count;
+    for (size_t i = first; i < end; i++) {
+        GlobalPullProject *p = &s->state.projects[i];
+        if (p->loaded) continue;
+        char *key = xstrfmt("pulls:%s", p->project.repo); Json *saved = cache_value(g_store.cache, key); free(key);
+        if (saved && global_pulls_adopt(p, saved)) p->synced_at = pulls_sync_time(saved, true, time(NULL));
+        json_free(saved);
+    }
+}
 static void projects_done(void *owner, Request *req) {
     GlobalPullsScreen *s = owner;
     if (!s->shown || !global_pulls_current(s)) { clear(s); return; }
@@ -71,15 +81,8 @@ static void projects_done(void *owner, Request *req) {
     global_pulls_replace(&s->state, projects, count); projects_free(projects, count);
     cache_store(g_store.cache, req->result, "projects");
     s->listed = true; s->projects_retry = 0; set_string(&s->error, NULL); s->cursor = 0;
-    for (size_t i = 0; i < s->state.count; i++) {
-        GlobalPullProject *p = &s->state.projects[i];
-        if (!p->loaded) {
-            char *key = xstrfmt("pulls:%s", p->project.repo); Json *saved = cache_value(g_store.cache, key); free(key);
-            if (saved && global_pulls_adopt(p, saved)) p->synced_at = pulls_sync_time(saved, true, time(NULL));
-            json_free(saved);
-        }
-        p->fresh = p->fresh || s->fresh;
-    }
+    for (size_t i = 0; i < s->state.count; i++) s->state.projects[i].fresh |= s->fresh;
+    restore_cached(s, 0, s->limit);
     changed(s); global_pulls_next(s);
 }
 void global_pulls_load(GlobalPullsScreen *s, bool fresh) {
@@ -141,7 +144,8 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
     if (id == GLOBAL_MORE_ROWS) { s->visible_rows += 100; changed(s); return; }
     if (id == GLOBAL_MORE) {
         if (s->loading || s->req || s->limit >= s->state.count) return;
-        s->cursor = s->limit; s->limit += GLOBAL_PULLS_PROJECT_BATCH; s->loading = true; global_pulls_next(s); return;
+        s->cursor = s->limit; s->limit += GLOBAL_PULLS_PROJECT_BATCH; s->loading = true;
+        restore_cached(s, s->cursor, s->limit); changed(s); global_pulls_next(s); return;
     }
     if (id >= GLOBAL_FILTER_BASE && id < GLOBAL_FILTER_BASE + FILTER_KIND_COUNT) { global_pulls_pick(s, (FilterKind)(id - GLOBAL_FILTER_BASE), pt); return; }
     if (id == GLOBAL_STACK) s->hide_stacked = !s->hide_stacked;
@@ -173,5 +177,11 @@ Screen *global_pulls_screen_new(void) {
     for (int k = 0; k < FILTER_KIND_COUNT; k++) board_filter_set(&s->filter, (FilterKind)k, json_str(json_get(saved, filter_kind_name((FilterKind)k))));
     s->filter.hide_failing_checks = json_bool_is(json_get(saved, "hideFailingChecks"), true);
     s->hide_stacked = json_bool_is(json_get(saved, "hideLaterStacked"), true); json_free(saved);
+    // Cached scope is provisional until /projects confirms it; errors must never call it complete.
+    Json *catalog = cache_value(g_store.cache, "projects"); Project *projects = NULL; size_t count = 0;
+    if (global_pulls_current(s) && projects_parse(catalog, &projects, &count)) {
+        global_pulls_replace(&s->state, projects, count); restore_cached(s, 0, s->limit);
+    }
+    projects_free(projects, count); json_free(catalog);
     return &s->base;
 }
