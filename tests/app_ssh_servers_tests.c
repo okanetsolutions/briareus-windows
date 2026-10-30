@@ -122,6 +122,32 @@ static void sessions_shared(void) {
     project_ssh_free(global); project_ssh_free(project); json_free(row); servers_ssh_sessions_reset();
     term_set_launcher(NULL, NULL); screen_fixture_clear(&f);
 }
+static void clicks_return_the_keyboard(void) {
+    ScreenFixture f; screen_fixture_init(&f, routes, 1);
+    Screen host = {0}; screen_fixture_pane(&f, &host);
+    ProjectSsh *p = project_ssh_new(NULL, &host, 700); p->loaded = true;
+    Json *row = json_parsez("{\"id\":1,\"repo\":\"o/one\",\"label\":\"Web\",\"username\":\"deploy\",\"host\":\"fake.example\"}");
+    json_array_push(p->rows, json_clone(row));
+    launches = 0; term_set_launcher(launch, NULL);
+    project_ssh_connect_row(p, row); Term *t = term_active(); CHECK(t != NULL); CHECK(term_at(0) == t);
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, pane_content_width(f.pane));
+    project_ssh_layout(p, &doc, doc.width); doc_end(&doc);
+    RECT content = pane_content_rect(f.pane); POINT pt = {0};
+    project_ssh_place(p, &content, 0, true); CHECK(GetFocus() == term_hwnd(t));
+    // A click takes the keyboard to the pane; on the session's own tab or server it changes nothing else.
+    SetFocus(pane_hwnd(f.pane));
+    CHECK(project_ssh_action(p, 700 + A_TAB, 0, pt)); project_ssh_place(p, &content, 0, true);
+    CHECK(GetFocus() == term_hwnd(t));
+    SetFocus(pane_hwnd(f.pane));
+    CHECK(project_ssh_action(p, 700 + A_SERVER, 0, pt)); project_ssh_place(p, &content, 0, true);
+    CHECK(GetFocus() == term_hwnd(t)); CHECK_INT(launches, 1);
+    // Folding a project in the list leaves the keyboard with the list.
+    SetFocus(pane_hwnd(f.pane));
+    CHECK(project_ssh_action(p, 700 + A_FOLDER, 0, pt)); project_ssh_place(p, &content, 0, true);
+    CHECK(GetFocus() == pane_hwnd(f.pane));
+    doc_free(&doc); project_ssh_free(p); json_free(row); servers_ssh_sessions_reset();
+    term_set_launcher(NULL, NULL); screen_fixture_clear(&f);
+}
 static void navigation_gated(void) {
     ScreenFixture f; screen_fixture_init(&f, routes, 1);
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400); screen_projects_sidebar_top(&doc, 400, "ssh-servers"); doc_end(&doc);
@@ -186,6 +212,7 @@ void app_ssh_servers_tests(void) {
     test_run("SSH Settings and refresh supersede blocked reads", refresh_race);
     test_run("SSH auth and project resets cancel stale reads and destruction releases ownership", reset_and_destroy);
     test_run("SSH global and project views reuse sessions and preserve cycling and reconnect", sessions_shared);
+    test_run("SSH clicks on a session give it back the keyboard", clicks_return_the_keyboard);
     test_run("SSH sidebar reaches the last server and retains scroll on resize", sidebar_scroll_survives_resize);
     test_run("SSH global page refreshes and resets without a search control", global_list_without_search);
     test_run("SSH global navigation uses admin capability gating", navigation_gated);

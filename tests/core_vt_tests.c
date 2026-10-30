@@ -240,6 +240,18 @@ static void test_modes_the_keyboard_depends_on(void) {
     vt_free(vt);
 }
 
+static void test_escape_and_return_go_as_key_records_once_conpty_asks(void) {
+    Vt *vt = vt_new(10, 5, 100);
+    CHECK(vt_key_record(vt, 0x1B) == NULL); CHECK(vt_key_record(vt, '\r') == NULL);
+    put(vt, "\x1b[?9001h");
+    CHECK_OWNED_STR(vt_key_record(vt, 0x1B), "\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_");
+    CHECK_OWNED_STR(vt_key_record(vt, '\r'), "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_");
+    CHECK(vt_key_record(vt, 'a') == NULL); CHECK(vt_key_record(vt, '\n') == NULL); CHECK(vt_key_record(vt, 0x7F) == NULL);
+    put(vt, "\x1b[?9001l");
+    CHECK(vt_key_record(vt, 0x1B) == NULL); CHECK(vt_key_record(vt, '\r') == NULL);
+    vt_free(vt);
+}
+
 static void test_resizing_keeps_the_cursor_line_on_screen(void) {
     Vt *vt = vt_new(10, 4, 100);
     put(vt, "1\r\n2\r\n3\r\n4");
@@ -314,6 +326,7 @@ void vt_tests(void) {
     test_run("vt titles and the bell", test_titles_and_the_bell);
     test_run("vt reports answer the program", test_reports_answer_the_program);
     test_run("vt modes the keyboard depends on", test_modes_the_keyboard_depends_on);
+    test_run("vt escape and return go as key records once ConPTY asks", test_escape_and_return_go_as_key_records_once_conpty_asks);
     test_run("vt resizing keeps the cursor line on screen", test_resizing_keeps_the_cursor_line_on_screen);
     test_run("vt tabs and backspace", test_tabs_and_backspace);
     test_run("vt char widths and the palette", test_char_widths_and_the_palette);

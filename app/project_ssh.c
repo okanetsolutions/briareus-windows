@@ -163,7 +163,7 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
         Json *folders = ssh_server_folders(p->rows, projects, count, "");
         const char *repo = json_str(json_get(json_at(folders, (size_t)arg), "repo"));
         if (repo) ssh_server_folder_toggle(p->folded, repo, "");
-        json_free(folders); relayout(p); break;
+        json_free(folders); relayout(p); return true;
     }
     case A_SERVER: project_ssh_connect_row(p, json_at(p->rows, (size_t)arg)); break;
     case A_TAB: term_set_active(term_by_index(arg)); break;
@@ -177,6 +177,10 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
         break;
     }
     }
+    // The click gave the pane the keyboard; the session on show takes it back even when nothing changed, as on its own
+    // tab or server or a cancelled Close.
+    p->focused = NULL;
+    relayout(p);
     return true;
 }
 
