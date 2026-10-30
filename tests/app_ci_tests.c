@@ -49,9 +49,11 @@ static void failures_and_capabilities(void) {
     Fixture f; CIScreen *s = setup(&f); f.statuses[1] = 429; load(&f, s);
     CHECK(s->stats != NULL && s->runs == NULL); CHECK(s->retry[1] >= (double)time(NULL) + 119); CHECK(s->errors[1] != NULL);
     s->base.vt->refresh(&s->base); CHECK_INT(f.calls[0], 1); CHECK_INT(f.calls[1], 1);
-    s->base.vt->action(&s->base, CI_DAYS, 90, (POINT){0}); CHECK(s->stats == NULL); CHECK(s->reads[0] == NULL);
+    s->base.vt->action(&s->base, CI_DAYS, 90, (POINT){0}); CHECK(s->stats == NULL); CHECK(s->reads[0] == NULL); CHECK(s->window == NULL);
+    s->base.vt->timer(&s->base, CI_POLL); CHECK_INT(f.calls[0], 1); CHECK(s->reads[0] == NULL);
     s->retry[1] = 0; f.statuses[1] = 200; f.answers[0] = "{}";
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 2); CHECK(s->stats == NULL); CHECK(s->errors[0] != NULL); CHECK(s->runs != NULL);
+    CHECK(json_num_or(json_get(s->window, "until"), 0) - json_num_or(json_get(s->window, "since"), 0) == 7776000000.0);
     s->retry[0] = 0; f.answers[0] = CI_STATS_FIXTURE; f.statuses[1] = 403;
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 2); CHECK(s->stats != NULL); CHECK(s->runs == NULL);
     g_store.route_count = 1; s->retry[1] = 0; s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);

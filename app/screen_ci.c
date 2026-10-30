@@ -51,7 +51,10 @@ static void read_channel(CIScreen *s, int channel, int offset) {
 void ci_load(CIScreen *s, bool reset) {
     if (!s->shown || !g_store.active || !ci_current(s)) return;
     if (!reset && (s->reads[0] || s->reads[1])) return;
-    if (reset) clear(s);
+    if (reset) {
+        clear(s); json_free(s->window); s->window = NULL;
+        set_string(&s->errors[0], NULL); set_string(&s->errors[1], NULL);
+    }
     // A refresh starts a new window only when both channels can read it.
     if (s->retry[0] > (double)time(NULL) || s->retry[1] > (double)time(NULL)) return;
     json_free(s->window); s->window = ci_query(s->days, (double)time(NULL) * 1000, s->statuses, s->repo, s->branch);
