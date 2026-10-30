@@ -17,10 +17,10 @@ void global_pulls_header(Screen *base, HeaderInfo *info) {
     }
     HeaderButton *b;
     if (s->tab == GLOBAL_TAB_PULLS) {
-    b = &info->buttons[info->button_count++];
-    snprintf(b->label, sizeof b->label, "%s later stacked PRs", s->hide_stacked ? "Show" : "Hide"); b->glyph = 0xE71C; b->tip = "Show or hide later stacked pull requests"; b->action = GLOBAL_STACK; b->enabled = s->listed;
-    b = &info->buttons[info->button_count++];
-    snprintf(b->label, sizeof b->label, "%s failing checks", s->filter.hide_failing_checks ? "Show" : "Hide"); b->glyph = 0xEA39; b->tip = "Show or hide pull requests with failing checks"; b->action = GLOBAL_CHECKS; b->enabled = s->listed;
+        b = &info->buttons[info->button_count++];
+        snprintf(b->label, sizeof b->label, "%s later stacked PRs", s->hide_stacked ? "Show" : "Hide"); b->glyph = 0xE71C; b->tip = "Show or hide later stacked pull requests"; b->action = GLOBAL_STACK; b->enabled = s->listed;
+        b = &info->buttons[info->button_count++];
+        snprintf(b->label, sizeof b->label, "%s failing checks", s->filter.hide_failing_checks ? "Show" : "Hide"); b->glyph = 0xEA39; b->tip = "Show or hide pull requests with failing checks"; b->action = GLOBAL_CHECKS; b->enabled = s->listed;
     }
     if (s->tab == GLOBAL_TAB_REVIEW) {
         b = &info->buttons[info->button_count++]; b->glyph = 0xE77B; b->action = GLOBAL_LOGIN; b->enabled = true;

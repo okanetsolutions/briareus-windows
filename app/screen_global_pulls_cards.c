@@ -12,7 +12,9 @@ void global_board_tabs(GlobalPullsScreen *s, Doc *doc) {
     char *labels[GLOBAL_TAB_COUNT]; ButtonSpec tabs[GLOBAL_TAB_COUNT];
     for (int tab = 0; tab < GLOBAL_TAB_COUNT; tab++) {
         size_t count; free(global_board_rows(&s->state, s->limit, (GlobalBoardTab)tab, NULL, false, screen_pulls_github_login(), &count));
-        labels[tab] = xstrfmt("%s %zu%s", tab == GLOBAL_TAB_PULLS ? "Pull requests" : tab == GLOBAL_TAB_ISSUES ? "Issues" : "Review List", count, global_board_incomplete(s, (GlobalBoardTab)tab) ? "+" : ""); tabs[tab] = (ButtonSpec){0, labels[tab], s->tab == (GlobalBoardTab)tab ? BUTTON_PROMINENT : BUTTON_BORDERED, GLOBAL_TAB, tab, true};
+        const char *title = tab == GLOBAL_TAB_PULLS ? "Pull requests" : tab == GLOBAL_TAB_ISSUES ? "Issues" : "Review List";
+        labels[tab] = xstrfmt("%s %zu%s", title, count, global_board_incomplete(s, (GlobalBoardTab)tab) ? "+" : "");
+        tabs[tab] = (ButtonSpec){0, labels[tab], s->tab == (GlobalBoardTab)tab ? BUTTON_PROMINENT : BUTTON_BORDERED, GLOBAL_TAB, tab, true};
     }
     doc_button_row(doc, 0, doc->width, tabs, GLOBAL_TAB_COUNT);
     for (int tab = 0; tab < GLOBAL_TAB_COUNT; tab++) free(labels[tab]);
