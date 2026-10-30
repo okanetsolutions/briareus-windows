@@ -2,6 +2,8 @@
 #include "dialogs.h"
 #include <string.h>
 
+double ci_now(const CIScreen *s) { return (double)(s->clock ? s->clock() : time(NULL)); }
+
 bool ci_current(CIScreen *s) {
     if (s->client != g_store.client || !store_supports("ci_stats")) return false;
     Json *device = device_json(&g_store.device);
@@ -20,7 +22,7 @@ static void done(void *owner, Request *req) {
     if (!parsed) {
         char *error = request_error_or_unexpected(req); set_string(&s->errors[channel], error); free(error);
         if (s->failures[channel] < 6) s->failures[channel]++;
-        s->retry[channel] = stats_retry_deadline((double)time(NULL), s->retry[channel], s->failures[channel], req->error.retry_after);
+        s->retry[channel] = stats_retry_deadline(ci_now(s), s->retry[channel], s->failures[channel], req->error.retry_after);
         // Never leave accessible figures behind a permission refusal.
         if (req->error.status == 401 || req->error.status == 403 || req->error.status == 404) {
             if (channel) { json_free(s->runs); s->runs = NULL; s->offset = -1; }
@@ -42,7 +44,7 @@ static void done(void *owner, Request *req) {
     json_free(parsed); s->action_first = s->action_next; pane_relayout(s->base.pane);
 }
 static void read_channel(CIScreen *s, int channel, int offset) {
-    if (s->reads[channel] || s->retry[channel] > (double)time(NULL)) return;
+    if (s->reads[channel] || s->retry[channel] > ci_now(s)) return;
     if (channel && !store_supports("ci_runs")) return;
     Json *args = channel ? ci_runs_query(s->window, offset) : json_clone(s->window);
     if (channel) s->requested_offset = offset;
@@ -56,15 +58,23 @@ void ci_load(CIScreen *s, bool reset) {
         set_string(&s->errors[0], NULL); set_string(&s->errors[1], NULL);
     }
     // A refresh starts a new window only when both channels can read it.
-    if (s->retry[0] > (double)time(NULL) || s->retry[1] > (double)time(NULL)) return;
-    json_free(s->window); s->window = ci_query(s->days, (double)time(NULL) * 1000, s->statuses, s->repo, s->branch);
+    if (s->retry[0] > ci_now(s) || s->retry[1] > ci_now(s)) return;
+    json_free(s->window); s->window = ci_query(s->days, ci_now(s) * 1000, s->statuses, s->repo, s->branch);
     clear(s); read_channel(s, 0, 0); read_channel(s, 1, 0);
+}
+static void resume_missing(CIScreen *s) {
+    if (!s->shown || !g_store.active || !ci_current(s)) return;
+    if (!s->window) { ci_load(s, false); return; }
+    // A cancelled or failed first page stays missing; an empty successful page does not.
+    // Resume within the pinned window, never restart or advance a loaded run snapshot.
+    if (!s->stats) read_channel(s, 0, 0);
+    if (!s->runs) read_channel(s, 1, 0);
 }
 static void visible(Screen *base, bool shown) {
     CIScreen *s = (CIScreen *)base; s->shown = shown;
     if (shown && ci_current(s)) {
         poller_start(&s->poller, base->pane, CI_POLL, 60000);
-        if (!s->stats && !s->runs) ci_load(s, false);
+        resume_missing(s);
     } else {
         poller_stop(&s->poller); request_cancel(&s->reads[0]); request_cancel(&s->reads[1]);
         if (!ci_current(s)) clear(s);
@@ -77,7 +87,8 @@ static void timer(Screen *base, UINT id) {
     if (!store_supports("ci_runs")) { request_cancel(&s->reads[1]); json_free(s->runs); s->runs = NULL; s->offset = -1; }
     if (poller_fired(&s->poller, id)) {
         // Keep the browsed run snapshot and its pinned window until an explicit refresh.
-        if (s->window) read_channel(s, 0, 0); else ci_load(s, false);
+        if (s->window) read_channel(s, 0, 0);
+        resume_missing(s);
         poller_finished(&s->poller, false, -1);
     }
 }
@@ -112,7 +123,7 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
 }
 static void activated(Screen *base, bool active) {
     CIScreen *s = (CIScreen *)base;
-    if (active && s->shown && ci_current(s) && !s->stats && !s->runs) ci_load(s, false);
+    if (active) resume_missing(s);
 }
 static void destroy(Screen *base) {
     CIScreen *s = (CIScreen *)base; visible(base, false); clear(s);

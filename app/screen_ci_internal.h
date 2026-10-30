@@ -18,7 +18,9 @@ typedef struct {
     bool statuses, shown, truncated, capped;
     intptr_t action_first, action_next;
     Poller poller;
+    time_t (*clock)(void); // NULL uses the wall clock; tests advance deadlines without sleeping.
 } CIScreen;
+double ci_now(const CIScreen *s);
 bool ci_current(CIScreen *s);
 void ci_load(CIScreen *s, bool reset);
 void ci_layout(Screen *base, Doc *doc);

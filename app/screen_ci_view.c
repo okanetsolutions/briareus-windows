@@ -52,7 +52,7 @@ void ci_layout(Screen *base, Doc *doc) {
     doc_text(doc, 0, w, "Observed GitHub checks only, not a full backfill. Refresh starts a new window; background reads retain this window and its run pages. Durations are execution time, not billed minutes.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
     for (int i = 0; i < 2; i++) {
         if (s->errors[i]) doc_notice(doc, 0, w, s->errors[i]);
-        if (s->retry[i] > (double)time(NULL)) {
+        if (s->retry[i] > ci_now(s)) {
             char *at = stats_time((StatNumber){s->retry[i] * 1000, true});
             char *text = xstrfmt("%s reads paused until %s", i ? "Run" : "Summary", at);
             doc_text(doc, 0, w, text, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(at); free(text);
@@ -75,5 +75,5 @@ void ci_layout(Screen *base, Doc *doc) {
         doc_box_end(doc, box, px(10)); doc_space(doc, px(6)); free(title); free(meta);
     }
     if (s->truncated || s->capped) doc_notice(doc, 0, w, "More observations exist. Narrow the window, project or branch to see them.");
-    if (s->offset >= 0) doc_button(doc, 0, 0, "Load more", BUTTON_BORDERED, CI_MORE, 0, !s->reads[0] && !s->reads[1] && s->retry[1] <= (double)time(NULL));
+    if (s->offset >= 0) doc_button(doc, 0, 0, "Load more", BUTTON_BORDERED, CI_MORE, 0, !s->reads[0] && !s->reads[1] && s->retry[1] <= ci_now(s));
 }
