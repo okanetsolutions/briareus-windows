@@ -72,6 +72,8 @@ Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issu
 Screen *findings_screen_new(void);
 /// Global waiting questions, held findings and working/ready counts.
 Screen *status_screen_new(void);
+/// Read-only observed CI/CD metrics and paged runs across accessible projects.
+Screen *ci_screen_new(void);
 /// Session-specific, read-only resource figures; reads only while visible.
 Screen *server_resources_screen_new(void);
 Screen *resources_screen_new(const Session *session);
