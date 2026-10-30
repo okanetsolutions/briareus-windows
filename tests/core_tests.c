@@ -901,6 +901,7 @@ int main(void) {
     core_ci_tests();
     core_code_reviews_tests();
     board_tests();
+    core_global_pulls_tests();
     api_tests();
     contract_tests();
     cache_tests();
