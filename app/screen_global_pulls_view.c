@@ -68,7 +68,8 @@ void global_pulls_layout(Screen *base, Doc *doc) {
 void global_pulls_header(Screen *base, HeaderInfo *info) {
     GlobalPullsScreen *s = (GlobalPullsScreen *)base;
     snprintf(info->title, sizeof info->title, "All projects · Pull requests");
-    snprintf(info->subtitle, sizeof info->subtitle, "%zu accessible projects · %s", s->state.count, incomplete(s) ? "scope incomplete" : "all projects loaded");
+    if (!s->listed) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->loading ? "Reading accessible project scope" : "Accessible project scope unavailable");
+    else snprintf(info->subtitle, sizeof info->subtitle, "%zu accessible projects · %s", s->state.count, incomplete(s) ? "scope incomplete" : "all projects loaded");
     if (!global_pulls_current(s)) return;
     const FilterKind kinds[] = {FILTER_AUTHOR, FILTER_REVIEWER, FILTER_LABEL};
     for (size_t i = 0; i < sizeof kinds / sizeof kinds[0]; i++) {
