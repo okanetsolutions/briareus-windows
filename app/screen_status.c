@@ -100,10 +100,15 @@ static void header(Screen *base, HeaderInfo *info) {
     StatusScreen *s = (StatusScreen *)base;
     snprintf(info->title, sizeof info->title, "\xE2\x97\x89 Status");
     if (status_current(s) && store_supports("server_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D9, .action = STATUS_SERVER, .enabled = true, .tip = "Server resources"};
+    if (status_current(s) && store_supports("ci_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D5, .action = STATUS_CI, .enabled = true, .tip = "CI/CD history"};
     if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->loaded ? "Answer questions and follow active sessions" : "Loading sessions…");
 }
 static void action(Screen *base, int action, intptr_t arg, POINT point) {
     (void)point; StatusScreen *s = (StatusScreen *)base;
+    if (action == STATUS_CI) {
+        if (status_current(s) && store_supports("ci_stats")) app_push_from(base, ci_screen_new());
+        return;
+    }
     if (action == STATUS_SERVER) {
         if (status_current(s) && store_supports("server_stats")) app_push_from(base, server_resources_screen_new());
         return;

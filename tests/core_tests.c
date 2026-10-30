@@ -898,6 +898,7 @@ int main(void) {
     markdown_tests();
     diff_tests();
     models_tests();
+    core_ci_tests();
     core_code_reviews_tests();
     board_tests();
     api_tests();

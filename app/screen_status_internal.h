@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER };
+enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI };
 typedef struct {
     Session session;
     Json *identity, *answered_question;
