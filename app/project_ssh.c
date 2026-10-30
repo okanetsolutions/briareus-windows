@@ -152,6 +152,11 @@ void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool sh
 // MARK: - Actions
 
 static Term *term_by_index(intptr_t arg) { return arg >= 0 ? term_at((size_t)arg) : NULL; }
+/// A dialog runs the message loop, where a sign-out can free the page; a freed page has left its slot.
+static bool instance_alive(const ProjectSsh *p) {
+    for (int i = 0; i < MAX_INSTANCES; i++) if (g_instances[i] == p) return true;
+    return false;
+}
 bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
     (void)pt;
     servers_ssh_scope_changed();
@@ -179,6 +184,7 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
     }
     // The click gave the pane the keyboard; the session on show takes it back even when nothing changed, as on its own
     // tab or server or a cancelled Close.
+    if (!instance_alive(p)) return true;
     p->focused = NULL;
     relayout(p);
     return true;
