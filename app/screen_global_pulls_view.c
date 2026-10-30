@@ -104,8 +104,12 @@ void global_pulls_pick(GlobalPullsScreen *s, FilterKind kind, POINT pt) {
         char *text = xstrfmt("%s (%d)", options[i].text, options[i].count); wchar_t *wide = utf8_to_wide(text);
         AppendMenuW(menu, MF_STRING, (UINT_PTR)i + 2, wide); free(text); free(wide);
     }
-    int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN, pt.x, pt.y, 0, pane_hwnd(s->base.pane), NULL); DestroyMenu(menu);
-    if (!global_pulls_current(s)) { filter_options_free(options, count); free(rows); free(refs); return; }
+    Pane *source = s->base.pane; Screen *screen = &s->base; HWND window = pane_hwnd(source);
+    int choice = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTALIGN, pt.x, pt.y, 0, window, NULL); DestroyMenu(menu);
+    // The popup pumps messages: connection rebuilding can destroy its screen before it returns.
+    bool live = IsWindow(window) && pane_contains_screen(source, screen);
+    if (!live) { filter_options_free(options, count); free(rows); free(refs); return; }
+    if (pane_top(source) != screen || !global_pulls_current(s)) { filter_options_free(options, count); free(rows); free(refs); return; }
     if (choice == 1) board_filter_set(&s->filter, kind, "");
     else if (choice >= 2 && (size_t)(choice - 2) < count) board_filter_set(&s->filter, kind, options[choice - 2].value);
     filter_options_free(options, count); free(rows); free(refs); global_pulls_filters_save(s);

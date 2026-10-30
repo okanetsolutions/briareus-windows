@@ -166,8 +166,30 @@ static void global_destroy_pending(void) {
     s->base.vt->destroy(&s->base); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
     CHECK_INT(f.calls[2], 0); global_fixture_clear(&f);
 }
+static WNDPROC menu_original;
+static Pane *menu_pane;
+static bool menu_retired;
+static LRESULT CALLBACK retire_menu_owner(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
+    if (message == WM_ENTERMENULOOP) PostMessageW(hwnd, WM_APP + 90, 0, 0);
+    if (message == WM_APP + 90) {
+        pane_set_root(menu_pane, NULL); menu_retired = true; EndMenu(); return 0;
+    }
+    return CallWindowProcW(menu_original, hwnd, message, wp, lp);
+}
+static void global_popup_owner_lifetime(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+    pane_set_root(f.screen.pane, &s->base); menu_pane = f.screen.pane; menu_retired = false;
+    HWND hwnd = pane_hwnd(menu_pane);
+    menu_original = (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)retire_menu_owner);
+    global_pulls_pick(s, FILTER_AUTHOR, (POINT){200, 100});
+    CHECK(menu_retired); CHECK(pane_top(menu_pane) == NULL);
+    SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)menu_original);
+    Json *saved = cache_value(g_store.cache, "global-pulls-filters"); CHECK(saved == NULL); json_free(saved);
+    pane_set_root(menu_pane, NULL); menu_pane = NULL; global_fixture_clear(&f);
+}
 void app_global_pulls_tests(void) {
     screen_fixture_prepare();
+    test_run("global PR filter popup survives owner retirement", global_popup_owner_lifetime);
     test_run("global PR destruction cancels both project and board owners", global_destroy_pending);
     test_run("global PR failed snapshots and fresh compatibility", global_failures_and_compatibility);
     test_run("global PR cancelled project list and stale client", global_cancel_projects_and_client);
