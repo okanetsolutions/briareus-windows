@@ -85,6 +85,8 @@ void global_pulls_header(Screen *base, HeaderInfo *info) {
     b = &info->buttons[info->button_count++];
     snprintf(b->label, sizeof b->label, "%s failing checks", s->filter.hide_failing_checks ? "Show" : "Hide"); b->glyph = 0xEA39; b->tip = "Show or hide pull requests with failing checks"; b->action = GLOBAL_CHECKS; b->enabled = s->listed;
     b = &info->buttons[info->button_count++]; b->glyph = 0xE72C; b->action = GLOBAL_REFRESH;
+    time_t shared = global_pulls_projects_deadline();
+    if (shared > s->projects_retry) s->projects_retry = shared;
     b->enabled = time(NULL) >= s->projects_retry; b->tip = "Refresh all included repositories from GitHub; repository cooldowns still apply";
 }
 void global_pulls_filters_save(GlobalPullsScreen *s) {

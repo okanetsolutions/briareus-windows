@@ -10,9 +10,10 @@ static void clear(GlobalPullsScreen *s) {
     free(s->rows); s->rows = NULL; s->row_count = 0;
     s->listed = s->loading = false; s->action_first = s->action_next;
 }
-static void changed(GlobalPullsScreen *s) {
+void global_pulls_changed(GlobalPullsScreen *s) {
     // Old document actions must never index a different snapshot.
     s->action_first = s->action_next;
+    if (!s->base.pane) return;
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
 }
 static void board_done(void *owner, Request *req) {
@@ -22,7 +23,7 @@ static void board_done(void *owner, Request *req) {
     GlobalPullProject *p = &s->state.projects[s->cursor];
     if (!str_ieq(p->project.repo, json_str(json_get(req->args, "repo")))) return;
     if (!req->ok && req->error.status == 400 && !json_is_null(json_get(req->args, "fresh"))) {
-        if (screen_pulls_pulls_read(p->project.repo, false, s, board_done, &s->req)) return;
+        if (screen_pulls_pulls_read(p->project.repo, false, s, board_done, &s->req)) { global_pulls_track(s); return; }
     }
     if (req->ok && global_pulls_adopt(p, req->result)) {
         pulls_note_success(p->project.repo); p->fresh = false;
@@ -39,19 +40,19 @@ static void board_done(void *owner, Request *req) {
             char *key = xstrfmt("pulls:%s", p->project.repo); cache_remove(g_store.cache, key); free(key);
         }
     }
-    s->cursor++; changed(s); global_pulls_next(s);
+    s->cursor++; global_pulls_changed(s); global_pulls_next(s);
 }
 void global_pulls_next(GlobalPullsScreen *s) {
     if (!s->shown || !g_store.active || !global_pulls_current(s) || s->req) return;
     size_t end = s->limit < s->state.count ? s->limit : s->state.count;
     while (s->cursor < end) {
         GlobalPullProject *p = &s->state.projects[s->cursor];
-        if (screen_pulls_pulls_read(p->project.repo, p->fresh, s, board_done, &s->req)) return;
+        if (screen_pulls_pulls_read(p->project.repo, p->fresh, s, board_done, &s->req)) { global_pulls_track(s); return; }
         if (!p->error) set_string(&p->error, "Updates delayed by this repository's cooldown; showing the last snapshot if available.");
         s->cursor++;
     }
     s->loading = false; s->next_poll = time(NULL) + 60;
-    poller_finished(&s->poller, false, -1); changed(s);
+    poller_finished(&s->poller, false, -1); global_pulls_changed(s);
     if (s->queued_fresh) { s->queued_fresh = false; global_pulls_load(s, true); }
 }
 static void restore_cached(GlobalPullsScreen *s, size_t first, size_t end) {
@@ -71,26 +72,27 @@ static void projects_done(void *owner, Request *req) {
     Project *projects = NULL; size_t count = 0;
     if (!req->ok || !projects_parse(req->result, &projects, &count)) {
         char *error = request_error_or_unexpected(req); set_string(&s->error, error); free(error);
-        double delay = req->error.retry_after > 60 ? req->error.retry_after : 60;
-        if (delay > 2147483647) delay = 2147483647;
-        s->projects_retry = time(NULL) + (time_t)delay + 1;
+        s->projects_retry = global_pulls_projects_failed(&req->error);
         s->loading = false;
         if (req->error.status == 403 || req->error.status == 404) clear(s);
-        poller_finished(&s->poller, false, -1); changed(s); return;
+        poller_finished(&s->poller, false, -1); global_pulls_changed(s); return;
     }
     global_pulls_replace(&s->state, projects, count); projects_free(projects, count);
     cache_store(g_store.cache, req->result, "projects");
-    s->listed = true; s->projects_retry = 0; set_string(&s->error, NULL); s->cursor = 0;
+    global_pulls_projects_succeeded();
+    s->listed = true; s->projects_retry = global_pulls_projects_deadline(); set_string(&s->error, NULL); s->cursor = 0;
     for (size_t i = 0; i < s->state.count; i++) s->state.projects[i].fresh |= s->fresh;
     restore_cached(s, 0, s->limit);
-    changed(s); global_pulls_next(s);
+    global_pulls_changed(s); global_pulls_next(s);
 }
 void global_pulls_load(GlobalPullsScreen *s, bool fresh) {
     if (!s->shown || !g_store.active || !global_pulls_current(s)) return;
     if (s->loading || s->req) { s->queued_fresh |= fresh; return; }
+    time_t shared = global_pulls_projects_deadline();
+    if (shared > s->projects_retry) s->projects_retry = shared;
     if (time(NULL) < s->projects_retry) return;
     s->fresh = fresh; s->loading = s->reading_projects = true;
-    store_call("projects", json_object(), 0, s, projects_done, 0, &s->req); changed(s);
+    store_call("projects", json_object(), 0, s, projects_done, 0, &s->req); global_pulls_track(s); global_pulls_changed(s);
 }
 static void visible(Screen *base, bool shown) {
     GlobalPullsScreen *s = (GlobalPullsScreen *)base;
@@ -111,7 +113,7 @@ static void visible(Screen *base, bool shown) {
 }
 static void timer(Screen *base, UINT id) {
     GlobalPullsScreen *s = (GlobalPullsScreen *)base;
-    if (!global_pulls_current(s)) { clear(s); poller_stop(&s->poller); changed(s); return; }
+    if (!global_pulls_current(s)) { clear(s); poller_stop(&s->poller); global_pulls_changed(s); return; }
     if (!poller_fired(&s->poller, id)) return;
     if (s->loading) { global_pulls_next(s); }
     else if (time(NULL) >= s->next_poll) global_pulls_load(s, false);
@@ -143,21 +145,21 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
     if (!global_pulls_current(s)) return;
     if (id == GLOBAL_OPEN) { Screen *detail = global_pulls_detail(s, arg); if (detail) app_push_from(base, detail); return; }
     if (id == GLOBAL_REFRESH) { refresh(base); return; }
-    if (id == GLOBAL_MORE_ROWS) { s->visible_rows += 100; changed(s); return; }
+    if (id == GLOBAL_MORE_ROWS) { s->visible_rows += 100; global_pulls_changed(s); return; }
     if (id == GLOBAL_MORE) {
         if (s->loading || s->req || s->limit >= s->state.count) return;
         s->cursor = s->limit; s->limit += GLOBAL_PULLS_PROJECT_BATCH; s->loading = true;
-        restore_cached(s, s->cursor, s->limit); changed(s); global_pulls_next(s); return;
+        restore_cached(s, s->cursor, s->limit); global_pulls_changed(s); global_pulls_next(s); return;
     }
     if (id >= GLOBAL_FILTER_BASE && id < GLOBAL_FILTER_BASE + FILTER_KIND_COUNT) { global_pulls_pick(s, (FilterKind)(id - GLOBAL_FILTER_BASE), pt); return; }
     if (id == GLOBAL_STACK) s->hide_stacked = !s->hide_stacked;
     else if (id == GLOBAL_CHECKS) s->filter.hide_failing_checks = !s->filter.hide_failing_checks;
     else if (id == GLOBAL_CLEAR) { board_filter_free(&s->filter); board_filter_init(&s->filter); s->hide_stacked = false; }
     else return;
-    global_pulls_filters_save(s); changed(s);
+    global_pulls_filters_save(s); global_pulls_changed(s);
 }
 static void destroy(Screen *base) {
-    GlobalPullsScreen *s = (GlobalPullsScreen *)base; poller_stop(&s->poller); clear(s);
+    GlobalPullsScreen *s = (GlobalPullsScreen *)base; global_pulls_unregister(s); poller_stop(&s->poller); clear(s);
     api_client_release(s->client); json_free(s->device); board_filter_free(&s->filter); free(s->error); free(s->selected_repo); screen_release(base);
 }
 static void place(Screen *base, const RECT *content, int scroll_y) {
@@ -185,5 +187,6 @@ Screen *global_pulls_screen_new(void) {
         global_pulls_replace(&s->state, projects, count); restore_cached(s, 0, s->limit);
     }
     projects_free(projects, count); json_free(catalog);
+    s->projects_retry = global_pulls_projects_deadline(); global_pulls_register(s);
     return &s->base;
 }

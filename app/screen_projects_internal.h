@@ -106,5 +106,7 @@ bool screen_projects_sessions_footer_wheel(Screen *base, POINT pt, int delta);
 void screen_projects_sessions_footer_click(Screen *base, POINT pt);
 // NULL opens sessions across all projects; a supplied project is copied.
 Screen *sessions_screen_new(const Project *project);
+// Creates the owned board for this session scope, or NULL when its global reads are unavailable.
+Screen *screen_projects_board_screen(const SessionsScreen *s);
 
 #endif

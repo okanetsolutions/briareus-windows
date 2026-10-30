@@ -6,7 +6,7 @@ typedef struct {
     ScreenFixture screen; wchar_t cache_directory[MAX_PATH];
     const char *projects, *boards[2];
     int statuses[2]; volatile LONG calls[3], active, peak;
-    char *urls[3]; bool block_board, reject_fresh;
+    char *urls[3]; bool block_board, block_projects, reject_fresh;
 } GlobalFixture;
 static Route GLOBAL_ROUTES[] = {{"GET", "/projects", "read"}, {"GET", "/pulls", "read"}};
 static bool global_transport(void *ctx, const char *method, const char *url, const char *const *headers,
@@ -16,7 +16,7 @@ static bool global_transport(void *ctx, const char *method, const char *url, con
     int channel = strstr(url, "/projects") ? 0 : strstr(url, "repo=o%2Fa") ? 1 : 2;
     LONG active = InterlockedIncrement(&f->active); if (active > f->peak) f->peak = active;
     free(f->urls[channel]); f->urls[channel] = xstrdup(url); InterlockedIncrement(&f->calls[channel]);
-    if (channel && f->block_board) { SetEvent(f->screen.entered); WaitForSingleObject(f->screen.resume, 10000); }
+    if ((channel && f->block_board) || (!channel && f->block_projects)) { SetEvent(f->screen.entered); WaitForSingleObject(f->screen.resume, 10000); }
     *status = channel ? f->statuses[channel - 1] : f->screen.read_status;
     if (channel && f->reject_fresh && strstr(url, "fresh=1")) *status = 400;
     *type = xstrdup("application/json"); *retry = xstrdup(*status == 429 ? "120" : NULL);
@@ -190,6 +190,51 @@ static void global_cached_scope_reconciliation(void) {
     CHECK(!s->listed); CHECK(s->error != NULL); CHECK_INT(s->state.projects[0].count, 1);
     global_cleanup(&f, s);
 }
+static void global_cancelled_cooldowns_survive_reopening(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); f.block_board = true; f.statuses[0] = 429;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->destroy(&s->base); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    CHECK(pulls_retry_deadline("o/a") >= time(NULL) + 119);
+    s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane; f.block_board = false;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 2);
+    CHECK_INT(f.calls[1], 1); CHECK(s->state.projects[0].error != NULL); CHECK(s->state.projects[1].loaded);
+    global_cleanup(&f, s);
+    s = global_setup(&f); f.block_projects = true; f.screen.read_status = 429;
+    s->base.vt->visible(&s->base, true); CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->destroy(&s->base); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    s = (GlobalPullsScreen *)global_pulls_screen_new(); s->base.pane = f.screen.pane;
+    CHECK(s->projects_retry >= time(NULL) + 119); s->base.vt->visible(&s->base, true);
+    CHECK(s->req == NULL); CHECK_INT(f.calls[0], 1); global_cleanup(&f, s);
+}
+static void global_cancelled_refusal_clears_reopened_snapshot(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); global_load(&f, s);
+    f.block_board = true; f.statuses[0] = 403;
+    s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->destroy(&s->base);
+    // A replacement can still be awaiting a leave confirmation, before it belongs to any pane.
+    s = (GlobalPullsScreen *)global_pulls_screen_new();
+    CHECK_INT(s->state.projects[0].count, 1); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(s->state.projects[0].count, 0); CHECK(s->state.projects[0].error != NULL); CHECK_INT(s->state.projects[1].count, 1);
+    Json *cached = cache_value(g_store.cache, "pulls:o/a"); CHECK(cached == NULL); json_free(cached); global_cleanup(&f, s);
+}
+static void global_cancelled_old_device_cannot_set_cooldown(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); f.block_board = true; f.statuses[0] = 429;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->destroy(&s->base); g_store.device.permission = "admin";
+    SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1); CHECK_INT(pulls_retry_deadline("o/a"), 0);
+    global_fixture_clear(&f);
+}
+static void global_old_device_401_cannot_invalidate_current_client(void) {
+    GlobalFixture f; GlobalPullsScreen *s = global_setup(&f); f.block_board = true; f.statuses[0] = 401;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    g_store.device.permission = "admin"; SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    CHECK(g_store.client == f.screen.client); CHECK(g_store.has_device); CHECK_INT(s->state.count, 0);
+    global_cleanup(&f, s);
+}
 static WNDPROC menu_original;
 static Pane *menu_pane;
 static bool menu_retired;
@@ -213,6 +258,10 @@ static void global_popup_owner_lifetime(void) {
 }
 void app_global_pulls_tests(void) {
     screen_fixture_prepare();
+    test_run("global PR old device 401 cannot invalidate the current client", global_old_device_401_cannot_invalidate_current_client);
+    test_run("global PR cancelled Retry-After survives controller destruction", global_cancelled_cooldowns_survive_reopening);
+    test_run("global PR cancelled refusal clears reopened snapshots", global_cancelled_refusal_clears_reopened_snapshot);
+    test_run("global PR old cancelled device cannot throttle the current device", global_cancelled_old_device_cannot_set_cooldown);
     test_run("global PR provisional cached scope reconciles removals and retains failed reads", global_cached_scope_reconciliation);
     test_run("global PR filter popup survives owner retirement", global_popup_owner_lifetime);
     test_run("global PR destruction cancels both project and board owners", global_destroy_pending);

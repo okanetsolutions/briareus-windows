@@ -3,7 +3,7 @@
 #include "test.h"
 
 static Pane *pane;
-static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/sessions", "read" } };
+static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/sessions", "read" }, { "GET", "/pulls", "read" } };
 static const char *rows = "{\"sessions\":["
     "{\"id\":\"a\",\"repo\":\"o/one\",\"status\":\"idle\",\"title\":\"First\"},"
     "{\"id\":\"b\",\"repo\":\"o/two\",\"status\":\"running\",\"title\":\"Second\"},"
@@ -80,7 +80,15 @@ static void test_all_and_project_requests_use_separate_scopes(void) {
         if (doc.items[i].action == ACT_OPEN_SESSION) open_rows++;
         CHECK(doc.items[i].action != ACT_BOARD);
     }
-    CHECK_INT(open_rows, 3); doc_free(&doc);
+    CHECK_INT(open_rows, 3); CHECK(screen_projects_board_screen(s) == NULL);
+    // The aggregate board is offered only when the catalog also exposes project PR reads.
+    g_store.route_count = 3; doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
+    size_t board_rows = 0;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_BOARD) board_rows++;
+    CHECK_INT(board_rows, 1); CHECK(s->all_projects); CHECK_STR(s->base.id, "sessions");
+    Screen *board = screen_projects_board_screen(s); CHECK(board != NULL);
+    if (board) { CHECK(str_has_prefix(board->id, "global-pulls:")); board->vt->destroy(board); }
+    doc_free(&doc);
     s->select_mode = true;
     s->base.vt->action(&s->base, ACT_PICK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_PICK, 1, (POINT){0});
     CHECK_INT(s->picked_count, 2); CHECK_STR(s->picked[0], "a"); CHECK_STR(s->picked[1], "b");
@@ -91,6 +99,12 @@ static void test_all_and_project_requests_use_separate_scopes(void) {
     // The sessions route filters its aggregate response in core/api.c.
     CHECK_STR(last_url, "https://test.example/api/v1/sessions");
     CHECK_INT(s->count, 1); CHECK(!s->all_projects);
+    doc_init(&doc); doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
+    board_rows = 0;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_BOARD) board_rows++;
+    CHECK_INT(board_rows, 1); CHECK_STR(s->project.repo, "o/one"); doc_free(&doc);
+    board = screen_projects_board_screen(s); CHECK(board != NULL);
+    if (board) { CHECK_STR(board->id, "pulls:o/one"); board->vt->destroy(board); }
     CHECK_STR(session_id(&s->sessions[0]), "a");
     check_saved("sessions", 3, "a");
     finish();
@@ -112,10 +126,20 @@ static void test_projects_all_navigation_and_capability(void) {
     all->vt->refresh(all); drain(1);
     CHECK_INT(((SessionsScreen *)all)->count, 3);
     all->vt->action(all, ACT_BACK, 0, (POINT){0}); CHECK(pane_top(pane) == root);
+    g_store.route_count = 3;
+    doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
+    size_t global_entries = 0, session_entries = 0;
+    for (size_t i = 0; i < doc.count; i++) {
+        if (doc.items[i].action == ACT_ALL_PULLS) global_entries++;
+        if (doc.items[i].action == ACT_ALL_SESSIONS) session_entries++;
+    }
+    CHECK_INT(global_entries, 1); CHECK_INT(session_entries, 1); doc_free(&doc);
     g_store.route_count = 1;
     root->vt->action(root, ACT_ALL_SESSIONS, 0, (POINT){0}); CHECK_INT(pane_depth(pane), 1);
     doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
-    for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != ACT_ALL_SESSIONS);
+    for (size_t i = 0; i < doc.count; i++) {
+        CHECK(doc.items[i].action != ACT_ALL_SESSIONS); CHECK(doc.items[i].action != ACT_ALL_PULLS);
+    }
     doc_free(&doc); finish();
 }
 

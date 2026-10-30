@@ -3,8 +3,9 @@
 #include "screen_pulls_internal.h"
 #include "global_pulls.h"
 enum { GLOBAL_POLL = 1, GLOBAL_REFRESH = 2000, GLOBAL_MORE, GLOBAL_OPEN, GLOBAL_CLEAR, GLOBAL_STACK, GLOBAL_CHECKS, GLOBAL_FILTER, GLOBAL_MORE_ROWS, GLOBAL_FILTER_BASE = 2100 };
-typedef struct {
+typedef struct GlobalPullsScreen {
     Screen base;
+    struct GlobalPullsScreen *next_live;
     ApiClient *client; Json *device;
     GlobalPulls state;
     BoardFilter filter; bool hide_stacked;
@@ -19,6 +20,13 @@ typedef struct {
     intptr_t action_first, action_next;
 } GlobalPullsScreen;
 bool global_pulls_current(GlobalPullsScreen *s);
+void global_pulls_changed(GlobalPullsScreen *s);
+void global_pulls_register(GlobalPullsScreen *s);
+void global_pulls_unregister(GlobalPullsScreen *s);
+void global_pulls_track(GlobalPullsScreen *s);
+time_t global_pulls_projects_failed(const ApiError *error);
+time_t global_pulls_projects_deadline(void);
+void global_pulls_projects_succeeded(void);
 void global_pulls_load(GlobalPullsScreen *s, bool fresh);
 void global_pulls_next(GlobalPullsScreen *s);
 void global_pulls_layout(Screen *base, Doc *doc);
