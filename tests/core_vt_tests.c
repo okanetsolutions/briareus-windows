@@ -235,8 +235,11 @@ static void test_modes_the_keyboard_depends_on(void) {
     CHECK(vt_focus_events(vt)); CHECK(vt_win32_input(vt));
     put(vt, "\x1b[?9001l");
     CHECK(!vt_win32_input(vt)); CHECK(vt_focus_events(vt));
-    put(vt, "\x1b" "c");
-    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt)); CHECK(!vt_focus_events(vt));
+    // A program's resets put its own modes back but keep what ConPTY asked for.
+    put(vt, "\x1b[?9001h\x1b[!p");
+    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt)); CHECK(vt_win32_input(vt)); CHECK(vt_focus_events(vt));
+    put(vt, "\x1b[?1h\x1b" "c");
+    CHECK(!vt_app_cursor(vt)); CHECK(vt_win32_input(vt)); CHECK(vt_focus_events(vt));
     vt_free(vt);
 }
 

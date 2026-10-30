@@ -46,7 +46,6 @@ static void reset_modes(Vt *vt) {
     vt->top = 0; vt->bottom = vt->rows - 1;
     vt->cursor_visible = true; vt->autowrap = true; vt->origin = false; vt->insert = false;
     vt->app_cursor = false; vt->app_keypad = false; vt->bracketed = false; vt->newline_mode = false;
-    vt->focus_events = false; vt->win32_input = false;
     vt->g0_lines = vt->g1_lines = vt->shift_out = false;
     vt->wrap_pending = false;
 }

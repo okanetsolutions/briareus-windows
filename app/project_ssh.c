@@ -135,14 +135,16 @@ void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool sh
         if (!IntersectRect(&visible, &r, content)) on = false;
         else r = visible;
     }
-    // Only this project's session on show is up; every other one waits, hidden.
+    // Only the session on show is up; the others in this pane wait, hidden. A session in another view's pane is that
+    // view's to place: hiding it would take its keyboard too.
+    HWND mine = p->host->pane ? pane_hwnd(p->host->pane) : NULL;
     for (size_t i = 0; i < term_count(); i++) {
         Term *t = term_at(i);
         if (t == active && on) {
-            SetParent(term_hwnd(t), pane_hwnd(p->host->pane));
+            SetParent(term_hwnd(t), mine);
             term_cycle_all(t, p->global); term_place(t, &r, true);
         }
-        else if (p->global || str_eq(term_group(t), p->repo) || !shown) term_place(t, NULL, false);
+        else if (GetParent(term_hwnd(t)) == mine) term_place(t, NULL, false);
     }
     if (!on) { p->focused = NULL; return; }
     // A session just opened or switched to takes the keyboard.
