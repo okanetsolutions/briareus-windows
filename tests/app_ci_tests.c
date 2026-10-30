@@ -16,7 +16,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
 }
 static CIScreen *setup(Fixture *f) {
     memset(f, 0, sizeof *f); screen_fixture_init(&f->screen, ROUTES, 2); g_store.device.permission = "read";
-    f->statuses[0] = f->statuses[1] = 200; f->answers[0] = f->answers[1] = CI_FIXTURE;
+    f->statuses[0] = f->statuses[1] = 200; f->answers[0] = CI_STATS_FIXTURE; f->answers[1] = CI_RUNS_FIXTURE;
     api_client_set_transport(f->screen.client, transport, f);
     CIScreen *s = (CIScreen *)ci_screen_new(); screen_fixture_pane(&f->screen, &s->base); return s;
 }
@@ -34,7 +34,10 @@ static void history_and_paging(void) {
     f.answers[1] = "{\"runs\":[],\"nextOffset\":null,\"truncated\":true}";
     s->base.vt->action(&s->base, CI_MORE, 0, (POINT){0}); screen_fixture_pump(&f.screen, 1);
     CHECK(json_equal(window, s->window)); CHECK(strstr(f.queries[1], "offset=50") != NULL); CHECK_INT(s->offset, -1); CHECK(s->truncated);
-    CHECK_INT(json_count(s->runs), 1); CHECK_INT(f.calls[0], 1); json_free(window);
+    CHECK_INT(json_count(s->runs), 1); CHECK_INT(f.calls[0], 1);
+    s->base.vt->timer(&s->base, CI_POLL); screen_fixture_pump(&f.screen, 1);
+    CHECK(json_equal(window, s->window)); CHECK_INT(json_count(s->runs), 1); CHECK_INT(f.calls[1], 2);
+    s->base.vt->activated(&s->base, true); CHECK(s->reads[0] == NULL && s->reads[1] == NULL); json_free(window);
     Doc doc; doc_init(&doc); screen_fixture_draw(&s->base, &doc); intptr_t old = s->action_first;
     s->base.vt->action(&s->base, CI_DAYS, 7, (POINT){0}); screen_fixture_pump(&f.screen, 2);
     CHECK_INT(s->days, 7); CHECK(old < s->action_first); CHECK_INT(json_count(s->runs), 0);
@@ -49,7 +52,7 @@ static void failures_and_capabilities(void) {
     s->base.vt->action(&s->base, CI_DAYS, 90, (POINT){0}); CHECK(s->stats == NULL); CHECK(s->reads[0] == NULL);
     s->retry[1] = 0; f.statuses[1] = 200; f.answers[0] = "{}";
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 2); CHECK(s->stats == NULL); CHECK(s->errors[0] != NULL); CHECK(s->runs != NULL);
-    s->retry[0] = 0; f.answers[0] = CI_FIXTURE; f.statuses[1] = 403;
+    s->retry[0] = 0; f.answers[0] = CI_STATS_FIXTURE; f.statuses[1] = 403;
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 2); CHECK(s->stats != NULL); CHECK(s->runs == NULL);
     g_store.route_count = 1; s->retry[1] = 0; s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
     CHECK_INT(f.calls[1], 3);

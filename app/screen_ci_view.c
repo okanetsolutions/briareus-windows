@@ -49,7 +49,7 @@ void ci_layout(Screen *base, Doc *doc) {
     doc_space(doc, px(12));
     if (!ci_current(s)) { doc_notice(doc, 0, w, "Reopen CI/CD on a connection with CI history access."); return; }
     filters(s, doc, w);
-    doc_text(doc, 0, w, "Observed GitHub checks only; this is not a full historical backfill. Durations are execution time, not billed minutes.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
+    doc_text(doc, 0, w, "Observed GitHub checks only, not a full backfill. Refresh starts a new window; background reads retain this window and its run pages. Durations are execution time, not billed minutes.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
     for (int i = 0; i < 2; i++) {
         if (s->errors[i]) doc_notice(doc, 0, w, s->errors[i]);
         if (s->retry[i] > (double)time(NULL)) {

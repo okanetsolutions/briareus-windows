@@ -13,7 +13,7 @@ static void clear(CIScreen *s) {
     s->offset = -1; s->truncated = s->capped = false; s->action_first = s->action_next;
 }
 static void done(void *owner, Request *req) {
-    CIScreen *s = owner; int channel = (int)req->arg;
+    CIScreen *s = owner; int channel = req->tag;
     if (!s->shown || !ci_current(s)) return;
     if (channel && !store_supports("ci_runs")) return;
     Json *parsed = req->ok ? (channel ? ci_page_parse(req->result, s->requested_offset) : ci_stats_parse(req->result)) : NULL;
@@ -72,7 +72,11 @@ static void timer(Screen *base, UINT id) {
     CIScreen *s = (CIScreen *)base;
     if (!ci_current(s)) { visible(base, false); pane_relayout(base->pane); return; }
     if (!store_supports("ci_runs")) { request_cancel(&s->reads[1]); json_free(s->runs); s->runs = NULL; s->offset = -1; }
-    if (poller_fired(&s->poller, id)) { refresh(base); poller_finished(&s->poller, false, -1); }
+    if (poller_fired(&s->poller, id)) {
+        // Keep the browsed run snapshot and its pinned window until an explicit refresh.
+        if (s->window) read_channel(s, 0, 0); else ci_load(s, false);
+        poller_finished(&s->poller, false, -1);
+    }
 }
 static void header(Screen *base, HeaderInfo *info) {
     CIScreen *s = (CIScreen *)base; snprintf(info->title, sizeof info->title, "CI/CD");
@@ -103,7 +107,10 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
     } else return;
     ci_load(s, true); pane_relayout(base->pane); pane_header_changed(base->pane);
 }
-static void activated(Screen *base, bool active) { if (active) refresh(base); }
+static void activated(Screen *base, bool active) {
+    CIScreen *s = (CIScreen *)base;
+    if (active && s->shown && ci_current(s) && !s->stats && !s->runs) ci_load(s, false);
+}
 static void destroy(Screen *base) {
     CIScreen *s = (CIScreen *)base; visible(base, false); clear(s);
     json_free(s->device); json_free(s->window); free(s->repo); free(s->branch);
@@ -112,7 +119,9 @@ static void destroy(Screen *base) {
 static const ScreenVTable VT = {.destroy = destroy, .layout = ci_layout, .header = header, .action = action,
     .visible = visible, .timer = timer, .refresh = refresh, .activated = activated, .detachable = true, .effective_visibility = true};
 Screen *ci_screen_new(void) {
-    CIScreen *s = xcalloc(1, sizeof *s); s->base.vt = &VT; s->base.id = xstrdup("ci-history");
+    CIScreen *s = xcalloc(1, sizeof *s); s->base.vt = &VT;
     s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device); s->days = 30; s->offset = -1;
+    char *scope = json_serialize(s->device, true);
+    s->base.id = xstrfmt("ci-history:%p:%s", (void *)s->client, scope); free(scope);
     return &s->base;
 }

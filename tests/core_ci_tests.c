@@ -3,6 +3,7 @@
 #include "suites.h"
 #include "test.h"
 #include <stdlib.h>
+#include <string.h>
 static void query_contract(void) {
     Json *q = ci_query(7, 1793188800000.0, true, "acme/shop", "feature/a b");
     CHECK_STR(json_str(json_get(q, "kind")), "status"); CHECK_STR(json_str(json_get(q, "repo")), "acme/shop");
@@ -45,7 +46,7 @@ static void labels_and_unknowns(void) {
     char *meta = ci_run_meta(j); CHECK(strstr(meta, "branch unknown") != NULL); free(meta);
     json_set_str(j, "repo", "acme/shop"); json_set_str(j, "branch", "main"); json_set_str(j, "headSha", "abcdef12345");
     json_set_num(j, "durationMs", 0); json_set_num(j, "runAt", 1793188800000.0);
-    meta = ci_run_meta(j); CHECK(strstr(meta, "acme/shop · main · abcdef1 · 0.0 s") != NULL); free(meta); json_free(j);
+    meta = ci_run_meta(j); CHECK(strstr(meta, "acme/shop · main · abcdef1 · 0.0 s") != NULL); CHECK(strstr(meta, "2026-10-28 12:00 UTC") != NULL); free(meta); json_free(j);
 }
 void core_ci_tests(void) {
     test_run("CI query window", query_contract); test_run("CI response validation", parsing); test_run("CI states and unknown metrics", labels_and_unknowns);

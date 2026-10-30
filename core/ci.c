@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 Json *ci_query(int days, double until_ms, bool statuses, const char *repo, const char *branch) {
     Json *q = json_object();
@@ -62,8 +63,13 @@ char *ci_metric_text(const Json *metrics, const char *key) {
 }
 char *ci_run_meta(const Json *run) {
     char *duration = ci_metric_text(run, "durationMs");
-    char *at = stats_time((StatNumber){json_num_or(json_get(run, "runAt"), 0), !json_is_null(json_get(run, "runAt"))});
+    double ms = json_num_or(json_get(run, "runAt"), 0);
+    char date[40] = "date unknown";
+    if (isfinite(ms) && ms > 0 && ms <= 253402300799000.0) {
+        time_t seconds = (time_t)(ms / 1000); struct tm *utc = gmtime(&seconds);
+        if (utc) strftime(date, sizeof date, "%Y-%m-%d %H:%M UTC", utc);
+    }
     char *text = xstrfmt("%s · %s · %.7s · %s · %s", json_str_or(json_get(run, "repo"), ""),
-        json_str_or(json_get(run, "branch"), "branch unknown"), json_str_or(json_get(run, "headSha"), ""), duration, at);
-    free(duration); free(at); return text;
+        json_str_or(json_get(run, "branch"), "branch unknown"), json_str_or(json_get(run, "headSha"), ""), duration, date);
+    free(duration); return text;
 }
