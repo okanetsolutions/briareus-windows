@@ -4,11 +4,14 @@ static const int widths[] = {12, 8, 15, 15, 17, 10, 10, 13};
 static const char *field(const Json *r, const char *key, const char *fallback) {
     const char *value = json_str(json_get(r, key)); return str_empty(value) ? fallback : value;
 }
+// A row opens its review's findings; the chevron at its end says so.
+static void paint_chevron(Doc *doc, Item *it, Canvas *cv, const RECT *rc) { draw_glyph(cv, 0xE76C, rc, FONT_ICON_SMALL, theme.muted); }
 static void history_row(Doc *doc, Col c, char **cells, bool header, bool selected, int64_t id, const Json *r) {
-    int top = doc->y, x = c.ix, pad = px(10), h = px(44);
+    int top = doc->y, x = c.ix, pad = px(10), h = px(44), trail = px(32), cols[8], used = 0;
     FontId font = header ? FONT_CAPTION_SEMIBOLD : FONT_FOOTNOTE;
     for (int i = 0; i < 8; i++) {
-        int want = measure_text(doc->cv, cells[i], c.iw * widths[i] / 100 - 2 * pad, font, DT_WORDBREAK) + 2 * pad;
+        cols[i] = i == 7 ? c.iw - trail - used : c.iw * widths[i] / 100; used += cols[i];
+        int want = measure_text(doc->cv, cells[i], cols[i] - 2 * pad, font, DT_WORDBREAK) + 2 * pad;
         if (want > h) h = want;
     }
     COLORREF fill = selected ? blend(theme.accent, theme.canvas, 0.10) : header ? theme.raise : theme.canvas;
@@ -18,7 +21,7 @@ static void history_row(Doc *doc, Col c, char **cells, bool header, bool selecte
         doc_item(doc, box)->paint = screen_pulls_paint_review_row;
     }
     for (int i = 0; i < 8; i++) {
-        int w = i == 7 ? c.ix + c.iw - x : c.iw * widths[i] / 100;
+        int w = cols[i];
         RECT rc = {x + pad, top + pad, x + w - pad, top + h - pad};
         int item = doc_text_at(doc, &rc, cells[i], font, header ? theme.secondary : theme.ink, DT_WORDBREAK);
         doc_item(doc, item)->cell = true; doc_item(doc, item)->tip = xstrdup(cells[i]);
@@ -26,12 +29,13 @@ static void history_row(Doc *doc, Col c, char **cells, bool header, bool selecte
         if (r && i == 7) { free(doc_item(doc, item)->tip); doc_item(doc, item)->tip = code_review_usage(r); }
         x += w;
     }
+    if (id) { RECT chevron = {c.ix + c.iw - trail, top, c.ix + c.iw - px(10), top + h}; doc_add(doc, &chevron, paint_chevron); }
     doc->y = top + h; doc_box_end(doc, box, 0);
 }
 void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c) {
     Col table = c;
     if (table.iw < px(1200)) {
-        doc_text(doc, c.ix, c.iw, "Scroll horizontally for usage and cost.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
+        doc_text(doc, c.ix, c.iw, "Open a review to read its findings. Scroll horizontally for usage and cost.", FONT_CAPTION, theme.secondary, DT_WORDBREAK);
         doc_space(doc, px(6)); table.iw = px(1200);
     }
     char *headers[] = {"Date", "Status", "Review / commit", "Provider / model", "Findings", "Input tokens", "Output tokens", "Cost"};
@@ -46,7 +50,7 @@ void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c) {
         char *input = screen_pulls_review_amount(t.input, false, false, 0), *output = screen_pulls_review_amount(t.output, false, false, 0);
         char *cost = screen_pulls_review_amount(t.cost, true, t.estimated, t.unpriced_turns);
         char *cells[] = {date, (char *)field(r, "status", "unknown"), context, provider, counts, input, output, cost};
-        history_row(doc, table, cells, false, code_review_id(r) == s->reviews.row_review_id, code_review_id(r), r);
+        history_row(doc, table, cells, false, code_review_id(r) == s->reviews.review_id, code_review_id(r), r);
         free(date); free(context); free(provider); free(counts); free(input); free(output); free(cost);
     }
     CodeReviewTotals t = code_reviews_totals(s->reviews.items);
@@ -55,6 +59,8 @@ void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c) {
     char *cost = screen_pulls_review_amount(t.cost, true, t.estimated, t.unpriced_turns);
     char *cells[] = {scope, "", "Latest 20 stored reviews", "Includes historical / dismissed", counts, input, output, cost};
     history_row(doc, table, cells, true, false, 0, NULL);
+    // The findings total carries its severity and verdict breakdown.
+    Item *found = doc_item(doc, (int)doc->count - 4); free(found->tip); found->tip = code_reviews_counts(s->reviews.items);
     // Exact aggregate values stay available alongside abbreviated table cells.
     for (size_t i = 0; i < 3; i++) {
         CodeReviewAmount a = i == 0 ? t.input : i == 1 ? t.output : t.cost;

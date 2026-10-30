@@ -90,7 +90,7 @@ enum {
     ACT_OPEN_URL = 1100, ACT_STACK_ITEM, ACT_STACK_TOGGLE, ACT_PR_TAB, ACT_MERGE,
     ACT_START_ACTION, ACT_OPEN_RUN, ACT_ISSUE_URL, ACT_RELOAD, ACT_CONV_URL,
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
-    ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_METADATA,
+    ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_SUMMARY, ACT_REVIEW_BACK,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -98,8 +98,8 @@ enum { TIMER_FILES_PAGE = 2, TIMER_RUN_LOG };
 
 enum { TAG_PULL = 1, TAG_ROWS, TAG_ACTIONS, TAG_SESSIONS, TAG_START, TAG_MERGE, TAG_BODY, TAG_CONV, TAG_DELETE_RUN, TAG_RUN, TAG_PROFILES, TAG_RUN_LOG, TAG_ACCESS, TAG_ISSUE, TAG_EDIT, TAG_UPDATE_BRANCH };
 
-// Keep existing IDs: retired Commits (4) and Checks (5) fall back to PR Body.
-enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_FINDINGS = 6, PR_TAB_RUN, PR_TAB_CODE_REVIEWS };
+// Keep existing IDs: retired Commits (4), Checks (5) and Findings (6) fall back to PR Body.
+enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_RUN = 7, PR_TAB_CODE_REVIEWS };
 
 typedef struct { const char *op, *field; } screen_pulls_conv_feeds_type;
 extern const screen_pulls_conv_feeds_type screen_pulls_conv_feeds[CONV_FEEDS];
@@ -112,8 +112,11 @@ typedef struct {
     char *scope, *error; bool read, visible;
     time_t next_poll, retry_at;
     time_t (*clock)(void); // NULL uses the system clock; deadlines share this clock.
-    int64_t review_id, finding_id, row_review_id;
-    bool metadata_open, reveal_row, reset_inspector;
+    // The selected table row; while `open`, the review whose findings fill the tab, and the finding selected in it.
+    // `list_scroll` is the table's page offset when the review opened, and `summary_id` the review whose summary is unfolded.
+    int64_t review_id, finding_id, summary_id;
+    int list_scroll;
+    bool open, reveal_row, reset_inspector;
 } PullReviews;
 
 typedef struct {
@@ -284,6 +287,9 @@ bool screen_pulls_reviews_sync(PullScreen *s);
 void screen_pulls_reviews_load(PullScreen *s, bool refresh);
 void screen_pulls_reviews_poll(PullScreen *s);
 void screen_pulls_reviews_visible(Screen *base, bool shown);
+void screen_pulls_review_open(PullScreen *s, int64_t id);
+void screen_pulls_review_close(PullScreen *s);
+bool screen_pulls_reviews_back(Screen *base);
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_paint_review_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c);
@@ -291,8 +297,11 @@ char *screen_pulls_review_amount(CodeReviewAmount amount, bool money, bool estim
 COLORREF screen_pulls_review_color(const char *text, bool severity);
 void screen_pulls_review_badge(Doc *doc, int x, int w, const char *text, bool severity, COLORREF background);
 char *screen_pulls_review_date(const Json *r, const char *name);
-void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, bool header);
-void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c);
+void screen_pulls_review_page(PullScreen *s, Doc *doc, Col c, const Json *review);
+void screen_pulls_review_findings(PullScreen *s, Doc *doc, Col c, const Json *review);
+void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, const Json *review, bool header);
+void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c, const Json *review);
+void screen_pulls_review_about(Doc *doc, Col c, const Json *review);
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
 void screen_pulls_paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_layout_runs(PullScreen *s, Doc *doc, Col c);

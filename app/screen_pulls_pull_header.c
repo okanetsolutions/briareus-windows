@@ -1,6 +1,6 @@
 #include "screen_pulls_internal.h"
 
-/// `tabnav`: Sessions, PR Body, Conversation, Files changed and Findings with their counts (doc_tab),
+/// `tabnav`: Sessions, PR Body, Conversation, Files changed, Code reviews and Run with their counts (doc_tab),
 /// and the diffstat at the right.
 typedef struct { int additions, deletions; } DiffStatData;
 
@@ -165,8 +165,10 @@ void screen_pulls_layout_tabs(PullScreen *s, Doc *doc, Col c) {
     bool counted = s->reviews.items && !s->reviews.error;
     if (counted) snprintf(count, sizeof count, "%zu", json_count(s->reviews.items));
     doc_tab(doc, &x, &y, c.ix, right, h, 0xE8A5, "Code reviews", counted ? count : NULL, s->tab == PR_TAB_CODE_REVIEWS, ACT_PR_TAB, PR_TAB_CODE_REVIEWS);
-    if (counted) snprintf(count, sizeof count, "%zu", code_reviews_findings(s->reviews.items));
-    doc_tab(doc, &x, &y, c.ix, right, h, 0xE7C1, "Findings", counted ? count : NULL, s->tab == PR_TAB_FINDINGS, ACT_PR_TAB, PR_TAB_FINDINGS);
+    if (s->tab == PR_TAB_CODE_REVIEWS && s->reviews.open) {
+        // Open on a review's findings, the tab leads back to the table of reviews.
+        Item *tab = doc_item(doc, (int)doc->count - 1); tab->action = ACT_PR_TAB; tab->arg = PR_TAB_CODE_REVIEWS; tab->hand = true;
+    }
     if (store_supports("serve_pull") || s->run_url) {
         // With run profiles, the tab names the one chosen and, once open, picks another.
         bool on = s->tab == PR_TAB_RUN;

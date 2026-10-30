@@ -58,7 +58,7 @@ static void finding_row(PullScreen *s, Doc *doc, Col c, const Json *r, const Jso
     int max_title = 3 * font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD);
     if (title_h > max_title) title_h = max_title;
     int h = title_h + px(52); if (h < px(72)) h = px(72);
-    bool selected = code_review_id(r) == s->reviews.review_id && code_review_id(f) == s->reviews.finding_id;
+    bool selected = code_review_id(f) == s->reviews.finding_id;
     int box = row_begin(doc, c, selected, ACT_REVIEW_FINDING, code_review_id(f));
     cell(doc, c.ix + pad, top + pad, first - 2 * pad, title_h, field(f, "title"), FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_WORDBREAK | DT_END_ELLIPSIS);
     char *where = code_review_location(f);
@@ -78,17 +78,8 @@ static void finding_row(PullScreen *s, Doc *doc, Col c, const Json *r, const Jso
     if (!str_eq(code_review_verdict(r, f), code_review_verification(r, f))) cell(doc, c.ix + first + px(78), top + px(38), px(102), px(30), code_review_verification(r, f), FONT_CAPTION, theme.secondary, DT_WORDBREAK);
     doc->y = top + h; doc_box_end(doc, box, 0);
 }
-void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, bool header) {
+void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, const Json *review, bool header) {
     if (header) { heading(doc, c); return; }
-    for (size_t i = 0; i < json_count(s->reviews.items); i++) {
-        const Json *r = json_at(s->reviews.items, i), *rows = json_get(r, "findings");
-        char *context = xstrfmt("Review #%lld · %.10s · %s", (long long)code_review_id(r), field(r, "headSha"), code_review_head(r, json_str(json_get(s->pr, "headSha"))));
-        if (json_count(rows)) {
-            doc_space(doc, px(10));
-            doc_text(doc, c.ix + px(10), c.iw - px(20), context, FONT_CAPTION_SEMIBOLD, theme.secondary, DT_WORDBREAK);
-            doc_space(doc, px(6));
-        }
-        for (size_t j = 0; j < json_count(rows); j++) finding_row(s, doc, c, r, json_at(rows, j));
-        free(context);
-    }
+    const Json *rows = json_get(review, "findings");
+    for (size_t j = 0; j < json_count(rows); j++) finding_row(s, doc, c, review, json_at(rows, j));
 }

@@ -18,9 +18,10 @@ int main(void) {
     Json *payload = pull_review_polish_fixture(); char *fixture = json_serialize(payload, false);
     f.read_response = fixture;
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
-    if (getenv("PREVIEW_REVIEWS")) s->tab = PR_TAB_CODE_REVIEWS;
-    s->reviews.review_id = s->reviews.row_review_id = 21; s->reviews.finding_id = 101;
     pane_set_root(f.pane, &s->base); poller_stop(&s->poller);
+    // PREVIEW_REVIEW opens that review's findings; without it the table of reviews shows.
+    if (getenv("PREVIEW_REVIEW")) s->base.vt->action(&s->base, ACT_REVIEW_ROW, atoi(getenv("PREVIEW_REVIEW")), (POINT){0});
+    if (getenv("PREVIEW_SUMMARY")) s->reviews.summary_id = s->reviews.review_id;
     if (getenv("PREVIEW_DPI")) theme_set_dpi(atoi(getenv("PREVIEW_DPI")));
     MoveWindow(f.parent, 0, 0, width, 1009, TRUE);
     RECT bounds = {0, 0, width, 1009}; pane_set_bounds(f.pane, &bounds);

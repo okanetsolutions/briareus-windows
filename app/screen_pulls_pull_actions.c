@@ -14,8 +14,10 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
     case ACT_STACK_TOGGLE: s->stack_open = !s->stack_open; pane_relayout(base->pane); break;
     case ACT_PR_TAB:
         if (arg == PR_TAB_RUN) { screen_pulls_run_open(s); break; }
+        // A review's findings keep their place across tabs; the open Code reviews tab leads back to its table.
+        if (arg == PR_TAB_CODE_REVIEWS && s->tab == PR_TAB_CODE_REVIEWS) { screen_pulls_review_close(s); break; }
         switch (arg) {
-        case PR_TAB_BODY: case PR_TAB_CONVERSATION: case PR_TAB_SESSIONS: case PR_TAB_FILES: case PR_TAB_FINDINGS: case PR_TAB_CODE_REVIEWS:
+        case PR_TAB_BODY: case PR_TAB_CONVERSATION: case PR_TAB_SESSIONS: case PR_TAB_FILES: case PR_TAB_CODE_REVIEWS:
             s->tab = (int)arg; break;
         default: s->tab = PR_TAB_BODY; break;
         }
@@ -26,16 +28,12 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
-    case ACT_REVIEW_METADATA:
-        s->reviews.metadata_open = !s->reviews.metadata_open; pane_relayout(base->pane); break;
-    case ACT_REVIEW_ROW:
-        if (code_review_find(s->reviews.items, (int64_t)arg)) { s->reviews.row_review_id = (int64_t)arg; s->reviews.reset_inspector = true; }
-        pane_relayout(base->pane); break;
+    case ACT_REVIEW_SUMMARY:
+        s->reviews.summary_id = s->reviews.summary_id == s->reviews.review_id ? 0 : s->reviews.review_id; pane_relayout(base->pane); break;
+    case ACT_REVIEW_ROW: screen_pulls_review_open(s, (int64_t)arg); break;
+    case ACT_REVIEW_BACK: screen_pulls_review_close(s); break;
     case ACT_REVIEW_FINDING:
-        for (size_t i = 0; i < json_count(s->reviews.items); i++) {
-            const Json *r = json_at(s->reviews.items, i);
-            if (code_review_finding(r, (int64_t)arg)) { s->reviews.review_id = code_review_id(r); s->reviews.finding_id = (int64_t)arg; s->reviews.reset_inspector = true; break; }
-        }
+        if (code_review_finding(code_review_find(s->reviews.items, s->reviews.review_id), (int64_t)arg)) { s->reviews.finding_id = (int64_t)arg; s->reviews.reset_inspector = true; }
         pane_relayout(base->pane); break;
     case ACT_WEB_RELOAD: if (s->web) webview_reload(s->web); break;
     case ACT_WEB_BACK: if (s->web) webview_back(s->web); break;

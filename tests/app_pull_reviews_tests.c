@@ -20,7 +20,7 @@ static PullScreen *setup(ScreenFixture *f) {
     screen_fixture_pane(f, &s->base);
     json_free(s->pr); s->pr = json_parsez("{\"title\":\"Synthetic PR\",\"state\":\"open\",\"headSha\":\"aaaaaaaaaa1111\"}");
     f->read_response = CODE_REVIEWS_FIXTURE;
-    s->tab = PR_TAB_FINDINGS; s->shown = true; s->reviews.visible = true;
+    s->tab = PR_TAB_CODE_REVIEWS; s->shown = true; s->reviews.visible = true;
     clock_now = 1000; s->reviews.clock = fake_clock; return s;
 }
 static void cleanup(ScreenFixture *f, PullScreen *s) { s->base.vt->destroy(&s->base); screen_fixture_clear(f); }
@@ -29,45 +29,107 @@ static bool contains(Doc *d, const char *text) {
     return false;
 }
 static void draw(PullScreen *s, Doc *d, int width) { doc_begin(d, NULL, width); s->base.vt->layout(&s->base, d); doc_end(d); }
-static void shared_read_and_tables(void) {
+static int find(Doc *d, int action, intptr_t arg) {
+    for (size_t i = 0; i < d->count; i++) if (d->items[i].action == action && d->items[i].arg == arg) return (int)i;
+    return -1;
+}
+static int count(Doc *d, int action) {
+    int n = 0;
+    for (size_t i = 0; i < d->count; i++) n += d->items[i].action == action;
+    return n;
+}
+// Clicks an item where the pane would hit-test it, when the click reaches the item at all.
+static bool click(PullScreen *s, Doc *d, int action, intptr_t arg) {
+    int i = find(d, action, arg); if (i < 0) return false;
+    RECT rc = d->items[i].rc; int hit = doc_hit(d, rc.right - px(3), (rc.top + rc.bottom) / 2);
+    if (hit < 0) return false;
+    s->base.vt->action(&s->base, d->items[hit].action, d->items[hit].arg, (POINT){0});
+    return d->items[hit].action == action && d->items[hit].arg == arg;
+}
+static void table_opens_review_findings(void) {
     ScreenFixture f; PullScreen *s = setup(&f);
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
     CHECK_INT(f.reads, 1); CHECK_INT(f.writes, 0); CHECK(s->reviews.error == NULL);
-    Doc d; doc_init(&d);
+    CHECK_INT(s->reviews.review_id, 21); CHECK(!s->reviews.open);
+    Doc d; doc_init(&d); draw(s, &d, 1200);
+    CHECK_INT(count(&d, ACT_REVIEW_ROW), 2); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 0);
+    CHECK(contains(&d, "current head")); CHECK(contains(&d, "older head")); CHECK(contains(&d, "1 pending"));
+    // The retired Findings tab ID falls back to PR Body.
+    s->base.vt->action(&s->base, ACT_PR_TAB, 6, (POINT){0}); CHECK_INT(s->tab, PR_TAB_BODY);
+    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0}); CHECK_INT(s->tab, PR_TAB_CODE_REVIEWS);
+    draw(s, &d, 1200); CHECK(click(s, &d, ACT_REVIEW_ROW, 20));
+    CHECK(s->reviews.open); CHECK_INT(s->reviews.review_id, 20); CHECK_INT(s->reviews.finding_id, 99);
     const int widths[] = {1200, 390};
     for (size_t w = 0; w < 2; w++) {
         draw(s, &d, widths[w]);
-        CHECK(contains(&d, "3 findings")); CHECK(contains(&d, "Latest 20"));
-        CHECK(contains(&d, "current head")); CHECK(contains(&d, "older head")); CHECK(contains(&d, "pending"));
-        int rows = 0;
-        for (size_t i = 0; i < d.count; i++) {
-            Item *it = &d.items[i];
-            if (it->action != ACT_REVIEW_FINDING) continue;
-            rows++; RECT r = it->rc;
-            int hit = doc_hit(&d, r.right - px(3), (r.top + r.bottom) / 2);
-            if (r.top >= d.regions[0].view.top && r.bottom <= d.regions[0].view.bottom) {
-                CHECK(hit >= 0); if (hit >= 0) CHECK_INT(d.items[hit].arg, it->arg);
-            }
-            if (it->arg == 102) s->base.vt->action(&s->base, it->action, it->arg, (POINT){0});
-        }
-        CHECK_INT(rows, 3); CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 102);
-        draw(s, &d, widths[w]); CHECK(contains(&d, "Verification rationale")); CHECK(contains(&d, "Confirmed") || contains(&d, "confirmed"));
-        CHECK(contains(&d, "Unknown in / 0 out"));
+        CHECK_INT(count(&d, ACT_REVIEW_ROW), 0); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 1);
+        CHECK(find(&d, ACT_REVIEW_BACK, 0) >= 0); CHECK(click(s, &d, ACT_REVIEW_FINDING, 99));
+        CHECK(contains(&d, "Historical duplicate")); CHECK(contains(&d, "Dismissed by verification"));
+        CHECK(!contains(&d, "Reject a response from an obsolete connection"));
     }
-    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0});
-    CHECK_INT(f.reads, 1); draw(s, &d, 1200);
-    CHECK(contains(&d, "Review / commit")); CHECK(contains(&d, "Findings"));
-    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 20, (POINT){0}); draw(s, &d, 390);
-    CHECK(contains(&d, "Historical review summary")); s->reviews.metadata_open = true; draw(s, &d, 390);
+    s->base.vt->action(&s->base, ACT_REVIEW_BACK, 0, (POINT){0});
+    CHECK(!s->reviews.open); CHECK_INT(s->reviews.review_id, 20);
+    draw(s, &d, 1200); CHECK_INT(count(&d, ACT_REVIEW_ROW), 2); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 0);
+    CHECK(click(s, &d, ACT_REVIEW_ROW, 21)); CHECK_INT(s->reviews.finding_id, 101);
+    draw(s, &d, 1200); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 2);
+    CHECK(click(s, &d, ACT_REVIEW_FINDING, 102)); CHECK_INT(s->reviews.finding_id, 102);
+    // Another review's finding is not selectable from this one.
+    s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 99, (POINT){0}); CHECK_INT(s->reviews.finding_id, 102);
+    draw(s, &d, 1200); CHECK(contains(&d, "Verification rationale")); CHECK(contains(&d, "Reproduced with a delayed response"));
+    // Each review's stored summary and exact usage stay folded under its findings until asked for.
+    CHECK(!contains(&d, "Stored summary")); CHECK(click(s, &d, ACT_REVIEW_SUMMARY, 0)); CHECK_INT(s->reviews.summary_id, 21);
+    draw(s, &d, 390); CHECK(contains(&d, "Stored summary")); CHECK(contains(&d, "unknown in / 0 out"));
+    s->base.vt->action(&s->base, ACT_REVIEW_BACK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_REVIEW_ROW, 20, (POINT){0});
+    draw(s, &d, 390); CHECK(!contains(&d, "Historical review summary"));
+    CHECK(click(s, &d, ACT_REVIEW_SUMMARY, 0)); draw(s, &d, 390); CHECK(contains(&d, "Historical review summary"));
     CHECK(contains(&d, "$0.0123 estimated")); CHECK(contains(&d, "partial cost"));
+    CHECK(click(s, &d, ACT_REVIEW_SUMMARY, 0)); CHECK_INT(s->reviews.summary_id, 0);
     CHECK_INT(s->run_count, 0); CHECK_INT(f.reads, 1); CHECK_INT(f.writes, 0);
-    CHECK(s->base.vt->key(&s->base, VK_HOME, false, false)); CHECK_INT(s->reviews.row_review_id, 21);
-    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
-    CHECK(s->base.vt->key(&s->base, VK_END, false, false)); CHECK_INT(s->reviews.review_id, 20); CHECK_INT(s->reviews.finding_id, 99);
-    CHECK(s->base.vt->key(&s->base, VK_UP, false, false)); CHECK_INT(s->reviews.finding_id, 102);
-    CHECK(s->base.vt->key(&s->base, VK_DOWN, false, false)); CHECK_INT(s->reviews.finding_id, 99);
-    CHECK(!s->base.vt->key(&s->base, VK_DOWN, true, false));
     doc_free(&d); cleanup(&f, s);
+}
+static void keyboard_and_tab_lead_in_and_out(void) {
+    ScreenFixture f; PullScreen *s = setup(&f);
+    screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+    CHECK(s->base.vt->key(&s->base, VK_END, false, false)); CHECK_INT(s->reviews.review_id, 20);
+    CHECK(s->base.vt->key(&s->base, VK_UP, false, false)); CHECK_INT(s->reviews.review_id, 21);
+    CHECK(s->base.vt->key(&s->base, VK_DOWN, false, false)); CHECK_INT(s->reviews.review_id, 20);
+    CHECK(s->base.vt->key(&s->base, VK_HOME, false, false)); CHECK_INT(s->reviews.review_id, 21);
+    // In the table, going back still leaves the pull request.
+    CHECK(!s->base.vt->back(&s->base)); CHECK(!s->base.vt->key(&s->base, VK_BACK, false, false));
+    CHECK(s->base.vt->key(&s->base, VK_RETURN, false, false)); CHECK(s->reviews.open); CHECK_INT(s->reviews.finding_id, 101);
+    CHECK(s->base.vt->key(&s->base, VK_END, false, false)); CHECK_INT(s->reviews.finding_id, 102);
+    CHECK(s->base.vt->key(&s->base, VK_UP, false, false)); CHECK_INT(s->reviews.finding_id, 101);
+    CHECK(s->base.vt->key(&s->base, VK_DOWN, false, false)); CHECK_INT(s->reviews.finding_id, 102);
+    CHECK(s->base.vt->key(&s->base, VK_DOWN, false, false)); CHECK_INT(s->reviews.finding_id, 102);
+    CHECK(!s->base.vt->key(&s->base, VK_DOWN, true, false)); CHECK(!s->base.vt->key(&s->base, VK_RETURN, false, false));
+    CHECK(s->base.vt->back(&s->base)); CHECK(!s->reviews.open); CHECK_INT(s->reviews.review_id, 21);
+    CHECK(s->base.vt->key(&s->base, VK_DOWN, false, false)); CHECK(s->base.vt->key(&s->base, VK_RETURN, false, false));
+    CHECK(s->reviews.open); CHECK_INT(s->reviews.review_id, 20); CHECK_INT(s->reviews.finding_id, 99);
+    // Other tabs keep the open review and leave going back to the pane; the open Code reviews tab leads back to the table.
+    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_BODY, (POINT){0}); CHECK(!s->base.vt->back(&s->base)); CHECK(s->reviews.open);
+    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0}); CHECK(s->reviews.open);
+    Doc d; doc_init(&d); draw(s, &d, 1200);
+    CHECK(find(&d, ACT_PR_TAB, PR_TAB_CODE_REVIEWS) >= 0);
+    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0}); CHECK(!s->reviews.open);
+    draw(s, &d, 1200); CHECK_INT(find(&d, ACT_PR_TAB, PR_TAB_CODE_REVIEWS), -1);
+    CHECK_INT(f.reads, 1); CHECK_INT(f.writes, 0); doc_free(&d); cleanup(&f, s);
+}
+static void review_without_findings_shows_its_summary(void) {
+    ScreenFixture f; PullScreen *s = setup(&f);
+    f.read_response = "{\"codeReviews\":[{\"id\":30,\"status\":\"completed\",\"summary\":\"Nothing needs attention.\",\"findings\":[]}]}";
+    screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 30, (POINT){0});
+    CHECK(s->reviews.open); CHECK_INT(s->reviews.finding_id, 0);
+    Doc d; doc_init(&d); draw(s, &d, 1200);
+    CHECK(contains(&d, "Nothing needs attention.")); CHECK_INT(count(&d, ACT_REVIEW_SUMMARY), 0);
+    CHECK_INT(count(&d, ACT_REVIEW_FINDING), 0); CHECK_INT(d.region_count, 0);
+    CHECK(!s->base.vt->key(&s->base, VK_DOWN, false, false));
+    // Its first finding arrives on a poll: the table appears under the summary, which stays unfolded.
+    f.read_response = "{\"codeReviews\":[{\"id\":30,\"status\":\"running\",\"summary\":\"Nothing needs attention.\",\"findings\":[{\"id\":31,\"severity\":\"low\",\"title\":\"Late finding\"}]}]}";
+    screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); draw(s, &d, 1200);
+    CHECK(s->reviews.open); CHECK_INT(s->reviews.finding_id, 31); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 1);
+    CHECK(contains(&d, "Nothing needs attention.")); CHECK_INT(count(&d, ACT_REVIEW_SUMMARY), 1);
+    CHECK(s->base.vt->back(&s->base)); CHECK(!s->reviews.open); doc_free(&d); cleanup(&f, s);
 }
 static void empty_failure_unsupported(void) {
     ScreenFixture f; PullScreen *s = setup(&f); Doc d; doc_init(&d);
@@ -81,7 +143,7 @@ static void empty_failure_unsupported(void) {
     f.read_response = "{\"codeReviews\":[]}";
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
     draw(s, &d, 900); CHECK(s->reviews.error == NULL); CHECK(contains(&d, "No stored code reviews"));
-    CHECK(contains(&d, "0 findings"));
+    CHECK_INT(count(&d, ACT_REVIEW_ROW), 0);
     f.read_status = 503; screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
     draw(s, &d, 900); CHECK(contains(&d, "Previous snapshot"));
     CHECK_INT(f.writes, 0); doc_free(&d); cleanup(&f, s);
@@ -90,6 +152,7 @@ static void refresh_replacement_and_stale(void) {
     for (int change = 0; change < 6; change++) {
         ScreenFixture f; PullScreen *s = setup(&f);
         screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
+        s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0});
         s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 102, (POINT){0});
         f.block_read = true; screen_pulls_reviews_load(s, true);
         CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
@@ -102,14 +165,21 @@ static void refresh_replacement_and_stale(void) {
         if (change == 4) g_store.route_count = 0;
         if (change == 5) s->project.repo = "other/repo";
         SetEvent(f.resume); screen_fixture_pump(&f, 1);
-        if (change) { CHECK(s->reviews.items == NULL); CHECK_INT(s->reviews.review_id, 0); }
+        if (change) { CHECK(s->reviews.items == NULL); CHECK_INT(s->reviews.review_id, 0); CHECK(!s->reviews.open); }
         else {
-            CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 102);
+            CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 102); CHECK(s->reviews.open);
             f.block_read = false;
             f.read_response = "{\"codeReviews\":[{\"id\":21,\"status\":\"completed\",\"findings\":[{\"id\":103,\"severity\":\"low\",\"title\":\"Replacement\"}]}]}";
             screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
-            CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 103);
+            CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 103); CHECK(s->reviews.open);
             CHECK(code_review_finding(code_review_find(s->reviews.items, 21), 102) == NULL);
+            // A review no longer stored gives way to the table, which selects the newest one left, even when F5 on
+            // another tab read the list.
+            s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_BODY, (POINT){0});
+            f.read_response = "{\"codeReviews\":[{\"id\":25,\"status\":\"running\",\"findings\":[]},{\"id\":20,\"status\":\"completed\",\"findings\":[]}]}";
+            screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
+            CHECK(!s->reviews.open); CHECK_INT(s->reviews.review_id, 25); CHECK_INT(s->reviews.finding_id, 0);
+            CHECK_INT(s->tab, PR_TAB_BODY);
         }
         s->project.repo = repo; g_store.client = original; CHECK_INT(f.writes, 0); cleanup(&f, s);
     }
@@ -151,21 +221,22 @@ static void terminal_labels_across_tables_and_details(void) {
     ScreenFixture f; PullScreen *s = setup(&f); f.read_response = CODE_REVIEWS_FINAL_NULL_FIXTURE;
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
     Doc d; doc_init(&d);
-    for (int tab = 0; tab < 2; tab++) for (int review = 0; review < 2; review++) {
-        s->tab = tab ? PR_TAB_CODE_REVIEWS : PR_TAB_FINDINGS;
-        s->reviews.review_id = s->reviews.row_review_id = review ? 23 : 22; s->reviews.finding_id = review ? 202 : 201;
+    for (int open = 0; open < 2; open++) for (int review = 0; review < 2; review++) {
+        s->reviews.open = open; s->reviews.review_id = review ? 23 : 22; s->reviews.finding_id = review ? 202 : 201;
+        s->reviews.summary_id = open ? s->reviews.review_id : 0;
         draw(s, &d, 1200);
-        CHECK(contains(&d, "no verdict")); CHECK(contains(&d, "not verified"));
+        CHECK(contains(&d, "no verdict"));
         char *counts = code_reviews_counts(s->reviews.items);
         CHECK_STR(counts, "2 findings: 0 critical, 0 high, 2 medium, 0 low; 0 pending verdicts; 2 without verdict"); free(counts);
         CHECK(!contains(&d, "1 pending verdict")); CHECK(!contains(&d, "partial cost"));
-        CHECK(contains(&d, review ? "stopped before verification" : "Inconclusive:"));
-
+        if (!open) continue;
+        CHECK(contains(&d, "not verified")); CHECK(contains(&d, review ? "stopped before verification" : "Inconclusive:"));
+        CHECK(contains(&d, review ? "Stored failed review." : "Stored completed review."));
     }
     json_free(s->reviews.items); s->reviews.items = NULL; s->reviews.read = false;
     clock_now += 30; f.read_response = CODE_REVIEWS_FIXTURE;
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
-    s->tab = PR_TAB_FINDINGS; s->reviews.review_id = 21; s->reviews.finding_id = 101;
+    s->reviews.open = true; s->reviews.review_id = 21; s->reviews.finding_id = 101;
     draw(s, &d, 390); char *counts = code_reviews_counts(s->reviews.items);
     CHECK(strstr(counts, "1 pending verdict; 0 without verdict") != NULL); free(counts);
     CHECK(contains(&d, "pending")); CHECK(!contains(&d, "not verified"));
@@ -181,7 +252,7 @@ static void completed_snapshots_discover_new_reviews(void) {
         f.read_response = CODE_REVIEWS_FINAL_NULL_FIXTURE;
         screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
         CHECK(!code_reviews_running(s->reviews.items));
-        s->reviews.review_id = 22; s->reviews.finding_id = 201;
+        s->base.vt->action(&s->base, ACT_REVIEW_ROW, 22, (POINT){0}); CHECK_INT(s->reviews.finding_id, 201);
         BoardAction action = {.id = "review", .advertised = true};
         if (source == 0 || source == 4) {
             f.fail_write = source == 4;
@@ -208,9 +279,10 @@ static void completed_snapshots_discover_new_reviews(void) {
         screen_pulls_reviews_poll(s); screen_pulls_reviews_poll(s);
         screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 2);
         CHECK(code_review_find(s->reviews.items, 24) != NULL); CHECK(code_reviews_running(s->reviews.items));
-        CHECK_INT(s->reviews.review_id, 22); CHECK_INT(s->reviews.finding_id, 201);
+        CHECK_INT(s->reviews.review_id, 22); CHECK_INT(s->reviews.finding_id, 201); CHECK(s->reviews.open);
         CHECK_STR(code_review_head(code_review_find(s->reviews.items, 24), json_str(json_get(s->pr, "headSha"))), "current head");
         json_set_str(r, "status", "completed"); char *completed = json_serialize(payload, false); f.read_response = completed;
+        s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_BODY, (POINT){0});
         s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0});
         CHECK_INT(f.reads, 2); // Switching tabs shares the snapshot and deadline.
         clock_now += 30; screen_pulls_reviews_poll(s); screen_fixture_pump(&f, 1);
@@ -220,7 +292,7 @@ static void completed_snapshots_discover_new_reviews(void) {
         CHECK_INT(f.reads, 3);
         s->base.vt->window_visible(&s->base, true); screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 4);
         s->tab = PR_TAB_BODY; clock_now += 30; screen_pulls_reviews_poll(s); CHECK_INT(f.reads, 4);
-        s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
+        s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0});
         screen_fixture_pump(&f, 1); CHECK_INT(f.reads, 5);
         CHECK_INT(f.writes, source == 0 || source == 1 || source == 4 ? 1 : 0);
         CHECK(s->uncertain == (source == 4));
@@ -241,14 +313,15 @@ static void inspector_selection_and_scroll(void) {
     ScreenFixture f; PullScreen *s = setup(&f);
     Json *payload = pull_review_polish_fixture(); char *fixture = json_serialize(payload, false);
     f.read_response = fixture; screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
-    CHECK_INT(s->reviews.finding_id, 101); CHECK_INT(s->reviews.row_review_id, 21);
+    CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 101);
+    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0});
     Doc d; doc_init(&d);
     const int widths[] = {1652, 390, 780};
     for (size_t n = 0; n < 3; n++) {
         theme_set_dpi(n == 2 ? 192 : 96);
         RECT bounds = {0, 0, widths[n], 800}; pane_set_bounds(f.pane, &bounds);
         draw(s, &d, widths[n]); CHECK_INT(d.content_width, d.width);
-        CHECK_INT(d.region_count, n == 0 ? 2 : 1);
+        CHECK_INT(d.region_count, n == 0 ? 2 : 1); CHECK_INT(count(&d, ACT_REVIEW_FINDING), 7);
         // Every row remains reachable inside a bounded table; the inspector has its own region on wide panes.
         CHECK(d.regions[0].max > 0);
         DocRegion *table = &d.regions[0];
@@ -256,8 +329,7 @@ static void inspector_selection_and_scroll(void) {
         int scrolled = d.regions[0].scroll;
         s->reviews.reveal_row = true; draw(s, &d, widths[n]);
         CHECK(d.regions[0].scroll < scrolled);
-        int selected = -1;
-        for (size_t i = 0; i < d.count; i++) if (d.items[i].action == ACT_REVIEW_FINDING && d.items[i].arg == 101) selected = (int)i;
+        int selected = find(&d, ACT_REVIEW_FINDING, 101);
         CHECK(selected >= 0);
         if (selected >= 0) {
             RECT row = d.items[selected].rc;
@@ -274,32 +346,41 @@ static void inspector_selection_and_scroll(void) {
         int before = d.regions[0].scroll; draw(s, &d, widths[n]); CHECK_INT(d.regions[0].scroll, before);
     }
     theme_set_dpi(96);
+    // Reopening a review keeps the finding last read in it; another review starts at its first finding.
     s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 105, (POINT){0});
-    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_CODE_REVIEWS, (POINT){0});
-    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 20, (POINT){0});
-    CHECK_INT(s->reviews.row_review_id, 20); CHECK_INT(s->reviews.finding_id, 105); CHECK_INT(s->reviews.review_id, 21);
-    s->base.vt->action(&s->base, ACT_PR_TAB, PR_TAB_FINDINGS, (POINT){0});
+    s->base.vt->action(&s->base, ACT_REVIEW_BACK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0});
+    CHECK_INT(s->reviews.finding_id, 105);
+    s->base.vt->action(&s->base, ACT_REVIEW_BACK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_REVIEW_ROW, 23, (POINT){0});
+    CHECK_INT(s->reviews.finding_id, 202);
+    s->base.vt->action(&s->base, ACT_REVIEW_BACK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0});
+    CHECK_INT(s->reviews.finding_id, 101);
+    s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 105, (POINT){0});
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1);
-    CHECK_INT(s->reviews.finding_id, 105); CHECK_INT(s->reviews.row_review_id, 20);
-    draw(s, &d, 1652);
-    CHECK(contains(&d, "Finding #105"));
+    CHECK(s->reviews.open); CHECK_INT(s->reviews.review_id, 21); CHECK_INT(s->reviews.finding_id, 105);
+    draw(s, &d, 1652); CHECK(contains(&d, "Finding #105"));
     CHECK_INT(f.writes, 0);
-    s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 202, (POINT){0});
+    // A refresh that drops the selected finding falls back to the review's first, revealed in its table.
+    s->base.vt->action(&s->base, ACT_REVIEW_FINDING, 107, (POINT){0});
     s->reviews.reveal_row = true; draw(s, &d, 390);
     int old_scroll = d.regions[0].scroll; CHECK(old_scroll > 0);
-    Json *removed = (Json *)json_at(json_get(payload, "codeReviews"), 2);
-    json_object_set(removed, "findings", json_array());
+    Json *review = (Json *)json_at(json_get(payload, "codeReviews"), 0), *kept = json_array();
+    const Json *findings = json_get(review, "findings");
+    for (size_t i = 0; i + 1 < json_count(findings); i++) json_array_push(kept, json_clone(json_at(findings, i)));
+    json_object_set(review, "findings", kept);
     char *updated = json_serialize(payload, false); f.read_response = updated;
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); draw(s, &d, 390);
     CHECK_INT(s->reviews.finding_id, 101); CHECK(d.regions[0].scroll < old_scroll);
     doc_free(&d); free(updated); free(fixture); json_free(payload); cleanup(&f, s);
 }
+static int root_backs;
+static void count_root_back(void *ctx) { (void)ctx; root_backs++; }
 static void inspector_keyboard_page_visibility(void) {
-    ScreenFixture f; PullScreen *s = setup(&f);
+    ScreenFixture f; PullScreen *s = setup(&f); root_backs = 0;
     Json *payload = pull_review_polish_fixture(); char *fixture = json_serialize(payload, false); f.read_response = fixture;
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
     pane_set_root(f.pane, &s->base); poller_stop(&s->poller);
     RECT bounds = {0, 0, 390, 800}; pane_set_bounds(f.pane, &bounds);
+    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0});
     UpdateWindow(pane_hwnd(f.pane));
     Doc *doc = pane_doc(f.pane); CHECK_INT(doc->region_count, 1);
     pane_scroll_to(f.pane, doc_height(doc)); UpdateWindow(pane_hwnd(f.pane));
@@ -319,6 +400,24 @@ static void inspector_keyboard_page_visibility(void) {
     CHECK_INT(doc->regions[0].scroll, table); CHECK_INT(pane_scroll_y(f.pane), page);
     CHECK(s->base.vt->key(&s->base, VK_PRIOR, false, false)); CHECK_INT(doc->regions[1].scroll, 0);
     CHECK_INT(s->reviews.finding_id, 101); CHECK_INT(f.writes, 0);
+    // The pane's back keys leave the review before the pull request; Escape first clears selected text.
+    HWND window = pane_hwnd(f.pane);
+    doc_select_all(doc); SendMessageW(window, WM_KEYDOWN, VK_ESCAPE, 0); CHECK(s->reviews.open); CHECK(!doc_has_selection(doc));
+    SendMessageW(window, WM_KEYDOWN, VK_ESCAPE, 0); CHECK(!s->reviews.open);
+    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 21, (POINT){0}); SendMessageW(window, WM_KEYDOWN, VK_BACK, 0); CHECK(!s->reviews.open);
+    // So does the header's back button, and the table comes back where it was scrolled.
+    pane_set_root_back(f.pane, true, count_root_back, NULL);
+    bounds.bottom = 360; pane_set_bounds(f.pane, &bounds); UpdateWindow(window);
+    pane_scroll_to(f.pane, doc_height(doc)); UpdateWindow(window);
+    int table_scroll = pane_scroll_y(f.pane); CHECK(table_scroll > 0);
+    s->base.vt->action(&s->base, ACT_REVIEW_ROW, 19, (POINT){0}); UpdateWindow(window);
+    CHECK(s->reviews.open); CHECK_INT(pane_scroll_y(f.pane), 0);
+    LPARAM back = MAKELPARAM(px(34), pane_content_rect(f.pane).top / 2);
+    SendMessageW(window, WM_LBUTTONDOWN, 0, back); SendMessageW(window, WM_LBUTTONUP, 0, back);
+    CHECK(!s->reviews.open); CHECK_INT(root_backs, 0);
+    UpdateWindow(window); CHECK_INT(pane_scroll_y(f.pane), table_scroll);
+    SendMessageW(window, WM_LBUTTONDOWN, 0, back); SendMessageW(window, WM_LBUTTONUP, 0, back); CHECK_INT(root_backs, 1);
+    pane_set_root_back(f.pane, false, NULL, NULL);
     pane_set_root(f.pane, NULL); screen_fixture_clear(&f); json_free(payload); free(fixture);
 }
 static void usage_cells_and_totals(void) {
@@ -340,13 +439,15 @@ static void usage_cells_and_totals(void) {
 }
 void app_pull_reviews_tests(void) {
     screen_fixture_prepare();
-    test_run("finding keyboard navigation reveals the table and pages the wide inspector independently", inspector_keyboard_page_visibility);
+    test_run("finding keys reveal the table and page the wide inspector; the pane's back leaves to the table where it was", inspector_keyboard_page_visibility);
     test_run("review history shows usage columns and scoped totals with honest unknown and zero formatting", usage_cells_and_totals);
-    test_run("review inspector retains independent tab selections and bounded scrolling across refresh and DPI", inspector_selection_and_scroll);
+    test_run("an opened review keeps its finding selection and bounded scrolling across refresh, reopening and DPI", inspector_selection_and_scroll);
     test_run("cancelled initial review reads retain their deadline through hide and reveal", cancelled_initial_read_keeps_cadence);
-    test_run("completed and failed nullable findings are final across tables, details and totals", terminal_labels_across_tables_and_details);
+    test_run("completed and failed nullable findings are final across the table, an opened review and totals", terminal_labels_across_tables_and_details);
     test_run("completed-only PR snapshots discover started, external and new-head reviews on a fake clock", completed_snapshots_discover_new_reviews);
-    test_run("PR review tabs share one read and render selectable wide/narrow tables without sessions", shared_read_and_tables);
+    test_run("a code review row opens that review's findings as their own table and leads back, on one read", table_opens_review_findings);
+    test_run("keys, back and the open Code reviews tab lead into and out of a review's findings", keyboard_and_tab_lead_in_and_out);
+    test_run("a review without findings shows its summary in place of a table until findings arrive", review_without_findings_shows_its_summary);
     test_run("PR reviews distinguish unsupported, malformed, failed and empty reads", empty_failure_unsupported);
     test_run("PR reviews preserve stable selection and reject obsolete connection/project results", refresh_replacement_and_stale);
     test_run("PR review polling is bounded, honors retry deadlines, refreshes completed lists and cancels on hide", bounded_polling_retry_and_visibility);

@@ -37,7 +37,7 @@ static void pull_destroy(Screen *base) {
 
 /// The main column: what the selected tab holds.
 static void layout_main(PullScreen *s, Doc *doc, Col c) {
-    if (s->tab == PR_TAB_FINDINGS || s->tab == PR_TAB_CODE_REVIEWS) { screen_pulls_layout_reviews(s, doc, c); return; }
+    if (s->tab == PR_TAB_CODE_REVIEWS) { screen_pulls_layout_reviews(s, doc, c); return; }
     if (json_is_null(s->pr)) {
         if (s->tab == PR_TAB_SESSIONS) screen_pulls_layout_runs(s, doc, c);
         else if (!s->error) doc_loading(doc, c.x, c.w, NULL);
@@ -46,7 +46,6 @@ static void layout_main(PullScreen *s, Doc *doc, Col c) {
     switch (s->tab) {
     case PR_TAB_FILES: pull_files_layout(s->files, doc, c.x, c.w); break;
     case PR_TAB_CONVERSATION: screen_pulls_layout_conversation(s, doc, c); break;
-    case PR_TAB_FINDINGS: case PR_TAB_CODE_REVIEWS: screen_pulls_layout_reviews(s, doc, c); break;
     case PR_TAB_SESSIONS: screen_pulls_layout_runs(s, doc, c); break;
     default:
         screen_pulls_layout_description(s, doc, c);
@@ -116,7 +115,7 @@ static void pull_layout(Screen *base, Doc *doc) {
     if (s->tab == PR_TAB_RUN) {
         screen_pulls_layout_run(s, doc, w);
         return;
-    } else if (files || s->tab == PR_TAB_FINDINGS || s->tab == PR_TAB_CODE_REVIEWS) {
+    } else if (files || s->tab == PR_TAB_CODE_REVIEWS) {
         // Tables and file diffs use the whole pane so their columns remain readable.
         layout_main(s, doc, screen_pulls_col_make(0, w));
     } else if (w >= px(880)) {
@@ -211,7 +210,7 @@ static void pull_activated(Screen *base, bool active) { if (active) { PullScreen
 
 static const ScreenVTable pull_vt = {
     .destroy = pull_destroy, .layout = pull_layout, .header = pull_header, .action = screen_pulls_pull_action, .timer = pull_timer,
-    .window_visible = screen_pulls_reviews_visible, .key = screen_pulls_reviews_key, .visible = pull_visible, .refresh = screen_pulls_pull_refresh, .activated = pull_activated, .place = pull_place,
+    .window_visible = screen_pulls_reviews_visible, .key = screen_pulls_reviews_key, .back = screen_pulls_reviews_back, .visible = pull_visible, .refresh = screen_pulls_pull_refresh, .activated = pull_activated, .place = pull_place,
 };
 
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary) {

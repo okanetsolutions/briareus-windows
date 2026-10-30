@@ -16,14 +16,14 @@ if [ "${PREVIEW_WINE_TIME:-1}" = 1 ]; then preview_time=-DBRIAREUS_WINE_PREVIEW_
     -ldwmapi -lwinmm -lmfplat -lmfreadwrite -lmfuuid -lshlwapi -luxtheme -lcomdlg32 -lmsimg32 -ld2d1 -ldwrite
 : "${DISPLAY:?Start Xvfb with a screen of at least 1652x1009 and set DISPLAY}"
 export WINEDEBUG=-all
-for preview_tab in findings reviews; do
+for preview_tab in reviews review; do
     for preview_size in wide narrow dpi usage; do
-        if [ "$preview_size" = usage ] && [ "$preview_tab" = findings ]; then continue; fi
+        if [ "$preview_size" = usage ] && [ "$preview_tab" = review ]; then continue; fi
         if [ "$preview_size" = usage ]; then export PREVIEW_USAGE=1; else unset PREVIEW_USAGE; fi
         preview_width=1652 preview_dpi=96
         if [ "$preview_size" = narrow ] || [ "$preview_size" = usage ]; then preview_width=390; fi
         if [ "$preview_size" = dpi ]; then preview_width=780; preview_dpi=192; fi
-        if [ "$preview_tab" = reviews ]; then export PREVIEW_REVIEWS=1; else unset PREVIEW_REVIEWS; fi
+        if [ "$preview_tab" = review ]; then export PREVIEW_REVIEW=21; else unset PREVIEW_REVIEW; fi
         PREVIEW_WIDTH=$preview_width PREVIEW_DPI=$preview_dpi wine "$preview_build/native-preview.exe" \
             > "$preview_build/$preview_tab-$preview_size.log" 2>&1 &
         preview_pid=$!
