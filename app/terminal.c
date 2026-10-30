@@ -657,10 +657,15 @@ static void char_typed(Term *t, wchar_t c, bool alt) {
     if (c >= 0xDC00 && c <= 0xDFFF) { if (!t->high_surrogate) return; w[0] = t->high_surrogate; w[1] = c; }
     else w[0] = c;
     t->high_surrogate = 0;
-    char *u = wide_to_utf8(w);
-    char *out = alt ? xstrfmt("\x1b%s", u) : xstrdup(u);
+    // Escape and Return go as their keys once ConPTY asks for Win32 input records; with Alt they keep the ESC prefix.
+    char *out = alt ? NULL : vt_key_record(t->vt, c);
+    if (!out) {
+        char *u = wide_to_utf8(w);
+        out = alt ? xstrfmt("\x1b%s", u) : xstrdup(u);
+        free(u);
+    }
     send_keys(t, out);
-    free(u); free(out);
+    free(out);
 }
 
 // MARK: - The window

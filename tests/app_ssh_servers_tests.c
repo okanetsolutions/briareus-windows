@@ -122,6 +122,48 @@ static void sessions_shared(void) {
     project_ssh_free(global); project_ssh_free(project); json_free(row); servers_ssh_sessions_reset();
     term_set_launcher(NULL, NULL); screen_fixture_clear(&f);
 }
+static void clicks_return_the_keyboard(void) {
+    ScreenFixture f; screen_fixture_init(&f, routes, 1);
+    f.read_response = "{\"servers\":[{\"id\":1,\"repo\":\"o/one\",\"label\":\"Web\",\"username\":\"deploy\",\"host\":\"fake.example\"}]}";
+    Screen *s = ssh_servers_screen_new(); screen_fixture_pane(&f, s); pane_set_root(f.pane, s);
+    screen_fixture_pump(&f, 1);
+    launches = 0; term_set_launcher(launch, NULL);
+    HWND pane = pane_hwnd(f.pane); POINT pt = {0};
+    // Each click first takes the keyboard to the pane, as the pane's mouse_down does; the repaint places the session.
+    SetFocus(pane); s->vt->action(s, 700 + A_SERVER, 0, pt); UpdateWindow(pane);
+    Term *t = term_active(); CHECK(t != NULL); CHECK_INT(launches, 1);
+    CHECK(t && GetFocus() == term_hwnd(t));
+    // The session's own tab and its server change nothing else, yet it takes the keyboard back.
+    SetFocus(pane); s->vt->action(s, 700 + A_TAB, 0, pt); UpdateWindow(pane);
+    CHECK(t && GetFocus() == term_hwnd(t));
+    SetFocus(pane); s->vt->action(s, 700 + A_SERVER, 0, pt); UpdateWindow(pane);
+    CHECK(t && GetFocus() == term_hwnd(t)); CHECK_INT(launches, 1);
+    // Folding a project in the list leaves the keyboard with the list.
+    SetFocus(pane); s->vt->action(s, 700 + A_FOLDER, 0, pt); UpdateWindow(pane);
+    CHECK(GetFocus() == pane);
+    servers_ssh_sessions_reset(); term_set_launcher(NULL, NULL); screen_fixture_clear(&f);
+}
+static void other_views_leave_a_session_alone(void) {
+    ScreenFixture f; screen_fixture_init(&f, routes, 1);
+    Screen host = {0}, other_host = {0}; screen_fixture_pane(&f, &host);
+    Pane *other = pane_create(f.parent, false); RECT left = {0, 0, 450, 2000};
+    pane_set_bounds(other, &left); pane_show(other, true); other_host.pane = other;
+    ProjectSsh *global = project_ssh_new(NULL, &host, 700), *project = project_ssh_new("o/one", &other_host, 710);
+    Json *row = json_parsez("{\"id\":1,\"repo\":\"o/one\",\"label\":\"Web\",\"username\":\"deploy\",\"host\":\"fake.example\"}");
+    launches = 0; term_set_launcher(launch, NULL);
+    project_ssh_connect_row(global, row); Term *t = term_active(); CHECK(t != NULL);
+    global->loaded = true; json_array_push(global->rows, json_clone(row));
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, pane_content_width(f.pane));
+    project_ssh_layout(global, &doc, doc.width); doc_end(&doc);
+    RECT content = pane_content_rect(f.pane);
+    project_ssh_place(global, &content, 0, true);
+    CHECK(t && IsWindowVisible(term_hwnd(t))); CHECK(t && GetFocus() == term_hwnd(t));
+    // The same project's page on another tab, in its own pane, hides its own sessions only.
+    project_ssh_place(project, NULL, 0, false);
+    CHECK(t && IsWindowVisible(term_hwnd(t))); CHECK(t && GetFocus() == term_hwnd(t));
+    doc_free(&doc); project_ssh_free(project); project_ssh_free(global); json_free(row); servers_ssh_sessions_reset();
+    pane_destroy(other); term_set_launcher(NULL, NULL); screen_fixture_clear(&f);
+}
 static void navigation_gated(void) {
     ScreenFixture f; screen_fixture_init(&f, routes, 1);
     Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 400); screen_projects_sidebar_top(&doc, 400, "ssh-servers"); doc_end(&doc);
@@ -186,6 +228,8 @@ void app_ssh_servers_tests(void) {
     test_run("SSH Settings and refresh supersede blocked reads", refresh_race);
     test_run("SSH auth and project resets cancel stale reads and destruction releases ownership", reset_and_destroy);
     test_run("SSH global and project views reuse sessions and preserve cycling and reconnect", sessions_shared);
+    test_run("SSH clicks on a session give it back the keyboard", clicks_return_the_keyboard);
+    test_run("SSH views in other panes leave a shown session and its keyboard alone", other_views_leave_a_session_alone);
     test_run("SSH sidebar reaches the last server and retains scroll on resize", sidebar_scroll_survives_resize);
     test_run("SSH global page refreshes and resets without a search control", global_list_without_search);
     test_run("SSH global navigation uses admin capability gating", navigation_gated);

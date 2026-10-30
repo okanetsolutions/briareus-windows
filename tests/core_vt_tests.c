@@ -235,8 +235,23 @@ static void test_modes_the_keyboard_depends_on(void) {
     CHECK(vt_focus_events(vt)); CHECK(vt_win32_input(vt));
     put(vt, "\x1b[?9001l");
     CHECK(!vt_win32_input(vt)); CHECK(vt_focus_events(vt));
-    put(vt, "\x1b" "c");
-    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt)); CHECK(!vt_focus_events(vt));
+    // A program's resets put its own modes back but keep what ConPTY asked for.
+    put(vt, "\x1b[?9001h\x1b[!p");
+    CHECK(!vt_app_cursor(vt)); CHECK(!vt_bracketed_paste(vt)); CHECK(vt_win32_input(vt)); CHECK(vt_focus_events(vt));
+    put(vt, "\x1b[?1h\x1b" "c");
+    CHECK(!vt_app_cursor(vt)); CHECK(vt_win32_input(vt)); CHECK(vt_focus_events(vt));
+    vt_free(vt);
+}
+
+static void test_escape_and_return_go_as_key_records_once_conpty_asks(void) {
+    Vt *vt = vt_new(10, 5, 100);
+    CHECK(vt_key_record(vt, 0x1B) == NULL); CHECK(vt_key_record(vt, '\r') == NULL);
+    put(vt, "\x1b[?9001h");
+    CHECK_OWNED_STR(vt_key_record(vt, 0x1B), "\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_");
+    CHECK_OWNED_STR(vt_key_record(vt, '\r'), "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_");
+    CHECK(vt_key_record(vt, 'a') == NULL); CHECK(vt_key_record(vt, '\n') == NULL); CHECK(vt_key_record(vt, 0x7F) == NULL);
+    put(vt, "\x1b[?9001l");
+    CHECK(vt_key_record(vt, 0x1B) == NULL); CHECK(vt_key_record(vt, '\r') == NULL);
     vt_free(vt);
 }
 
@@ -314,6 +329,7 @@ void vt_tests(void) {
     test_run("vt titles and the bell", test_titles_and_the_bell);
     test_run("vt reports answer the program", test_reports_answer_the_program);
     test_run("vt modes the keyboard depends on", test_modes_the_keyboard_depends_on);
+    test_run("vt escape and return go as key records once ConPTY asks", test_escape_and_return_go_as_key_records_once_conpty_asks);
     test_run("vt resizing keeps the cursor line on screen", test_resizing_keeps_the_cursor_line_on_screen);
     test_run("vt tabs and backspace", test_tabs_and_backspace);
     test_run("vt char widths and the palette", test_char_widths_and_the_palette);

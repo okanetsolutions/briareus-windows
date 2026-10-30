@@ -46,7 +46,6 @@ static void reset_modes(Vt *vt) {
     vt->top = 0; vt->bottom = vt->rows - 1;
     vt->cursor_visible = true; vt->autowrap = true; vt->origin = false; vt->insert = false;
     vt->app_cursor = false; vt->app_keypad = false; vt->bracketed = false; vt->newline_mode = false;
-    vt->focus_events = false; vt->win32_input = false;
     vt->g0_lines = vt->g1_lines = vt->shift_out = false;
     vt->wrap_pending = false;
 }
@@ -95,6 +94,12 @@ bool vt_bracketed_paste(const Vt *vt) { return vt->bracketed; }
 bool vt_alt_screen(const Vt *vt) { return vt->grid == vt->alt; }
 bool vt_focus_events(const Vt *vt) { return vt->focus_events; }
 bool vt_win32_input(const Vt *vt) { return vt->win32_input; }
+char *vt_key_record(const Vt *vt, uint32_t ch) {
+    if (!vt->win32_input || (ch != 0x1B && ch != '\r')) return NULL;
+    // Both keys' virtual key codes are their characters; 1 and 28 are their scan codes.
+    unsigned key = (unsigned)ch, scan = ch == 0x1B ? 1 : 28;
+    return xstrfmt("\x1b[%u;%u;%u;1;0;1_\x1b[%u;%u;%u;0;0;1_", key, scan, key, key, scan, key);
+}
 const char *vt_title(const Vt *vt) { return vt->title; }
 bool vt_take_title_changed(Vt *vt) { bool c = vt->title_changed; vt->title_changed = false; return c; }
 bool vt_take_bell(Vt *vt) { bool b = vt->bell; vt->bell = false; return b; }

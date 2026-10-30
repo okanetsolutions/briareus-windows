@@ -135,14 +135,16 @@ void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool sh
         if (!IntersectRect(&visible, &r, content)) on = false;
         else r = visible;
     }
-    // Only this project's session on show is up; every other one waits, hidden.
+    // Only the session on show is up; the others in this pane wait, hidden. A session in another view's pane is that
+    // view's to place: hiding it would take its keyboard too.
+    HWND mine = p->host->pane ? pane_hwnd(p->host->pane) : NULL;
     for (size_t i = 0; i < term_count(); i++) {
         Term *t = term_at(i);
         if (t == active && on) {
-            SetParent(term_hwnd(t), pane_hwnd(p->host->pane));
+            SetParent(term_hwnd(t), mine);
             term_cycle_all(t, p->global); term_place(t, &r, true);
         }
-        else if (p->global || str_eq(term_group(t), p->repo) || !shown) term_place(t, NULL, false);
+        else if (GetParent(term_hwnd(t)) == mine) term_place(t, NULL, false);
     }
     if (!on) { p->focused = NULL; return; }
     // A session just opened or switched to takes the keyboard.
@@ -152,6 +154,11 @@ void project_ssh_place(ProjectSsh *p, const RECT *content, int scroll_y, bool sh
 // MARK: - Actions
 
 static Term *term_by_index(intptr_t arg) { return arg >= 0 ? term_at((size_t)arg) : NULL; }
+/// A dialog runs the message loop, where a sign-out can free the page; a freed page has left its slot.
+static bool instance_alive(const ProjectSsh *p) {
+    for (int i = 0; i < MAX_INSTANCES; i++) if (g_instances[i] == p) return true;
+    return false;
+}
 bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
     (void)pt;
     servers_ssh_scope_changed();
@@ -163,7 +170,7 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
         Json *folders = ssh_server_folders(p->rows, projects, count, "");
         const char *repo = json_str(json_get(json_at(folders, (size_t)arg), "repo"));
         if (repo) ssh_server_folder_toggle(p->folded, repo, "");
-        json_free(folders); relayout(p); break;
+        json_free(folders); relayout(p); return true;
     }
     case A_SERVER: project_ssh_connect_row(p, json_at(p->rows, (size_t)arg)); break;
     case A_TAB: term_set_active(term_by_index(arg)); break;
@@ -177,6 +184,11 @@ bool project_ssh_action(ProjectSsh *p, int action, intptr_t arg, POINT pt) {
         break;
     }
     }
+    // The click gave the pane the keyboard; the session on show takes it back even when nothing changed, as on its own
+    // tab or server or a cancelled Close.
+    if (!instance_alive(p)) return true;
+    p->focused = NULL;
+    relayout(p);
     return true;
 }
 
