@@ -149,7 +149,8 @@ static void projects_layout(Screen *base, Doc *doc) {
     screen_projects_sidebar_top(doc, w, pane_selected_id(base->pane));
     if (!store_can_manage()) { doc_text(doc, px(8), w - px(16), "\xF0\x9F\x94\x92 Read-only access", FONT_CAPTION, theme.muted, DT_SINGLELINE | DT_END_ELLIPSIS); doc_space(doc, px(8)); }
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
-    if (store_supports("sessions")) screen_projects_doc_project_row(doc, w, "All", s->all_count, s->all_busy, false, true, px(39), ACT_ALL_SESSIONS, 0);
+    if (store_supports("sessions")) screen_projects_doc_project_row(doc, w, "All sessions", s->all_count, s->all_busy, false, true, px(39), ACT_ALL_SESSIONS, 0);
+    if (store_supports("pulls") && store_supports("projects")) screen_projects_doc_project_row(doc, w, "All pull requests", -1, false, str_has_prefix(pane_selected_id(base->pane), "global-pulls:"), true, px(39), ACT_ALL_PULLS, 0);
     for (size_t i = 0; i < s->count; i++) {
         const Project *p = &s->projects[i];
         screen_projects_doc_project_row(doc, w, project_title(p), s->counts ? s->counts[i] : 0, s->busy ? s->busy[i] : false, false, true, px(39), ACT_OPEN_PROJECT, (intptr_t)i);
@@ -185,6 +186,7 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     if (screen_projects_sidebar_common_action(base->pane, action)) return;
     if (action == ACT_NEW) { app_show_detail(new_session_screen_new(NULL, s->projects, s->count)); return; }
+    if (action == ACT_ALL_PULLS && store_supports("pulls") && store_supports("projects")) { app_show_detail(global_pulls_screen_new()); return; }
     if (action == ACT_ALL_SESSIONS && store_supports("sessions")) { pane_push(base->pane, sessions_screen_new(NULL)); return; }
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }

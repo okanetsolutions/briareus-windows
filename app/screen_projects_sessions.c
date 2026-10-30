@@ -165,7 +165,7 @@ static void sessions_layout(Screen *base, Doc *doc) {
     doc_custom(doc, 0, w, px(30), screen_projects_paint_back_row, NULL, NULL, ACT_BACK, 0);
     doc_space(doc, px(2));
     char *board_id = s->all_projects ? NULL : xstrfmt("pulls:%s", s->project.repo);
-    screen_projects_doc_project_row(doc, w, s->all_projects ? "All" : project_title(&s->project), (int)s->count, false, !s->all_projects && str_eq(selected, board_id), false, px(35), s->all_projects ? 0 : ACT_BOARD, 0);
+    screen_projects_doc_project_row(doc, w, s->all_projects ? "All projects · Pull requests" : project_title(&s->project), s->all_projects ? -1 : (int)s->count, false, s->all_projects ? str_has_prefix(selected, "global-pulls:") : str_eq(selected, board_id), false, px(35), ACT_BOARD, 0);
     free(board_id);
     doc_space(doc, px(4));
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
@@ -189,7 +189,7 @@ static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (screen_projects_sidebar_common_action(base->pane, action)) return;
     switch (action) {
     case ACT_BACK: pane_pop(base->pane); break;
-    case ACT_BOARD: if (!s->all_projects) app_show_detail(pulls_screen_new(&s->project)); break;
+    case ACT_BOARD: app_show_detail(s->all_projects ? global_pulls_screen_new() : pulls_screen_new(&s->project)); break;
     case ACT_NEW: { size_t n; const Project *all = projects_list(&n); app_show_detail(new_session_screen_new(s->all_projects ? NULL : &s->project, all, n)); break; }
     case ACT_OPEN_SESSION:
         if ((size_t)arg >= s->count) break;

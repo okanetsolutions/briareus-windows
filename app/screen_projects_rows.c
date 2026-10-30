@@ -29,10 +29,12 @@ static void paint_project_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     if (hovered || d->selected) fill_round_rect(cv, rc, px(8), theme.raise, theme.raise);
     int right = rc->right - px(8);
     if (d->chevron) { RECT c = { right - px(6), rc->top, right, rc->bottom }; draw_text(cv, "\xE2\x80\xBA", &c, FONT_CAPTION2, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); right -= px(6) + px(8); }
-    char n[16]; snprintf(n, sizeof n, "%d", d->count);
-    int nw = text_width(cv, n, FONT_CAPTION);
-    RECT cr = { right - nw, rc->top, right, rc->bottom }; draw_text(cv, n, &cr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    right -= nw + px(8);
+    if (d->count >= 0) {
+        char n[16]; snprintf(n, sizeof n, "%d", d->count);
+        int nw = text_width(cv, n, FONT_CAPTION);
+        RECT cr = { right - nw, rc->top, right, rc->bottom }; draw_text(cv, n, &cr, FONT_CAPTION, theme.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        right -= nw + px(8);
+    }
     if (d->busy) { draw_status_dot(cv, right - px(4), (rc->top + rc->bottom) / 2, "running"); right -= px(7) + px(8); }
     RECT t = { rc->left + px(8), rc->top, right, rc->bottom };
     draw_text(cv, d->name, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
