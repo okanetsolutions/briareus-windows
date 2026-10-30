@@ -79,9 +79,16 @@ static void global_cancel_and_stale(void) {
     Request *pending = s->req; s->base.vt->refresh(&s->base); s->base.vt->refresh(&s->base); CHECK(s->req == pending); CHECK(s->queued_fresh);
     s->base.vt->visible(&s->base, false); CHECK(s->req == NULL); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
     CHECK(!s->state.projects[0].loaded); f.block_board = false;
-    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 5); // Resume two boards, then one coalesced fresh round.
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 6); // Reconfirm projects and two boards, then one coalesced fresh round.
     CHECK(s->state.projects[0].loaded && s->state.projects[1].loaded); CHECK(!s->queued_fresh); CHECK_INT(f.peak, 1);
     CHECK(strstr(f.urls[1], "fresh=1") != NULL);
+    f.block_board = true; ResetEvent(f.screen.resume); ResetEvent(f.screen.entered);
+    s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    s->base.vt->visible(&s->base, false); SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1);
+    f.projects = "{\"projects\":[{\"repo\":\"o/b\"}]}"; f.block_board = false;
+    s->base.vt->visible(&s->base, true); screen_fixture_pump(&f.screen, 2);
+    CHECK_INT(s->state.count, 1); CHECK_STR(s->state.projects[0].project.repo, "o/b");
     f.block_board = true; ResetEvent(f.screen.resume); ResetEvent(f.screen.entered);
     s->base.vt->refresh(&s->base); screen_fixture_pump(&f.screen, 1);
     CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);

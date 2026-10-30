@@ -104,6 +104,8 @@ static void visible(Screen *base, bool shown) {
         else poller_finished(&s->poller, false, -1);
     } else {
         poller_stop(&s->poller); request_cancel(&s->req);
+        // A cancelled round must reconfirm the catalog on reveal, especially after a long absence.
+        if (s->loading) s->reading_projects = true;
         if (!global_pulls_current(s)) clear(s);
     }
 }
