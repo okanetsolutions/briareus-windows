@@ -28,7 +28,7 @@ python3 -m unittest discover -s tests -p 'test_structure.py'
 
 The checker requires Python 3 and Git, not Windows SDK headers. It resolves the merge base of `HEAD` and the supplied ref, defaulting to `origin/main`, then compares that snapshot with tracked and untracked working files. CI fetches full history and supplies the PR base SHA. Main pushes compare with their previous commit. Missing refs or Git errors fail with exit code 2; violations fail with exit code 1.
 
-The change-based check compares findings per file and token expression against the base. Moving an unchanged condition within a file does not make it new; new copies do. An existing long condition cannot span more lines. Existing oversized files may stay the same size or shrink. Deleted files do not create structure findings, but core removals still need a test delta. No committed exemption list or suppression option is provided.
+The change-based check compares findings per file and token expression against the base. Moving an unchanged condition within a file does not make it new; new copies do. An existing long condition cannot span more lines. Existing oversized files may stay the same size or shrink. Deleted files do not create structure findings, but core removals still need a test delta: an updated core suite, or the removed module's retired suite. No committed exemption list or suppression option is provided.
 
 `make rules` also runs the full-tree audit used by `make audit`. It reports all existing layer, condition and presentation-size violations without baseline allowances. After the structural cleanup, both checks must pass; new presentation components retain the 300-line ceiling. Warning suppression and core test-delta checks still compare against the merge base.
 

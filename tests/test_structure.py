@@ -108,9 +108,11 @@ class StructureRules(unittest.TestCase):
         self.assertEqual([], check(before, after))
         self.assertTrue(self.errors("#define X 2\n", old="#define X 1\n", path="core/a.h"))
 
-    def test_deleted_core_files_do_not_need_a_test_delta(self):
+    def test_deleted_core_files_need_their_suite_removed_or_a_test_delta(self):
         before = {"core/a.c": "int x = 1;", "core/a.h": "#define A 1\n", "tests/core_a_tests.c": "void test(void) { CHECK_INT(x, 1); }"}
         self.assertEqual([], check(before, {}))
+        errors = check(before, {"tests/core_a_tests.c": before["tests/core_a_tests.c"]})
+        self.assertTrue(any("core test gate" in error and "core/a.c, core/a.h" in error for error in errors))
         after = {"core/a.c": "int x = 2;"}
         self.assertTrue(any("core test gate" in error for error in check(before, after)))
 
