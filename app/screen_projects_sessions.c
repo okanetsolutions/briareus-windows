@@ -42,8 +42,7 @@ static void sessions_done(void *owner, Request *req) {
         set_string(&s->error, NULL);
         char *key = sessions_key(s);
         Json *list = sessions_json(s->sessions, s->count);
-        if (s->all_projects) screen_projects_cache_all_sessions(s->sessions, s->count);
-        else cache_store(g_store.cache, list, key);
+        cache_store(g_store.cache, list, key);
         json_free(list); free(key);
         projects_recount_findings();
     } else {
@@ -63,7 +62,7 @@ static void sessions_load(SessionsScreen *s) {
     }
     if (s->req) return;
     Json *args = json_object();
-    if (!s->all_projects) json_set_str(args, "repo", s->project.repo);
+    json_set_str(args, "repo", s->project.repo);
     store_call("sessions", args, 0, s, sessions_done, 0, &s->req);
 }
 
@@ -76,7 +75,7 @@ void sessions_forget(const char *repo, const char *id) {
     Screen *top = sidebar ? pane_top(sidebar) : NULL;
     if (!top || top->vt->layout != sessions_layout) return;
     SessionsScreen *s = (SessionsScreen *)top;
-    if (!s->all_projects && !str_eq(s->project.repo, repo)) return;
+    if (!str_eq(s->project.repo, repo)) return;
     for (size_t i = 0; i < s->count; i++) {
         if (!str_eq(session_id(&s->sessions[i]), id)) continue;
         session_free(&s->sessions[i]);
@@ -164,10 +163,8 @@ static void sessions_layout(Screen *base, Doc *doc) {
     // `‹ All projects`, the current scope, then its conversations.
     doc_custom(doc, 0, w, px(30), screen_projects_paint_back_row, NULL, NULL, ACT_BACK, 0);
     doc_space(doc, px(2));
-    char *board_id = s->all_projects ? NULL : xstrfmt("pulls:%s", s->project.repo);
-    bool global_board = store_supports("pulls") && store_supports("projects");
-    const char *title = s->all_projects ? (global_board ? "All projects · Pull requests" : "All sessions") : project_title(&s->project);
-    screen_projects_doc_project_row(doc, w, title, s->all_projects && global_board ? -1 : (int)s->count, false, s->all_projects ? str_has_prefix(selected, "global-pulls:") : str_eq(selected, board_id), false, px(35), !s->all_projects || global_board ? ACT_BOARD : 0, 0);
+    char *board_id = xstrfmt("pulls:%s", s->project.repo);
+    screen_projects_doc_project_row(doc, w, project_title(&s->project), (int)s->count, false, str_eq(selected, board_id), false, px(35), ACT_BOARD, 0);
     free(board_id);
     doc_space(doc, px(4));
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
@@ -175,7 +172,7 @@ static void sessions_layout(Screen *base, Doc *doc) {
         const Session *ses = &s->sessions[i];
         char *id = xstrfmt("conversation:%s", session_id(ses));
         bool lit = s->select_mode ? is_picked(s, session_id(ses)) : str_eq(selected, id);
-        screen_projects_doc_dashboard_session_row(doc, w, ses, s->all_projects, lit, s->select_mode, is_picked(s, session_id(ses)), s->select_mode ? ACT_PICK : ACT_OPEN_SESSION, (intptr_t)i);
+        screen_projects_doc_dashboard_session_row(doc, w, ses, lit, s->select_mode, is_picked(s, session_id(ses)), s->select_mode ? ACT_PICK : ACT_OPEN_SESSION, (intptr_t)i);
         free(id);
     }
     if (s->loaded && !s->count) doc_text(doc, px(8), w - px(16), "No conversations here yet.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
@@ -185,22 +182,14 @@ static void sessions_layout(Screen *base, Doc *doc) {
 
 static void sessions_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
 
-Screen *screen_projects_board_screen(const SessionsScreen *s) {
-    if (!s->all_projects) return pulls_screen_new(&s->project);
-    if (!store_supports("pulls") || !store_supports("projects")) return NULL;
-    return global_pulls_screen_new();
-}
-
 static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     SessionsScreen *s = (SessionsScreen *)base;
     if (screen_projects_sidebar_common_action(base->pane, action)) return;
     switch (action) {
     case ACT_BACK: pane_pop(base->pane); break;
-    case ACT_BOARD: {
-        Screen *board = screen_projects_board_screen(s); if (board) app_show_detail(board); break;
-    }
-    case ACT_NEW: { size_t n; const Project *all = projects_list(&n); app_show_detail(new_session_screen_new(s->all_projects ? NULL : &s->project, all, n)); break; }
+    case ACT_BOARD: app_show_detail(pulls_screen_new(&s->project)); break;
+    case ACT_NEW: { size_t n; const Project *all = projects_list(&n); app_show_detail(new_session_screen_new(&s->project, all, n)); break; }
     case ACT_OPEN_SESSION:
         if ((size_t)arg >= s->count) break;
         // Ctrl-clicking a row turns ☑ Select on with that row ticked, as the dashboard does.
@@ -242,8 +231,7 @@ static const ScreenVTable sessions_vt = {
 
 Screen *sessions_screen_new(const Project *project) {
     SessionsScreen *s = xcalloc(1, sizeof *s);
-    s->all_projects = project == NULL;
-    s->base.vt = &sessions_vt; s->base.id = project ? xstrfmt("sessions:%s", project->repo) : xstrdup("sessions");
-    if (project) project_copy(&s->project, project);
+    s->base.vt = &sessions_vt; s->base.id = xstrfmt("sessions:%s", project->repo);
+    project_copy(&s->project, project);
     return &s->base;
 }

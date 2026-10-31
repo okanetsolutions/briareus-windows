@@ -265,13 +265,15 @@ def check(before, after):
             errors.append(f"{path}:1: warning suppressions increased; fix the cause instead of suppressing it")
         if path.startswith("core/") and token_values(old) != token_values(new):
             core_changes.append(path)
+    core_tests = [path for path in changed if re.fullmatch(r"tests/core_.+tests\.c", path)]
     test_changes = any(
-        re.fullmatch(r"tests/core_.+tests\.c", path) and path in after
-        and token_values(before.get(path, "")) != token_values(after[path])
-        for path in changed
+        path in after and token_values(before.get(path, "")) != token_values(after[path]) for path in core_tests
     )
-    if core_changes and not test_changes:
-        errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(core_changes))
+    # A removed core module may retire its suite instead; deleting a suite never covers an edited module.
+    test_removals = any(path in before and path not in after for path in core_tests)
+    untested = [path for path in core_changes if not test_changes and (path in after or not test_removals)]
+    if untested:
+        errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(untested))
     if "Makefile" in changed:
         old, new = (re.sub(r"(?m)#.*$", "", snapshot.get("Makefile", "")) for snapshot in (before, after))
         suppressions = lambda text: Counter(re.findall(r"--suppress(?:=|\s+)([^\s]+)", text))

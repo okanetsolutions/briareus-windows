@@ -24,7 +24,6 @@ Screen *conversation_screen_new(const Session *session);
 /// and rotate the keys.
 Screen *mail_wake_screen_new(const Session *session);
 Screen *webhook_screen_new(const Session *session);
-Screen *global_pulls_screen_new(void);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
 /// The changed files on their own, for the conversation's menu.

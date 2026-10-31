@@ -22,8 +22,6 @@ void markdown_tests(void);
 void diff_tests(void);
 void models_tests(void);
 void board_tests(void);
-void core_global_pulls_tests(void);
-void app_global_pulls_tests(void);
 void api_tests(void);
 void contract_tests(void);
 void cache_tests(void);
