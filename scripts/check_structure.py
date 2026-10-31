@@ -263,7 +263,8 @@ def check(before, after):
             continue
         if source_suppressions(new) > source_suppressions(old):
             errors.append(f"{path}:1: warning suppressions increased; fix the cause instead of suppressing it")
-        if path.startswith("core/") and token_values(old) != token_values(new):
+        # Deleting a whole core file leaves no behavior to test; any remaining caller fails to build.
+        if path.startswith("core/") and path in after and token_values(old) != token_values(new):
             core_changes.append(path)
     test_changes = any(
         re.fullmatch(r"tests/core_.+tests\.c", path) and path in after

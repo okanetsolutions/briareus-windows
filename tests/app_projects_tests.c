@@ -68,79 +68,45 @@ static SessionsScreen *open_sessions(const Project *project) {
 
 static void finish(void) { pane_set_root(pane, NULL); free(last_url); last_url = NULL; }
 
-static void test_all_and_project_requests_use_separate_scopes(void) {
+static const Project one = { .repo = "o/one", .label = "One" };
+
+static void test_project_sessions_request_scope_and_board(void) {
     reset();
-    SessionsScreen *s = open_sessions(NULL); drain(1);
-    CHECK_STR(last_url, "https://test.example/api/v1/sessions");
-    CHECK_INT(s->count, 3); CHECK(s->all_projects);
-    CHECK_STR(session_repo(&s->sessions[2]), "other/repo");
-    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
-    size_t open_rows = 0;
-    for (size_t i = 0; i < doc.count; i++) {
-        if (doc.items[i].action == ACT_OPEN_SESSION) open_rows++;
-        CHECK(doc.items[i].action != ACT_BOARD);
-    }
-    CHECK_INT(open_rows, 3); CHECK(screen_projects_board_screen(s) == NULL);
-    // The aggregate board is offered only when the catalog also exposes project PR reads.
-    g_store.route_count = 3; doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
-    size_t board_rows = 0;
-    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_BOARD) board_rows++;
-    CHECK_INT(board_rows, 1); CHECK(s->all_projects); CHECK_STR(s->base.id, "sessions");
-    Screen *board = screen_projects_board_screen(s); CHECK(board != NULL);
-    if (board) { CHECK(str_has_prefix(board->id, "global-pulls:")); board->vt->destroy(board); }
-    doc_free(&doc);
-    s->select_mode = true;
-    s->base.vt->action(&s->base, ACT_PICK, 0, (POINT){0}); s->base.vt->action(&s->base, ACT_PICK, 1, (POINT){0});
-    CHECK_INT(s->picked_count, 2); CHECK_STR(s->picked[0], "a"); CHECK_STR(s->picked[1], "b");
-    CHECK(s->base.vt->key(&s->base, VK_ESCAPE, false, false)); CHECK_INT(s->picked_count, 0);
-    check_saved("sessions", 3, "a"); check_saved("sessions:o/one", 1, "a"); check_saved("sessions:o/two", 1, "b");
-    Project project = { .repo = "o/one", .label = "One" };
-    s = open_sessions(&project); drain(1);
+    SessionsScreen *s = open_sessions(&one); drain(1);
     // The sessions route filters its aggregate response in core/api.c.
     CHECK_STR(last_url, "https://test.example/api/v1/sessions");
-    CHECK_INT(s->count, 1); CHECK(!s->all_projects);
-    doc_init(&doc); doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
-    board_rows = 0;
-    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_BOARD) board_rows++;
-    CHECK_INT(board_rows, 1); CHECK_STR(s->project.repo, "o/one"); doc_free(&doc);
-    board = screen_projects_board_screen(s); CHECK(board != NULL);
-    if (board) { CHECK_STR(board->id, "pulls:o/one"); board->vt->destroy(board); }
-    CHECK_STR(session_id(&s->sessions[0]), "a");
-    check_saved("sessions", 3, "a");
+    CHECK_INT(s->count, 1); CHECK_STR(session_id(&s->sessions[0]), "a"); CHECK_STR(s->base.id, "sessions:o/one");
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
+    size_t board_rows = 0, open_rows = 0;
+    for (size_t i = 0; i < doc.count; i++) {
+        if (doc.items[i].action == ACT_BOARD) board_rows++;
+        if (doc.items[i].action == ACT_OPEN_SESSION) open_rows++;
+    }
+    CHECK_INT(board_rows, 1); CHECK_INT(open_rows, 1); doc_free(&doc);
+    s->select_mode = true;
+    s->base.vt->action(&s->base, ACT_PICK, 0, (POINT){0});
+    CHECK_INT(s->picked_count, 1); CHECK_STR(s->picked[0], "a");
+    CHECK(s->base.vt->key(&s->base, VK_ESCAPE, false, false)); CHECK_INT(s->picked_count, 0);
+    check_saved("sessions:o/one", 1, "a");
     finish();
 }
 
-static void test_projects_all_navigation_and_capability(void) {
+static void test_projects_lists_only_projects(void) {
     reset();
     Screen *root = projects_screen_new(); pane_set_root(pane, root);
     root->vt->refresh(root); drain(2);
-    check_saved("sessions", 3, "a");
-    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
-    bool found = false;
-    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_ALL_SESSIONS) {
-        found = true; root->vt->action(root, doc.items[i].action, doc.items[i].arg, (POINT){0}); break;
-    }
-    CHECK(found); doc_free(&doc);
-    CHECK_INT(pane_depth(pane), 2);
-    Screen *all = pane_top(pane); CHECK_STR(all->id, "sessions");
-    all->vt->refresh(all); drain(1);
-    CHECK_INT(((SessionsScreen *)all)->count, 3);
-    all->vt->action(all, ACT_BACK, 0, (POINT){0}); CHECK(pane_top(pane) == root);
+    check_saved("sessions:o/one", 1, "a"); check_saved("sessions:o/two", 1, "b");
+    Json *aggregate = cache_value(g_store.cache, "sessions"); CHECK(aggregate == NULL); json_free(aggregate);
     g_store.route_count = 3;
-    doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
-    size_t global_entries = 0, session_entries = 0;
-    for (size_t i = 0; i < doc.count; i++) {
-        if (doc.items[i].action == ACT_ALL_PULLS) global_entries++;
-        if (doc.items[i].action == ACT_ALL_SESSIONS) session_entries++;
-    }
-    CHECK_INT(global_entries, 1); CHECK_INT(session_entries, 1); doc_free(&doc);
-    g_store.route_count = 1;
-    root->vt->action(root, ACT_ALL_SESSIONS, 0, (POINT){0}); CHECK_INT(pane_depth(pane), 1);
-    doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
-    for (size_t i = 0; i < doc.count; i++) {
-        CHECK(doc.items[i].action != ACT_ALL_SESSIONS); CHECK(doc.items[i].action != ACT_ALL_PULLS);
-    }
-    doc_free(&doc); finish();
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); root->vt->layout(root, &doc);
+    size_t listed = 0;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == ACT_OPEN_PROJECT) listed++;
+    // Only the projects themselves, without cross-project session or pull request entries.
+    CHECK_INT(listed, 2); doc_free(&doc);
+    root->vt->action(root, ACT_OPEN_PROJECT, 1, (POINT){0}); CHECK_INT(pane_depth(pane), 2);
+    Screen *project = pane_top(pane); CHECK_STR(project->id, "sessions:o/two");
+    project->vt->action(project, ACT_BACK, 0, (POINT){0}); CHECK(pane_top(pane) == root);
+    finish();
 }
 
 static void test_project_counts_save_live_scope_when_project_cache_is_stale(void) {
@@ -153,49 +119,48 @@ static void test_project_counts_save_live_scope_when_project_cache_is_stale(void
     Screen *root = projects_screen_new(); pane_set_root(pane, root);
     root->vt->refresh(root); drain(2);
     Json *saved = cache_value(g_store.cache, "projects"); CHECK_INT(json_count(saved), 0); json_free(saved);
-    check_saved("sessions", 3, "a");
     check_saved("sessions:o/one", 1, "a"); check_saved("sessions:o/two", 1, "b");
     screen_projects_recount(pane);
     CloseHandle(lock); finish();
 }
 
-static void test_all_restores_cache_preserves_errors_and_accepts_empty(void) {
+static void test_project_restores_cache_preserves_errors_and_accepts_empty(void) {
     reset();
-    SessionsScreen *s = open_sessions(NULL); drain(1);
+    SessionsScreen *s = open_sessions(&one); drain(1);
     answer_status = 503; answer = "{\"error\":\"Unavailable\"}";
-    s = open_sessions(NULL);
-    CHECK_INT(s->count, 3); CHECK(s->loaded); drain(1);
-    CHECK_INT(s->count, 3); CHECK(s->error != NULL);
-    check_saved("sessions", 3, "a");
+    s = open_sessions(&one);
+    CHECK_INT(s->count, 1); CHECK(s->loaded); drain(1);
+    CHECK_INT(s->count, 1); CHECK(s->error != NULL);
+    check_saved("sessions:o/one", 1, "a");
     answer_status = 200; answer = "{\"sessions\":[]}";
     s->base.vt->refresh(&s->base); drain(1);
     CHECK_INT(s->count, 0); CHECK(s->error == NULL);
-    check_saved("sessions", 0, NULL); check_saved("sessions:o/one", 0, NULL); check_saved("sessions:o/two", 0, NULL);
+    check_saved("sessions:o/one", 0, NULL);
     finish();
 }
 
-static void test_delete_updates_aggregate_and_project_caches(void) {
-    reset(); open_sessions(NULL); drain(1);
+static void test_delete_updates_project_cache(void) {
+    reset(); save("sessions:o/two", "[{\"id\":\"b\",\"repo\":\"o/two\"}]");
+    open_sessions(&one); drain(1);
     save("transcript:a", "{\"messages\":[]}");
     sessions_forget("o/one", "a");
-    check_saved("sessions", 2, "b"); check_saved("sessions:o/one", 0, NULL); check_saved("sessions:o/two", 1, "b");
+    check_saved("sessions:o/one", 0, NULL); check_saved("sessions:o/two", 1, "b");
     Json *transcript = cache_value(g_store.cache, "transcript:a"); CHECK(transcript == NULL); json_free(transcript);
     answer_status = 503; answer = "{\"error\":\"Unavailable\"}";
-    SessionsScreen *s = open_sessions(NULL); CHECK_INT(s->count, 2); drain(1);
-    CHECK_STR(session_id(&s->sessions[0]), "b");
+    SessionsScreen *s = open_sessions(&one); CHECK_INT(s->count, 0); drain(1);
     finish();
 }
 
-static void test_hidden_and_destroyed_all_discard_completions(void) {
-    reset(); SessionsScreen *s = open_sessions(NULL); drain(1);
+static void test_hidden_and_destroyed_project_discard_completions(void) {
+    reset(); SessionsScreen *s = open_sessions(&one); drain(1);
     entered = CreateEventW(NULL, TRUE, FALSE, NULL); resume = CreateEventW(NULL, TRUE, FALSE, NULL);
     answer = "{\"sessions\":[]}";
     s->base.vt->refresh(&s->base); CHECK_INT(WaitForSingleObject(entered, 5000), WAIT_OBJECT_0);
     s->base.vt->visible(&s->base, false); SetEvent(resume); drain(1);
-    CHECK_INT(s->count, 3); check_saved("sessions", 3, "a");
+    CHECK_INT(s->count, 1); check_saved("sessions:o/one", 1, "a");
     ResetEvent(entered); ResetEvent(resume);
     s->base.vt->refresh(&s->base); CHECK_INT(WaitForSingleObject(entered, 5000), WAIT_OBJECT_0);
-    pane_set_root(pane, NULL); SetEvent(resume); drain(1); check_saved("sessions", 3, "a");
+    pane_set_root(pane, NULL); SetEvent(resume); drain(1); check_saved("sessions:o/one", 1, "a");
     CloseHandle(entered); CloseHandle(resume); entered = resume = NULL;
     finish();
 }
@@ -212,13 +177,13 @@ void app_projects_tests(void) {
     g_store.client = api_client_new(&address, "brm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", &error);
     api_client_set_transport(g_store.client, transport, NULL);
     // Allocate the pane's retained stack before the per-test leak checkpoints.
-    pane_set_root(pane, projects_screen_new()); pane_push(pane, sessions_screen_new(NULL)); pane_set_root(pane, NULL);
-    test_run("all and project sessions use distinct request and cache scopes", test_all_and_project_requests_use_separate_scopes);
-    test_run("projects opens all sessions and gates it by capability", test_projects_all_navigation_and_capability);
-    test_run("project counts save live scope alongside aggregate sessions when project cache is stale", test_project_counts_save_live_scope_when_project_cache_is_stale);
-    test_run("all sessions restores cached rows and handles errors and empty results", test_all_restores_cache_preserves_errors_and_accepts_empty);
-    test_run("deleting sessions clears aggregate and project caches", test_delete_updates_aggregate_and_project_caches);
-    test_run("all sessions discards hidden and destroyed request completions", test_hidden_and_destroyed_all_discard_completions);
+    pane_set_root(pane, projects_screen_new()); pane_push(pane, sessions_screen_new(&one)); pane_set_root(pane, NULL);
+    test_run("project sessions request their scope and open the project board", test_project_sessions_request_scope_and_board);
+    test_run("projects lists only projects and opens a project's sessions", test_projects_lists_only_projects);
+    test_run("project counts save live scope when project cache is stale", test_project_counts_save_live_scope_when_project_cache_is_stale);
+    test_run("project sessions restore cached rows and handle errors and empty results", test_project_restores_cache_preserves_errors_and_accepts_empty);
+    test_run("deleting a session clears its project cache", test_delete_updates_project_cache);
+    test_run("project sessions discard hidden and destroyed request completions", test_hidden_and_destroyed_project_discard_completions);
     pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&error);
