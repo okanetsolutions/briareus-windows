@@ -265,13 +265,17 @@ def check(before, after):
             errors.append(f"{path}:1: warning suppressions increased; fix the cause instead of suppressing it")
         if path.startswith("core/") and token_values(old) != token_values(new):
             core_changes.append(path)
+    core_tests = [path for path in changed if re.fullmatch(r"tests/core_.+tests\.c", path)]
     test_changes = any(
-        re.fullmatch(r"tests/core_.+tests\.c", path) and path in after
-        and token_values(before.get(path, "")) != token_values(after[path])
-        for path in changed
+        path in after and token_values(before.get(path, "")) != token_values(after[path]) for path in core_tests
     )
-    if core_changes and not test_changes:
-        errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(core_changes))
+    # A removed core module may retire its own suite instead; deleting a suite never covers an edited module.
+    retired = {match.group(1) for path in core_tests if path in before and path not in after
+               for match in [re.fullmatch(r"tests/core_(.+)_tests\.c", path)] if match}
+    removed = lambda stem: stem in retired and not any(f"core/{stem}{ext}" in after for ext in (".c", ".h"))
+    untested = [path for path in core_changes if not test_changes and not removed(PurePosixPath(path).stem)]
+    if untested:
+        errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(untested))
     if "Makefile" in changed:
         old, new = (re.sub(r"(?m)#.*$", "", snapshot.get("Makefile", "")) for snapshot in (before, after))
         suppressions = lambda text: Counter(re.findall(r"--suppress(?:=|\s+)([^\s]+)", text))

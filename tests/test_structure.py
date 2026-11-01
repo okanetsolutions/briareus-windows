@@ -108,6 +108,23 @@ class StructureRules(unittest.TestCase):
         self.assertEqual([], check(before, after))
         self.assertTrue(self.errors("#define X 2\n", old="#define X 1\n", path="core/a.h"))
 
+    def test_deleted_core_files_need_their_suite_removed_or_a_test_delta(self):
+        before = {"core/a.c": "int x = 1;", "core/a.h": "#define A 1\n", "tests/core_a_tests.c": "void test(void) { CHECK_INT(x, 1); }"}
+        self.assertEqual([], check(before, {}))
+        errors = check(before, {"tests/core_a_tests.c": before["tests/core_a_tests.c"]})
+        self.assertTrue(any("core test gate" in error and "core/a.c, core/a.h" in error for error in errors))
+        after = {"core/a.c": "int x = 2;"}
+        self.assertTrue(any("core test gate" in error for error in check(before, after)))
+
+    def test_deleted_core_files_are_not_covered_by_another_modules_suite(self):
+        suite = "void test(void) { CHECK_INT(x, 1); }"
+        before = {"core/a.c": "int x = 1;", "core/b.c": "int y = 1;", "tests/core_b_tests.c": suite}
+        errors = check(before, {"core/b.c": before["core/b.c"]})
+        self.assertTrue(any("core test gate" in error and "core/a.c" in error for error in errors))
+        before = {"core/a.c": "int x = 1;", "core/a.h": "#define A 1\n", "tests/core_a_tests.c": suite}
+        errors = check(before, {"core/a.h": before["core/a.h"]})
+        self.assertTrue(any("core test gate" in error and "core/a.c" in error for error in errors))
+
     def test_changed_c_operators_are_not_mistaken_for_whitespace(self):
         self.assertTrue(self.errors("int f(void) { return a + ++b; }", old="int f(void) { return a++ + b; }", path="core/a.c"))
 
