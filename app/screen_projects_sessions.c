@@ -182,13 +182,15 @@ static void sessions_layout(Screen *base, Doc *doc) {
 
 static void sessions_header(Screen *base, HeaderInfo *info) { (void)base; (void)info; }
 
+Screen *screen_projects_board_screen(const SessionsScreen *s) { return pulls_screen_new(&s->project); }
+
 static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
     (void)pt;
     SessionsScreen *s = (SessionsScreen *)base;
     if (screen_projects_sidebar_common_action(base->pane, action)) return;
     switch (action) {
     case ACT_BACK: pane_pop(base->pane); break;
-    case ACT_BOARD: app_show_detail(pulls_screen_new(&s->project)); break;
+    case ACT_BOARD: app_show_detail(screen_projects_board_screen(s)); break;
     case ACT_NEW: { size_t n; const Project *all = projects_list(&n); app_show_detail(new_session_screen_new(&s->project, all, n)); break; }
     case ACT_OPEN_SESSION:
         if ((size_t)arg >= s->count) break;

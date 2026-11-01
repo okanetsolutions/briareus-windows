@@ -83,6 +83,8 @@ static void test_project_sessions_request_scope_and_board(void) {
         if (doc.items[i].action == ACT_OPEN_SESSION) open_rows++;
     }
     CHECK_INT(board_rows, 1); CHECK_INT(open_rows, 1); doc_free(&doc);
+    Screen *board = screen_projects_board_screen(s); CHECK(board != NULL);
+    if (board) { CHECK_STR(board->id, "pulls:o/one"); board->vt->destroy(board); }
     s->select_mode = true;
     s->base.vt->action(&s->base, ACT_PICK, 0, (POINT){0});
     CHECK_INT(s->picked_count, 1); CHECK_STR(s->picked[0], "a");

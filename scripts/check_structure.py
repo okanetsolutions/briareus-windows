@@ -269,9 +269,11 @@ def check(before, after):
     test_changes = any(
         path in after and token_values(before.get(path, "")) != token_values(after[path]) for path in core_tests
     )
-    # A removed core module may retire its suite instead; deleting a suite never covers an edited module.
-    test_removals = any(path in before and path not in after for path in core_tests)
-    untested = [path for path in core_changes if not test_changes and (path in after or not test_removals)]
+    # A removed core module may retire its own suite instead; deleting a suite never covers an edited module.
+    retired = {match.group(1) for path in core_tests if path in before and path not in after
+               for match in [re.fullmatch(r"tests/core_(.+)_tests\.c", path)] if match}
+    removed = lambda stem: stem in retired and not any(f"core/{stem}{ext}" in after for ext in (".c", ".h"))
+    untested = [path for path in core_changes if not test_changes and not removed(PurePosixPath(path).stem)]
     if untested:
         errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(untested))
     if "Makefile" in changed:

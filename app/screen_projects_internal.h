@@ -103,5 +103,7 @@ bool screen_projects_sessions_footer_wheel(Screen *base, POINT pt, int delta);
 void screen_projects_sessions_footer_click(Screen *base, POINT pt);
 // The project is copied.
 Screen *sessions_screen_new(const Project *project);
+// Creates the owned pull request board for this project.
+Screen *screen_projects_board_screen(const SessionsScreen *s);
 
 #endif
