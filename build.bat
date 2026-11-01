@@ -11,8 +11,8 @@ rem app\canvas.cpp is C++ in C style (the SDK declares DirectWrite for C++ only)
 set CXXFLAGS=%CFLAGS:/std:c11=/std:c++17% /EHs-c- /GR-
 set LIBS=dbghelp.lib winhttp.lib advapi32.lib ole32.lib comctl32.lib gdi32.lib user32.lib shell32.lib uuid.lib dwmapi.lib winmm.lib mfplat.lib mfreadwrite.lib mfuuid.lib shlwapi.lib uxtheme.lib comdlg32.lib msimg32.lib d2d1.lib dwrite.lib
 rem miniaudio, the meeting assistant's audio library, is fetched at the version and hash the Makefile pins.
-set MINIAUDIO_VERSION=0.11.25
-set MINIAUDIO_SHA256=ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89
+set MINIAUDIO_VERSION=0.11.26
+set MINIAUDIO_SHA256=6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e
 if not exist third_party\miniaudio\miniaudio.h (
   if not exist third_party\miniaudio mkdir third_party\miniaudio
   curl -fsSL https://raw.githubusercontent.com/mackron/miniaudio/%MINIAUDIO_VERSION%/miniaudio.h -o third_party\miniaudio\miniaudio.h.download || exit /b 1

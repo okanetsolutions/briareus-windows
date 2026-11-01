@@ -98,8 +98,8 @@ $(BUILD)/core/%.o: core/%.c core/*.h | $(BUILD)/core
 
 # miniaudio is not kept in the repository: the pinned release is fetched once, and a download whose hash differs fails
 # the build. To update it, change both lines and delete third_party/miniaudio.
-MINIAUDIO_VERSION = 0.11.25
-MINIAUDIO_SHA256 = ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89
+MINIAUDIO_VERSION = 0.11.26
+MINIAUDIO_SHA256 = 6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e
 MINIAUDIO = third_party/miniaudio/miniaudio.h
 $(MINIAUDIO):
 	mkdir -p $(dir $@)
