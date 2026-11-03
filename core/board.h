@@ -98,9 +98,9 @@ const PullSummary *pulls_find(const PullSummary *pulls, size_t count, int number
 #define REVIEW_LIST_REQUEST_LABEL "requires-dev-review"
 #define REVIEW_LIST_ANSWERED_LABEL "feedback-implemented"
 /// The Review List: the pull requests waiting on `me`'s review, as indices in board order. Those labelled
-/// requires-dev-review that are not assigned to `me` and not stacked on another (outside a stack, or its first), and those
-/// labelled feedback-implemented that `me` reviews. None without a login. Labels and logins match ignoring case.
-size_t *pulls_review_list(const PullSummary *pulls, size_t count, const Json *stacks, const char *me, size_t *found);
+/// requires-dev-review that are not assigned to `me`, and those labelled feedback-implemented that `me` reviews.
+/// Includes every stack position. None without a login. Labels and logins match ignoring case.
+size_t *pulls_review_list(const PullSummary *pulls, size_t count, const char *me, size_t *found);
 
 /// What the board's pickers filter on, carried by pull requests and issues alike.
 typedef struct {

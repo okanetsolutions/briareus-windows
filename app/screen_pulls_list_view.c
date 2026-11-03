@@ -114,7 +114,7 @@ const char *screen_pulls_reviewer(PullsScreen *s) {
 
 /// The Review List tab's rows, as indices into the pull requests (pulls_review_list).
 size_t *screen_pulls_review_rows(PullsScreen *s, size_t *count) {
-    return pulls_review_list(s->pulls, s->pull_count, json_get(s->board, "stacks"), screen_pulls_reviewer(s), count);
+    return pulls_review_list(s->pulls, s->pull_count, screen_pulls_reviewer(s), count);
 }
 
 void screen_pulls_pulls_layout(Screen *base, Doc *doc) {

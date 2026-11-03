@@ -1378,21 +1378,24 @@ static void test_names_join_as_the_edit_box_shows_them(void) {
 static void test_review_list_keeps_what_waits_on_my_review(void) {
     Json *j = json_parsez("[{\"number\":1,\"labels\":[{\"name\":\"requires-dev-review\"}],\"assignees\":[]},"
         "{\"number\":2,\"labels\":[{\"name\":\"Requires-Dev-Review\"}],\"assignees\":[\"Me\"]},"
-        "{\"number\":3,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":1,\"total\":2}},"
-        "{\"number\":4,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":2,\"total\":2}},"
+        "{\"number\":3,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":1,\"total\":3}},"
+        "{\"number\":4,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":2,\"total\":3}},"
         "{\"number\":5,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"changes_requested\"}],"
         "\"stack\":{\"id\":7,\"position\":2,\"total\":2},\"assignees\":[\"me\"]},"
         "{\"number\":6,\"labels\":[{\"name\":\"feedback-implemented\"}],\"reviewers\":[{\"user\":\"someone\",\"state\":\"requested\"}]},"
-        "{\"number\":7,\"labels\":[{\"name\":\"bug\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"requested\"}]}]");
-    size_t n; PullSummary *pulls = pull_summaries_parse(j, &n); CHECK_INT(n, 7);
-    size_t found = 99; size_t *rows = pulls_review_list(pulls, n, NULL, "me", &found);
-    CHECK_INT(found, 3); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 3); CHECK_INT(pulls[rows[2]].number, 5); free(rows);
-    rows = pulls_review_list(pulls, n, NULL, "someone", &found);
-    CHECK_INT(found, 4); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 2); CHECK_INT(pulls[rows[2]].number, 3); CHECK_INT(pulls[rows[3]].number, 6); free(rows);
+        "{\"number\":7,\"labels\":[{\"name\":\"bug\"}],\"reviewers\":[{\"user\":\"me\",\"state\":\"requested\"}]},"
+        "{\"number\":8,\"labels\":[{\"name\":\"requires-dev-review\"}],\"stack\":{\"id\":7,\"position\":3,\"total\":3}}]");
+    size_t n; PullSummary *pulls = pull_summaries_parse(j, &n); CHECK_INT(n, 8);
+    size_t found = 99; size_t *rows = pulls_review_list(pulls, n, "me", &found);
+    CHECK_INT(found, 5); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 3); CHECK_INT(pulls[rows[2]].number, 4);
+    CHECK_INT(pulls[rows[3]].number, 5); CHECK_INT(pulls[rows[4]].number, 8); free(rows);
+    rows = pulls_review_list(pulls, n, "someone", &found);
+    CHECK_INT(found, 6); CHECK_INT(pulls[rows[0]].number, 1); CHECK_INT(pulls[rows[1]].number, 2); CHECK_INT(pulls[rows[2]].number, 3);
+    CHECK_INT(pulls[rows[3]].number, 4); CHECK_INT(pulls[rows[4]].number, 6); CHECK_INT(pulls[rows[5]].number, 8); free(rows);
     // No login, no list.
-    rows = pulls_review_list(pulls, n, NULL, NULL, &found); CHECK_INT(found, 0); free(rows);
-    rows = pulls_review_list(pulls, n, NULL, "", &found); CHECK_INT(found, 0); free(rows);
-    rows = pulls_review_list(NULL, 0, NULL, "me", &found); CHECK_INT(found, 0); free(rows);
+    rows = pulls_review_list(pulls, n, NULL, &found); CHECK_INT(found, 0); free(rows);
+    rows = pulls_review_list(pulls, n, "", &found); CHECK_INT(found, 0); free(rows);
+    rows = pulls_review_list(NULL, 0, "me", &found); CHECK_INT(found, 0); free(rows);
     pull_summaries_free(pulls, n); json_free(j);
 }
 static void test_assign_me_adds_or_takes_off_the_login(void) {
