@@ -214,6 +214,9 @@ static void board_start_done(void *owner, Request *req) {
         if (request_outcome_unknown(req)) s->uncertain = true;
     }
     pane_relayout(s->base.pane);
+    if (screen_pulls_another_round(&s->base, &s->dialog_open, req, board_start_done, 0, &s->req_start)) {
+        s->busy = true; set_string(&s->start_device, g_store.device.id); pane_relayout(s->base.pane);
+    }
 }
 
 void screen_pulls_board_start(PullsScreen *s, int number, const char *branch, const BoardAction *action, const char *input, const RuntimeChoice *runtime) {

@@ -776,6 +776,33 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     CHECK_OWNED_STR(api_error_description(&e), "This token has expired or was revoked. Reconnect with a new token.");
     api_error_clear(&e); api_client_release(c); stub_reset(&stub);
 }
+static void test_error_answers_keep_the_servers_code(void) {
+    Stub stub = { 0 };
+    ApiClient *c = client(&stub);
+    ApiError e; api_error_init(&e);
+    CHECK(e.code == NULL); CHECK(!api_error_is_review_round_limit(NULL)); CHECK(!api_error_is_review_round_limit(&e));
+    stub_json(&stub, 409, "{\"error\":\"o/r PR #7 has used 3 of its 3 code review rounds.\",\"code\":\"review_round_limit\",\"reviewRounds\":{\"used\":3}}");
+    CHECK(call(c, "action", "{\"repo\":\"o/r\",\"action\":\"review\",\"prNumber\":7}", &e) == NULL);
+    CHECK_INT(e.status, 409); CHECK_STR(e.code, "review_round_limit"); CHECK_STR(e.message, "o/r PR #7 has used 3 of its 3 code review rounds.");
+    CHECK(api_error_is_review_round_limit(&e)); CHECK(api_error_is_refusal(&e));
+    // A copy keeps the code apart; setting the error again drops it.
+    ApiError copy; api_error_init(&copy); api_error_copy(&copy, &e);
+    CHECK(copy.code != e.code); CHECK_STR(copy.code, "review_round_limit"); CHECK(api_error_is_review_round_limit(&copy));
+    api_error_set(&copy, API_HTTP, 409, "again", -1); CHECK(copy.code == NULL); api_error_clear(&copy);
+    // Another refusal of a review, an empty or non-string code, and a code outside JSON are not the round limit.
+    stub_json(&stub, 409, "{\"error\":\"Round 2 is already being reviewed\",\"code\":\"review_round_in_progress\"}");
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.code, "review_round_in_progress"); CHECK(!api_error_is_review_round_limit(&e));
+    stub_json(&stub, 409, "{\"error\":\"Conflict\",\"code\":\"\"}");
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.code == NULL);
+    stub_json(&stub, 409, "{\"error\":\"Conflict\",\"code\":7}");
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.code == NULL);
+    stub_json(&stub, 409, "{\"code\":\"review_round_limit\"}"); stub.content_type = "text/plain";
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.code == NULL); CHECK(!api_error_is_review_round_limit(&e));
+    // The code alone is not enough: only a 409 is the limit.
+    stub_json(&stub, 400, "{\"error\":\"Bad\",\"code\":\"review_round_limit\"}");
+    CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.code, "review_round_limit"); CHECK(!api_error_is_review_round_limit(&e));
+    api_error_clear(&e); CHECK(e.code == NULL); api_client_release(c); stub_reset(&stub);
+}
 static void test_retry_after_is_read_from_any_error_answer(void) {
     Stub stub = { 0 };
     ApiClient *c = client(&stub);
@@ -1266,6 +1293,7 @@ void api_tests(void) {
     test_run("successful answers need json", test_successful_answers_need_json);
     test_run("redirects of any kind are refused", test_redirects_of_any_kind_are_refused);
     test_run("error answers keep the server's words or the status", test_error_answers_keep_the_servers_words_or_the_status);
+    test_run("error answers keep the server's code", test_error_answers_keep_the_servers_code);
     test_run("retry after is read from any error answer", test_retry_after_is_read_from_any_error_answer);
     test_run("network failures say why", test_network_failures_say_why);
     test_run("a success needs no error to fill", test_a_success_needs_no_error_to_fill);

@@ -295,6 +295,44 @@ static void action_buttons_recover_after_owner_is_covered(void) {
         CHECK_INT(f.writes, 0); cleanup(&f);
     }
 }
+static ScreenFixture *round_fixture;
+static void round_pump(Screen *unused, int action, intptr_t arg, POINT pt) {
+    (void)unused; (void)action; (void)arg; (void)pt; screen_fixture_pump(round_fixture, 1);
+}
+static void round_granted(void) {
+    // The extra round is held in the transport, so its start is seen busy before it answers.
+    round_fixture->block_write = true; round_fixture->write_status = 201; round_fixture->write_response = "{\"session\":{\"id\":\"round-4\",\"status\":\"preparing\"}}";
+}
+static void review_at_round_limit_is_sent_again_only_on_a_yes_from_both_views(void) {
+    static const ScreenVTable pump_vt = {.action = round_pump};
+    for (int detail = 0; detail < 2; detail++) for (int yes = 0; yes < 2; yes++) {
+        ScreenFixture f; setup(&f); round_fixture = &f;
+        f.write_status = 409; f.write_response = "{\"error\":\"o/r PR #12 has used 3 of its 3 code review rounds.\",\"code\":\"review_round_limit\",\"reviewRounds\":{\"used\":3,\"limit\":3}}";
+        ScreenVTable vt; Screen *screen = entry_screen(&f, detail != 0, &vt);
+        BoardAction review = {.id = "review", .label = "Code review", .binary = "codex", .advertised = true}; RuntimeChoice chosen = {2, "sonnet", "medium"};
+        if (detail) screen_pulls_start_action((PullScreen *)screen, &review, NULL, &chosen);
+        else screen_pulls_board_start((PullsScreen *)screen, 12, "topic", &review, NULL, &chosen);
+        Screen driver = {.vt = &pump_vt};
+        modal_driver_action_during(&driver, 0, 0, yes ? IDOK : IDCANCEL, round_granted);
+        CHECK(!entry_dialog_open(screen, detail != 0));
+        const char *error = detail ? ((PullScreen *)screen)->write_error : ((PullsScreen *)screen)->write_error;
+        CHECK(error && strstr(error, "3 of its 3 code review rounds"));
+        CHECK(!(detail ? ((PullScreen *)screen)->uncertain : ((PullsScreen *)screen)->uncertain));
+        // A no sends nothing; a yes sends the same start once more, runtime included, asking for the extra round.
+        CHECK_INT(detail ? ((PullScreen *)screen)->busy : ((PullsScreen *)screen)->busy, yes);
+        if (yes) {
+            CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0); SetEvent(f.resume);
+            screen_fixture_pump(&f, 1); CHECK_INT(f.writes, 2);
+            CHECK_STR(f.url, "https://example.com/api/v1/actions"); CHECK_INT(json_count(f.body), 7);
+            CHECK(json_bool_is(json_get(f.body, "continueReview"), true)); CHECK_STR(json_str(json_get(f.body, "action")), "review");
+            CHECK_INT(json_int_or(json_get(f.body, "prNumber"), 0), 12); CHECK_INT(json_int_or(json_get(f.body, "provider"), 0), 2);
+            CHECK_STR(json_str(json_get(f.body, "model")), "sonnet"); CHECK_STR(json_str(json_get(f.body, "effort")), "medium");
+            CHECK(!(detail ? ((PullScreen *)screen)->busy : ((PullsScreen *)screen)->busy));
+            CHECK((detail ? ((PullScreen *)screen)->write_error : ((PullsScreen *)screen)->write_error) == NULL);
+        }
+        CHECK_INT(f.writes, 1 + yes); cleanup(&f);
+    }
+}
 static void fallback_requires_an_available_default_and_review_contract(void) {
     ScreenFixture f; setup(&f); char *repos[] = {"o/r"}; g_store.device.permission = "manage"; g_store.device.repos = repos; g_store.device.repo_count = 1;
     for (int scenario = 0; scenario < 3; scenario++) {
@@ -315,6 +353,7 @@ void app_action_runtime_tests(void) {
     screen_fixture_prepare();
     test_run("manage review confirms server default and handles success refusal uncertainty in both entry points", manage_defaults_are_confirmed_and_server_validated_from_both_views);
     test_run("review buttons recover after popup owner is covered and survive owner replacement", action_buttons_recover_after_owner_is_covered);
+    test_run("review refused at the round limit is sent again with continueReview only on a yes from both views", review_at_round_limit_is_sent_again_only_on_a_yes_from_both_views);
     test_run("review default fallback requires an available default and the supported review contract", fallback_requires_an_available_default_and_review_contract);
     test_run("old endpoint action catalog cannot overwrite current metadata or cache", obsolete_action_catalog_cannot_replace_current_metadata);
     test_run("action POST completions ignore replaced endpoint account and project", stale_action_completions_are_isolated);

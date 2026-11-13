@@ -42,6 +42,24 @@ BoardAction *screen_pulls_row_actions(const Json *catalog, const PullSummary *pu
     return out;
 }
 
+bool screen_pulls_another_round(Screen *source, bool *dialog_open, const Request *req, RequestDone done, int tag, Request **slot) {
+    if (req->ok || !api_error_is_review_round_limit(&req->error)) return false;
+    Json *again = board_review_round_continued(req->operation, req->args);
+    if (!again) return false;
+    char *question = board_review_round_question(req->error.message), *device = xstrdup(g_store.device.id);
+    ApiClient *client = g_store.client; Pane *pane = source->pane; HWND window = pane_hwnd(pane);
+    *dialog_open = true;
+    bool yes = app_confirm("Review round limit reached", question, "Run one more round", false);
+    bool live = IsWindow(window) && pane_contains_screen(pane, source);
+    if (live) *dialog_open = false;
+    // The answer is about this pull request on the connection that refused it; never sent on anything else.
+    bool current = live && pane_top(pane) == source && client == g_store.client && str_eq(device, g_store.device.id);
+    free(question); free(device);
+    if (!yes || !current || !store_can_manage()) { json_free(again); return false; }
+    store_call(req->operation, again, req->timeout_ms, source, done, tag, slot);
+    return true;
+}
+
 // MARK: - Edits, shared by one pull request and one issue
 
 // The user's own GitHub login, which "Assign me" adds: asked the first time and kept in the registry, since the API does

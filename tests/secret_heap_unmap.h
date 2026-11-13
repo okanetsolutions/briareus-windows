@@ -87,6 +87,7 @@
 #undef api_error_description
 #undef api_error_unauthorized
 #undef api_error_is_refusal
+#undef api_error_is_review_round_limit
 #undef server_address_parse
 #undef server_address_free
 #undef server_address_copy

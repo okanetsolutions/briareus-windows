@@ -147,6 +147,13 @@ char *board_action_operation(const BoardAction *action);
 int board_action_timeout_ms(const BoardAction *action);
 /// Review checks the branch out itself; the rest look the pull request up by number.
 Json *board_action_arguments(const BoardAction *action, const char *repo, int number, const char *branch, const char *input);
+/// The arguments that run one more code review round on purpose after a start sent as `operation` with `args` was refused
+/// at the project's round limit (api_error_is_review_round_limit): a new copy with `continueReview` true. NULL for anything
+/// but the `review` errand sent through `action`, and for the extra round itself, so a person is offered it only once.
+Json *board_review_round_continued(const char *operation, const Json *args);
+/// What a person is asked before that round, as a new string: the server's account `said` of what is unresolved (a generic
+/// lead when it gave none), then the paid round it would cost.
+char *board_review_round_question(const char *said);
 /// The board's errands, in the order the dashboard shows them.
 const BoardAction *board_actions_known(size_t *count);
 /// The errands worth offering on one pull request. `catalog` is what the server's `actions` lists; NULL or empty before it
