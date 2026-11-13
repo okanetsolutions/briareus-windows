@@ -13,6 +13,8 @@ static char *scope(PullScreen *s) {
 void screen_pulls_reviews_clear(PullScreen *s) {
     PullReviews *r = &s->reviews;
     request_cancel(&r->req); json_free(r->items); free(r->scope); free(r->error);
+    request_cancel(&r->req_write); code_review_edit_free(r->editing); free(r->editing); free(r->save_error); free(r->edit_error);
+    if (r->reason) DestroyWindow(r->reason);
     if (r->client) api_client_release(r->client);
     memset(r, 0, sizeof *r);
 }
@@ -30,12 +32,16 @@ bool screen_pulls_reviews_sync(PullScreen *s) {
 }
 // The first finding a review registered, or 0 when it has none.
 static int64_t first_finding(const Json *review) { return code_review_id(json_at(json_get(review, "findings"), 0)); }
-static void done(void *owner, Request *req) {
-    PullScreen *s = owner;
+// Whether a request's answer is for the reviews shown: the same connection, token, server and pull request.
+bool screen_pulls_reviews_current(PullScreen *s, const Request *req) {
     char *now = scope(s);
     bool current = req->client == g_store.client && str_eq(now, s->reviews.scope);
     free(now);
-    if (!current) { screen_pulls_reviews_sync(s); pane_relayout(s->base.pane); return; }
+    return current;
+}
+static void done(void *owner, Request *req) {
+    PullScreen *s = owner;
+    if (!screen_pulls_reviews_current(s, req)) { screen_pulls_reviews_sync(s); pane_relayout(s->base.pane); return; }
     PullReviews *r = &s->reviews; r->read = true;
     if (!req->ok) {
         request_error_into(&r->error, req);
@@ -44,7 +50,7 @@ static void done(void *owner, Request *req) {
         Json *items = code_reviews_parse(req->result);
         if (!items) set_string(&r->error, "The server returned an invalid code review list.");
         else {
-            json_free(r->items); r->items = items; set_string(&r->error, NULL);
+            json_free(r->items); r->items = items; set_string(&r->error, NULL); set_string(&r->save_error, NULL);
             const Json *review = code_review_find(items, r->review_id);
             // A review no longer among the latest 20 gives way to the table, which selects the newest.
             if (!review) { review = json_at(items, 0); r->review_id = code_review_id(review); screen_pulls_review_close(s); }
@@ -56,7 +62,8 @@ static void done(void *owner, Request *req) {
 void screen_pulls_reviews_load(PullScreen *s, bool refresh) {
     if (!screen_pulls_reviews_sync(s)) return;
     PullReviews *r = &s->reviews;
-    if (!r->visible || r->req || r->retry_at > review_time(s)) return;
+    // A read waits for a write under way, which it could predate.
+    if (!r->visible || r->req || r->req_write || r->retry_at > review_time(s)) return;
     if (s->tab != PR_TAB_CODE_REVIEWS && !r->read) return;
     if (!refresh && (r->read || r->next_poll > review_time(s))) return;
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);

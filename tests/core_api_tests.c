@@ -289,6 +289,8 @@ static const Expected ROUTE_TABLE[] = {
     { "pulls", "GET", "pulls" }, { "pull", "GET", "pulls/{pr}" }, { "pull_description", "GET", "pulls/{pr}/description" },
     { "pull_files", "GET", "pulls/{pr}/files" }, { "pull_comments", "GET", "pulls/{pr}/comments" }, { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" }, { "findings", "GET", "pulls/{pr}/findings" },
+    { "code_reviews", "GET", "pulls/{pr}/code-reviews" }, { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
+    { "update_code_review_finding", "PATCH", "pulls/{pr}/code-reviews/{reviewId}/findings/{findingId}" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" }, { "merge_pull", "POST", "pulls/{pr}/merge" },
     { "update_pull", "PATCH", "pulls/{pr}" }, { "update_pull_branch", "POST", "pulls/{pr}/update-branch" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" },
@@ -543,6 +545,13 @@ static void test_json_bodies_of_writes(void) {
     CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"labels\":[\"bug\",\"good first issue\"],\"assignees\":[]}");
     r = call(c, "update_issue", "{\"issue\":9,\"repo\":\"o/r\",\"title\":\"T\",\"body\":\"\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "issues/9"); CHECK_STR(stub.last_method, "PATCH"); CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"title\":\"T\",\"body\":\"\"}");
+    // A code review's handling and a finding's verdict name the review and finding in the path; a null clears a field.
+    r = call(c, "update_code_review", "{\"pr\":7,\"reviewId\":21,\"repo\":\"o/r\",\"handlingStatus\":\"handled\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7/code-reviews/21"); CHECK_STR(stub.last_method, "PATCH");
+    CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"handlingStatus\":\"handled\"}");
+    r = call(c, "update_code_review_finding", "{\"pr\":7,\"reviewId\":21,\"findingId\":102,\"repo\":\"o/r\",\"shouldFix\":null,\"verification\":\"plausible\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7/code-reviews/21/findings/102"); CHECK_STR(stub.last_method, "PATCH");
+    CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"shouldFix\":null,\"verification\":\"plausible\"}");
     r = call(c, "update_pull_branch", "{\"pr\":7,\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "pulls/7/update-branch"); CHECK_STR(stub.last_method, "POST");
     CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}");

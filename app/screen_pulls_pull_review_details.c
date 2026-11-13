@@ -18,7 +18,16 @@ static void markdown(Doc *doc, Col c, const Json *r, const char *field, const ch
     doc_section(doc, c.ix, c.iw, label);
     doc_markdown(doc, c.ix, c.iw, v, FONT_FOOTNOTE);
 }
-static void finding_details(Doc *doc, Col c, const Json *r, const Json *f) {
+// Change verdict, on a finding of a review that stopped running; held while a save is under way or its editor is open.
+static void change_verdict(PullScreen *s, Doc *doc, Col c, const Json *r, const Json *f) {
+    if (!screen_pulls_review_can_edit(r)) return;
+    const CodeReviewFindingEdit *e = s->reviews.editing;
+    bool open = e && e->review_id == code_review_id(r) && e->finding_id == code_review_id(f);
+    ButtonSpec button = {0xE70F, "Change verdict", BUTTON_BORDERED, ACT_REVIEW_EDIT, (intptr_t)code_review_id(f), !open && !s->reviews.req_write};
+    doc_button_row(doc, c.ix, c.iw, &button, 1);
+    doc_space(doc, px(10));
+}
+static void finding_details(PullScreen *s, Doc *doc, Col c, const Json *r, const Json *f) {
     const char *type = json_str(json_get(f, "type"));
     char *label = str_empty(type) ? xstrfmt("Finding #%lld", (long long)code_review_id(f)) : xstrfmt("Finding #%lld · %s", (long long)code_review_id(f), type);
     doc_text(doc, c.ix, c.iw, label, FONT_CAPTION_SEMIBOLD, theme.accent, DT_WORDBREAK); free(label);
@@ -31,6 +40,7 @@ static void finding_details(Doc *doc, Col c, const Json *r, const Json *f) {
     int badge = doc_badges(doc, c.ix, c.iw, badges, str_eq(badges[1].text, badges[2].text) ? 2 : 3, theme.canvas);
     doc_item(doc, badge)->text = xstrfmt("Severity: %s · Verdict: %s · Verification: %s", badges[0].text, badges[1].text, badges[2].text);
     doc_space(doc, px(10));
+    change_verdict(s, doc, c, r, f);
     const char *path = json_str(json_get(f, "filePath"));
     if (!str_empty(path)) {
         // The full source can be copied or inspected in the tooltip; line ranges never wrap mid-number.
@@ -51,7 +61,7 @@ static void finding_details(Doc *doc, Col c, const Json *r, const Json *f) {
 void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c, const Json *review) {
     const Json *f = code_review_finding(review, s->reviews.finding_id);
     if (!f) { doc_text(doc, c.ix, c.iw, "Select a finding to read its details.", FONT_BODY, theme.secondary, DT_WORDBREAK); return; }
-    finding_details(doc, c, review, f);
+    finding_details(s, doc, c, review, f);
 }
 // The review's stored summary and the parts of its record the page does not otherwise show; exact usage stays unrounded.
 void screen_pulls_review_about(Doc *doc, Col c, const Json *review) {

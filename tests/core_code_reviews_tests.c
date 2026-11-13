@@ -115,7 +115,148 @@ static void usage_totals_preserve_unknowns(void) {
     json_set_str(r1, "status", "running");
     CHECK_OWNED_STR(code_review_counts_compact(r1), "1 finding\n1 high\n1 pending"); json_free(r1);
 }
+static void handling_and_its_actions(void) {
+    Json *r = json_parsez("{\"id\":5,\"status\":\"completed\",\"handlingStatus\":\"pending\",\"findings\":[]}");
+    CHECK_STR(code_review_handling(r), "pending"); CHECK_INT(code_review_handling_action(r), CODE_REVIEW_MARK_HANDLED);
+    CHECK_STR(code_review_handling_title(CODE_REVIEW_MARK_HANDLED), "Mark handled");
+    Json *a = code_review_handling_args("o/r", 12, 5, CODE_REVIEW_MARK_HANDLED);
+    CHECK_INT(json_count(a), 4); CHECK_STR(json_str(json_get(a, "repo")), "o/r"); CHECK(json_num_or(json_get(a, "pr"), 0) == 12);
+    CHECK(json_num_or(json_get(a, "reviewId"), 0) == 5); CHECK_STR(json_str(json_get(a, "handlingStatus")), "handled"); json_free(a);
+    json_set_str(r, "handlingStatus", "handled");
+    CHECK_INT(code_review_handling_action(r), CODE_REVIEW_REOPEN); CHECK_STR(code_review_handling_title(CODE_REVIEW_REOPEN), "Reopen");
+    a = code_review_handling_args("o/r", 12, 5, CODE_REVIEW_REOPEN); CHECK_STR(json_str(json_get(a, "handlingStatus")), "pending"); json_free(a);
+    // A failed review can be handled too; a running one is still writing its findings.
+    json_set_str(r, "status", "failed"); CHECK_INT(code_review_handling_action(r), CODE_REVIEW_REOPEN); CHECK(code_review_can_edit_findings(r));
+    json_set_str(r, "status", "running"); CHECK_INT(code_review_handling_action(r), CODE_REVIEW_HANDLING_NONE); CHECK(!code_review_can_edit_findings(r));
+    // A server that does not track handling, or an unknown value, offers nothing.
+    json_set_str(r, "status", "completed"); json_object_remove(r, "handlingStatus");
+    CHECK(code_review_handling(r) == NULL); CHECK_INT(code_review_handling_action(r), CODE_REVIEW_HANDLING_NONE);
+    json_set_str(r, "handlingStatus", "done"); CHECK(code_review_handling(r) == NULL); CHECK_INT(code_review_handling_action(r), CODE_REVIEW_HANDLING_NONE);
+    CHECK(!code_review_can_edit_findings(NULL)); json_free(r);
+}
+static void answers_fold_into_the_list(void) {
+    Json *payload = json_parsez(CODE_REVIEWS_FIXTURE), *reviews = code_reviews_parse(payload); json_free(payload);
+    Json *review = json_parsez("{\"id\":20,\"status\":\"completed\",\"handlingStatus\":\"handled\",\"findings\":[{\"id\":99,\"severity\":\"low\",\"title\":\"T\"}]}");
+    CHECK(code_reviews_replace_review(reviews, review)); json_free(review);
+    CHECK_INT(json_count(reviews), 2); CHECK_STR(code_review_handling(code_review_find(reviews, 20)), "handled");
+    CHECK_INT(code_review_id(json_at(reviews, 1)), 20);
+    // A review not in the list, or a malformed answer, changes nothing.
+    const char *bad[] = {"{\"id\":77,\"status\":\"completed\",\"findings\":[]}", "{\"id\":20,\"status\":\"bogus\",\"findings\":[]}", "{\"id\":20,\"status\":\"completed\"}", "null"};
+    for (size_t i = 0; i < 4; i++) {
+        review = json_parsez(bad[i]); CHECK(!code_reviews_replace_review(reviews, review)); json_free(review);
+    }
+    CHECK_STR(code_review_handling(code_review_find(reviews, 20)), "handled");
+    Json *finding = json_parsez("{\"id\":102,\"severity\":\"medium\",\"title\":\"Obsolete\",\"shouldFix\":\"optional\",\"verification\":\"plausible\",\"comments\":\"Later.\"}");
+    CHECK(code_reviews_replace_finding(reviews, 21, finding));
+    const Json *f = code_review_finding(code_review_find(reviews, 21), 102);
+    CHECK_STR(json_str(json_get(f, "shouldFix")), "optional"); CHECK_STR(json_str(json_get(f, "comments")), "Later.");
+    CHECK_INT(json_count(json_get(code_review_find(reviews, 21), "findings")), 2);
+    // The finding has to be in that review, and the answer readable.
+    CHECK(!code_reviews_replace_finding(reviews, 20, finding)); CHECK(!code_reviews_replace_finding(reviews, 5, finding));
+    json_free(finding); finding = json_parsez("{\"id\":102,\"severity\":\"severe\",\"title\":\"Obsolete\"}");
+    CHECK(!code_reviews_replace_finding(reviews, 21, finding)); json_free(finding);
+    CHECK(!code_reviews_replace_finding(NULL, 21, NULL));
+    json_free(reviews);
+}
+static CodeReviewFindingEdit edit_of(const char *finding_json) {
+    Json *finding = json_parsez(finding_json), *review = json_parsez("{\"id\":2,\"status\":\"completed\"}");
+    CodeReviewFindingEdit e; code_review_edit_init(&e, review, finding);
+    json_free(finding); json_free(review); return e;
+}
+static size_t verdict_index(const char *v) {
+    for (size_t i = 0; i < CODE_REVIEW_VERDICT_CHOICES; i++) if (str_eq(code_review_verdict_choices[i], v)) return i;
+    return CODE_REVIEW_VERDICT_CHOICES - 1;
+}
+static size_t evidence_index(const char *v) {
+    for (size_t i = 0; i < CODE_REVIEW_VERIFICATION_CHOICES; i++) if (str_eq(code_review_verification_choices[i], v)) return i;
+    return CODE_REVIEW_VERIFICATION_CHOICES - 1;
+}
+static void a_verdict_edit_sends_only_what_changed(void) {
+    CodeReviewFindingEdit e = edit_of("{\"id\":21,\"shouldFix\":\"fix\",\"verification\":\"confirmed\",\"comments\":\"Reproduced.\"}");
+    CHECK(!code_review_edit_dirty(&e)); CHECK(!code_review_edit_can_save(&e)); CHECK(code_review_edit_reason_hint(&e) == NULL);
+    code_review_edit_choose_verdict(&e, verdict_index("optional"));
+    // The verify step's reason for fixing it cannot stand for not fixing it.
+    CHECK(code_review_edit_needs_reason(&e)); CHECK(!code_review_edit_has_reason(&e)); CHECK(!code_review_edit_can_save(&e));
+    CHECK(code_review_edit_reason_hint(&e) != NULL);
+    code_review_edit_set_reason(&e, " Not worth it here. \n"); CHECK(code_review_edit_can_save(&e));
+    Json *a = code_review_edit_args(&e, "o/r", 9);
+    // repo, pr, reviewId, findingId, shouldFix and comments: the evidence it kept is not sent.
+    CHECK_INT(json_count(a), 6); CHECK_STR(json_str(json_get(a, "shouldFix")), "optional"); CHECK_STR(json_str(json_get(a, "comments")), "Not worth it here.");
+    CHECK(json_num_or(json_get(a, "reviewId"), 0) == 2); CHECK(json_num_or(json_get(a, "findingId"), 0) == 21);
+    json_free(a);
+    // Clearing the verdict and the reason sends nulls.
+    code_review_edit_choose_verdict(&e, verdict_index(NULL)); code_review_edit_set_reason(&e, "");
+    CHECK(code_review_edit_can_save(&e));
+    a = code_review_edit_args(&e, "o/r", 9);
+    CHECK_INT(json_count(a), 6); CHECK(json_is_null(json_get(a, "shouldFix"))); CHECK(json_is_null(json_get(a, "comments")));
+    char *body = json_serialize(a, true);
+    CHECK_STR(body, "{\"comments\":null,\"findingId\":21,\"pr\":9,\"repo\":\"o/r\",\"reviewId\":2,\"shouldFix\":null}"); free(body);
+    json_free(a);
+    // An index out of range changes nothing.
+    code_review_edit_choose_verdict(&e, CODE_REVIEW_VERDICT_CHOICES); CHECK(e.verdict == NULL);
+    code_review_edit_choose_verification(&e, CODE_REVIEW_VERIFICATION_CHOICES); CHECK_STR(e.verification, "confirmed");
+    code_review_edit_free(&e);
+}
+static void not_fixing_needs_the_evidence_the_outcome_asks(void) {
+    CodeReviewFindingEdit e = edit_of("{\"id\":1,\"shouldFix\":\"fix\"}");
+    code_review_edit_set_reason(&e, "Refuted by the guard on line 4.");
+    // Optional takes either level of evidence.
+    code_review_edit_choose_verdict(&e, verdict_index("optional"));
+    CHECK(!code_review_edit_has_verification(&e)); CHECK(!code_review_edit_can_save(&e)); CHECK(code_review_edit_verification_hint(&e) != NULL);
+    code_review_edit_choose_verification(&e, evidence_index("plausible"));
+    CHECK(code_review_edit_can_save(&e)); CHECK(code_review_edit_verification_hint(&e) == NULL);
+    // Dismissed takes only Confirmed.
+    code_review_edit_choose_verdict(&e, verdict_index("dismiss"));
+    CHECK(!code_review_edit_can_save(&e)); CHECK(code_review_edit_verification_hint(&e) != NULL);
+    code_review_edit_choose_verification(&e, evidence_index("confirmed")); CHECK(code_review_edit_can_save(&e));
+    // Fix and no verdict need none.
+    code_review_edit_choose_verification(&e, evidence_index(NULL));
+    code_review_edit_choose_verdict(&e, verdict_index("fix")); CHECK(code_review_edit_has_verification(&e));
+    code_review_edit_choose_verdict(&e, verdict_index(NULL)); CHECK(code_review_edit_has_verification(&e));
+    code_review_edit_free(&e);
+    // The choices come in one order, None last.
+    CHECK_STR(code_review_verdict_choices[0], "fix"); CHECK_STR(code_review_verdict_choices[2], "dismiss");
+    CHECK(code_review_verdict_choices[CODE_REVIEW_VERDICT_CHOICES - 1] == NULL); CHECK(code_review_verification_choices[CODE_REVIEW_VERIFICATION_CHOICES - 1] == NULL);
+    CHECK_STR(code_review_verification_choices[0], "confirmed");
+}
+static void an_earlier_ruling_may_be_reworded_as_it_stands(void) {
+    CodeReviewFindingEdit e = edit_of("{\"id\":5,\"shouldFix\":\"dismiss\",\"verification\":\"plausible\",\"comments\":\"Refuted.\"}");
+    // A dismissal stored as only plausible lacks the evidence, but its reason may still be reworded.
+    CHECK(!code_review_edit_dirty(&e)); CHECK(!code_review_edit_has_verification(&e)); CHECK(code_review_edit_verification_hint(&e) != NULL);
+    code_review_edit_set_reason(&e, "Refuted by the guard on line 4.");
+    CHECK(code_review_edit_can_save(&e));
+    Json *a = code_review_edit_args(&e, "o/r", 9); CHECK_INT(json_count(a), 5); CHECK(json_str(json_get(a, "comments")) != NULL); json_free(a);
+    // Changing the ruling to something still short of the evidence is held back.
+    code_review_edit_choose_verdict(&e, verdict_index("optional")); code_review_edit_choose_verification(&e, evidence_index(NULL));
+    CHECK(!code_review_edit_can_save(&e));
+    code_review_edit_choose_verdict(&e, verdict_index("dismiss")); code_review_edit_set_reason(&e, "Refuted.");
+    code_review_edit_choose_verification(&e, evidence_index("confirmed"));
+    CHECK(code_review_edit_dirty(&e)); CHECK(code_review_edit_can_save(&e));
+    a = code_review_edit_args(&e, "o/r", 9);
+    CHECK_INT(json_count(a), 5); CHECK_STR(json_str(json_get(a, "verification")), "confirmed");
+    json_free(a); code_review_edit_free(&e);
+}
+static void saving_waits_for_a_stopped_review(void) {
+    Json *payload = json_parsez(CODE_REVIEWS_FIXTURE), *reviews = code_reviews_parse(payload); json_free(payload);
+    const Json *older = code_review_find(reviews, 20);
+    CodeReviewFindingEdit e; code_review_edit_init(&e, older, code_review_finding(older, 99));
+    CHECK_STR(e.verdict, "dismiss"); CHECK_STR(e.verification, "plausible"); CHECK_STR(e.saved_reason, "Dismissed by verification, not marked fixed.");
+    code_review_edit_choose_verification(&e, evidence_index("confirmed"));
+    CHECK(code_reviews_allow_saving(reviews, &e));
+    // A rerun rewrites the findings, so a review running again refuses the save; so does a list without the finding.
+    Json *running = (Json *)code_review_find(reviews, 20); json_set_str(running, "status", "running");
+    CHECK(code_review_edit_can_save(&e)); CHECK(!code_reviews_allow_saving(reviews, &e));
+    json_set_str(running, "status", "completed"); e.finding_id = 98; CHECK(!code_reviews_allow_saving(reviews, &e));
+    e.finding_id = 99; e.review_id = 1; CHECK(!code_reviews_allow_saving(reviews, &e));
+    code_review_edit_free(&e); json_free(reviews);
+}
 void core_code_reviews_tests(void) {
+    test_run("a stopped review is marked handled or reopened only where the server tracks handling", handling_and_its_actions);
+    test_run("handling and verdict answers fold into the list only where they belong", answers_fold_into_the_list);
+    test_run("a verdict edit needs a reason of its own and sends only what changed", a_verdict_edit_sends_only_what_changed);
+    test_run("not fixing a finding needs the evidence the review outcome asks", not_fixing_needs_the_evidence_the_outcome_asks);
+    test_run("a ruling stored before evidence was asked may be reworded as it stands", an_earlier_ruling_may_be_reworded_as_it_stands);
+    test_run("a verdict save waits for its review to stop and its finding to be there", saving_waits_for_a_stopped_review);
     test_run("review totals sum each review once and preserve zero, unknown, estimated and unpriced values", usage_totals_preserve_unknowns);
     test_run("terminal null review verdicts remain inconclusive and only running nulls are pending", terminal_null_verdicts);
     test_run("stored code review nested public contract and null semantics", stored_contract);
