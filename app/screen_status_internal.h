@@ -2,13 +2,15 @@
 #define BRIAREUS_SCREEN_STATUS_INTERNAL_H
 #include "screens.h"
 #include "session_cache.h"
+#include "pull_attention.h"
 #include "session_overview.h"
 #include "str.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
-enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI };
+enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI, STATUS_PULL };
 typedef struct {
     Session session;
     Json *identity, *answered_question;
@@ -30,7 +32,12 @@ typedef struct {
     StatusCard **cards; size_t card_count, next_question, reading_card, sending_card;
     StatusAction *actions; size_t action_count;
     intptr_t action_first, action_next;
-    Request *projects_read, *sessions_read, *question_read, *check_read, *write;
+    Request *projects_read, *sessions_read, *question_read, *check_read, *write, *attention_read;
+    // Pull requests waiting on a person (`attention`); `pulls_generation` changes whenever the list is replaced, so a
+    // click laid out before names the list it was laid out for.
+    PullAttention *pulls; size_t pull_count;
+    char *attention_error; unsigned pulls_generation; bool attention_loaded;
+    time_t attention_at;   // when the last attention read was sent
     Json *send_question, *send_identity;
     char *send_text, *error;
     Poller poller;
@@ -39,6 +46,7 @@ typedef struct {
 bool status_current(StatusScreen *s);
 void status_rebuild(StatusScreen *s);
 void status_load(StatusScreen *s);
+void status_open_pull(StatusScreen *s, intptr_t arg);
 void status_questions_next(StatusScreen *s);
 void status_cancel_questions(StatusScreen *s);
 void status_send(StatusScreen *s, size_t card, const char *text);

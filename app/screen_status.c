@@ -92,7 +92,37 @@ static void projects_done(void *owner, Request *req) {
         s->loaded = true; poller_finished(&s->poller, true, req->error.retry_after); pane_relayout(s->base.pane);
     }
 }
+static void attention_done(void *owner, Request *req) {
+    StatusScreen *s = owner;
+    if (!status_current(s)) return;
+    PullAttention *items = NULL; size_t count = 0;
+    s->attention_loaded = true;
+    if (req->ok && pull_attention_parse(req->result, &items, &count)) {
+        pull_attention_free(s->pulls, s->pull_count); s->pulls = items; s->pull_count = count; s->pulls_generation++;
+        set_string(&s->attention_error, NULL);
+    } else { char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error); }
+    pane_relayout(s->base.pane);
+}
+// Pull requests waiting on a person are read beside the sessions, on servers that list them, at most every 30 seconds
+// unless a refresh asks.
+static void attention_load(StatusScreen *s, bool force) {
+    if (!status_current(s) || s->attention_read || !store_supports("attention")) return;
+    if (!force && s->attention_at && time(NULL) - s->attention_at < 30) return;
+    s->attention_at = time(NULL);
+    store_call("attention", json_object(), 0, s, attention_done, 0, &s->attention_read);
+}
+// A listed pull request opens on its Code reviews tab; one of a project this token no longer lists opens on GitHub.
+void status_open_pull(StatusScreen *s, intptr_t arg) {
+    size_t index = (size_t)(arg & 0xFFFF);
+    if (!status_current(s) || (unsigned)(arg >> 16) != (s->pulls_generation & 0xFFFF) || index >= s->pull_count) return;
+    const PullAttention *pull = &s->pulls[index];
+    for (size_t p = 0; p < s->project_count; p++) {
+        if (str_eq(s->projects[p].repo, pull->repo)) { app_push_from(&s->base, pull_code_reviews_screen_new(&s->projects[p], pull->number)); return; }
+    }
+    if (pull->href) open_web_url(pull->href);
+}
 void status_load(StatusScreen *s) {
+    attention_load(s, false);
     if (!status_current(s) || s->projects_read || s->sessions_read) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->projects_read);
 }
@@ -113,6 +143,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         if (status_current(s) && store_supports("server_stats")) app_push_from(base, server_resources_screen_new());
         return;
     }
+    if (action == STATUS_PULL) { status_open_pull(s, arg); return; }
     if (!status_current(s) || arg < s->action_first || arg >= s->action_next) return;
     StatusAction a = s->actions[arg - s->action_first];
     if (a.card >= s->card_count) return;
@@ -141,7 +172,7 @@ static void visible(Screen *base, bool shown) {
     StatusScreen *s = (StatusScreen *)base; s->shown = shown;
     if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); }
     else {
-        poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s);
+        poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
     }
@@ -149,7 +180,8 @@ static void visible(Screen *base, bool shown) {
 static void activated(Screen *base, bool active) { if (active) visible(base, true); }
 static void refresh(Screen *base) {
     StatusScreen *s = (StatusScreen *)base;
-    request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s); status_load(s);
+    request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
+    attention_load(s, true); status_load(s);
 }
 static void destroy(Screen *base) {
     StatusScreen *s = (StatusScreen *)base; visible(base, false);
@@ -161,6 +193,7 @@ static void destroy(Screen *base) {
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);
+    pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
     api_client_release(s->client); screen_release(base);
 }
 static const ScreenVTable VT = {

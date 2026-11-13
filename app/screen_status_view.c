@@ -71,6 +71,24 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
     }
     doc_box_end(doc, box, px(16)); doc_space(doc, px(16));
 }
+// The pull requests waiting on a person, each opening on its Code reviews tab: what it waits on, and the server's account.
+static void waiting_pulls(StatusScreen *s, Doc *doc, int x, int w) {
+    if (!s->pull_count && !s->attention_error) return;
+    doc_space(doc, px(8));
+    doc_section(doc, x, w, "Pull requests");
+    if (s->attention_error) doc_notice(doc, x, w, s->attention_error);
+    for (size_t i = 0; i < s->pull_count && i < 0xFFFF; i++) {
+        const PullAttention *pull = &s->pulls[i];
+        int box = doc_box_begin(doc, x, w, px(8), theme.canvas, theme.canvas, 0);
+        char *title = xstrfmt("%s #%d \xC2\xB7 %s", pull->repo, pull->number, pull->title);
+        doc_text(doc, x + px(8), w - px(16), title, FONT_BODY, theme.ink, DT_WORDBREAK); free(title);
+        doc_text(doc, x + px(8), w - px(16), pull_attention_kind_title(pull->kind), FONT_CAPTION_SEMIBOLD, theme.warn, DT_WORDBREAK);
+        if (pull->summary) doc_text(doc, x + px(8), w - px(16), pull->summary, FONT_CAPTION, theme.muted, DT_WORDBREAK);
+        doc_box_end(doc, box, px(8));
+        doc_box_action(doc, box, STATUS_PULL, (intptr_t)((s->pulls_generation & 0xFFFF) << 16) | (intptr_t)i);
+        doc_rule(doc, x, w);
+    }
+}
 void status_layout(Screen *base, Doc *doc) {
     StatusScreen *s = (StatusScreen *)base; int w = doc->width;
     s->action_first = s->action_next; s->action_count = 0;
@@ -85,6 +103,7 @@ void status_layout(Screen *base, Doc *doc) {
     if (!s->loaded) doc_loading(doc, origin, w, "Loading Status…");
     bool complete = s->loaded && !s->error && !s->missing;
     char *ready = complete ? xstrfmt("Need you  %u     Working  %u     Ready  %u", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count, (unsigned)s->overview.ready) : xstrdup("Need you  —     Working  —     Ready  —");
+    if (s->attention_loaded) { char *more = xstrfmt("%s     Pull requests  %u", ready, (unsigned)s->pull_count); free(ready); ready = more; }
     doc_text(doc, origin, w, ready, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK); free(ready);
     doc_space(doc, px(20));
     bool columns = w >= px(1040);
@@ -92,11 +111,12 @@ void status_layout(Screen *base, Doc *doc) {
     int waiting_w = columns ? w - gap - working_w : w;
     int top = doc->y;
     doc_section(doc, origin, waiting_w, "Need you");
-    if (complete && !s->overview.waiting_count) doc_text(doc, origin, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    if (complete && !s->overview.waiting_count && !s->pull_count) doc_text(doc, origin, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.waiting_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.waiting[i]]);
         if (index < s->card_count) waiting(s, doc, index, origin, waiting_w);
     }
+    waiting_pulls(s, doc, origin, waiting_w);
     int waiting_bottom = doc->y;
     if (columns) doc->y = top;
     else doc_space(doc, px(8));

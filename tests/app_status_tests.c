@@ -5,6 +5,7 @@
 static Route routes[] = {
     { "GET", "/projects", "read" }, { "GET", "/sessions", "read" },
     { "GET", "/sessions/{sessionId}", "read" }, { "POST", "/sessions/{sessionId}/messages", "manage" },
+    { "GET", "/attention", "read" },
 };
 static const char *lists = "["
     "{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
@@ -15,7 +16,8 @@ static const char *lists = "["
 static const char *question = "{\"session\":{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
     "\"events\":[{\"seq\":1,\"kind\":\"ask\",\"question\":\"Which fixture?\",\"options\":[{\"label\":\"First fixture\"},{\"label\":\"Second fixture\"}]}]}";
 typedef struct {
-    const char *sessions, *answer, *projects;
+    const char *sessions, *answer, *projects, *attention;
+    volatile LONG attention_reads;
     int read_status, write_status, blocked_read;
     const char *retry_after, *write_retry_after;
     volatile LONG reads, writes;
@@ -36,7 +38,8 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         InterlockedIncrement(&stub->writes); free(stub->body); stub->body = xstrndup(body, bytes);
         set_string(&stub->url, url); set_string(&stub->method, method); if (stub->write_status) *status = stub->write_status;
         if (stub->write_retry_after) *retry = xstrdup(stub->write_retry_after);
-    } else if (strstr(url, "/projects")) answer = stub->projects ? stub->projects : "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
+    } else if (strstr(url, "/attention")) { InterlockedIncrement(&stub->attention_reads); answer = stub->attention ? stub->attention : "{\"items\":[]}"; }
+    else if (strstr(url, "/projects")) answer = stub->projects ? stub->projects : "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
     else if (strstr(url, "/sessions/")) {
         detail = true; InterlockedIncrement(&stub->reads); set_string(&stub->read_url, url);
         answer = stub->answer ? stub->answer : question; if (stub->read_status) *status = stub->read_status;
@@ -582,6 +585,53 @@ static void test_held_navigation_and_teardown(void) {
     memset(&stub, 0, sizeof stub); block(&stub, false); s = setup(&stub, "manage", 4); pump(2);
     CHECK_INT(WaitForSingleObject(stub.entered, 10000), WAIT_OBJECT_0); pane_set_root(pane, NULL); SetEvent(stub.resume); pump(1); cleanup(&stub);
 }
+static int find_text(Doc *doc, const char *text) {
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].text && strstr(doc->items[i].text, text)) return (int)i;
+    return -1;
+}
+static intptr_t pull_arg(Doc *doc, size_t nth) {
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].action == STATUS_PULL && nth-- == 0) return doc->items[i].arg;
+    return -1;
+}
+static void test_waiting_pull_requests(void) {
+    Stub stub = {0};
+    stub.attention = "{\"items\":[{\"id\":\"q\",\"kind\":\"question\",\"repo\":\"one/repo\",\"sessionId\":\"wait\",\"title\":\"Asked\"},"
+        "{\"id\":\"a\",\"kind\":\"review-approval\",\"repo\":\"one/repo\",\"prNumber\":12,\"title\":\"Fix the guard\",\"summary\":\"High risk: 1 of 2 approvals\"},"
+        "{\"id\":\"l\",\"kind\":\"review-limit\",\"repo\":\"gone/repo\",\"prNumber\":4,\"title\":\"Old\"}]}";
+    stub.sessions = "[{\"id\":\"work\",\"repo\":\"one/repo\",\"status\":\"running\"}]";
+    StatusScreen *s = setup(&stub, "manage", 5); pump(3);
+    CHECK_INT(stub.attention_reads, 1);
+    // Opened pages stack in Status's own window, as from a detached Status.
+    Pane *window = detached_open(pane_take_root(pane), NULL, false); CHECK(window != NULL); pump(2);
+    CHECK_INT(stub.attention_reads, 1);
+    Doc doc; doc_init(&doc); draw(s, &doc);
+    // Only the pull request items show, with what each waits on; the summary counts them.
+    CHECK(find_text(&doc, "Pull requests  2") >= 0); CHECK(find_text(&doc, "one/repo #12 \xC2\xB7 Fix the guard") >= 0);
+    CHECK(find_text(&doc, "Waiting on approval") >= 0); CHECK(find_text(&doc, "High risk: 1 of 2 approvals") >= 0);
+    CHECK(find_text(&doc, "Review rounds used up") >= 0); CHECK_INT(find_text(&doc, "Asked"), -1);
+    // A pull request of a listed project opens on its Code reviews tab; one of a project no longer listed, without a
+    // link, opens nothing.
+    intptr_t first = pull_arg(&doc, 0), second = pull_arg(&doc, 1);
+    s->base.vt->action(&s->base, STATUS_PULL, second, (POINT){0}); CHECK(pane_top(window) == &s->base);
+    s->base.vt->action(&s->base, STATUS_PULL, first, (POINT){0});
+    Screen *top = pane_top(window); CHECK(top != &s->base); CHECK_STR(top->id, "pull:one/repo#12");
+    pane_pop(window); CHECK(pane_top(window) == &s->base);
+    // A poll inside 30 seconds does not read again; a refresh does, and a click laid out for the old list does nothing.
+    status_load(s); CHECK(s->attention_read == NULL); pump(2);
+    stub.attention = "{\"items\":[{\"id\":\"s\",\"kind\":\"review-status\",\"repo\":\"one/repo\",\"prNumber\":7,\"title\":\"Docs\"}]}";
+    s->base.vt->refresh(&s->base); pump(3);
+    CHECK_INT(stub.attention_reads, 2); CHECK_INT(s->pull_count, 1);
+    s->base.vt->action(&s->base, STATUS_PULL, first, (POINT){0}); CHECK(pane_top(window) == &s->base);
+    draw(s, &doc); CHECK(find_text(&doc, "Commit status not published") >= 0); CHECK_INT(find_text(&doc, "Fix the guard"), -1);
+    // A failed read says so and keeps the list.
+    stub.attention = "not json"; s->base.vt->refresh(&s->base); pump(3);
+    CHECK(s->attention_error != NULL); CHECK_INT(s->pull_count, 1);
+    doc_free(&doc); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); cleanup(&stub);
+    // A server without the route reads nothing and counts nothing.
+    memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
+    CHECK_INT(stub.attention_reads, 0); doc_init(&doc); draw(s, &doc); CHECK_INT(find_text(&doc, "Pull requests"), -1);
+    doc_free(&doc); cleanup(&stub);
+}
 void app_status_tests(void) {
     if (!theme.canvas) theme_init();
     dispatcher = CreateWindowExW(0, L"STATIC", L"Status dispatcher", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -594,6 +644,7 @@ void app_status_tests(void) {
     if (warm) DestroyWindow(GetAncestor(pane_hwnd(warm), GA_ROOT));
     test_run("Status blank replies stay disabled and long option values survive rendering", test_blank_reply_and_long_option);
     test_run("Status option/text sends use message contract and suppress duplicates", test_option_and_text_wire);
+    test_run("Status lists pull requests waiting on a person and opens them on Code reviews", test_waiting_pull_requests);
     test_run("Status respects catalog/token and rejects changed questions and stale actions", test_permissions_and_changed_ask);
     test_run("Status refreshes counts, isolates badges and rejects pre-paint stale actions", test_refresh_and_cached_questions);
     test_run("Status retains drafts on refusal and blocks uncertain sends", test_failures_and_uncertainty);

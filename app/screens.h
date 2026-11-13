@@ -26,6 +26,8 @@ Screen *mail_wake_screen_new(const Session *session);
 Screen *webhook_screen_new(const Session *session);
 Screen *pulls_screen_new(const Project *project);
 Screen *pull_detail_screen_new(const Project *project, int number, const StackPosition *stack, const PullSummary *summary);
+/// The pull request opened on its Code reviews tab, where its review outcome, security pass and approvals are.
+Screen *pull_code_reviews_screen_new(const Project *project, int number);
 /// The changed files on their own, for the conversation's menu.
 Screen *pull_files_screen_new(const Project *project, int number);
 /// A pull request's changed files as GitHub's Files changed tab: the tree of paths beside the chosen file's diff, laid out
