@@ -291,6 +291,7 @@ static const Expected ROUTE_TABLE[] = {
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" }, { "findings", "GET", "pulls/{pr}/findings" },
     { "code_reviews", "GET", "pulls/{pr}/code-reviews" }, { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
     { "update_code_review_finding", "PATCH", "pulls/{pr}/code-reviews/{reviewId}/findings/{findingId}" },
+    { "approve_pull", "POST", "pulls/{pr}/approvals" }, { "withdraw_pull_approval", "POST", "pulls/{pr}/approvals/{approvalId}/withdraw" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" }, { "merge_pull", "POST", "pulls/{pr}/merge" },
     { "update_pull", "PATCH", "pulls/{pr}" }, { "update_pull_branch", "POST", "pulls/{pr}/update-branch" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" },
@@ -552,6 +553,12 @@ static void test_json_bodies_of_writes(void) {
     r = call(c, "update_code_review_finding", "{\"pr\":7,\"reviewId\":21,\"findingId\":102,\"repo\":\"o/r\",\"shouldFix\":null,\"verification\":\"plausible\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "pulls/7/code-reviews/21/findings/102"); CHECK_STR(stub.last_method, "PATCH");
     CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"shouldFix\":null,\"verification\":\"plausible\"}");
+    // An approval names the head it approves in the body; a withdrawal names the approval in the path.
+    r = call(c, "approve_pull", "{\"pr\":7,\"repo\":\"o/r\",\"headSha\":\"abc\",\"note\":\"ok\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7/approvals"); CHECK_STR(stub.last_method, "POST");
+    CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"headSha\":\"abc\",\"note\":\"ok\"}");
+    r = call(c, "withdraw_pull_approval", "{\"pr\":7,\"approvalId\":5,\"repo\":\"o/r\"}", &e); json_free(r);
+    CHECK_STR(stub.last_url, BASE "pulls/7/approvals/5/withdraw"); CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_body, "{\"repo\":\"o/r\"}");
     r = call(c, "update_pull_branch", "{\"pr\":7,\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}", &e); json_free(r);
     CHECK_STR(stub.last_url, BASE "pulls/7/update-branch"); CHECK_STR(stub.last_method, "POST");
     CHECK_STR(stub.last_body, "{\"repo\":\"o/r\",\"headSha\":\"abc\",\"baseRef\":\"main\"}");

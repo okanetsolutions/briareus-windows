@@ -64,6 +64,25 @@ static void test_device_round_trips_and_copies_deeply(void) {
     CHECK_INT(copy.repo_count, 0); CHECK_INT(device_expiry(&copy), 0);
     device_free(&copy); device_free(&d); json_free(j);
 }
+// The token's user tells one's own approvals from other people's; a saved connection from before it was sent has none.
+static void test_device_keeps_the_user_it_acts_as(void) {
+    Json *j = json_parsez("{\"id\":\"d\",\"label\":\"L\",\"userId\":42,\"permission\":\"manage\",\"repos\":[],\"expiresAt\":0}");
+    Device d; CHECK(device_parse(j, &d)); CHECK(d.user_id == 42);
+    Json *saved = device_json(&d); CHECK(json_num_or(json_get(saved, "userId"), 0) == 42.0);
+    Device copy; device_copy(&copy, &d); CHECK(copy.user_id == 42);
+    device_free(&copy); device_free(&d); json_free(saved); json_free(j);
+    const char *unknown[] = {
+        "{\"id\":\"d\",\"label\":\"L\",\"permission\":\"read\",\"repos\":[],\"expiresAt\":0}",
+        "{\"id\":\"d\",\"label\":\"L\",\"userId\":\"42\",\"permission\":\"read\",\"repos\":[],\"expiresAt\":0}",
+        "{\"id\":\"d\",\"label\":\"L\",\"userId\":1.5,\"permission\":\"read\",\"repos\":[],\"expiresAt\":0}",
+        "{\"id\":\"d\",\"label\":\"L\",\"userId\":0,\"permission\":\"read\",\"repos\":[],\"expiresAt\":0}",
+    };
+    for (size_t i = 0; i < sizeof unknown / sizeof *unknown; i++) {
+        j = json_parsez(unknown[i]); CHECK(device_parse(j, &d)); CHECK(d.user_id == 0);
+        saved = device_json(&d); char *text = json_serialize(saved, true); CHECK(strstr(text, "userId") == NULL);
+        free(text); json_free(saved); device_free(&d); json_free(j);
+    }
+}
 static void test_permission_ranks_and_who_may_manage(void) {
     CHECK_INT(permission_rank("read"), 0); CHECK_INT(permission_rank("manage"), 1); CHECK_INT(permission_rank("admin"), 2);
     CHECK_INT(permission_rank("owner"), -1); CHECK_INT(permission_rank(""), -1); CHECK_INT(permission_rank(NULL), -1);
@@ -941,6 +960,7 @@ void models_tests(void) {
     test_run("device reads every field", test_device_reads_every_field);
     test_run("device rejects missing or mistyped fields", test_device_rejects_missing_or_mistyped_fields);
     test_run("device round trips and copies deeply", test_device_round_trips_and_copies_deeply);
+    test_run("device keeps the user it acts as", test_device_keeps_the_user_it_acts_as);
     test_run("permission ranks and who may manage", test_permission_ranks_and_who_may_manage);
     test_run("admin tokens manage since the client API", test_admin_tokens_manage_since_the_client_api);
     test_run("discovery reads the client record and transcription", test_discovery_reads_the_client_record_and_transcription);

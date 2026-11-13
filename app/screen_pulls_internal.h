@@ -6,7 +6,9 @@
 #include "issue_pages.h"
 #include "markdown.h"
 #include "pull_conversation.h"
+#include "review_approvals_card.h"
 #include "review_outcome.h"
+#include "review_outcome_card.h"
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
@@ -95,6 +97,7 @@ enum {
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_SUMMARY, ACT_REVIEW_BACK,
     ACT_REVIEW_HANDLING, ACT_REVIEW_EDIT, ACT_REVIEW_VERDICT, ACT_REVIEW_EVIDENCE, ACT_REVIEW_SAVE, ACT_REVIEW_CANCEL,
+    ACT_APPROVAL_BASE, ACT_APPROVAL_LAST = ACT_APPROVAL_BASE + APPROVAL_ACTIONS - 1,   // the approvals card's (review_approvals_card.h)
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -130,9 +133,11 @@ typedef struct {
     // The editor's reason box, a child of the pane over `reason_rc` (content coordinates) while `reason_laid`; its text
     // is the reason of finding `reason_for`, and `focus_reason` focuses it once shown.
     HWND reason; RECT reason_rc; bool reason_laid, focus_reason; int64_t reason_for;
-    // What the reviews amount to, as the last read or verdict save answered it (review_outcome_state); `outcome` is
-    // NULL while the server has sent none.
+    // What the reviews amount to, as the last read, verdict save or approval answered it (review_outcome_state);
+    // `outcome` is NULL while the server has sent none.
     Json *outcome_state; ReviewOutcome *outcome;
+    // The approvals card under the outcome, whose write is the tab's one write while it is under way.
+    ApprovalForm approvals;
 } PullReviews;
 
 typedef struct {
@@ -342,6 +347,8 @@ void screen_pulls_review_editor_place(PullScreen *s, const RECT *content, int sc
 void screen_pulls_review_editor_command(PullScreen *s, HWND control, int code);
 void screen_pulls_review_outcome_take(PullReviews *r, const Json *answer, ReviewOutcomeSource source);
 void screen_pulls_review_outcome_clear(PullReviews *r);
+void screen_pulls_review_approvals_init(PullScreen *s);
+bool screen_pulls_reviews_writing(const PullReviews *r);
 void screen_pulls_review_outcome(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_layout_runs(PullScreen *s, Doc *doc, Col c);

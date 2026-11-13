@@ -12,7 +12,7 @@ void screen_pulls_review_handling(PullScreen *s, Doc *doc, Col c, const Json *re
     PullReviews *r = &s->reviews;
     bool saving = r->saving_review == code_review_id(review);
     const char *title = saving ? "Saving\xE2\x80\xA6" : code_review_handling_title(action);
-    ButtonSpec button = {action == CODE_REVIEW_MARK_HANDLED ? 0xE73E : 0xE7A7, title, BUTTON_BORDERED, ACT_REVIEW_HANDLING, (intptr_t)code_review_id(review), !r->req_write};
+    ButtonSpec button = {action == CODE_REVIEW_MARK_HANDLED ? 0xE73E : 0xE7A7, title, BUTTON_BORDERED, ACT_REVIEW_HANDLING, (intptr_t)code_review_id(review), !screen_pulls_reviews_writing(r)};
     doc_space(doc, px(8));
     doc_button_row(doc, c.ix, c.iw, &button, 1);
 }
@@ -35,7 +35,7 @@ void screen_pulls_review_editor(PullScreen *s, Doc *doc, Col c, const Json *revi
     CodeReviewFindingEdit *e = r->editing;
     const Json *finding = e && e->review_id == code_review_id(review) ? code_review_finding(review, e->finding_id) : NULL;
     if (!finding) return;
-    bool busy = r->req_write != NULL;
+    bool busy = screen_pulls_reviews_writing(r);
     int pad = px(12);
     doc_space(doc, px(14));
     int box = doc_box_begin(doc, c.ix, c.iw, pad, theme.canvas, theme.accent, px(8));
@@ -113,7 +113,7 @@ void screen_pulls_review_editor_place(PullScreen *s, const RECT *content, int sc
     if (GetParent(r->reason) != parent) SetParent(r->reason, parent);
     SendMessageW(r->reason, WM_SETFONT, (WPARAM)font(FONT_FOOTNOTE), TRUE);
     if (r->reason_for != r->editing->finding_id) { r->reason_for = r->editing->finding_id; reason_text(r->reason, r->editing->reason); }
-    EnableWindow(r->reason, !r->req_write);
+    EnableWindow(r->reason, !screen_pulls_reviews_writing(r));
     RECT client; GetClientRect(parent, &client);
     int margin = (client.right - pane_content_width(pane)) / 2;
     RECT rc = r->reason_rc, view = *content, visible;

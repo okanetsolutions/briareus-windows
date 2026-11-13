@@ -3,6 +3,8 @@
 // The Code reviews tab's two writes: Mark handled or Reopen a stopped review, and a finding's verdict overruled in the
 // editor. Each answer is folded into the list as read (code_reviews.c); neither is retried.
 
+// One write at a time on the tab: a handling or verdict save, or an approval (screen_pulls_pull_review_outcome.c).
+bool screen_pulls_reviews_writing(const PullReviews *r) { return r->req_write || approval_form_writing(&r->approvals); }
 CodeReviewHandlingAction screen_pulls_review_handling_action(const Json *review) {
     return store_supports("update_code_review") ? code_review_handling_action(review) : CODE_REVIEW_HANDLING_NONE;
 }
@@ -56,14 +58,14 @@ static void send_write(PullScreen *s, const char *call, Json *args, RequestDone 
 void screen_pulls_review_set_handled(PullScreen *s, int64_t review_id) {
     PullReviews *r = &s->reviews;
     CodeReviewHandlingAction action = screen_pulls_review_handling_action(code_review_find(r->items, review_id));
-    if (r->req_write || action == CODE_REVIEW_HANDLING_NONE) return;
+    if (screen_pulls_reviews_writing(r) || action == CODE_REVIEW_HANDLING_NONE) return;
     r->saving_review = review_id;
     send_write(s, "update_code_review", code_review_handling_args(s->project.repo, s->number, review_id, action), handling_done);
 }
 void screen_pulls_review_edit(PullScreen *s, int64_t finding_id) {
     PullReviews *r = &s->reviews;
     const Json *review = code_review_find(r->items, r->review_id), *finding = code_review_finding(review, finding_id);
-    if (r->req_write || !finding || !screen_pulls_review_can_edit(review)) return;
+    if (screen_pulls_reviews_writing(r) || !finding || !screen_pulls_review_can_edit(review)) return;
     if (!r->editing) r->editing = xcalloc(1, sizeof *r->editing);
     else code_review_edit_free(r->editing);
     code_review_edit_init(r->editing, review, finding);
@@ -73,7 +75,7 @@ void screen_pulls_review_edit(PullScreen *s, int64_t finding_id) {
 }
 void screen_pulls_review_edit_cancel(PullScreen *s) {
     PullReviews *r = &s->reviews;
-    if (r->req_write || !r->editing) return;
+    if (screen_pulls_reviews_writing(r) || !r->editing) return;
     code_review_edit_free(r->editing); free(r->editing); r->editing = NULL;
     set_string(&r->edit_error, NULL);
     if (s->base.pane) SetFocus(pane_hwnd(s->base.pane));
@@ -81,7 +83,7 @@ void screen_pulls_review_edit_cancel(PullScreen *s) {
 }
 void screen_pulls_review_edit_save(PullScreen *s) {
     PullReviews *r = &s->reviews;
-    if (r->req_write || !r->editing || !store_supports("update_code_review_finding")) return;
+    if (screen_pulls_reviews_writing(r) || !r->editing || !store_supports("update_code_review_finding")) return;
     if (!code_reviews_allow_saving(r->items, r->editing)) return;
     send_write(s, "update_code_review_finding", code_review_edit_args(r->editing, s->project.repo, s->number), verdict_done);
 }

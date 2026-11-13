@@ -1,11 +1,33 @@
 #include "review_outcome.h"
+#include "review_approvals.h"
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
 
 static const Json *object_or_null(const Json *value) { return json_is_object(value) ? value : NULL; }
+ReviewOutcomeSource review_outcome_source_after(const char *call) {
+    if (str_eq(call, "update_code_review_finding")) return REVIEW_OUTCOME_FROM_VERDICT;
+    if (str_eq(call, "approve_pull") || str_eq(call, "withdraw_pull_approval")) return REVIEW_OUTCOME_FROM_APPROVAL;
+    return REVIEW_OUTCOME_FROM_OTHER;
+}
+// An approval's answer: its outcome replaces the kept one; without one, its requirement replaces the kept outcome's
+// approvals; with neither, nothing changes.
+static Json *approval_state(const Json *answer, const Json *previous) {
+    Json *kept = json_is_object(previous) ? json_clone(previous) : NULL;
+    const Json *outcome = object_or_null(json_get(answer, "reviewOutcome")), *approvals = object_or_null(json_get(answer, "approvals"));
+    if (outcome) {
+        if (!kept) { kept = json_object(); json_object_set(kept, "reviewRounds", json_null()); }
+        json_object_set(kept, "reviewOutcome", json_clone(outcome));
+    } else if (approvals && json_is_object(json_get(kept, "reviewOutcome"))) {
+        Json *merged = json_clone(json_get(kept, "reviewOutcome"));
+        json_object_set(merged, "approvals", json_clone(approvals));
+        json_object_set(kept, "reviewOutcome", merged);
+    }
+    return kept;
+}
 Json *review_outcome_state(const Json *answer, ReviewOutcomeSource source, const Json *previous) {
     if (source == REVIEW_OUTCOME_FROM_OTHER) return previous ? json_clone(previous) : NULL;
+    if (source == REVIEW_OUTCOME_FROM_APPROVAL) return approval_state(answer, previous);
     const Json *outcome = object_or_null(json_get(answer, "reviewOutcome"));
     const Json *rounds = object_or_null(json_get(source == REVIEW_OUTCOME_FROM_READ ? answer : previous, "reviewRounds"));
     if (!outcome && !rounds) return NULL;
@@ -21,7 +43,7 @@ static bool outcome_kind(const char *text, ReviewOutcomeKind *kind) {
     return false;
 }
 static char *nonempty(const Json *value) { return xstrdup(json_str_nonempty(value)); }
-static void reasons_parse(const Json *list, ReviewReasons *out) {
+void review_reasons_parse(const Json *list, ReviewReasons *out) {
     out->items = xcalloc(json_count(list) + 1, sizeof *out->items); out->count = 0;
     for (size_t i = 0; i < json_count(list); i++) {
         const Json *r = json_at(list, i);
@@ -35,7 +57,7 @@ static void reasons_parse(const Json *list, ReviewReasons *out) {
         reason->message = message ? xstrdup(message) : str_replace(code, "_", " ");
     }
 }
-static void reasons_free(ReviewReasons *reasons) {
+void review_reasons_free(ReviewReasons *reasons) {
     for (size_t i = 0; i < reasons->count; i++) { free(reasons->items[i].code); free(reasons->items[i].effect); free(reasons->items[i].message); }
     free(reasons->items);
     memset(reasons, 0, sizeof *reasons);
@@ -47,16 +69,7 @@ static void security_parse(const Json *j, ReviewSecurity *out) {
     const char *policy = json_str_nonempty(json_get(j, "policy"));
     out->policy = xstrdup(policy ? policy : "off");
     out->blocking = json_bool_is(json_get(j, "blocking"), true);
-    reasons_parse(json_get(j, "reasons"), &out->reasons);
-}
-static void approvals_parse(const Json *j, ReviewApprovals *out) {
-    const char *result = json_str_nonempty(json_get(j, "result"));
-    if (!json_is_object(j) || !result) return;
-    out->present = true; out->result = xstrdup(result);
-    out->enabled = json_bool_is(json_get(j, "enabled"), true);
-    out->tier = nonempty(json_get(j, "tier")); out->explanation = nonempty(json_get(j, "explanation"));
-    out->required = json_int_or(json_get(j, "required"), 0); out->valid = json_int_or(json_get(j, "valid"), 0);
-    out->missing = json_int_or(json_get(j, "missing"), 0);
+    review_reasons_parse(json_get(j, "reasons"), &out->reasons);
 }
 static void rounds_parse(const Json *j, ReviewRounds *out) {
     double used;
@@ -70,7 +83,7 @@ bool review_outcome_parse(const Json *state, ReviewOutcome *out) {
     memset(out, 0, sizeof *out);
     const Json *o = json_get(state, "reviewOutcome"), *status = json_get(o, "status");
     if (!json_is_object(o) || !outcome_kind(json_str(json_get(o, "outcome")), &out->outcome)) return false;
-    reasons_parse(json_get(o, "reasons"), &out->reasons);
+    review_reasons_parse(json_get(o, "reasons"), &out->reasons);
     out->stale = json_bool_is(json_get(o, "stale"), true);
     out->ready = json_bool_is(json_get(o, "ready"), true);
     out->enforced = json_bool_is(json_get(o, "enforced"), true);
@@ -78,15 +91,15 @@ bool review_outcome_parse(const Json *state, ReviewOutcome *out) {
     out->status_error = nonempty(json_get(status, "error"));
     out->status_retried = !json_is_null(json_get(status, "retryAt"));
     security_parse(json_get(o, "security"), &out->security);
-    approvals_parse(json_get(o, "approvals"), &out->approvals);
+    review_approvals_parse(json_get(o, "approvals"), &out->approvals);
     rounds_parse(json_get(state, "reviewRounds"), &out->rounds);
     return true;
 }
 void review_outcome_free(ReviewOutcome *o) {
     if (!o) return;
-    reasons_free(&o->reasons); free(o->status_error);
-    free(o->security.policy); free(o->security.result); reasons_free(&o->security.reasons);
-    free(o->approvals.result); free(o->approvals.tier); free(o->approvals.explanation);
+    review_reasons_free(&o->reasons); free(o->status_error);
+    free(o->security.policy); free(o->security.result); review_reasons_free(&o->security.reasons);
+    review_approvals_free(&o->approvals);
     memset(o, 0, sizeof *o);
 }
 
@@ -154,12 +167,20 @@ ReviewTone review_security_tone(const ReviewSecurity *s) {
     if (str_eq(s->result, "incomplete") || str_eq(s->result, "not_run")) return REVIEW_TONE_WARN;
     return REVIEW_TONE_RUNNING;
 }
-bool review_approvals_shown(const ReviewApprovals *a) { return a->present && a->enabled && !str_eq(a->result, "not_required"); }
-char *review_approvals_line(const ReviewApprovals *a) {
-    if (a->tier) return xstrfmt("%d of %d approval%s \xC2\xB7 %s risk", a->valid, a->required, a->required == 1 ? "" : "s", a->tier);
-    return xstrfmt("%d of %d approval%s", a->valid, a->required, a->required == 1 ? "" : "s");
+bool review_approvals_shown(const ReviewApprovals *a) {
+    return a->present && a->enabled && (!str_eq(a->result, "not_required") || a->count > 0);
 }
-ReviewTone review_approvals_tone(const ReviewApprovals *a) { return str_eq(a->result, "satisfied") ? REVIEW_TONE_OK : REVIEW_TONE_WARN; }
+char *review_approvals_line(const ReviewApprovals *a) {
+    char *count = str_eq(a->result, "not_required") ? xstrdup("None needed") : xstrfmt("%d of %d approval%s", a->valid, a->required, a->required == 1 ? "" : "s");
+    if (!a->tier) return count;
+    char *line = xstrfmt("%s \xC2\xB7 %s risk", count, a->tier);
+    free(count);
+    return line;
+}
+ReviewTone review_approvals_tone(const ReviewApprovals *a) {
+    if (str_eq(a->result, "satisfied")) return REVIEW_TONE_OK;
+    return str_eq(a->result, "not_required") ? REVIEW_TONE_MUTED : REVIEW_TONE_WARN;
+}
 char *review_rounds_line(const ReviewRounds *r) {
     Str text; str_init(&text);
     if (r->limit > 0) str_appendf(&text, "%d of %d round%s", r->used, r->limit, r->limit == 1 ? "" : "s");

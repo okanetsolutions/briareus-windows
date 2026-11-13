@@ -15,7 +15,7 @@ void screen_pulls_reviews_clear(PullScreen *s) {
     request_cancel(&r->req); json_free(r->items); free(r->scope); free(r->error);
     request_cancel(&r->req_write); code_review_edit_free(r->editing); free(r->editing); free(r->save_error); free(r->edit_error);
     if (r->reason) DestroyWindow(r->reason);
-    screen_pulls_review_outcome_clear(r);
+    screen_pulls_review_outcome_clear(r); approval_form_clear(&r->approvals);
     if (r->client) api_client_release(r->client);
     memset(r, 0, sizeof *r);
 }
@@ -27,6 +27,7 @@ bool screen_pulls_reviews_sync(PullScreen *s) {
         r->visible = visible; r->clock = clock;
         r->scope = now; now = NULL;
         r->client = g_store.client ? api_client_retain(g_store.client) : NULL;
+        screen_pulls_review_approvals_init(s);
     }
     free(now);
     return r->client && store_supports("code_reviews");
@@ -65,7 +66,7 @@ void screen_pulls_reviews_load(PullScreen *s, bool refresh) {
     if (!screen_pulls_reviews_sync(s)) return;
     PullReviews *r = &s->reviews;
     // A read waits for a write under way, which it could predate.
-    if (!r->visible || r->req || r->req_write || r->retry_at > review_time(s)) return;
+    if (!r->visible || r->req || screen_pulls_reviews_writing(r) || r->retry_at > review_time(s)) return;
     if (s->tab != PR_TAB_CODE_REVIEWS && !r->read) return;
     if (!refresh && (r->read || r->next_poll > review_time(s))) return;
     Json *args = json_object(); json_set_str(args, "repo", s->project.repo); json_set_num(args, "pr", s->number);

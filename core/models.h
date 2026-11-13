@@ -4,6 +4,7 @@
 #include "json.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <time.h>
 
 /// Defines `T *name(const Json *array, size_t *count)`: reads each element with `bool parse(const Json *, T *)` and keeps
@@ -19,6 +20,7 @@ typedef struct {
     char *id, *label, *permission;   // permission: read, manage or admin
     char **repos; size_t repo_count;  // empty for an admin token, which is held to no project list
     double expires_at;   // milliseconds since 1970
+    int64_t user_id;     // the user the token acts as; 0 from a server, or a saved connection, from before it was sent
 } Device;
 bool device_parse(const Json *value, Device *out);
 Json *device_json(const Device *device);

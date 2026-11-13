@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 static Json *string_array_json(char **items, size_t count) {
     Json *a = json_array();
@@ -20,6 +21,8 @@ bool device_parse(const Json *value, Device *out) {
     out->id = xstrdup(id); out->label = xstrdup(label); out->permission = xstrdup(permission);
     out->repos = json_dup_strings(json_get(value, "repos"), &out->repo_count);
     out->expires_at = expires;
+    double user;
+    if (json_num(json_get(value, "userId"), &user) && user >= 1 && user <= 9007199254740991.0 && floor(user) == user) out->user_id = (int64_t)user;
     return true;
 }
 Json *device_json(const Device *d) {
@@ -27,6 +30,7 @@ Json *device_json(const Device *d) {
     json_set_str(o, "id", d->id); json_set_str(o, "label", d->label); json_set_str(o, "permission", d->permission);
     json_object_set(o, "repos", string_array_json(d->repos, d->repo_count));
     json_set_num(o, "expiresAt", d->expires_at);
+    if (d->user_id) json_set_num(o, "userId", (double)d->user_id);
     return o;
 }
 void device_free(Device *d) {
