@@ -82,7 +82,7 @@ static void folds_toggle_by_id(void) {
 
 void core_session_tree_tests(void) {
     test_run("Session tree places workers after their orchestrator in list order", workers_follow_their_orchestrator_in_list_order);
-    test_run("Session tree nests orchestrators and leaves cycles flat, each row once", nested_orchestrators_and_cycles_keep_every_row_once);
+    test_run("Session tree nests orchestrators at any depth and breaks cycles at their first row, each row once", nested_orchestrators_and_cycles_keep_every_row_once);
     test_run("Session tree folding hides everything under a folded orchestrator", folding_hides_everything_under_an_orchestrator);
     test_run("Session tree folding keeps the open conversation and the orchestrators above it", folding_keeps_the_open_conversation_and_its_orchestrators);
     test_run("Session tree folds toggle by conversation id", folds_toggle_by_id);

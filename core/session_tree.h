@@ -5,12 +5,13 @@
 #include "models.h"
 #include <stdint.h>
 
-/// A conversation's place in the nested list: its index in the session array it was nested from, 0 deep for a
-/// conversation of its own and 1 for a worker under its orchestrator, and how many rows sit directly under it.
+/// A conversation's place in the nested list: its index in the session array it was nested from, how deep it sits (0
+/// at the top level, one more than its orchestrator's depth under one), and how many rows sit directly under it.
 typedef struct { size_t index; int depth; size_t workers; } SessionNode;
 /// Workers under the orchestrator their `parentId` names, depth first, each keeping the list's order among its siblings.
-/// Only an orchestrator on the list itself nests its workers: one whose orchestrator is left out (closed, or filtered
-/// out) stays at the top level, and a cycle leaves its rows flat. Every session is drawn once. Owned; release with free().
+/// An orchestrator on the list nests its workers whatever its status, a closed one included; only a worker whose
+/// orchestrator is missing from the list stays at the top level. In a cycle, the first member in list order is drawn at
+/// the top level and the others nest under it. Every session is drawn once. Owned; release with free().
 SessionNode *sessions_nested(const Session *sessions, size_t count, size_t *row_count);
 
 /// Orchestrators whose workers are hidden, by conversation id. Owned; release with session_folds_free.
