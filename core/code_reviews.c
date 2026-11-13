@@ -60,6 +60,7 @@ const char *code_review_verdict(const Json *review, const Json *finding) {
     if (!str_empty(v)) return v;
     return str_eq(json_str(json_get(review, "status")), "running") ? "pending" : "no verdict";
 }
+bool code_review_finding_is_security(const Json *finding) { return json_bool_is(json_get(finding, "security"), true); }
 const char *code_review_verification(const Json *review, const Json *finding) {
     const char *v = json_str(json_get(finding, "verification"));
     if (!str_empty(v)) return v;

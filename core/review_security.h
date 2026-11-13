@@ -1,7 +1,8 @@
-// A pull request's security pass in full (`reviewOutcome.security`, the server's `SecurityReview`): beyond the result
-// and policy the outcome card names, the risk tier that made the pass required, the stage and head it covered, what it
-// examined per risk category, the findings it recorded and how the security findings stand. The Code reviews tab draws
-// it as its own block under the outcome. No UI here.
+// A security pass in full (the server's `SecurityReview`, the pull request's in `reviewOutcome.security` and each stored
+// review's own in its `security`): beyond the result and policy the outcome card names, the risk tier that made the pass
+// required, the stage and head it covered, what it examined per risk category, the findings it recorded, the earlier
+// claims it checked and how the security findings stand. The Code reviews tab draws the pull request's as its own block
+// under the outcome and a review's on its opened page. No UI here.
 #ifndef BRIAREUS_REVIEW_SECURITY_H
 #define BRIAREUS_REVIEW_SECURITY_H
 #include "review_outcome.h"
@@ -21,6 +22,12 @@ char *review_security_scope_line(const ReviewSecurity *security);
 char *review_security_findings_line(const ReviewSecurity *security);
 // "Earlier claims: 2 fixed · 1 still stands"; owned, NULL when the pass checked none.
 char *review_security_claims_line(const ReviewSecurity *security);
+// One claim checked, "f-12: fixed · Guard added"; owned. A claim that still stands reads as a warning.
+char *review_security_claim_line(const SecurityClaim *claim);
+ReviewTone review_security_claim_tone(const SecurityClaim *claim);
+// A stored code review's own security pass (its `security`, the same shape as the pull request's). False, with `out`
+// empty, when there is nothing of its own to show: no result (an older server), or a policy that ran no pass in it.
+bool review_security_of_review(const Json *review, ReviewSecurity *out);
 // A category's name in words ("Untrusted input"), its id with spaces for one this client does not know; owned.
 char *review_security_category_title(const SecurityCategory *category);
 // "Applies · 1 finding", "Applies", "Does not apply"; owned.

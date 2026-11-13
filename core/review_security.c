@@ -22,19 +22,34 @@ static bool entry_parse(const Json *j, SecurityEntry *out) {
     if (!title) return false;
     out->title = xstrdup(title); out->category = json_dup_nonempty(json_get(j, "category"));
     out->severity = json_dup_nonempty(json_get(j, "severity")); out->file_path = json_dup_nonempty(json_get(j, "filePath"));
-    out->start_line = count(j, "startLine");
+    out->start_line = count(j, "startLine"); out->claim = json_dup_nonempty(json_get(j, "claim"));
     return true;
 }
-static void entry_free(SecurityEntry *e) { free(e->category); free(e->severity); free(e->title); free(e->file_path); }
+static void entry_free(SecurityEntry *e) { free(e->category); free(e->severity); free(e->title); free(e->file_path); free(e->claim); }
+static bool claim_parse(const Json *j, SecurityClaim *out) {
+    memset(out, 0, sizeof *out);
+    const char *ref = json_str_nonempty(json_get(j, "findingRef"));
+    if (!ref) return false;
+    out->finding_ref = xstrdup(ref); out->status = json_dup_nonempty(json_get(j, "status"));
+    out->evidence = json_dup_nonempty(json_get(j, "evidence"));
+    return true;
+}
+static void claim_free(SecurityClaim *c) { free(c->finding_ref); free(c->status); free(c->evidence); }
 static DEFINE_LIST_PARSE(SecurityCategory, categories_parse, category_parse)
 static DEFINE_LIST_PARSE(SecurityEntry, entries_parse, entry_parse)
+static DEFINE_LIST_PARSE(SecurityClaim, claims_parse, claim_parse)
 
-static void claims_parse(const Json *claims, ReviewSecurity *out) {
-    for (size_t i = 0; i < json_count(claims); i++) {
-        const char *status = json_str(json_get(json_at(claims, i), "status"));
-        if (str_eq(status, "fixed")) out->claims_fixed++;
-        else if (str_eq(status, "stands")) out->claims_standing++;
+// `widened` in words: a sentence, or a list of what it took in; NULL for neither.
+static char *widened_text(const Json *value) {
+    if (json_str_nonempty(value)) return xstrdup(json_str(value));
+    Str text; str_init(&text);
+    for (size_t i = 0; i < json_count(value); i++) {
+        const char *part_text = json_str_nonempty(json_at(value, i));
+        if (part_text) str_appendf(&text, "%s%s", text.len ? ", " : "", part_text);
     }
+    if (text.len) return str_detach(&text);
+    str_free(&text);
+    return NULL;
 }
 void review_security_parse(const Json *j, ReviewSecurity *out) {
     memset(out, 0, sizeof *out);
@@ -54,15 +69,18 @@ void review_security_parse(const Json *j, ReviewSecurity *out) {
     out->covered = json_is_object(coverage);
     out->categories = categories_parse(json_get(coverage, "categories"), &out->category_count);
     out->entries = entries_parse(json_get(coverage, "entries"), &out->entry_count);
-    claims_parse(json_get(coverage, "claims"), out);
+    out->claims = claims_parse(json_get(coverage, "claims"), &out->claim_count);
+    out->recorded = count(coverage, "findings");
+    out->widened = widened_text(json_get(coverage, "widened"));
 }
 void review_security_free(ReviewSecurity *s) {
     if (!s) return;
-    free(s->policy); free(s->result); free(s->required_by_risk); free(s->stage); free(s->head_sha);
+    free(s->policy); free(s->result); free(s->required_by_risk); free(s->stage); free(s->head_sha); free(s->widened);
     review_reasons_free(&s->reasons);
     for (size_t i = 0; i < s->category_count; i++) category_free(&s->categories[i]);
     for (size_t i = 0; i < s->entry_count; i++) entry_free(&s->entries[i]);
-    free(s->categories); free(s->entries);
+    for (size_t i = 0; i < s->claim_count; i++) claim_free(&s->claims[i]);
+    free(s->categories); free(s->entries); free(s->claims);
     memset(s, 0, sizeof *s);
 }
 
@@ -95,12 +113,34 @@ char *review_security_findings_line(const ReviewSecurity *s) {
     return str_detach(&text);
 }
 char *review_security_claims_line(const ReviewSecurity *s) {
-    if (!s->claims_fixed && !s->claims_standing) return NULL;
+    int fixed = 0, standing = 0;
+    for (size_t i = 0; i < s->claim_count; i++) {
+        if (str_eq(s->claims[i].status, "fixed")) fixed++;
+        else if (str_eq(s->claims[i].status, "stands")) standing++;
+    }
+    if (!fixed && !standing) return NULL;
     Str text; str_init(&text);
     str_appendz(&text, "Earlier claims:");
-    if (s->claims_fixed) str_appendf(&text, " %d fixed", s->claims_fixed);
-    if (s->claims_standing) str_appendf(&text, "%s %d still stand%s", s->claims_fixed ? " \xC2\xB7" : "", s->claims_standing, s->claims_standing == 1 ? "s" : "");
+    if (fixed) str_appendf(&text, " %d fixed", fixed);
+    if (standing) str_appendf(&text, "%s %d still stand%s", fixed ? " \xC2\xB7" : "", standing, standing == 1 ? "s" : "");
     return str_detach(&text);
+}
+char *review_security_claim_line(const SecurityClaim *c) {
+    Str text; str_init(&text);
+    str_appendf(&text, "%s: %s", c->finding_ref, c->status ? c->status : "unchecked");
+    if (c->evidence) str_appendf(&text, " \xC2\xB7 %s", c->evidence);
+    return str_detach(&text);
+}
+ReviewTone review_security_claim_tone(const SecurityClaim *c) {
+    if (str_eq(c->status, "stands")) return REVIEW_TONE_WARN;
+    return str_eq(c->status, "fixed") ? REVIEW_TONE_OK : REVIEW_TONE_MUTED;
+}
+bool review_security_of_review(const Json *review, ReviewSecurity *out) {
+    review_security_parse(json_get(review, "security"), out);
+    // A policy that ran no pass in this review has nothing of its own to show.
+    if (out->present && !(str_eq(out->result, "not_required") && !out->stage)) return true;
+    review_security_free(out);
+    return false;
 }
 char *review_security_category_title(const SecurityCategory *c) {
     static const char *const known[][2] = {
