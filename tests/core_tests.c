@@ -897,7 +897,6 @@ int main(void) {
     vt_tests();
     sftp_tests();
     browser_tests();
-    meet_tests();
     mcp_tests();
     update_tests();
     repo_tests();

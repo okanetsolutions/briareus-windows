@@ -1,5 +1,4 @@
-# Briareus for Windows: native C, Win32, and one library: miniaudio (public domain) for the meeting assistant's audio,
-# downloaded at a pinned version into third_party/ on the first build and checked against its SHA-256. One file, app/canvas.cpp, is C++ in C style:
+# Briareus for Windows: native C and Win32, with no third-party libraries. One file, app/canvas.cpp, is C++ in C style:
 # the Windows SDK declares DirectWrite for C++ only.
 # Build with MinGW-w64 GCC (for example WinLibs): `mingw32-make` or `make`. See build.bat for the same steps.
 
@@ -85,32 +84,15 @@ sanitize:
 	$(MAKE) BUILD=build-san OPT="-O1 -g $(SANITIZE)" test
 
 # Static analysis with cppcheck: fails on any finding. canvas.cpp is C in a .cpp file, so the C++-only checks are off there.
-# third_party/ (miniaudio, compiled through app/miniaudio.c) is someone else's code and is left out.
 CPPCHECK ?= cppcheck
-lint: $(MINIAUDIO)
-	$(CPPCHECK) -q -j4 --error-exitcode=1 --enable=warning,performance,portability --inline-suppr --std=c11 		-DUNICODE -D_UNICODE -D_WIN32 -D_WIN64 -Icore -Iapp --suppress=missingIncludeSystem 		--suppress=uninitMemberVarNoCtor --suppress=dangerousTypeCast:app/canvas.cpp 		--config-exclude=third_party --suppress='*:third_party/*' -i app/miniaudio.c core app tests
+lint:
+	$(CPPCHECK) -q -j4 --error-exitcode=1 --enable=warning,performance,portability --inline-suppr --std=c11 		-DUNICODE -D_UNICODE -D_WIN32 -D_WIN64 -Icore -Iapp --suppress=missingIncludeSystem 		--suppress=uninitMemberVarNoCtor --suppress=dangerousTypeCast:app/canvas.cpp core app tests
 
 run: app
 	$(BUILD)/Briareus.exe
 
 $(BUILD)/core/%.o: core/%.c core/*.h | $(BUILD)/core
 	$(CC) $(CFLAGS) -c -o $@ $<
-
-# miniaudio is not kept in the repository: the pinned release is fetched once, and a download whose hash differs fails
-# the build. To update it, change both lines and delete third_party/miniaudio.
-MINIAUDIO_VERSION = 0.11.26
-MINIAUDIO_SHA256 = 6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e
-MINIAUDIO = third_party/miniaudio/miniaudio.h
-$(MINIAUDIO):
-	mkdir -p $(dir $@)
-	curl -fsSL https://raw.githubusercontent.com/mackron/miniaudio/$(MINIAUDIO_VERSION)/miniaudio.h -o $@.download
-	echo "$(MINIAUDIO_SHA256)  $@.download" | sha256sum -c --quiet
-	mv $@.download $@
-
-$(BUILD)/app/miniaudio.o: app/miniaudio.c $(MINIAUDIO) | $(BUILD)/app
-	$(CC) $(CFLAGS) -c -o $@ $<
-
-$(BUILD)/app/meet_audio.o: $(MINIAUDIO)
 
 $(BUILD)/app/%.o: app/%.c app/*.h core/*.h | $(BUILD)/app
 	$(CC) $(CFLAGS) -c -o $@ $<

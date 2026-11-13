@@ -19,10 +19,6 @@ char *dialog_password(HWND owner, const char *caption, const char *label);
 struct Screen;
 bool dialog_action_runtime(HWND owner, struct Screen *source, const char *repo, const BoardAction *action, RuntimeChoice *out);
 bool dialog_action_input(HWND owner, struct Screen *source, const char *repo, const BoardAction *action, int number, char **input);
-/// The meeting assistant's system prompt and first message, written before joining a meeting about `project`, from
-/// `*prompt` and `*first_message`; Reset puts the defaults back. True with the texts on Join.
-bool dialog_meeting_prompt(HWND owner, const char *project, const char *default_prompt, const char *default_first,
-                           char **prompt, char **first_message);
 /// An issue's or pull request's title and description, edited from `*title` and `*body`; true with both on Save, which
 /// a blank title keeps disabled.
 bool dialog_edit_item(HWND owner, const char *caption, char **title, char **body);

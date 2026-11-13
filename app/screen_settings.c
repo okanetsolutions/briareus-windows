@@ -41,12 +41,12 @@ double screen_settings_ssh_row_id(const Json *row) { double id; return json_num(
 /// A Forge account's id is, like an SSH server's, the time it was added in milliseconds.
 char *screen_settings_forge_form_id(double id) { return id > 0 ? xstrfmt("settings-forge:%.0f", id) : xstrdup("settings-forge:new"); }
 
-/// A settings form in the detail pane: a project's, a provider's, an SSH server's, a Forge account's, or the meeting
-/// assistant's.
+/// A settings form in the detail pane: a project's, a provider's, an SSH server's, a Forge account's, an MCP server's,
+/// the smart home's or a mailbox's.
 bool screen_settings_is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:")
-                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-home") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
+                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-home") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -149,7 +149,6 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_OPEN_HOME: if (home_assistant_offered()) app_show_detail(home_assistant_screen_new()); break;
     case ACT_SLEEP: sleep_settings_action(); pane_relayout(base->pane); break;
-    case ACT_OPEN_MEETING: app_show_detail(meeting_settings_screen_new()); break;
     case ACT_MOVE_UP: screen_settings_settings_move(s, (size_t)arg, -1); break;
     case ACT_MOVE_DOWN: screen_settings_settings_move(s, (size_t)arg, 1); break;
     }

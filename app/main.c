@@ -5,7 +5,6 @@
 #include "crash.h"
 #include "dialogs.h"
 #include "media.h"
-#include "meeting.h"
 #include "resource.h"
 #include "screens.h"
 #include "sftp_session.h"
@@ -505,7 +504,6 @@ static LRESULT CALLBACK main_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_DESTROY:
         sleep_stop();
-        meeting_shutdown();
         detached_close_all();
         servers_ssh_sessions_reset();
         term_shutdown();

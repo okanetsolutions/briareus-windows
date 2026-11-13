@@ -4,7 +4,6 @@
 #include "code_reviews.h"
 #include "dialogs.h"
 #include "issue_pages.h"
-#include "meeting.h"
 #include "markdown.h"
 #include "pull_conversation.h"
 #include "review_outcome.h"
@@ -18,7 +17,7 @@
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE, ACT_MORE_ISSUES };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE, ACT_MORE_ISSUES };
 
 enum { ACT_SSH_BASE = 1100 };
 
@@ -41,7 +40,7 @@ enum { ACT_BOARD_BASE = 1200 };
 enum { ACT_REPO_FILES_BASE = 1220 };
 
 // the Files tab's, PROJECT_FILES_ACTIONS of them
-enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_MEETING, TAB_BOARD, TAB_REVIEW, TAB_FILES };
+enum { TAB_PULLS, TAB_ISSUES, TAB_SSH, TAB_SFTP, TAB_RUN, TAB_DB, TAB_FORGE, TAB_BOARD, TAB_REVIEW, TAB_FILES };
 
 enum { TIMER_POLL = 1, TIMER_BOARD_RUN_LOG = 3, TIMER_FILES_GOTO = 4, TIMER_LIST_RETRY = 5 };
 
@@ -56,7 +55,7 @@ typedef struct {
     IssueFolds issue_folds; // Session-only, retained while this repository board lives.
     // The issues past the 100 a board lists, read a page at a time on Load more; a refresh drops them.
     IssuePages issue_pages; Request *req_issue_pages;
-    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_FILES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
+    int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_FILES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB or TAB_FORGE
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
     ProjectRun *run;   // the Run tab, on the default branch

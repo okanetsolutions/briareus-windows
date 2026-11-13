@@ -78,18 +78,8 @@ void screen_pulls_pulls_header(Screen *base, HeaderInfo *info) {
     if (s->synced_at) { char *ago = format_relative(s->synced_at); str_appendf(&sub, " \xC2\xB7 synced %s", ago); free(ago); }
     time_t retry = pulls_retry_deadline(s->project.repo);
     if (retry > time(NULL)) { char *at = format_event_time(retry); str_appendf(&sub, " \xC2\xB7 retry after %s", at); free(at); }
-    // A meeting about this project leads the line: its time, cost and what it is doing.
-    if (meeting_for(s->project.repo)) { char *m = meeting_status(); snprintf(info->subtitle, sizeof info->subtitle, "%s \xC2\xB7 %s", m, sub.data); free(m); }
-    else snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
+    snprintf(info->subtitle, sizeof info->subtitle, "%s", sub.data);
     str_free(&sub);
-    // 🎙 Meet: the meeting assistant, on this project.
-    {
-        bool here = meeting_for(s->project.repo);
-        HeaderButton *m = &info->buttons[info->button_count++];
-        snprintf(m->label, sizeof m->label, "%s", here ? "\xF0\x9F\x8E\x99 Meeting \xE2\x97\x8F" : "\xF0\x9F\x8E\x99 Meet");
-        m->glyph = 0xE720; m->action = ACT_MEET; m->enabled = true; m->tip = "Join a meeting with an assistant that can look up this project";
-    }
-    if (s->tab == TAB_MEETING) return;
     if (s->tab == TAB_RUN) { project_run_header(s->run, info); return; }
     if (s->tab == TAB_BOARD) {
         board_tab_header(s->board_tab, info);

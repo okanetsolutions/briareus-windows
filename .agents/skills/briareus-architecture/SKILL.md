@@ -17,14 +17,13 @@ Read `CLAUDE.md` and `.ai/rules/index.md` first. This map helps locate the exist
 | Usage comparisons and pricing coverage | `core/usage.*` |
 | Pull conversation roots, review association and timeline ordering | `core/pull_conversation.*` |
 | Mail thread grouping and notification classification | `core/mail_group.*` |
-| Mail, MCP, browser, meeting, terminal and SFTP logic | Corresponding `core/` modules |
+| Mail, MCP, browser, terminal and SFTP logic | Corresponding `core/` modules |
 | Release parsing, download checks and executable swap | `core/update.*`; app scheduling and feedback in `app/updater.*` |
 | Connection state, request ownership and UI-thread completion | `app/store.*` |
 | Window and screen lifecycle | `app/main.c`, `app/pane.*`, `app/detached.c`, `app/screens.h` |
 | Layout, drawing and shared visual state | `app/doc.*`, `app/canvas.*`, `app/theme.*`, generated `app/briareus_tokens.h` |
 | Screens and project tabs | `app/screen_*.c`, `app/project_*.c`, focused app helpers |
-| WebSocket transport | `app/ws.*` |
-| Audio and attachments | `app/voice.*`, `app/meet_audio.*`, `app/loopback.*`, `app/attach*`, `app/miniaudio.c` |
+| Voice notes and attachments | `app/voice.*`, `app/attach*` |
 | Crash handling and reports | `app/crash.*`, `tests/crash_probe.c`, `tests/crash_smoke.ps1` |
 
 ## Follow one request
