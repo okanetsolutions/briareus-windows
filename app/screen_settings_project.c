@@ -96,7 +96,7 @@ static void form_clone(FormScreen *s) {
 // MARK: The screen
 
 static void form_release(FormScreen *s) {
-    for (int f = 0; f < F_COUNT; f++) if (s->edits[f]) DestroyWindow(s->edits[f]);
+    for (int f = 0; f < F_COUNT; f++) { if (s->edits[f]) DestroyWindow(s->edits[f]); free(s->choices[f]); }
     for (int r = 0; r < R_COUNT; r++) screen_settings_pick_clear(&s->picks[r]);
     if (s->has_catalog) runtime_catalog_free(&s->catalog);
     json_free(s->row); free(s->error);
@@ -128,6 +128,7 @@ static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
         screen_settings_form_changed(s); pane_relayout(base->pane); break;
     case ACT_PICK: if (arg >= 0 && arg < R_COUNT * 3) screen_settings_pick(s, (int)arg / 3, (int)arg % 3, pt); break;
     case ACT_FOCUS: if (arg >= 0 && arg < F_COUNT && s->edits[arg]) SetFocus(s->edits[arg]); break;
+    case ACT_CHOOSE: if (arg >= 0 && arg < F_COUNT && screen_settings_FIELDS[arg].kind == K_CHOICE) screen_settings_choose(s, (int)arg, pt); break;
     }
 }
 

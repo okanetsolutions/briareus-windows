@@ -213,6 +213,8 @@ Screen *settings_screen_new(void) {
     return &s->base;
 }
 
+static const FieldChoice SECURITY_CHOICES[] = { { "off", "Off" }, { "advisory", "Advisory" }, { "required", "Required" }, { NULL, NULL } };
+
 const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_REPO] = { "repo", K_TEXT, "Repository", "owner/name", "Cloned over HTTPS with the machine's own git credentials.", 0, false },
     [F_LABEL] = { "label", K_TEXT, "Label", "shown in the project dropdown", NULL, 0, false },
@@ -231,6 +233,12 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_DB_EXT] = { "dbExtensions", K_LIST, "Postgres extensions", NULL,
         "One extension name per line, created in the session's database right after it is created. A fresh Postgres database carries only what template1 does, so migrations that declare a vector column fail without this. The extension itself must already be installed on the server. Ignored on MySQL.", 2, true },
     [F_REVIEW_AUTHOR] = { "prAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
+    [F_ROUND_LIMIT] = { "reviewRoundLimit", K_NUMBER, "Review rounds per pull request", "3",
+        "How many code review rounds a pull request gets across all its commits before a person has to grant one more, 1 to 20, or 0 for no limit. Leave empty for the server's default.", 0, false, 20 },
+    [F_SECURITY] = { "securityReview", K_CHOICE, "Security review", NULL,
+        "Whether every code review runs a security pass after discovery, one more turn on the review's runtime. Advisory shows its result; Required keeps the review outcome from passing until the pass has passed.", .choices = SECURITY_CHOICES },
+    [F_ENFORCE_OUTCOME] = { "enforceReviewOutcome", K_BOOL, "Publish the review outcome to GitHub as commit statuses" },
+    [F_BENCHMARK] = { "reviewBenchmark", K_BOOL, "Use this repository for the review benchmark" },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
     [F_AUTO_LOOP] = { "autonomousReviewLoop", K_BOOL, "Autonomous review loop: fix every finding and review again" },

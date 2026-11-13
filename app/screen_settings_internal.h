@@ -49,17 +49,21 @@ typedef struct { char *label, *binary; bool active, login, endpoint, selected, u
 
 // MARK: - The project form
 
-typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD } FieldKind;
+typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD, K_CHOICE } FieldKind;
 
-// K_BOARD: the Projects board, edited as its address
-/// One of the form's fields: the Project key it edits, how, and the words around it. `rows` sizes a multi-line box.
-typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; } FieldDef;
+/// One value a K_CHOICE field may take, and what its picker says for it.
+typedef struct { const char *value, *title; } FieldChoice;
+
+// K_BOARD: the Projects board, edited as its address. K_CHOICE: one of `choices`, ended by a NULL value, picked from a menu.
+/// One of the form's fields: the Project key it edits, how, and the words around it. `rows` sizes a multi-line box. A
+/// K_NUMBER with `max` takes a whole number from 0 to it.
+typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; int max; const FieldChoice *choices; } FieldDef;
 
 enum {
     F_REPO, F_LABEL, F_ENABLED, F_MAIL_TOOLS, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT,
-    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    F_REVIEW_AUTHOR, F_ROUND_LIMIT, F_SECURITY, F_ENFORCE_OUTCOME, F_BENCHMARK, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
     F_BUDGET, F_IS_SELF,
     F_ENV,
     F_RUN, F_PROFILES,
@@ -82,7 +86,7 @@ typedef struct { int provider_id; char *model, *effort; } RuntimePick;
 enum { T_PROJECT, T_DATABASE, T_REVIEW, T_ORCHESTRATOR, T_ENV, T_RUN, T_COUNT };
 
 extern int screen_settings_g_tab;
-enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_PICK, ACT_FOCUS };
+enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_PICK, ACT_FOCUS, ACT_CHOOSE };
 
 enum { ID_FIELD = 2000 };
 
@@ -96,6 +100,7 @@ typedef struct {
     bool clipped[F_COUNT];
     int lines[F_COUNT];    // a long box's lines, which it grows to show, as the dashboard's textareas do
     bool bools[F_COUNT];
+    char *choices[F_COUNT];   // a K_CHOICE field's value: the row's, or the one picked since
     RuntimePick picks[R_COUNT];
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
@@ -241,6 +246,7 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab);
 void screen_settings_form_changed(FormScreen *s);
 bool screen_settings_tab_changed(FormScreen *s, int t);
 void screen_settings_field(FormScreen *s, Doc *doc, int x, int w, int f);
+void screen_settings_check(FormScreen *s, Doc *doc, int x, int w, int f);
 void screen_settings_select_free(void *p);
 void screen_settings_paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_settings_note(Doc *doc, int x, int w, const char *text);
@@ -252,6 +258,11 @@ void screen_settings_form_ensure_controls(FormScreen *s);
 void screen_settings_load_runtimes(FormScreen *s);
 void screen_settings_append_item(HMENU menu, UINT id, const char *text, bool checked, bool enabled);
 void screen_settings_pick(FormScreen *s, int r, int part, POINT pt);
+const char *screen_settings_choice_title(int f, const char *value);
+bool screen_settings_choice_changed(FormScreen *s, int f);
+bool screen_settings_choice_into(FormScreen *s, int f, Json *body, char **why);
+void screen_settings_choose(FormScreen *s, int f, POINT pt);
+void screen_settings_review_rules(FormScreen *s, Doc *doc, int x, int w);
 void screen_settings_form_save(FormScreen *s);
 Screen *project_settings_screen_new(const Json *row, const Json *defaults);
 const char *screen_settings_mode_title(const char *mode);
