@@ -28,4 +28,17 @@ char *review_security_category_line(const SecurityCategory *category);
 ReviewTone review_security_category_tone(const SecurityCategory *category);
 // Where a recorded finding is, "app/x.c:12", or the file alone; owned, NULL without a file.
 char *review_security_entry_location(const SecurityEntry *entry);
+
+// Where a pull request's security result stands across pull requests, worst first: what blocks or cannot be read, what
+// is owed, what is under way, what passed, and a pass the project does not ask for (or no result at all).
+typedef enum {
+    SECURITY_RANK_FAILED, SECURITY_RANK_INCOMPLETE, SECURITY_RANK_NOT_RUN, SECURITY_RANK_PENDING, SECURITY_RANK_PASSED,
+    SECURITY_RANK_OFF, SECURITY_RANKS
+} SecurityRank;
+SecurityRank review_security_rank(const ReviewSecurity *security);
+// "Failed", "Incomplete", "Not run", "Pending", "Passed", "Not asked"; static.
+const char *review_security_rank_title(SecurityRank rank);
+// The pull requests counted per rank, "2 failed · 1 not run · 10 passed", the ones not asked for last; "No open pull
+// requests" when every count is 0. Owned.
+char *review_security_summary(const size_t counts[SECURITY_RANKS]);
 #endif

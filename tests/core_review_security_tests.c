@@ -68,7 +68,21 @@ static void a_pass_not_run_or_out_of_date_says_so(void) {
     parse_security("{\"result\":\"pending\",\"stage\":\"bogus\"}", &s); CHECK(review_security_scope_line(&s) == NULL); review_security_free(&s);
     parse_security("{\"policy\":\"required\"}", &s); CHECK(!s.present); review_security_free(&s);
 }
+static void pull_requests_rank_worst_first_and_sum_up(void) {
+    const char *results[] = { "failed", "incomplete", "not_run", "pending", "passed", "not_required" };
+    for (size_t i = 0; i < 6; i++) {
+        ReviewSecurity s = { .present = true, .policy = "advisory", .result = (char *)results[i] };
+        CHECK_INT(review_security_rank(&s), (int)i);
+    }
+    ReviewSecurity absent = {0}; CHECK_INT(review_security_rank(&absent), SECURITY_RANK_OFF); CHECK_INT(review_security_rank(NULL), SECURITY_RANK_OFF);
+    ReviewSecurity odd = { .present = true, .result = "bogus" }; CHECK_INT(review_security_rank(&odd), SECURITY_RANK_PENDING);
+    CHECK_STR(review_security_rank_title(SECURITY_RANK_NOT_RUN), "Not run"); CHECK_STR(review_security_rank_title(SECURITY_RANK_OFF), "Not asked");
+    size_t counts[SECURITY_RANKS] = { 2, 0, 1, 0, 10, 3 };
+    CHECK_OWNED_STR(review_security_summary(counts), "2 failed \xC2\xB7 1 not run \xC2\xB7 10 passed \xC2\xB7 3 not asked");
+    size_t none[SECURITY_RANKS] = {0}; CHECK_OWNED_STR(review_security_summary(none), "No open pull requests");
+}
 void core_review_security_tests(void) {
+    test_run("pull requests rank by security result, worst first, and sum up", pull_requests_rank_worst_first_and_sum_up);
     test_run("a security pass reads its coverage, counts, claims and the head it covered", a_pass_reads_its_coverage_counts_and_scope);
     test_run("a security pass not run, still running or out of date says so", a_pass_not_run_or_out_of_date_says_so);
 }

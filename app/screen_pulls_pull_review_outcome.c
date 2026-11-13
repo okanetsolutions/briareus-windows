@@ -16,7 +16,7 @@ void screen_pulls_review_outcome_clear(PullReviews *r) {
     json_free(r->outcome_state); r->outcome_state = NULL;
     review_outcome_free(r->outcome); free(r->outcome); r->outcome = NULL;
 }
-COLORREF screen_pulls_review_tone_color(ReviewTone tone) {
+COLORREF review_tone_color(ReviewTone tone) {
     switch (tone) {
     case REVIEW_TONE_RUNNING: return theme.accent;
     case REVIEW_TONE_OK: return theme.ok;
@@ -39,7 +39,7 @@ void screen_pulls_review_reasons(Doc *doc, Col c, const ReviewReasons *list, int
     review_reasons_listed(list, listed);
     doc_space(doc, gap);
     for (size_t i = 0; i < list->count; i++) {
-        COLORREF color = review_reason_is_note(listed[i]) ? theme.secondary : screen_pulls_review_tone_color(review_reason_tone(listed[i]));
+        COLORREF color = review_reason_is_note(listed[i]) ? theme.secondary : review_tone_color(review_reason_tone(listed[i]));
         doc_text(doc, c.ix, c.iw, listed[i]->message, FONT_FOOTNOTE, color, DT_WORDBREAK);
         if (i + 1 < list->count) doc_space(doc, px(4));
     }
@@ -53,13 +53,13 @@ void screen_pulls_review_fact(Doc *doc, Col c, const char *title, char *value, R
     RECT t = {c.ix, top, c.ix + tw, top + font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD)};
     doc_text_at(doc, &t, title, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
     doc->y = top;
-    doc_text(doc, c.ix + tw, c.iw - tw, value, FONT_FOOTNOTE, screen_pulls_review_tone_color(tone), DT_WORDBREAK);
+    doc_text(doc, c.ix + tw, c.iw - tw, value, FONT_FOOTNOTE, review_tone_color(tone), DT_WORDBREAK);
     if (doc->y < t.bottom) doc->y = t.bottom;
     free(value);
 }
 static void heading(Doc *doc, Col c, const ReviewOutcome *o) {
     int top = doc->y, tw = text_width(doc->cv, "Review outcome", FONT_FOOTNOTE_SEMIBOLD) + px(10);
-    BadgeSpec badge = {outcome_glyph(o->outcome), review_outcome_title(o->outcome), screen_pulls_review_tone_color(review_outcome_tone(o->outcome)), false};
+    BadgeSpec badge = {outcome_glyph(o->outcome), review_outcome_title(o->outcome), review_tone_color(review_outcome_tone(o->outcome)), false};
     int bw = doc_badges_width(doc, &badge, 1);
     int h = font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD);
     RECT t = {c.ix, top, c.ix + tw, top + h};
@@ -73,7 +73,7 @@ static void heading(Doc *doc, Col c, const ReviewOutcome *o) {
         int lw = text_width(doc->cv, line, FONT_CAPTION) + px(2), x = c.ix + c.iw - lw;
         if (x < c.ix + tw + bw + px(10)) { x = c.ix; top = bottom + px(4); }
         RECT r = {x, top, x + lw, top + font_height(doc->cv, FONT_CAPTION)};
-        doc_text_at(doc, &r, line, FONT_CAPTION, screen_pulls_review_tone_color(review_rounds_tone(&o->rounds)), DT_SINGLELINE);
+        doc_text_at(doc, &r, line, FONT_CAPTION, review_tone_color(review_rounds_tone(&o->rounds)), DT_SINGLELINE);
         if (r.bottom > bottom) bottom = r.bottom;
         free(line);
     }

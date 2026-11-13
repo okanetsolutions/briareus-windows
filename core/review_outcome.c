@@ -135,11 +135,7 @@ const char *review_outcome_ready_note(const ReviewOutcome *o) {
 
 bool review_security_shown(const ReviewSecurity *s) { return s->present && !str_eq(s->result, "not_required"); }
 char *review_security_line(const ReviewSecurity *s) {
-    const char *said = "Pending", *held = "advisory";
-    if (str_eq(s->result, "passed")) said = "Passed";
-    else if (str_eq(s->result, "failed")) said = "Failed";
-    else if (str_eq(s->result, "not_run")) said = "Not run";
-    else if (str_eq(s->result, "incomplete")) said = "Incomplete";
+    const char *said = review_security_rank_title(review_security_rank(s)), *held = "advisory";
     if (str_eq(s->policy, "required") || s->blocking) held = "required";
     else if (str_eq(s->policy, "off")) held = "off";
     return xstrfmt("%s \xC2\xB7 %s", said, held);

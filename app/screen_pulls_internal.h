@@ -350,7 +350,6 @@ void screen_pulls_review_edit_cancel(PullScreen *s);
 void screen_pulls_review_edit_save(PullScreen *s);
 void screen_pulls_review_handling(PullScreen *s, Doc *doc, Col c, const Json *review);
 void screen_pulls_review_editor(PullScreen *s, Doc *doc, Col c, const Json *review);
-COLORREF screen_pulls_review_tone_color(ReviewTone tone);
 /// The server's reasons, those that hold it back first in their tones and the notes after, `gap` above them.
 void screen_pulls_review_reasons(Doc *doc, Col c, const ReviewReasons *reasons, int gap);
 /// Wrapped text, or nothing for NULL or an empty string.

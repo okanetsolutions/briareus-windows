@@ -340,6 +340,7 @@ static const ApiRoute ROUTES[] = {
     { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" },
     { "code_reviews", "GET", "pulls/{pr}/code-reviews" },
+    { "code_review_rounds", "GET", "pulls/{pr}/code-review-rounds" },   // the rounds and the outcome alone; the Security screen reads it per pull request
     // A person marks a stored review handled or reopens it (`handlingStatus`), or overrules a finding's `shouldFix` with
     // its `verification` and `comments` (code_reviews.c).
     { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
