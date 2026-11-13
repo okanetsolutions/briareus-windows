@@ -67,6 +67,7 @@ static void access_done(void *owner, Request *req) {
 static void pull_place(Screen *base, const RECT *content, int scroll_y) {
     PullScreen *s = (PullScreen *)base;
     screen_pulls_review_editor_place(s, content, scroll_y);
+    screen_pulls_review_approvals_place(s, content, scroll_y);
     bool on = s->shown && s->tab == PR_TAB_RUN && s->run_url && !s->run_busy;
     // The browser is a child of the pane, so it starts once the tab is first shown in one, and once the service token
     // that lets it past Cloudflare Access has been read.
@@ -187,7 +188,7 @@ static void pull_visible(Screen *base, bool shown) {
     if (s->web && !shown) webview_show(s->web, false);
     if (shown) screen_pulls_profiles_load(s);
     if (shown && s->run_busy) SetTimer(pane_hwnd(base->pane), TIMER_RUN_LOG, 1500, NULL);
-    if (!shown) { request_cancel(&s->reviews.req); screen_pulls_review_editor_place(s, NULL, 0); }
+    if (!shown) { request_cancel(&s->reviews.req); screen_pulls_review_editor_place(s, NULL, 0); screen_pulls_review_approvals_place(s, NULL, 0); }
     if (!shown) KillTimer(pane_hwnd(base->pane), TIMER_RUN_LOG);
     if (shown) { poller_start(&s->poller, base->pane, TIMER_POLL, 30000); if (s->tab == PR_TAB_FILES) pull_files_load(s->files); if (s->tab == PR_TAB_CONVERSATION) screen_pulls_conv_load(s); }
     else { poller_stop(&s->poller); pull_files_cancel(s->files); screen_pulls_conv_cancel(s); request_cancel(&s->req_pull); request_cancel(&s->req_rows); request_cancel(&s->req_actions); request_cancel(&s->req_sessions); request_cancel(&s->req_body); request_cancel(&s->req_issue); }

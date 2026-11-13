@@ -492,6 +492,8 @@ static void test_string_accessors_on_wrong_types(void) {
     CHECK_OWNED_STR(json_dup_str(json_get(j, "s")), "x");
     CHECK_OWNED_STR(json_dup_str(json_get(j, "e")), "");
     CHECK(json_dup_str(json_get(j, "n")) == NULL);
+    CHECK_OWNED_STR(json_dup_nonempty(json_get(j, "s")), "x");
+    CHECK(json_dup_nonempty(json_get(j, "e")) == NULL); CHECK(json_dup_nonempty(json_get(j, "n")) == NULL);
     CHECK(json_dup_str(json_get(j, "missing")) == NULL);
     CHECK(json_dup_str(NULL) == NULL);
     char *dup = json_dup_str(json_get(j, "s"));

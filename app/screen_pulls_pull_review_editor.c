@@ -96,34 +96,37 @@ static bool reason_shown(const PullScreen *s, const RECT *content) {
     if (!content || !s->base.pane || !s->shown || s->tab != PR_TAB_CODE_REVIEWS) return false;
     return r->open && r->editing && r->reason_laid;
 }
+bool screen_pulls_review_box_place(PullScreen *s, HWND box, const RECT *laid, const RECT *content, int scroll_y) {
+    Pane *pane = s->base.pane;
+    HWND parent = pane_hwnd(pane);
+    if (GetParent(box) != parent) SetParent(box, parent);
+    RECT client; GetClientRect(parent, &client);
+    int margin = (client.right - pane_content_width(pane)) / 2;
+    RECT rc = *laid, view = *content, visible;
+    OffsetRect(&rc, content->left + margin, content->top - scroll_y);
+    if (pane_doc(pane)->pin_last) view.top += pane_doc(pane)->pin_bottom;
+    if (!IntersectRect(&visible, &rc, &view)) { ShowWindow(box, SW_HIDE); return false; }
+    MoveWindow(box, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+    SetWindowRgn(box, CreateRectRgn(visible.left - rc.left, visible.top - rc.top, visible.right - rc.left, visible.bottom - rc.top), TRUE);
+    ShowWindow(box, SW_SHOWNA);
+    return true;
+}
 // Shows the reason box where the editor laid it out, clipped to the view below the pinned header; hides it otherwise.
 void screen_pulls_review_editor_place(PullScreen *s, const RECT *content, int scroll_y) {
     PullReviews *r = &s->reviews;
-    Pane *pane = s->base.pane;
     if (!reason_shown(s, content)) { if (r->reason) ShowWindow(r->reason, SW_HIDE); return; }
-    HWND parent = pane_hwnd(pane);
     if (!r->reason) {
         r->reason = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-            0, 0, 10, 10, parent, NULL, GetModuleHandleW(NULL), NULL);
+            0, 0, 10, 10, pane_hwnd(s->base.pane), NULL, GetModuleHandleW(NULL), NULL);
         SetWindowSubclass(r->reason, reason_proc, 0, (DWORD_PTR)s);
         SendMessageW(r->reason, EM_SETLIMITTEXT, 10000, 0);
         theme_apply_control(r->reason);
         r->reason_for = 0;
     }
-    if (GetParent(r->reason) != parent) SetParent(r->reason, parent);
     SendMessageW(r->reason, WM_SETFONT, (WPARAM)font(FONT_FOOTNOTE), TRUE);
     if (r->reason_for != r->editing->finding_id) { r->reason_for = r->editing->finding_id; reason_text(r->reason, r->editing->reason); }
     EnableWindow(r->reason, !r->req_write);
-    RECT client; GetClientRect(parent, &client);
-    int margin = (client.right - pane_content_width(pane)) / 2;
-    RECT rc = r->reason_rc, view = *content, visible;
-    OffsetRect(&rc, content->left + margin, content->top - scroll_y);
-    if (pane_doc(pane)->pin_last) view.top += pane_doc(pane)->pin_bottom;
-    if (!IntersectRect(&visible, &rc, &view)) { ShowWindow(r->reason, SW_HIDE); return; }
-    MoveWindow(r->reason, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
-    SetWindowRgn(r->reason, CreateRectRgn(visible.left - rc.left, visible.top - rc.top, visible.right - rc.left, visible.bottom - rc.top), TRUE);
-    ShowWindow(r->reason, SW_SHOWNA);
-    if (r->focus_reason) { r->focus_reason = false; SetFocus(r->reason); }
+    if (screen_pulls_review_box_place(s, r->reason, &r->reason_rc, content, scroll_y) && r->focus_reason) { r->focus_reason = false; SetFocus(r->reason); }
 }
 // The reason as typed, so Save and the hints follow it.
 void screen_pulls_review_editor_command(PullScreen *s, HWND control, int code) {

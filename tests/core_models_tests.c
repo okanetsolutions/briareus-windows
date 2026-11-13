@@ -63,6 +63,12 @@ static void test_device_round_trips_and_copies_deeply(void) {
     CHECK(device_parse(j, &d)); device_copy(&copy, &d);
     CHECK_INT(copy.repo_count, 0); CHECK_INT(device_expiry(&copy), 0);
     device_free(&copy); device_free(&d); json_free(j);
+    // The user the token acts as survives a save; a record from before it was sent reads as 0 and saves without it.
+    CHECK_INT(again.user_id, 0);
+    j = json_parsez("{\"id\":\"w\",\"label\":\"Web\",\"permission\":\"manage\",\"repos\":[],\"expiresAt\":0,\"userId\":42}");
+    CHECK(device_parse(j, &d)); CHECK(d.user_id == 42); device_copy(&copy, &d); CHECK(copy.user_id == 42);
+    saved = device_json(&d); CHECK(json_equal(saved, j)); json_free(saved);
+    device_free(&copy); device_free(&d); json_free(j);
 }
 static void test_permission_ranks_and_who_may_manage(void) {
     CHECK_INT(permission_rank("read"), 0); CHECK_INT(permission_rank("manage"), 1); CHECK_INT(permission_rank("admin"), 2);

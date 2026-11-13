@@ -15,6 +15,8 @@ void screen_pulls_reviews_clear(PullScreen *s) {
     request_cancel(&r->req); json_free(r->items); free(r->scope); free(r->error);
     request_cancel(&r->req_write); code_review_edit_free(r->editing); free(r->editing); free(r->save_error); free(r->edit_error);
     if (r->reason) DestroyWindow(r->reason);
+    if (r->note) DestroyWindow(r->note);
+    free(r->approval_error);
     screen_pulls_review_outcome_clear(r);
     if (r->client) api_client_release(r->client);
     memset(r, 0, sizeof *r);

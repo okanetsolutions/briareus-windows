@@ -56,6 +56,7 @@
 #undef json_str_nonempty
 #undef json_str_or
 #undef json_dup_str
+#undef json_dup_nonempty
 #undef json_dup_strings
 #undef json_num
 #undef json_num_or

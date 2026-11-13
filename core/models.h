@@ -19,6 +19,7 @@ typedef struct {
     char *id, *label, *permission;   // permission: read, manage or admin
     char **repos; size_t repo_count;  // empty for an admin token, which is held to no project list
     double expires_at;   // milliseconds since 1970
+    long long user_id;   // the user the token acts as; 0 from a server, or a saved connection, from before it was sent
 } Device;
 bool device_parse(const Json *value, Device *out);
 Json *device_json(const Device *device);

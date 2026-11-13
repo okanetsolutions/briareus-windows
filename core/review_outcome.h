@@ -15,8 +15,25 @@ typedef struct { char *code, *effect, *message; } ReviewReason;
 typedef struct { ReviewReason *items; size_t count; } ReviewReasons;
 // The security pass under the project's policy (`off`, `advisory`, `required`), its result and its own reasons.
 typedef struct { bool present, blocking; char *policy, *result; ReviewReasons reasons; } ReviewSecurity;
+// One approval on record (`Approval`): recorded by a person through Briareus, or read from GitHub (`from_github`, with
+// `user_id` 0). `counted` says whether it counts now; `reason` and `message` say why not.
+typedef struct {
+    long long id, user_id;
+    bool from_github, withdrawn, counted;
+    char *name, *github_login, *head_sha, *at, *note, *withdraw_note, *reason, *message;   // NULL when absent
+} ReviewApproval;
+// One thing that set the change's risk tier (`risk.reasons`): a sensitive path rule, a size threshold, an unreadable list.
+typedef struct { char *code, *tier, *message; } RiskReason;
 // Whether the people the change's risk calls for approved the reviewed revision; a result apart from the outcome.
-typedef struct { bool present, enabled; char *result, *tier, *explanation; int required, valid, missing; } ReviewApprovals;
+// `head_sha` is the head an approval names, and `review_current` whether a review that has ended covers it.
+typedef struct {
+    bool present, enabled, review_current;
+    char *result, *tier, *explanation, *head_sha;
+    int required, valid, missing;
+    ReviewReasons reasons;
+    RiskReason *risk; size_t risk_count;
+    ReviewApproval *items; size_t count;   // oldest first
+} ReviewApprovals;
 // The rounds used against the project's `reviewRoundLimit` (0: none), and how many a person granted past it.
 typedef struct { bool present, limit_reached; int limit, used, continuations; } ReviewRounds;
 typedef struct {
@@ -30,14 +47,19 @@ typedef struct {
 } ReviewOutcome;
 
 // Which answer the outcome comes from, and so what it replaces: a read replaces both the outcome and the rounds; a
-// verdict save replaces the outcome (and leaves none when it carries none) and keeps the rounds; any other save keeps both.
-typedef enum { REVIEW_OUTCOME_FROM_READ, REVIEW_OUTCOME_FROM_VERDICT, REVIEW_OUTCOME_FROM_OTHER } ReviewOutcomeSource;
+// verdict save replaces the outcome (and leaves none when it carries none) and keeps the rounds; an approval recorded or
+// withdrawn replaces the outcome, or without one only its approvals, and keeps the rounds; any other save keeps both.
+typedef enum { REVIEW_OUTCOME_FROM_READ, REVIEW_OUTCOME_FROM_VERDICT, REVIEW_OUTCOME_FROM_APPROVAL, REVIEW_OUTCOME_FROM_OTHER } ReviewOutcomeSource;
 // The `{ reviewOutcome, reviewRounds }` to keep after `answer`, over `previous` (either may be NULL); owned, NULL for none.
 Json *review_outcome_state(const Json *answer, ReviewOutcomeSource source, const Json *previous);
 // Reads what review_outcome_state kept; false, with `out` empty, while it holds no outcome this client knows (an older
 // server, or nothing read yet). Free with review_outcome_free.
 bool review_outcome_parse(const Json *state, ReviewOutcome *out);
 void review_outcome_free(ReviewOutcome *outcome);
+
+// The server's `reasons` list read into `out`, every entry with a code; free with review_reasons_free.
+void review_reasons_parse(const Json *list, ReviewReasons *out);
+void review_reasons_free(ReviewReasons *reasons);
 
 const char *review_outcome_title(ReviewOutcomeKind kind);
 ReviewTone review_outcome_tone(ReviewOutcomeKind kind);
@@ -56,10 +78,6 @@ const char *review_outcome_ready_note(const ReviewOutcome *outcome);
 bool review_security_shown(const ReviewSecurity *security);
 char *review_security_line(const ReviewSecurity *security);
 ReviewTone review_security_tone(const ReviewSecurity *security);
-// Shown only while a policy is on and the change's tier asks for approvals; "1 of 2 approvals · high risk", owned.
-bool review_approvals_shown(const ReviewApprovals *approvals);
-char *review_approvals_line(const ReviewApprovals *approvals);
-ReviewTone review_approvals_tone(const ReviewApprovals *approvals);
 // "2 of 3 rounds", "4 rounds" without a limit, with any rounds granted past it; owned.
 char *review_rounds_line(const ReviewRounds *rounds);
 ReviewTone review_rounds_tone(const ReviewRounds *rounds);
