@@ -16,6 +16,8 @@ const char *code_review_head(const Json *review, const char *current_head);
 // Null verdicts await work only while their parent review is running.
 const char *code_review_verdict(const Json *review, const Json *finding);
 const char *code_review_verification(const Json *review, const Json *finding);
+// Whether the finding counts towards the review's security result: one of its security pass, or one the server marked so.
+bool code_review_finding_is_security(const Json *finding);
 // Owned display strings; null usage remains visibly unknown.
 char *code_review_location(const Json *finding);
 char *code_review_usage(const Json *review);

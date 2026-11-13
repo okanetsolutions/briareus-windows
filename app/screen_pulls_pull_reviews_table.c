@@ -73,6 +73,7 @@ static void finding_row(PullScreen *s, Doc *doc, Col c, const Json *r, const Jso
     }
     doc->y = top + pad;
     screen_pulls_review_badge(doc, c.ix + first, px(72), field(f, "severity"), true, theme.canvas);
+    if (code_review_finding_is_security(f)) cell(doc, c.ix + first, top + px(38), px(72), px(18), "Security", FONT_CAPTION, theme.warn, DT_SINGLELINE);
     doc->y = top + pad;
     screen_pulls_review_badge(doc, c.ix + first + px(78), px(102), code_review_verdict(r, f), false, theme.canvas);
     if (!str_eq(code_review_verdict(r, f), code_review_verification(r, f))) cell(doc, c.ix + first + px(78), top + px(38), px(102), px(30), code_review_verification(r, f), FONT_CAPTION, theme.secondary, DT_WORDBREAK);
