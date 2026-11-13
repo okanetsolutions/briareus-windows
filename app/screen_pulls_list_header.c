@@ -18,10 +18,13 @@ bool screen_pulls_row_filter_passes(PullsScreen *s, const BoardRow *row, size_t 
     return board_filter_passes(screen_pulls_current_filter(s), row, -1) && (s->tab != TAB_PULLS || screen_pulls_stack_filter_passes(s, index));
 }
 
+/// The current tab's rows; on Issues, those the board lists followed by those its pages read.
 BoardRow *screen_pulls_rows_of(PullsScreen *s, size_t *count) {
-    size_t n = s->tab == 0 ? s->pull_count : s->issue_count;
-    BoardRow *rows = xcalloc(n, sizeof *rows);
-    for (size_t i = 0; i < n; i++) rows[i] = s->tab == 0 ? pull_board_row(&s->pulls[i]) : issue_board_row(&s->issues[i]);
+    size_t n = s->pull_count;
+    IssueSummary *issues = s->tab == 0 ? NULL : screen_pulls_listed_issues(s, &n);
+    BoardRow *rows = xcalloc(n + 1, sizeof *rows);
+    for (size_t i = 0; i < n; i++) rows[i] = issues ? issue_board_row(&issues[i]) : pull_board_row(&s->pulls[i]);
+    free(issues);
     *count = n;
     return rows;
 }

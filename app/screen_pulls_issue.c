@@ -54,7 +54,8 @@ static void issue_close_done(void *owner, Request *req) {
         const char *reason = json_str(json_get(json_get(req->result, "issue"), "stateReason"));
         set_string(&s->closed_reason, reason ? reason : json_str(json_get(req->args, "reason")));
         set_string(&s->write_error, NULL);
-        // The board drops it; reading it again keeps the epic's counts and its siblings true.
+        // The board drops it, and the pages read past it drop it now; reading it again keeps the epic's counts true.
+        screen_pulls_board_issue_closed(s->base.pane, s->project.repo, s->issue.number);
         screen_pulls_issue_load(s, true);
     } else request_error_into(&s->write_error, req);   // closing twice only restates the reason, so trying again is safe
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);

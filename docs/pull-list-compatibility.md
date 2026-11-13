@@ -37,7 +37,9 @@ no longer allowed are ignored.
 An issue absent from `issuesTruncated: true` or an `issuesError` list remains
 accessible. Its own detail read establishes its state when available; on older
 servers without that route, the supplied row stays visible without claiming it
-has disappeared. Read failures leave successful detail intact.
+has disappeared. Read failures leave successful detail intact. On a server with
+`GET /issues`, Load more reads the issues past a cut board a page at a time
+(`core/issue_pages.c`); a refresh drops them.
 
 Regression tests in `tests/app_pulls_tests.c` drive screen refresh, timer,
 visibility, activation, reopen and request completion paths with a stub transport.
