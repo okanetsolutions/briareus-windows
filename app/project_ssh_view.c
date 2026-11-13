@@ -131,7 +131,8 @@ void project_ssh_layout(ProjectSsh *p, Doc *doc, int w) {
         doc_space(doc, px(40));
         doc_empty_state(doc, rx, rw, 0xE7F4, "No open sessions",
                         "Click a server on the left to open an SSH session here. It connects from this PC straight to the server with your own "
-                        "OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply, and password prompts appear in the terminal.");
+                        "OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply, though a new server\xE2\x80\x99s host key is saved without "
+                        "asking, and password prompts appear in the terminal.");
     } else {
         layout_tabs(p, doc, rx, rw);
         doc_space(doc, px(8));

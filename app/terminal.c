@@ -2,6 +2,7 @@
 // prints to the UI thread through a message-only window, and a child window per session that paints the emulator's grid
 // (core/vt.c) in a monospace font and turns keys, the mouse and the clipboard into what the program reads.
 #include "terminal.h"
+#include "sftp.h"
 #include "str.h"
 #include "theme.h"
 #include "vt.h"
@@ -155,10 +156,10 @@ char *term_target_problem(const TermTarget *target) {
 }
 
 wchar_t *term_command_line(const wchar_t *client, const TermTarget *target) {
-    char *exe = wide_to_utf8(client);
-    char *line = xstrfmt("\"%s\" -p %d -l %s -- %s", exe, target->port, target->user, target->host);
+    char *exe = wide_to_utf8(client), *args = openssh_terminal_args(target->user, target->host, target->port);
+    char *line = xstrfmt("\"%s\" %s", exe, args);
     wchar_t *w = utf8_to_wide(line);
-    free(exe); free(line);
+    free(exe); free(args); free(line);
     return w;
 }
 

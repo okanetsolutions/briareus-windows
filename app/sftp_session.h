@@ -1,7 +1,8 @@
 // The SFTP sessions tab's sessions: this PC's OpenSSH sftp client run without a console, fed one command at a time
-// through a pipe, its answers read back into a tree of the server's folders. Password and host key prompts come up as
-// dialogs of the app's own (ssh asks Briareus.exe, as its SSH_ASKPASS). Sessions outlive the screens that show them, as
-// the SSH sessions do, until they are closed or the app quits.
+// through a pipe, its answers read back into a tree of the server's folders. New host keys are saved automatically;
+// password prompts, and a jump host's unknown key, come up as dialogs of the app's own (ssh asks Briareus.exe, as its
+// SSH_ASKPASS). Sessions outlive the screens that show them, as the SSH sessions do, until they are closed or the app
+// quits.
 #ifndef BRIAREUS_SFTP_SESSION_H
 #define BRIAREUS_SFTP_SESSION_H
 #include "terminal.h"

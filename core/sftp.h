@@ -1,5 +1,6 @@
 // What the SFTP sessions tab says to OpenSSH's sftp client and reads back: paths written as sftp's command line wants
-// them, the long listing `ls -la` prints, and remote path arithmetic.
+// them, the long listing `ls -la` prints, and remote path arithmetic. Also the arguments every OpenSSH program here
+// (terminal, SFTP and SQL sessions) runs with, so they share one host key policy.
 #ifndef BRIAREUS_SFTP_H
 #define BRIAREUS_SFTP_H
 #include <stdbool.h>
@@ -33,5 +34,18 @@ bool sftp_path_within(const char *path, const char *folder);
 
 /// A size as Explorer shows it: "512 bytes", "1.4 KB", "3.2 MB".
 char *sftp_format_size(long long bytes);
+
+/// The arguments after the program, for a user and host term_target_problem accepted. Every one is a plain word, so
+/// Git for Windows' (msys) and Windows' own OpenSSH split them alike. Each adds StrictHostKeyChecking=accept-new: a new
+/// server's host key is saved without asking, and a key that differs from the saved one is still refused. Given on the
+/// command line it overrides ~/.ssh/config, but a ProxyJump host runs in an ssh of its own that keeps its config's
+/// policy, so an unknown jump host still asks to be trusted. The caller frees each.
+/// Interactive ssh: "-p PORT -l USER -o StrictHostKeyChecking=accept-new -- HOST".
+char *openssh_terminal_args(const char *user, const char *host, int port);
+/// sftp, keeping idle connections alive: "-P PORT -o User=USER -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -- HOST".
+char *openssh_sftp_args(const char *user, const char *host, int port);
+/// SQL over ssh without a terminal, the remote command to follow: "-T -o ServerAliveInterval=30 -o LogLevel=ERROR " and
+/// the interactive arguments.
+char *openssh_query_args(const char *user, const char *host, int port);
 
 #endif

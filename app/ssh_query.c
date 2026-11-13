@@ -1,6 +1,7 @@
 // SQL over SSH (see ssh_query.h): one ssh.exe per query, without a console, its input the password line and the
 // statements, a worker thread reading what it prints until it ends and posting the whole answer to a message window.
 #include "ssh_query.h"
+#include "sftp.h"
 #include "sftp_session.h"
 #include "str.h"
 #include <shlobj.h>
@@ -161,11 +162,12 @@ bool ssh_query_run(const TermTarget *target, const SqlLogin *login, const char *
     bool ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size)
            && UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof inherit, NULL, NULL);
     char *exe = wide_to_utf8(client), *remote = ssh_query_remote_command(login);
+    char *args = openssh_query_args(target->user, target->host, target->port);
     Str line; str_init(&line);
-    str_appendf(&line, "\"%s\" -T -p %d -o User=%s -o ServerAliveInterval=30 -o LogLevel=ERROR -- %s ", exe, target->port, target->user, target->host);
+    str_appendf(&line, "\"%s\" %s ", exe, args);
     append_win_arg(&line, remote);
     wchar_t *cmd = utf8_to_wide(line.data);
-    free(exe); free(remote); str_free(&line);
+    free(exe); free(args); free(remote); str_free(&line);
     wchar_t *env = sftp_child_environment();
     wchar_t *dir = NULL;
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &dir))) dir = NULL;

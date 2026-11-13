@@ -1,7 +1,7 @@
 // SQL run on a server's MySQL over SSH: this PC's OpenSSH client starts the server's own `mysql` client, which reads
-// the password and then the statements from its standard input, so neither shows on a command line. Prompts for an SSH
-// password or host key come up as the SFTP sessions' do. Each query is a process of its own; its answer is handed back
-// on the UI thread.
+// the password and then the statements from its standard input, so neither shows on a command line. New host keys are
+// saved automatically; prompts for an SSH password come up as the SFTP sessions' do. Each query is a process of its
+// own; its answer is handed back on the UI thread.
 #ifndef BRIAREUS_SSH_QUERY_H
 #define BRIAREUS_SSH_QUERY_H
 #include "terminal.h"
