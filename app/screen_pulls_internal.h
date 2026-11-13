@@ -7,6 +7,7 @@
 #include "meeting.h"
 #include "markdown.h"
 #include "pull_conversation.h"
+#include "review_outcome.h"
 #include "screens.h"
 #include "str.h"
 #include "webview.h"
@@ -130,6 +131,9 @@ typedef struct {
     // The editor's reason box, a child of the pane over `reason_rc` (content coordinates) while `reason_laid`; its text
     // is the reason of finding `reason_for`, and `focus_reason` focuses it once shown.
     HWND reason; RECT reason_rc; bool reason_laid, focus_reason; int64_t reason_for;
+    // What the reviews amount to, as the last read or verdict save answered it (review_outcome_state); `outcome` is
+    // NULL while the server has sent none.
+    Json *outcome_state; ReviewOutcome *outcome;
 } PullReviews;
 
 typedef struct {
@@ -337,6 +341,9 @@ void screen_pulls_review_handling(PullScreen *s, Doc *doc, Col c, const Json *re
 void screen_pulls_review_editor(PullScreen *s, Doc *doc, Col c, const Json *review);
 void screen_pulls_review_editor_place(PullScreen *s, const RECT *content, int scroll_y);
 void screen_pulls_review_editor_command(PullScreen *s, HWND control, int code);
+void screen_pulls_review_outcome_take(PullReviews *r, const Json *answer, ReviewOutcomeSource source);
+void screen_pulls_review_outcome_clear(PullReviews *r);
+void screen_pulls_review_outcome(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_paint_delete_run(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_pulls_layout_runs(PullScreen *s, Doc *doc, Col c);
 void screen_pulls_delete_run_done(void *owner, Request *req);

@@ -34,6 +34,7 @@ int main(void) {
     app_mail_reply_tests();
     app_pull_reviews_tests();
     app_pull_review_writes_tests();
+    app_pull_review_outcome_tests();
     app_pulls_tests();
     app_projects_tests();
     app_ssh_servers_tests();

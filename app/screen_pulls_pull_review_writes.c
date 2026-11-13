@@ -39,6 +39,8 @@ static void verdict_done(void *owner, Request *req) {
     if (!req->ok) { failure(&r->edit_error, req); pane_relayout(s->base.pane); return; }
     int64_t review = (int64_t)json_num_or(json_get(req->args, "reviewId"), 0), finding = (int64_t)json_num_or(json_get(req->args, "findingId"), 0);
     if (!code_reviews_replace_finding(r->items, review, json_get(req->result, "finding"))) screen_pulls_reviews_load(s, true);
+    // A changed verdict or evidence changes the review outcome at once; the rounds stay as read.
+    screen_pulls_review_outcome_take(r, req->result, REVIEW_OUTCOME_FROM_VERDICT);
     // The editor closes once the server took it; one opened on another finding meanwhile stays.
     if (r->editing && r->editing->finding_id == finding) { code_review_edit_free(r->editing); free(r->editing); r->editing = NULL; }
     pane_relayout(s->base.pane);

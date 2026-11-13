@@ -15,6 +15,7 @@ void screen_pulls_reviews_clear(PullScreen *s) {
     request_cancel(&r->req); json_free(r->items); free(r->scope); free(r->error);
     request_cancel(&r->req_write); code_review_edit_free(r->editing); free(r->editing); free(r->save_error); free(r->edit_error);
     if (r->reason) DestroyWindow(r->reason);
+    screen_pulls_review_outcome_clear(r);
     if (r->client) api_client_release(r->client);
     memset(r, 0, sizeof *r);
 }
@@ -51,6 +52,7 @@ static void done(void *owner, Request *req) {
         if (!items) set_string(&r->error, "The server returned an invalid code review list.");
         else {
             json_free(r->items); r->items = items; set_string(&r->error, NULL); set_string(&r->save_error, NULL);
+            screen_pulls_review_outcome_take(r, req->result, REVIEW_OUTCOME_FROM_READ);
             const Json *review = code_review_find(items, r->review_id);
             // A review no longer among the latest 20 gives way to the table, which selects the newest.
             if (!review) { review = json_at(items, 0); r->review_id = code_review_id(review); screen_pulls_review_close(s); }
