@@ -66,6 +66,9 @@ void review_outcome_free(ReviewOutcome *outcome);
 // The server's `{ code, effect, message }` reasons, those without a code left out; free with review_reasons_free.
 void review_reasons_parse(const Json *list, ReviewReasons *out);
 void review_reasons_free(ReviewReasons *reasons);
+// A `SecurityReview`'s policy, result and reasons; not `present` without a result. Free with review_security_free.
+void review_security_parse(const Json *security, ReviewSecurity *out);
+void review_security_free(ReviewSecurity *security);
 
 const char *review_outcome_title(ReviewOutcomeKind kind);
 ReviewTone review_outcome_tone(ReviewOutcomeKind kind);

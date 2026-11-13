@@ -31,6 +31,8 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         break;
     case ACT_REVIEW_SUMMARY:
         s->reviews.summary_id = s->reviews.summary_id == s->reviews.review_id ? 0 : s->reviews.review_id; pane_relayout(base->pane); break;
+    case ACT_REVIEW_SECURITY:
+        s->reviews.security_id = s->reviews.security_id == s->reviews.review_id ? 0 : s->reviews.review_id; pane_relayout(base->pane); break;
     case ACT_REVIEW_ROW: screen_pulls_review_open(s, (int64_t)arg); break;
     case ACT_REVIEW_BACK: screen_pulls_review_close(s); break;
     case ACT_REVIEW_HANDLING: screen_pulls_review_set_handled(s, (int64_t)arg); break;

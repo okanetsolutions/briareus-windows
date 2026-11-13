@@ -97,7 +97,7 @@ enum {
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_SUMMARY, ACT_REVIEW_BACK,
     ACT_REVIEW_HANDLING, ACT_REVIEW_EDIT, ACT_REVIEW_VERDICT, ACT_REVIEW_EVIDENCE, ACT_REVIEW_SAVE, ACT_REVIEW_CANCEL,
-    ACT_APPROVAL_BASE, ACT_APPROVAL_LAST = ACT_APPROVAL_BASE + APPROVAL_ACTIONS - 1,   // the approvals card's (review_approvals_card.h)
+    ACT_REVIEW_SECURITY, ACT_APPROVAL_BASE, ACT_APPROVAL_LAST = ACT_APPROVAL_BASE + APPROVAL_ACTIONS - 1,   // the approvals card's (review_approvals_card.h)
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -120,8 +120,9 @@ typedef struct {
     time_t next_poll, retry_at;
     time_t (*clock)(void); // NULL uses the system clock; deadlines share this clock.
     // The selected table row; while `open`, the review whose findings fill the tab, and the finding selected in it.
-    // `list_scroll` is the table's page offset when the review opened, and `summary_id` the review whose summary is unfolded.
-    int64_t review_id, finding_id, summary_id;
+    // `list_scroll` is the table's page offset when the review opened, and `summary_id` and `security_id` the reviews whose
+    // summary and security pass are unfolded.
+    int64_t review_id, finding_id, summary_id, security_id;
     int list_scroll;
     bool open, reveal_row, reset_inspector;
     // One write at a time: Mark handled or Reopen on `saving_review`, or the verdict in `editing`, the editor open on a
@@ -333,6 +334,7 @@ void screen_pulls_review_findings(PullScreen *s, Doc *doc, Col c, const Json *re
 void screen_pulls_reviews_table(PullScreen *s, Doc *doc, Col c, const Json *review, bool header);
 void screen_pulls_reviews_details(PullScreen *s, Doc *doc, Col c, const Json *review);
 void screen_pulls_review_about(Doc *doc, Col c, const Json *review);
+void screen_pulls_review_security(PullScreen *s, Doc *doc, Col c, const Json *review);
 bool screen_pulls_reviews_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
 bool screen_pulls_reviews_current(PullScreen *s, const Request *req);
 CodeReviewHandlingAction screen_pulls_review_handling_action(const Json *review);
