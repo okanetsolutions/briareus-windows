@@ -57,7 +57,7 @@ void screen_projects_sessions_footer_click(Screen *base, POINT pt) {
     if (PtInRect(&s->footer.settings_rc, pt)) { screen_projects_sidebar_common_action(base->pane, ACT_SETTINGS); return; }
     if (PtInRect(&s->footer.signout_rc, pt)) { screen_projects_sidebar_common_action(base->pane, ACT_SIGN_OUT); return; }
     if (!s->select_mode) return;
-    if (PtInRect(&g_bulk.all, pt)) { screen_projects_clear_picks(s); for (size_t i = 0; i < s->count; i++) screen_projects_toggle_pick(s, session_id(&s->sessions[i])); pane_footer_changed(base->pane); }
+    if (PtInRect(&g_bulk.all, pt)) { screen_projects_select_all(s); pane_footer_changed(base->pane); }
     else if (PtInRect(&g_bulk.close_, pt)) screen_projects_bulk_start(s, false, false);
     else if (PtInRect(&g_bulk.delete_, pt)) screen_projects_bulk_start(s, true, false);
     else if (PtInRect(&g_bulk.delete_all, pt)) screen_projects_bulk_start(s, true, true);

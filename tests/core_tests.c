@@ -842,6 +842,7 @@ int main(void) {
     core_stats_tests();
     core_server_stats_tests();
     core_session_overview_tests();
+    core_session_tree_tests();
     struct { const char *name; void (*fn)(void); } tests[] = {
         { "normalizes origin and API path", test_normalizes_origin_and_api_path },
         { "HTTPS scheme and host preserve accepted characters", test_https_scheme_and_host_characters },
