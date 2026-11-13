@@ -9,6 +9,8 @@ bool ci_current(CIScreen *s) {
     Json *device = device_json(&g_store.device);
     bool same = json_equal(device, s->device); json_free(device); return same;
 }
+bool ci_runs_failed(const CIScreen *s) { return s->errors[1] != NULL; }
+int ci_retry_page(const CIScreen *s) { return ci_retry_offset(ci_runs_failed(s), s->runs != NULL, s->offset); }
 static void clear(CIScreen *s) {
     request_cancel(&s->reads[0]); request_cancel(&s->reads[1]);
     json_free(s->stats); s->stats = NULL; json_free(s->runs); s->runs = NULL;
@@ -47,7 +49,8 @@ static void read_channel(CIScreen *s, int channel, int offset) {
     if (s->reads[channel] || s->retry[channel] > ci_now(s)) return;
     if (channel && !store_supports("ci_runs")) return;
     Json *args = channel ? ci_runs_query(s->window, offset) : json_clone(s->window);
-    if (channel) s->requested_offset = offset;
+    // A read of runs under way shows progress rather than the failure it retries.
+    if (channel) { s->requested_offset = offset; set_string(&s->errors[1], NULL); }
     store_call(channel ? "ci_runs" : "ci_stats", args, 0, s, done, channel, &s->reads[channel]);
 }
 void ci_load(CIScreen *s, bool reset) {
@@ -101,8 +104,11 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
     (void)pt; CIScreen *s = (CIScreen *)base;
     if (!ci_current(s)) return;
     if (id == CI_REFRESH) { refresh(base); return; }
-    if (id == CI_MORE) {
-        if (s->shown && g_store.active && s->offset >= 0 && !s->reads[0]) read_channel(s, 1, s->offset);
+    if (id == CI_MORE || id == CI_RETRY) {
+        // Retry reads only the failed page of runs, never the figures, and within the existing deadline.
+        int offset = ci_retry_page(s);
+        if (id == CI_MORE) offset = ci_can_load_more(ci_runs_failed(s), s->offset) ? s->offset : -1;
+        if (offset >= 0 && s->shown && g_store.active && s->window && !s->reads[0]) read_channel(s, 1, offset);
         return;
     }
     if (id == CI_OPEN) {
@@ -112,6 +118,11 @@ static void action(Screen *base, int id, intptr_t arg, POINT pt) {
     }
     if (id == CI_DAYS) { if (arg != 7 && arg != 30 && arg != 90) return; s->days = (int)arg; }
     else if (id == CI_KIND) s->statuses = arg != 0;
+    else if (id == CI_CLEAR) {
+        if (!ci_filtered(s->days, s->statuses, s->repo, s->branch)) return;
+        s->days = ci_cleared_days(s->days); s->statuses = false;
+        free(s->repo); s->repo = NULL; free(s->branch); s->branch = NULL;
+    }
     else if (id == CI_REPO || id == CI_BRANCH) {
         char **slot = id == CI_REPO ? &s->repo : &s->branch;
         char *text = dialog_text(app_dialog_owner(), "CI/CD filter", id == CI_REPO ? "Repository owner/name (empty for all accessible projects)" : "Exact branch (empty for all)", "Apply", *slot ? *slot : "");
@@ -134,7 +145,7 @@ static const ScreenVTable VT = {.destroy = destroy, .layout = ci_layout, .header
     .visible = visible, .timer = timer, .refresh = refresh, .activated = activated, .detachable = true, .effective_visibility = true};
 Screen *ci_screen_new(void) {
     CIScreen *s = xcalloc(1, sizeof *s); s->base.vt = &VT;
-    s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device); s->days = 30; s->offset = -1;
+    s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device); s->days = CI_DEFAULT_DAYS; s->offset = -1;
     char *scope = json_serialize(s->device, true);
     s->base.id = xstrfmt("ci-history:%p:%s", (void *)s->client, scope); free(scope);
     return &s->base;

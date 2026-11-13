@@ -33,6 +33,11 @@ static void groups(Doc *doc, const Json *rows, const char *key, const char *titl
     }
 }
 static void figures(CIScreen *s, Doc *doc, int w) {
+    if (ci_stats_empty(s->stats)) {
+        doc_empty_state(doc, 0, w, 0xE9D9, "No checks observed in this window.", s->repo && *s->repo ? "Try a longer window or All projects." : "Try a longer window.");
+        if (ci_filtered(s->days, s->statuses, s->repo, s->branch)) doc_button(doc, 0, 0, "Clear filters", BUTTON_BORDERED, CI_CLEAR, 0, true);
+        return;
+    }
     const Json *totals = json_get(s->stats, "totals");
     const char *keys[] = {"total", "successRate", "failed", "avgDurationMs", "pending"};
     const char *labels[] = {"Total", "Success rate", "Failed", "Average duration", "Pending"};
@@ -43,6 +48,14 @@ static void figures(CIScreen *s, Doc *doc, int w) {
     groups(doc, json_get(s->stats, "repositories"), "repo", "Repositories", w);
     groups(doc, json_get(s->stats, "checks"), "name", "Checks", w);
 }
+static void channel_state(CIScreen *s, Doc *doc, int w, int channel) {
+    if (s->errors[channel]) doc_notice(doc, 0, w, s->errors[channel]);
+    if (s->retry[channel] > ci_now(s)) {
+        char *at = stats_time((StatNumber){s->retry[channel] * 1000, true});
+        char *text = xstrfmt("%s reads paused until %s", channel ? "Run" : "Summary", at);
+        doc_text(doc, 0, w, text, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(at); free(text);
+    }
+}
 void ci_layout(Screen *base, Doc *doc) {
     CIScreen *s = (CIScreen *)base; int w = doc->width;
     s->action_first = s->action_next;
@@ -50,18 +63,14 @@ void ci_layout(Screen *base, Doc *doc) {
     if (!ci_current(s)) { doc_notice(doc, 0, w, "Reopen CI/CD on a connection with CI history access."); return; }
     filters(s, doc, w);
     doc_text(doc, 0, w, "Observed GitHub checks only, not a full backfill. Refresh starts a new window; background reads retain this window and its run pages. Durations are execution time, not billed minutes.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-    for (int i = 0; i < 2; i++) {
-        if (s->errors[i]) doc_notice(doc, 0, w, s->errors[i]);
-        if (s->retry[i] > ci_now(s)) {
-            char *at = stats_time((StatNumber){s->retry[i] * 1000, true});
-            char *text = xstrfmt("%s reads paused until %s", i ? "Run" : "Summary", at);
-            doc_text(doc, 0, w, text, FONT_CAPTION, theme.muted, DT_WORDBREAK); free(at); free(text);
-        }
-    }
+    channel_state(s, doc, w, 0);
     if (s->reads[0]) doc_loading(doc, 0, w, "Loading CI figures…");
     if (s->stats) figures(s, doc, w);
     doc_section(doc, 0, w, "Recent runs");
     if (!store_supports("ci_runs")) { doc_notice(doc, 0, w, "This connection does not offer run history."); return; }
+    channel_state(s, doc, w, 1);
+    bool idle = !s->reads[0] && !s->reads[1] && s->retry[1] <= ci_now(s);
+    if (ci_retry_page(s) >= 0) doc_button(doc, 0, 0, "Retry", BUTTON_BORDERED, CI_RETRY, 0, idle);
     if (s->reads[1]) doc_loading(doc, 0, w, "Loading runs…");
     if (s->runs && !json_count(s->runs)) doc_text(doc, 0, w, "No runs observed in this window.", FONT_BODY, theme.muted, DT_WORDBREAK);
     s->action_next += (intptr_t)json_count(s->runs);
@@ -75,5 +84,5 @@ void ci_layout(Screen *base, Doc *doc) {
         doc_box_end(doc, box, px(10)); doc_space(doc, px(6)); free(title); free(meta);
     }
     if (s->truncated || s->capped) doc_notice(doc, 0, w, "More observations exist. Narrow the window, project or branch to see them.");
-    if (s->offset >= 0) doc_button(doc, 0, 0, "Load more", BUTTON_BORDERED, CI_MORE, 0, !s->reads[0] && !s->reads[1] && s->retry[1] <= ci_now(s));
+    if (ci_can_load_more(ci_runs_failed(s), s->offset)) doc_button(doc, 0, 0, "Load more", BUTTON_BORDERED, CI_MORE, 0, idle);
 }
