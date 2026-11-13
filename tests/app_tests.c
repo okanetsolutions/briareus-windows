@@ -10,6 +10,7 @@ int main(void) {
     app_ci_tests();
     app_server_resources_tests();
     app_status_tests();
+    app_status_approvals_tests();
     app_mail_wake_tests();
     app_webhook_tests();
     app_leave_tests();

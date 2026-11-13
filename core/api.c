@@ -425,6 +425,8 @@ static const ApiRoute ROUTES[] = {
     { "provider_login_start", "POST", "settings/providers/{id}/login/start" },
     { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
     // The SSH servers agents may run commands on, each held to one project; also for an admin token.
+    // What waits on you: questions, failures, SSH and Slack approvals and pull requests waiting on a person (attention.c).
+    { "attention", "GET", "attention" },
     { "ssh_requests", "GET", "ssh/requests" },
     { "ssh_decision", "POST", "ssh/requests/{id}/decision" },
     { "settings_ssh_servers", "GET", "settings/ssh/servers" },

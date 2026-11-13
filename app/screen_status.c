@@ -93,6 +93,7 @@ static void projects_done(void *owner, Request *req) {
     }
 }
 void status_load(StatusScreen *s) {
+    status_approvals_load(s, false);
     if (!status_current(s) || s->projects_read || s->sessions_read) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->projects_read);
 }
@@ -113,6 +114,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         if (status_current(s) && store_supports("server_stats")) app_push_from(base, server_resources_screen_new());
         return;
     }
+    if (status_current(s) && status_approvals_action(s, action, arg)) return;
     if (!status_current(s) || arg < s->action_first || arg >= s->action_next) return;
     StatusAction a = s->actions[arg - s->action_first];
     if (a.card >= s->card_count) return;
@@ -142,6 +144,7 @@ static void visible(Screen *base, bool shown) {
     if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); }
     else {
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s);
+        status_approvals_cancel(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
     }
@@ -149,7 +152,8 @@ static void visible(Screen *base, bool shown) {
 static void activated(Screen *base, bool active) { if (active) visible(base, true); }
 static void refresh(Screen *base) {
     StatusScreen *s = (StatusScreen *)base;
-    request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s); status_load(s);
+    request_cancel(&s->projects_read); request_cancel(&s->sessions_read); status_cancel_questions(s);
+    request_cancel(&s->attention_read); status_approvals_load(s, true); status_load(s);
 }
 static void destroy(Screen *base) {
     StatusScreen *s = (StatusScreen *)base; visible(base, false);
@@ -160,6 +164,7 @@ static void destroy(Screen *base) {
         session_free(&c->session); json_free(c->identity); json_free(c->answered_question); json_free(c->unsaved_events); transcript_free(&c->transcript); free(c->draft); free(c->error); free(c->read_error); free(c);
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
+    status_approvals_free(s);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);
     api_client_release(s->client); screen_release(base);
 }

@@ -89,6 +89,8 @@ void app_pull_reviews_tests(void);
 void app_pull_review_writes_tests(void);
 void app_pull_review_outcome_tests(void);
 void app_pull_review_approvals_tests(void);
+void app_status_approvals_tests(void);
 void core_review_outcome_tests(void);
 void core_review_approvals_tests(void);
+void core_attention_tests(void);
 #endif

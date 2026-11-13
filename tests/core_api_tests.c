@@ -325,7 +325,7 @@ static const Expected ROUTE_TABLE[] = {
     { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
     { "settings_ssh_servers", "GET", "settings/ssh/servers" }, { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" }, { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
-    { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
+    { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" }, { "attention", "GET", "attention" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "mail_messages", "GET", "mail/messages" },

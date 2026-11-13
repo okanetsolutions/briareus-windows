@@ -87,6 +87,7 @@ void status_layout(Screen *base, Doc *doc) {
     char *ready = complete ? xstrfmt("Need you  %u     Working  %u     Ready  %u", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count, (unsigned)s->overview.ready) : xstrdup("Need you  —     Working  —     Ready  —");
     doc_text(doc, origin, w, ready, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK); free(ready);
     doc_space(doc, px(20));
+    status_approvals_layout(s, doc, origin, w);
     bool columns = w >= px(1040);
     int gap = px(32), working_w = columns ? (w - gap) * 36 / 100 : w;
     int waiting_w = columns ? w - gap - working_w : w;
@@ -116,6 +117,7 @@ void status_layout(Screen *base, Doc *doc) {
     if (doc->y < waiting_bottom) doc->y = waiting_bottom;
 }
 void status_controls_hide(StatusScreen *s) {
+    status_approvals_place(s, NULL, 0);
     for (size_t i = 0; i < s->card_count; i++) {
         if (s->cards[i]->label) ShowWindow(s->cards[i]->label, SW_HIDE);
         if (s->cards[i]->edit) ShowWindow(s->cards[i]->edit, SW_HIDE);
@@ -182,9 +184,11 @@ void status_place(Screen *base, const RECT *content, int scroll_y) {
         SetWindowRgn(c->edit, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
         ShowWindow(c->edit, SW_SHOWNA);
     }
+    status_approvals_place(s, content, scroll_y);
 }
 void status_command(Screen *base, int id, int code, HWND control) {
     (void)id; StatusScreen *s = (StatusScreen *)base;
+    status_approvals_command(s, control, code);
     if (code != EN_CHANGE || !status_current(s)) return;
     for (size_t i = 0; i < s->card_count; i++) {
         StatusCard *c = s->cards[i]; if (c->edit != control) continue;
