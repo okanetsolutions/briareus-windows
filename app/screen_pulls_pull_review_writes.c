@@ -51,7 +51,7 @@ static void verdict_done(void *owner, Request *req) {
 static void send_write(PullScreen *s, const char *call, Json *args, RequestDone done) {
     PullReviews *r = &s->reviews;
     request_cancel(&r->req);
-    set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL);
+    set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL); set_string(&r->approvals.error, NULL);
     store_call(call, args, 0, s, done, 0, &r->req_write);
     pane_relayout(s->base.pane);
 }

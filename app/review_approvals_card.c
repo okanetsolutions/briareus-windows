@@ -140,12 +140,13 @@ void approval_form_layout(ApprovalForm *f, Doc *doc, int x, int w, const ReviewA
 
 static void close_form(ApprovalForm *f) {
     bool focused = f->box && GetFocus() == f->box;
-    f->open = 0; set_string(&f->note, NULL);
+    // The box starts empty for whichever form opens next, so what it shows is what is sent.
+    f->open = 0; f->box_for = 0; set_string(&f->note, NULL);
     if (focused && f->screen && f->screen->pane) SetFocus(pane_hwnd(f->screen->pane));
 }
 static void open_form(ApprovalForm *f, int64_t which) {
     if (busy(f)) return;
-    f->open = which; set_string(&f->note, NULL); set_string(&f->error, NULL);
+    f->open = which; f->box_for = 0; set_string(&f->note, NULL); set_string(&f->error, NULL);
     f->focus_box = true;
 }
 static void send_write(ApprovalForm *f) {

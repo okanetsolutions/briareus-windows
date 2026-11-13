@@ -108,7 +108,12 @@ static void withdrawing_names_the_approval_and_cancel_sends_nothing(void) {
     Doc d; doc_init(&d);
     act(s, APPROVAL_ACT_WITHDRAW, 1); draw(s, &d); CHECK(s->reviews.approvals.open == 1);
     act(s, APPROVAL_ACT_CANCEL, 0); CHECK(s->reviews.approvals.open == 0); CHECK_INT(f.writes, 0);
-    act(s, APPROVAL_ACT_WITHDRAW, 1); type_note(&f, s, &d, L"pushed again");
+    // A note typed and cancelled is gone from the box when the form opens again, and is not sent.
+    act(s, APPROVAL_ACT_WITHDRAW, 1); type_note(&f, s, &d, L"first thought"); act(s, APPROVAL_ACT_CANCEL, 0);
+    act(s, APPROVAL_ACT_WITHDRAW, 1); draw(s, &d);
+    RECT content = pane_content_rect(f.pane); s->base.vt->place(&s->base, &content, 0);
+    CHECK(s->reviews.approvals.box != NULL); CHECK_INT(GetWindowTextLengthW(s->reviews.approvals.box), 0); CHECK(s->reviews.approvals.note == NULL);
+    type_note(&f, s, &d, L"pushed again");
     // An answer carrying the requirement alone puts it in the kept outcome.
     f.write_response = "{\"approval\":{\"id\":1,\"counted\":false}," SATISFIED "}";
     act(s, APPROVAL_ACT_SEND, 0); screen_fixture_pump(&f, 1);

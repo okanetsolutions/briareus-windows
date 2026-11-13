@@ -21,8 +21,11 @@ static const ReviewApprovals *approvals_shown(void *owner) {
     return s->reviews.outcome ? &s->reviews.outcome->approvals : NULL;
 }
 static bool other_write(void *owner) { return ((PullScreen *)owner)->reviews.req_write != NULL; }
-// A read under way may predate the approval and would put back what it changes.
-static void before_approval(void *owner) { request_cancel(&((PullScreen *)owner)->reviews.req); }
+// A read under way may predate the approval and would put back what it changes; another write's refusal is now old.
+static void before_approval(void *owner) {
+    PullReviews *r = &((PullScreen *)owner)->reviews;
+    request_cancel(&r->req); set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL);
+}
 static void approval_done(void *owner, Request *req) {
     PullScreen *s = owner; PullReviews *r = &s->reviews;
     if (!screen_pulls_reviews_current(s, req)) { screen_pulls_reviews_sync(s); pane_relayout(s->base.pane); return; }
