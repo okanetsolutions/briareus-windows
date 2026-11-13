@@ -29,6 +29,7 @@ static void pulls_destroy(Screen *base) {
     json_free(s->board); json_free(s->catalog); pull_summaries_free(s->pulls, s->pull_count); issue_summaries_free(s->issues, s->issue_count);
     request_cancel(&s->req_runs); sessions_free(s->runs, s->run_count);
     request_cancel(&s->req_status); json_free(s->issue_status); json_free(s->status_read);
+    screen_pulls_issue_pages_reset(s);
     project_ssh_free(s->ssh);
     project_sftp_free(s->sftp);
     project_run_free(s->run);
@@ -89,7 +90,13 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     }
     case ACT_FOLD_ISSUE:
         issue_folds_toggle(&s->issue_folds, (int)arg); pane_relayout(base->pane); break;
-    case ACT_OPEN_ISSUE: if ((size_t)arg < s->issue_count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &s->issues[arg])); break;
+    case ACT_OPEN_ISSUE: {
+        size_t count; IssueSummary *listed = screen_pulls_listed_issues(s, &count);
+        if ((size_t)arg < count) app_push_from(&s->base, issue_detail_screen_new(&s->project, &listed[arg]));
+        free(listed);
+        break;
+    }
+    case ACT_MORE_ISSUES: screen_pulls_issue_pages_load(s); break;
     case ACT_PULL_ACTION: {
         size_t index = (size_t)arg / ACTION_STRIDE, k = (size_t)arg % ACTION_STRIDE;
         if (index >= s->pull_count || s->busy || s->uncertain || s->dialog_open) break;
@@ -175,6 +182,7 @@ static void pulls_refresh(Screen *base) {
     // Refreshing is how an uncertain start is checked: its conversation is listed in the project if it began.
     s->uncertain = false; set_string(&s->write_error, NULL);
     request_cancel(&s->req_status); json_free(s->status_read); s->status_read = json_object();
+    screen_pulls_issue_pages_reset(s);
     screen_pulls_pulls_load(s, true);
 }
 

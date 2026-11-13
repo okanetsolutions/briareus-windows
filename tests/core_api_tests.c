@@ -293,7 +293,7 @@ static const Expected ROUTE_TABLE[] = {
     { "update_pull", "PATCH", "pulls/{pr}" }, { "update_pull_branch", "POST", "pulls/{pr}/update-branch" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" },
     { "issue", "GET", "issues/{issue}" }, { "issue_timeline", "GET", "issues/{issue}/timeline" }, { "close_issue", "POST", "issues/{issue}/close" },
-    { "update_issue", "PATCH", "issues/{issue}" },
+    { "update_issue", "PATCH", "issues/{issue}" }, { "issues", "GET", "issues" },
     { "project_board", "GET", "project-board" }, { "project_board_move", "POST", "project-board/move" },
     { "repo_tree", "GET", "repo/tree" }, { "repo_file", "GET", "repo/file" }, { "commit", "GET", "commits/{sha}" },
     { "events", "GET", "events" },

@@ -3,6 +3,7 @@
 #include "credentials.h"
 #include "code_reviews.h"
 #include "dialogs.h"
+#include "issue_pages.h"
 #include "meeting.h"
 #include "markdown.h"
 #include "pull_conversation.h"
@@ -16,7 +17,7 @@
 
 // MARK: - Board
 
-enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE };
+enum { ACT_FILTER = 1000, ACT_TAB, ACT_CLEAR, ACT_OPEN_PULL, ACT_OPEN_ISSUE, ACT_PULL_ACTION, ACT_REFRESH, ACT_FILTER_AUTHOR, ACT_FILTER_REVIEWER, ACT_FILTER_ASSIGNEE, ACT_FILTER_LABEL, ACT_RUNS, ACT_MERGE_PULL, ACT_MEET, ACT_REVIEW_LOGIN, ACT_FILTER_STACK, ACT_FILTER_CHECKS, ACT_FOLD_ISSUE, ACT_MORE_ISSUES };
 
 enum { ACT_SSH_BASE = 1100 };
 
@@ -52,6 +53,8 @@ typedef struct {
     PullSummary *pulls; size_t pull_count;
     IssueSummary *issues; size_t issue_count;
     IssueFolds issue_folds; // Session-only, retained while this repository board lives.
+    // The issues past the 100 a board lists, read a page at a time on Load more; a refresh drops them.
+    IssuePages issue_pages; Request *req_issue_pages;
     int tab;   // TAB_PULLS, TAB_ISSUES, TAB_BOARD, TAB_REVIEW, TAB_FILES, TAB_RUN, TAB_SSH, TAB_SFTP, TAB_DB, TAB_FORGE or TAB_MEETING
     ProjectSsh *ssh;   // the SSH sessions tab
     ProjectSftp *sftp; // the SFTP sessions tab
@@ -232,6 +235,12 @@ BoardFilter *screen_pulls_current_filter(PullsScreen *s);
 bool screen_pulls_stack_filter_passes(const PullsScreen *s, size_t index);
 bool screen_pulls_row_filter_passes(PullsScreen *s, const BoardRow *row, size_t index);
 BoardRow *screen_pulls_rows_of(PullsScreen *s, size_t *count);
+/// The Issues tab's rows (issue_pages_listed): free the array only.
+IssueSummary *screen_pulls_listed_issues(PullsScreen *s, size_t *count);
+void screen_pulls_issues_layout(PullsScreen *s, Doc *doc, int w, const BoardRow *rows, size_t shown);
+void screen_pulls_issue_pages_load(PullsScreen *s);
+void screen_pulls_issue_pages_reset(PullsScreen *s);
+void screen_pulls_board_issue_closed(Pane *pane, const char *repo, int number);
 void screen_pulls_filters_save(PullsScreen *s);
 bool screen_pulls_filters_restore(PullsScreen *s);
 char *screen_pulls_number_key(int number);

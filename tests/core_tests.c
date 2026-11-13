@@ -908,6 +908,7 @@ int main(void) {
     provider_settings_tests();
     session_working_tests();
     pull_conversation_tests();
+    core_issue_pages_tests();
     core_ssh_servers_tests();
     core_ssh_settings_tests();
     core_ssh_approval_tests();

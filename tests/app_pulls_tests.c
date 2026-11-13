@@ -9,14 +9,15 @@
 #include <commctrl.h>
 
 static Pane *pane;
-static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies, files_calls, comments_calls;
+static volatile LONG list_calls, session_calls, detail_calls, pull_calls, fresh_calls, replies, files_calls, comments_calls, page_calls;
 static int list_status;
-static const char *list_body, *retry_header;
-static bool network_fail, reject_fresh;
+static const char *list_body, *retry_header, *page_body;
+static char page_url[512];
+static bool network_fail, reject_fresh, page_fail;
 static HANDLE hold, entered;
 static Route routes[] = {
     { "GET", "/pulls", "read" }, { "GET", "/sessions", "read" }, { "GET", "/issues/{number}", "read" },
-    { "GET", "/pulls/{pr}", "read" }
+    { "GET", "/pulls/{pr}", "read" }, { "GET", "/issues", "read" }
 };
 static bool transport(void *ctx, const char *method, const char *url, const char *const *headers,
                       const void *body, size_t body_len, int timeout_ms, int *status, char **content_type,
@@ -29,6 +30,10 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         if (retry_header) *retry_after = xstrdup(retry_header);
         if (hold) { SetEvent(entered); WaitForSingleObject(hold, 5000); }
         if (network_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
+    } else if (strstr(url, "/issues?")) {
+        InterlockedIncrement(&page_calls); *status = 200; payload = page_body;
+        snprintf(page_url, sizeof page_url, "%s", url);
+        if (page_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
     } else if (strstr(url, "/files?")) {
         InterlockedIncrement(&files_calls); *status = 200;
         payload = "{\"pr\":{\"headSha\":\"abc\"},\"files\":[]}";
@@ -71,8 +76,8 @@ static void next_account(void) {
 static void reset(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache);
     list_calls = session_calls = detail_calls = pull_calls = fresh_calls = replies = 0;
-    files_calls = comments_calls = 0;
-    list_status = 200; retry_header = NULL; network_fail = reject_fresh = false;
+    files_calls = comments_calls = page_calls = 0;
+    list_status = 200; retry_header = NULL; network_fail = reject_fresh = page_fail = false; page_body = NULL; page_url[0] = 0;
     list_body = "{\"pulls\":[{\"number\":1,\"title\":\"Keep this row\"}],\"issues\":[],\"syncedAt\":\"2026-10-07T12:00:00.000Z\"}";
     g_store.routes = routes; g_store.route_count = 2; next_account();
 }
@@ -241,21 +246,23 @@ static void test_failing_checks_filter_persists_per_repo_and_combines_with_stack
 }
 static void click_issue_control(Screen *s, int action, int number) {
     Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    size_t listed_count; IssueSummary *listed = screen_pulls_listed_issues((PullsScreen *)s, &listed_count);
     bool clicked = false;
     for (size_t i = 0; i < d.count; i++) {
         Item *it = &d.items[i];
         if (it->action != action || (action == ACT_FOLD_ISSUE && it->arg != number)) continue;
-        if (action == ACT_OPEN_ISSUE && ((PullsScreen *)s)->issues[it->arg].number != number) continue;
+        if (action == ACT_OPEN_ISSUE && ((size_t)it->arg >= listed_count || listed[it->arg].number != number)) continue;
         // Hit-test the actual control, including the overlapping issue row.
         int hit = doc_hit(&d, (it->rc.left + it->rc.right) / 2, (it->rc.top + it->rc.bottom) / 2);
         CHECK(hit >= 0);
         if (hit >= 0) {
             CHECK_INT(d.items[hit].action, action);
-            if (action == ACT_OPEN_ISSUE) CHECK_INT(((PullsScreen *)s)->issues[d.items[hit].arg].number, number);
+            if (action == ACT_OPEN_ISSUE) CHECK_INT(listed[d.items[hit].arg].number, number);
             s->vt->action(s, d.items[hit].action, d.items[hit].arg, (POINT){0});
         }
         clicked = true; break;
     }
+    free(listed);
     CHECK(clicked); doc_free(&d);
 }
 static void test_issue_folding_controls_and_board_lifetime(void) {
@@ -344,6 +351,87 @@ static void test_truncated_issue_is_not_gone_and_reads_detail(void) {
     pane_set_root(pane, NULL); cache_remove_all(g_store.cache); g_store.route_count = 2;
     s = issue_detail_screen_new(&p, &issue); pane_set_root(pane, s); s->vt->refresh(s); drain(2);
     CHECK(!layout_contains(s, "This issue is no longer on the board"));
+    pane_set_root(pane, NULL);
+}
+static size_t layout_count(Screen *s, const char *text) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 800); s->vt->layout(s, &d);
+    size_t found = 0;
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].text && strstr(d.items[i].text, text)) found++;
+    doc_free(&d); return found;
+}
+static const char CUT_BOARD[] = "{\"pulls\":[],\"issuesTruncated\":true,\"issues\":[{\"number\":5,\"title\":\"Board five\",\"labels\":[\"bug\"]},"
+    "{\"number\":4,\"title\":\"Board four\"}]}";
+static const char CUT_NOTE[] = "This repository has more open issues";
+static void test_issue_pages_load_past_a_cut_board(void) {
+    Pane *original = pane;
+    Project fixture = project();
+    pane = detached_open(pulls_screen_new(&fixture), NULL, false);
+    CHECK(pane != NULL);
+    reset(); g_store.route_count = 5; list_body = CUT_BOARD;
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(s, "Board five")); CHECK(layout_contains(s, "Load more")); CHECK(!layout_contains(s, CUT_NOTE));
+    // The first page reaches back over the board's rows; one it lists too is shown once.
+    page_body = "{\"issues\":[{\"number\":4,\"title\":\"Board four\"},{\"number\":3,\"title\":\"Paged three\",\"labels\":[\"bug\"]},"
+        "{\"number\":2,\"title\":\"Paged two\"}],\"nextOffset\":40}";
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0});
+    CHECK(layout_contains(s, "Loading\xE2\x80\xA6"));
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0});   // one page at a time
+    drain(1); CHECK_INT(page_calls, 1);
+    CHECK(strstr(page_url, "offset=0") != NULL); CHECK(strstr(page_url, "limit=50") != NULL); CHECK(strstr(page_url, "repo=o") != NULL);
+    CHECK(layout_contains(s, "Paged three")); CHECK(layout_contains(s, "Paged two")); CHECK_INT(layout_count(s, "Board four"), 1);
+    // The board's filters keep and count the loaded rows too.
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "bug");
+    CHECK(layout_contains(s, "Showing 2 of 4")); CHECK(layout_contains(s, "Paged three")); CHECK(!layout_contains(s, "Paged two"));
+    board_filter_set(&((PullsScreen *)s)->issue_filter, FILTER_LABEL, "");
+    // A failed page shows why, and Retry reads the same page again.
+    page_fail = true;
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); drain(1);
+    CHECK(strstr(page_url, "offset=30") != NULL);
+    CHECK(layout_contains(s, "Connection failed")); CHECK(layout_contains(s, "Retry")); CHECK(layout_contains(s, "Paged two"));
+    page_fail = false; page_url[0] = 0;
+    page_body = "{\"issues\":[{\"number\":1,\"title\":\"Paged one\"}],\"nextOffset\":null}";
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); drain(1);
+    CHECK_INT(page_calls, 3); CHECK(strstr(page_url, "offset=30") != NULL);
+    CHECK(!layout_contains(s, "Connection failed")); CHECK(layout_contains(s, "Paged one"));
+    // The last page read issues the board lacks: nothing is cut and nothing more is offered.
+    CHECK(!layout_contains(s, "Load more")); CHECK(!layout_contains(s, "Retry")); CHECK(!layout_contains(s, CUT_NOTE));
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); CHECK_INT(page_calls, 3);
+    // An issue from a loaded page opens as itself, and one closed in the app leaves its board's pages.
+    click_issue_control(s, ACT_OPEN_ISSUE, 1); CHECK_INT(pane_depth(pane), 2);
+    CHECK_STR(pane_top(pane)->id, "issue:o/r#1");
+    screen_pulls_board_issue_closed(pane, "o/other", 3); CHECK(layout_contains(s, "Paged three"));
+    screen_pulls_board_issue_closed(pane, "o/r", 3); CHECK(!layout_contains(s, "Paged three"));
+    pane_pop(pane);
+    // A refresh drops the pages, and Load more starts again after the board.
+    s->vt->refresh(s); drain(2);
+    CHECK(!layout_contains(s, "Paged one")); CHECK(layout_contains(s, "Load more")); CHECK(layout_contains(s, "Board five"));
+    DestroyWindow(GetAncestor(pane_hwnd(pane), GA_ROOT)); pane = original;
+}
+static void test_issue_pages_need_a_cut_board_and_the_route(void) {
+    reset(); list_body = CUT_BOARD;
+    // A server without `issues` keeps the note that the list is cut.
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(s, CUT_NOTE)); CHECK(!layout_contains(s, "Load more"));
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); CHECK_INT(page_calls, 0);
+    // A whole board lists every open issue itself.
+    g_store.route_count = 5; list_body = "{\"pulls\":[],\"issues\":[{\"number\":5,\"title\":\"Board five\"}],\"issuesTruncated\":false}";
+    s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(layout_contains(s, "Board five")); CHECK(!layout_contains(s, CUT_NOTE)); CHECK(!layout_contains(s, "Load more"));
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); CHECK_INT(page_calls, 0);
+    // A page that ends without a row the board lacks leaves the list saying it is cut.
+    list_body = CUT_BOARD; page_body = "{\"issues\":[{\"number\":4,\"title\":\"Board four\"}],\"nextOffset\":null}";
+    s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); drain(1); CHECK_INT(page_calls, 1);
+    CHECK(layout_contains(s, CUT_NOTE)); CHECK(!layout_contains(s, "Load more")); CHECK_INT(layout_count(s, "Board four"), 1);
+    // An answer that is not a page is an error Retry reads again.
+    page_body = "{\"issues\":{}}";
+    s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0}); drain(1); CHECK_INT(page_calls, 2);
+    CHECK(layout_contains(s, "Retry"));
     pane_set_root(pane, NULL);
 }
 static void test_legacy_freshness_and_catalog_account_changes(void) {
@@ -728,6 +816,8 @@ void app_pulls_tests(void) {
     test_run("issue folding controls and board lifetime", test_issue_folding_controls_and_board_lifetime);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
+    test_run("pulls issue pages load, filter, retry, close and reset past a cut board", test_issue_pages_load_past_a_cut_board);
+    test_run("pulls issue pages need a cut board and the route", test_issue_pages_need_a_cut_board_and_the_route);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);
     test_run("pulls older fresh argument and network recovery", test_old_fresh_rejection_and_network_error_preserve_board);
     test_run("pulls HTTP failures and permission gates", test_http_failures_keep_rows_and_permission_gates_stop_reads);

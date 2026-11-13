@@ -174,8 +174,9 @@ void screen_pulls_pulls_layout(Screen *base, Doc *doc) {
         return;
     }
     BoardFilter *filter = screen_pulls_current_filter(s);
-    size_t total = s->tab == 0 ? s->pull_count : s->issue_count, shown = 0;
+    size_t shown = 0;
     size_t rn; BoardRow *rows = screen_pulls_rows_of(s, &rn);
+    size_t total = rn;
     for (size_t i = 0; i < rn; i++) if (screen_pulls_row_filter_passes(s, &rows[i], i)) shown++;
     if (board_filter_is_on(filter) || (s->tab == TAB_PULLS && s->hide_later_stacked)) {
         char *text = xstrfmt("Showing %zu of %zu", shown, total);
@@ -195,34 +196,7 @@ void screen_pulls_pulls_layout(Screen *base, Doc *doc) {
             layout_pull(s, doc, w, i);
         }
         if (s->loaded && !shown && !s->error) doc_text(doc, 0, w, s->pull_count ? "No pull requests match the filters." : "No open pull requests.", FONT_FOOTNOTE, theme.muted, DT_LEFT);
-    } else {
-        const char *refused = json_str(json_get(s->board, "issuesError"));
-        if (refused) {
-            int box = doc_box_begin(doc, 0, w, px(10), theme.raise, theme.line, px(12));
-            doc_item(doc, box)->hover_fill = false;
-            doc_text(doc, px(12), w - px(24), "GitHub would not read this repository\xE2\x80\x99s issues with the server\xE2\x80\x99s token. A fine-grained token needs Issues: read. The pull requests are unaffected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-            doc_space(doc, px(6));
-            doc_notice(doc, px(12), w - px(24), refused);
-            doc_box_end(doc, box, px(10));
-        } else {
-            IssueSummary *visible = xcalloc(s->issue_count, sizeof *visible);
-            size_t *map = xcalloc(s->issue_count, sizeof *map);
-            size_t vn = 0;
-            for (size_t i = 0; i < s->issue_count; i++) if (board_filter_passes(filter, &rows[i], -1)) { visible[vn] = s->issues[i]; map[vn] = i; vn++; }
-            size_t nn; IssueRow *nested = issues_nested(visible, vn, s->project.repo, &nn);
-            nn = issues_folded(nested, nn, visible, &s->issue_folds);
-            for (size_t k = 0; k < nn; k++) {
-                int depth = nested[k].depth > 4 ? 4 : nested[k].depth;
-                int indent = depth * px(18);
-                doc_issue_row_foldable(doc, indent, w - indent, &s->issues[map[nested[k].index]], s->project.repo, depth > 0, ACT_OPEN_ISSUE, (intptr_t)map[nested[k].index],
-                    nested[k].children ? ACT_FOLD_ISSUE : 0, issue_folds_contains(&s->issue_folds, visible[nested[k].index].number));
-                doc_space(doc, px(8));
-            }
-            free(nested); free(map); free(visible);
-            if (json_bool_is(json_get(s->board, "issuesTruncated"), true)) doc_text(doc, 0, w, "This repository has more open issues; only the most recently updated are listed.", FONT_CAPTION, theme.muted, DT_WORDBREAK);
-            if (s->loaded && !shown && !s->error) doc_text(doc, 0, w, s->issue_count ? "No issues match the filters." : "No open issues.", FONT_FOOTNOTE, theme.muted, DT_LEFT);
-        }
-    }
+    } else screen_pulls_issues_layout(s, doc, w, rows, shown);
     free(rows);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading pull requests\xE2\x80\xA6");
     doc_space(doc, px(16));

@@ -13,7 +13,7 @@ Read `CLAUDE.md` and `.ai/rules/index.md` first. This map helps locate the exist
 | Domain models and server capability records | `core/models.*` |
 | Route catalog, HTTP validation, request encoding and transport | `core/api.*` |
 | Origin-scoped tokens and saved responses | `core/credentials.*`, `core/cache.*` |
-| Board, repository files/indexing, diff and Markdown | `core/board.*`, `core/repo*`, `core/diff.*`, `core/markdown.*`, `core/highlight.c` |
+| Board, the Issues tab's pages past it, repository files/indexing, diff and Markdown | `core/board.*`, `core/issue_pages.*`, `core/repo*`, `core/diff.*`, `core/markdown.*`, `core/highlight.c` |
 | Usage comparisons and pricing coverage | `core/usage.*` |
 | Pull conversation roots, review association and timeline ordering | `core/pull_conversation.*` |
 | Mail thread grouping and notification classification | `core/mail_group.*` |

@@ -20,8 +20,8 @@ void screen_pulls_issue_board_show(IssueScreen *s, const Json *board, bool saved
         if (!saved && !s->detail && issue_summary_parse(row, &fresh)) { issue_summary_free(&s->issue); s->issue = fresh; }
         break;
     }
-    // A board GitHub refused the issues of says nothing about this one.
-    if (!saved) s->gone = !found && !json_is_set(json_get(board, "issuesError")) && !json_bool_is(json_get(board, "issuesTruncated"), true);
+    // A board GitHub refused the issues of, or one cut short, says nothing about this one.
+    if (!saved) s->gone = !found && board_lists_every_issue(board);
     s->board_read = true;
 }
 
