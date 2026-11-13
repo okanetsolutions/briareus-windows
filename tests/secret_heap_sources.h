@@ -173,6 +173,7 @@ void ssh_secrets_scrub(Json *body);
 #define api_error_description heap_api_error_description
 #define api_error_unauthorized heap_api_error_unauthorized
 #define api_error_is_refusal heap_api_error_is_refusal
+#define api_error_is_review_round_limit heap_api_error_is_review_round_limit
 #define server_address_parse heap_server_address_parse
 #define server_address_free heap_server_address_free
 #define server_address_copy heap_server_address_copy
@@ -205,6 +206,7 @@ void api_error_copy(ApiError *into, const ApiError *from);
 char *api_error_description(const ApiError *e);
 bool api_error_unauthorized(const ApiError *e);
 bool api_error_is_refusal(const ApiError *e);
+bool api_error_is_review_round_limit(const ApiError *e);
 bool server_address_parse(const char *input, ServerAddress *out);
 void server_address_free(ServerAddress *address);
 void server_address_copy(ServerAddress *into, const ServerAddress *from);

@@ -33,16 +33,20 @@
 
 // MARK: - Errors
 
-void api_error_init(ApiError *e) { e->kind = API_OK; e->status = 0; e->message = NULL; e->retry_after = -1; }
-void api_error_clear(ApiError *e) { if (!e) return; free(e->message); api_error_init(e); }
+void api_error_init(ApiError *e) { e->kind = API_OK; e->status = 0; e->message = NULL; e->retry_after = -1; e->code = NULL; }
+void api_error_clear(ApiError *e) { if (!e) return; free(e->message); free(e->code); api_error_init(e); }
 void api_error_set(ApiError *e, ApiErrorKind kind, int status, const char *message, double retry_after) {
     if (!e) return;
     api_error_clear(e);
     e->kind = kind; e->status = status; e->message = xstrdup(message); e->retry_after = retry_after;
 }
-void api_error_copy(ApiError *into, const ApiError *from) { api_error_set(into, from->kind, from->status, from->message, from->retry_after); }
+void api_error_copy(ApiError *into, const ApiError *from) {
+    api_error_set(into, from->kind, from->status, from->message, from->retry_after);
+    if (into) into->code = xstrdup(from->code);
+}
 bool api_error_unauthorized(const ApiError *e) { return e && e->kind == API_HTTP && e->status == 401; }
 bool api_error_is_refusal(const ApiError *e) { return e && e->kind == API_HTTP && e->status >= 400 && e->status < 500; }
+bool api_error_is_review_round_limit(const ApiError *e) { return e && e->kind == API_HTTP && e->status == 409 && str_eq(e->code, "review_round_limit"); }
 
 char *api_error_description(const ApiError *e) {
     switch (e->kind) {
@@ -72,6 +76,12 @@ static const char *status_text(int status) {
     case 502: return "bad gateway"; case 503: return "service unavailable"; case 504: return "gateway timeout";
     default: return "request failed";
     }
+}
+/// An HTTP refusal in the server's words and `code` when its JSON `payload` gives them, else the status's own.
+static void http_refusal(ApiError *error, int status, const Json *payload, const char *retry) {
+    const char *message = json_str_nonempty(json_get(payload, "error"));
+    api_error_set(error, API_HTTP, status, message ? message : status_text(status), api_retry_after(retry, time(NULL)));
+    if (error) error->code = xstrdup(json_str_nonempty(json_get(payload, "code")));
 }
 
 // MARK: - Address
@@ -246,8 +256,7 @@ static Json *send_request_cancellable(ApiClient *c, const char *method, const ch
         }
         if (status < 200 || status >= 300) {
             Json *payload = json ? json_parse(response, response_len) : NULL;
-            const char *message = json_str_nonempty(json_get(payload, "error"));
-            api_error_set(error, API_HTTP, status, message ? message : status_text(status), api_retry_after(retry, time(NULL)));
+            http_refusal(error, status, payload, retry);
             json_free(payload);
         } else if (!json) {
             api_error_set(error, API_NON_JSON, status, NULL, -1);
@@ -653,9 +662,8 @@ bool api_stream(ApiClient *c, const char *name, const Json *arguments, ApiStream
         while (total < sizeof body - 1 && WinHttpReadData(req, body + total, (DWORD)(sizeof body - 1 - total), &got) && got) total += got;
         body[total] = 0;
         Json *payload = type && str_icontains(type, "json") ? json_parse(body, total) : NULL;
-        const char *message = json_str_nonempty(json_get(payload, "error"));
         if (code >= 300 && code < 400) api_error_set(error, API_REDIRECTED, (int)code, NULL, -1);
-        else api_error_set(error, API_HTTP, (int)code, message ? message : status_text((int)code), api_retry_after(retry, time(NULL)));
+        else http_refusal(error, (int)code, payload, retry);
         json_free(payload); free(type); free(retry);
         goto done;
     }

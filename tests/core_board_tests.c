@@ -673,6 +673,35 @@ static void test_errand_arguments_take_the_shape_each_route_wants(void) {
     a = board_action_arguments(feedback, "o/r", 9, NULL, "line one\nline two");
     CHECK_STR(json_str(json_get(a, "input")), "line one\nline two"); json_free(a);
 }
+static void test_only_a_review_through_action_asks_for_another_round(void) {
+    Json *args = json_parsez("{\"repo\":\"o/r\",\"prNumber\":9,\"action\":\"review\",\"provider\":2,\"model\":\"sonnet\"}");
+    Json *again = board_review_round_continued("action", args);
+    CHECK(again != NULL && again != args); CHECK_INT(json_count(again), 6); CHECK(json_bool_is(json_get(again, "continueReview"), true));
+    CHECK_STR(json_str(json_get(again, "action")), "review"); CHECK_INT(json_int_or(json_get(again, "provider"), 0), 2); CHECK_STR(json_str(json_get(again, "model")), "sonnet");
+    CHECK(json_is_null(json_get(args, "continueReview")));
+    // The extra round itself is never offered again.
+    CHECK(board_review_round_continued("action", again) == NULL);
+    json_free(again); json_free(args);
+    // Another errand, Run and the older review route would be refused with it.
+    const char *others[][2] = {
+        { "action", "{\"repo\":\"o/r\",\"prNumber\":9,\"action\":\"fix-checks\"}" },
+        { "serve_pull", "{\"repo\":\"o/r\",\"prNumber\":9}" },
+        { "review", "{\"repo\":\"o/r\",\"prNumber\":9,\"branch\":\"feat/x\"}" },
+        { "review", "{\"repo\":\"o/r\",\"prNumber\":9,\"action\":\"review\"}" },
+        { "action", "{\"repo\":\"o/r\",\"prNumber\":9}" },
+    };
+    for (size_t i = 0; i < sizeof others / sizeof *others; i++) {
+        args = json_parsez(others[i][1]); CHECK(board_review_round_continued(others[i][0], args) == NULL); json_free(args);
+    }
+    CHECK(board_review_round_continued("action", NULL) == NULL);
+}
+static void test_the_another_round_question_keeps_what_the_server_said(void) {
+    char *q = board_review_round_question(" 2 fixes unresolved. \n");
+    CHECK(strncmp(q, "2 fixes unresolved. ", 20) == 0); CHECK(strlen(q) > 20); free(q);
+    char *blank = board_review_round_question(" "), *none = board_review_round_question(NULL);
+    CHECK(*blank != ' ' && strlen(blank) > 0); CHECK_STR(blank, none);
+    free(blank); free(none);
+}
 static void test_errands_are_offered_for_the_state_a_pull_request_is_in(void) {
     const char *always = "run,review,custom-feedback,test-sheet,test-run,pr-body-summary,delete-self-comments";
     CHECK_OWNED_STR(offered(NULL, "{\"number\":1,\"mergeable\":\"mergeable\",\"checks\":\"success\"}", 0), always);
@@ -1464,6 +1493,8 @@ void board_tests(void) {
     test_run("known errands are listed in the dashboard's order", test_known_errands_are_listed_in_the_dashboards_order);
     test_run("errands start through their own operation", test_errands_start_through_their_own_operation);
     test_run("errand arguments take the shape each route wants", test_errand_arguments_take_the_shape_each_route_wants);
+    test_run("only a review through action asks for another round", test_only_a_review_through_action_asks_for_another_round);
+    test_run("the another round question keeps what the server said", test_the_another_round_question_keeps_what_the_server_said);
     test_run("errands are offered for the state a pull request is in", test_errands_are_offered_for_the_state_a_pull_request_is_in);
     test_run("a known catalog restricts errands to those it lists", test_a_known_catalog_restricts_errands_to_those_it_lists);
     test_run("errands the app does not know follow in the server's order", test_errands_the_app_does_not_know_follow_in_the_servers_order);

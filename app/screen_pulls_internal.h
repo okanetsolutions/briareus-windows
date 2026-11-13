@@ -226,6 +226,10 @@ typedef struct { wchar_t glyph; COLORREF color; } EventBadge;
 const char *screen_pulls_action_icon(const char *id);
 bool screen_pulls_action_prompt(Screen *source, const char *repo, const BoardAction *a, int number, char **input, RuntimeChoice *runtime);
 BoardAction *screen_pulls_row_actions(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count);
+/// From a start's failed completion: a code review refused at the project's round limit asks whether to run one more round
+/// and, on a yes while `source` is still on top of its pane on the same connection, sends `req` once more with
+/// `continueReview` through `done` into `slot`. True when sent; `source` may be gone when false.
+bool screen_pulls_another_round(Screen *source, bool *dialog_open, const Request *req, RequestDone done, int tag, Request **slot);
 void screen_pulls_list_retry_stop(Poller *poller, bool *armed);
 void screen_pulls_list_retry_arm(Poller *poller, bool *armed, const char *repo);
 bool screen_pulls_list_retry_fired(Poller *poller, bool *armed, const char *repo, UINT id, bool paused);

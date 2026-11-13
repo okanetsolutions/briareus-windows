@@ -22,6 +22,7 @@ typedef struct {
     int status;           // for API_HTTP
     char *message;        // server's `error` or the transport's words
     double retry_after;   // seconds; < 0 without a Retry-After header
+    char *code;           // the refusal's machine-readable `code` when the server gave one (`review_round_limit`); NULL otherwise
 } ApiError;
 
 void api_error_init(ApiError *e);
@@ -33,6 +34,9 @@ char *api_error_description(const ApiError *e);
 bool api_error_unauthorized(const ApiError *e);
 /// A 4xx is a definite refusal; anything else may have gone through.
 bool api_error_is_refusal(const ApiError *e);
+/// A code review refused because the pull request has used the project's `reviewRoundLimit` rounds: nothing started, and
+/// only a person's explicit word sends it again with `continueReview` (board_review_round_continued).
+bool api_error_is_review_round_limit(const ApiError *e);
 
 /// An HTTPS origin and the client API base beneath it.
 typedef struct { char *base_url; char *origin; char *host; int port; } ServerAddress;

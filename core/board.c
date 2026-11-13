@@ -429,6 +429,20 @@ Json *board_action_arguments(const BoardAction *a, const char *repo, int number,
     }
     return args;
 }
+Json *board_review_round_continued(const char *operation, const Json *args) {
+    // The server takes `continueReview` on POST /actions for a review only; any other start would be refused with it.
+    if (!str_eq(operation, "action") || !str_eq(json_str(json_get(args, "action")), "review")) return NULL;
+    if (json_bool_is(json_get(args, "continueReview"), true)) return NULL;
+    Json *again = json_clone(args);
+    json_set_bool(again, "continueReview", true);
+    return again;
+}
+char *board_review_round_question(const char *said) {
+    char *lead = str_trim(said ? said : "");
+    char *out = xstrfmt("%s Run one more round on purpose? It starts a paid session.", *lead ? lead : "This pull request has used its review rounds.");
+    free(lead);
+    return out;
+}
 BoardAction *board_actions_offered(const Json *catalog, const PullSummary *pull, int failed_checks, size_t *count) {
     // What the server lists, by id, in its order.
     size_t served_count = json_count(catalog);
