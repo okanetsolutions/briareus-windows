@@ -53,6 +53,7 @@ struct StatusScreen {
     Poller poller;
     bool loaded, shown;
     StatusApproval **approvals; size_t approval_count; Request *attention_read; char *attention_error;
+    time_t attention_retry_at;   // a refused inbox read's Retry-After; polls wait for it, F5 does not
 };
 bool status_current(StatusScreen *s);
 void status_rebuild(StatusScreen *s);

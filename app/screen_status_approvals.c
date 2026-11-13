@@ -1,4 +1,5 @@
 #include "screen_status_internal.h"
+#include <math.h>
 
 // ◉ Status's pull requests waiting on a person's approval (the Mac's StatusReviewApproval): the `attention` inbox names
 // them, each reads its own review outcome, and the approvals card under it approves or withdraws in place, with what set
@@ -23,14 +24,18 @@ static void read_done(void *owner, Request *req) {
     StatusApproval *a = owner; StatusScreen *s = a->screen;
     if (!status_current(s) || req->client != s->client) return;
     a->read = true;
-    if (req->ok) { take(a, req->result, REVIEW_OUTCOME_FROM_READ); set_string(&a->error, NULL); }
+    // A failed read stays owed and is tried again with the next inbox read.
+    if (req->ok) { take(a, req->result, REVIEW_OUTCOME_FROM_READ); set_string(&a->error, NULL); a->stale = false; }
     else request_error_into(&a->error, req);
     pane_relayout(s->base.pane);
 }
-// Its review outcome, unless a read or its write is under way; a write's answer is not overwritten by an older read.
+// Its review outcome, unless a read or its write is under way; a write's answer is not overwritten by an older read. It
+// stays owed (`stale`) until a read lands, so one cancelled by hiding Status or by a write is read again.
 static void read_review(StatusApproval *a) {
-    if (a->req || approval_form_writing(&a->form) || !store_supports("code_reviews")) return;
-    a->stale = false;
+    if (a->req || approval_form_writing(&a->form)) return;
+    if (!store_supports("code_reviews")) {
+        a->read = true; set_string(&a->error, "This server or token cannot read the pull request's code review."); return;
+    }
     Json *args = json_object(); json_set_str(args, "repo", a->pull.repo); json_set_num(args, "pr", a->pull.number);
     store_call("code_reviews", args, 0, a, read_done, 0, &a->req);
 }
@@ -40,10 +45,11 @@ static void approval_done(void *owner, Request *req) {
     switch (approval_form_finish(&a->form, req)) {
     case APPROVAL_LANDED:
         take(a, req->result, review_outcome_source_after(req->operation));
-        status_approvals_load(s, false);
+        // An inbox read under way may predate the write: the inbox is read again after it.
+        request_cancel(&s->attention_read); s->attention_retry_at = 0; status_approvals_load(s, false);
         break;
     case APPROVAL_STALE: read_review(a); break;
-    case APPROVAL_FAILED: break;
+    case APPROVAL_FAILED: if (a->stale) read_review(a); break;
     }
     pane_relayout(s->base.pane);
 }
@@ -94,14 +100,17 @@ static void attention_done(void *owner, Request *req) {
     if (req->ok) {
         size_t count; AttentionPull *pulls = attention_approval_pulls(req->result, &count);
         merge(s, pulls, count); attention_pulls_free(pulls, count);
-        set_string(&s->attention_error, NULL);
-    } else request_error_into(&s->attention_error, req);
+        set_string(&s->attention_error, NULL); s->attention_retry_at = 0;
+    } else {
+        request_error_into(&s->attention_error, req);
+        if (req->error.retry_after > 0) s->attention_retry_at = time(NULL) + (time_t)ceil(req->error.retry_after);
+    }
     pane_relayout(s->base.pane);
 }
 void status_approvals_load(StatusScreen *s, bool fresh) {
     if (!status_current(s) || !store_supports("attention")) return;
     if (fresh) for (size_t i = 0; i < s->approval_count; i++) s->approvals[i]->stale = true;
-    if (s->attention_read) return;
+    if (s->attention_read || (!fresh && time(NULL) < s->attention_retry_at)) return;
     store_call("attention", json_object(), 0, s, attention_done, 0, &s->attention_read);
 }
 // Reads stop with the screen; a write under way finishes, since its outcome is the person's to know.

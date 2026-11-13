@@ -18,7 +18,8 @@ static Route routes[] = {
 
 typedef struct {
     const char *inbox, *review, *write;
-    int write_status;
+    int write_status, inbox_status;
+    const char *inbox_retry;
     volatile LONG inbox_reads, review_reads, writes;
     char *url; Json *body;
     CRITICAL_SECTION lock;
@@ -36,7 +37,11 @@ static bool transport(void *ctx, const char *method, const char *url, const char
         char *text = xstrndup(body, bytes); json_free(stub->body); stub->body = json_parsez(text); free(text);
         if (stub->write_status) *status = stub->write_status;
         answer = stub->write ? stub->write : "{}";
-    } else if (strstr(url, "/attention")) { InterlockedIncrement(&stub->inbox_reads); answer = stub->inbox ? stub->inbox : INBOX; }
+    } else if (strstr(url, "/attention")) {
+        InterlockedIncrement(&stub->inbox_reads); answer = stub->inbox ? stub->inbox : INBOX;
+        if (stub->inbox_status) { *status = stub->inbox_status; answer = "{\"error\":\"Slow down\"}"; }
+        if (stub->inbox_retry) *retry = xstrdup(stub->inbox_retry);
+    }
     else if (strstr(url, "/code-reviews")) { InterlockedIncrement(&stub->review_reads); answer = stub->review ? stub->review : REVIEW; }
     else if (strstr(url, "/projects")) answer = "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
     *response = xstrdup(answer); *len = strlen(answer);
@@ -53,6 +58,15 @@ static void pump(int expected) {
         if (received < expected) Sleep(1);
     }
     CHECK_INT(received, expected);
+}
+// Delivers whatever completes within a moment, cancelled requests included, whose count depends on timing.
+static void settle(void) {
+    ULONGLONG until = GetTickCount64() + 400;
+    while (GetTickCount64() < until) {
+        MSG msg;
+        while (PeekMessageW(&msg, dispatcher, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE)) store_handle_message(msg.message, msg.wParam, msg.lParam);
+        Sleep(1);
+    }
 }
 static StatusScreen *setup(Stub *stub, const char *permission, size_t route_count, int64_t me) {
     InitializeCriticalSection(&stub->lock);
@@ -124,11 +138,25 @@ static void a_server_without_the_inbox_or_a_read_token_approves_nothing(void) {
     CHECK(contains(&doc, "0 of 1 approval")); CHECK_INT(find(&doc, STATUS_APPROVALS_BASE + APPROVAL_ACT_APPROVE, 0), -1);
     doc_free(&doc); cleanup(&stub);
 }
-static void hiding_cancels_the_reads(void) {
+static void hiding_cancels_the_reads_and_showing_reads_them_again(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); pump(4);
-    status_approvals_load(s, true); CHECK(s->attention_read != NULL);
+    // A review read cut short by hiding Status is read again once it shows.
+    status_approvals_load(s, true); pump(1); CHECK(s->approvals[0]->req != NULL);
     s->base.vt->visible(&s->base, false);
     CHECK(s->attention_read == NULL); CHECK(s->approvals[0]->req == NULL);
+    settle();   // the cancelled read may still reach the transport
+    LONG before = stub.review_reads;
+    s->base.vt->visible(&s->base, true); settle();
+    CHECK_INT(stub.review_reads, before + 1); CHECK(!s->approvals[0]->stale);
+    cleanup(&stub);
+}
+static void a_refused_inbox_waits_for_its_retry_after(void) {
+    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); settle();
+    stub.inbox_status = 429; stub.inbox_retry = "120";
+    status_approvals_load(s, false); settle(); CHECK(s->attention_error != NULL);
+    // Polls wait for it; F5 reads at once.
+    status_approvals_load(s, false); CHECK(s->attention_read == NULL); CHECK_INT(stub.inbox_reads, 2);
+    stub.inbox_status = 0; stub.inbox_retry = NULL; status_approvals_load(s, true); settle(); CHECK_INT(stub.inbox_reads, 3); CHECK(s->attention_error == NULL);
     cleanup(&stub);
 }
 void app_status_approvals_tests(void) {
@@ -141,6 +169,7 @@ void app_status_approvals_tests(void) {
     test_run("Status shows a pull request waiting on approval with its review, security pass and risk", a_pull_waiting_on_approval_shows_its_review_and_risk);
     test_run("Status approves in place and reads the inbox again", approving_in_place_reads_the_inbox_again);
     test_run("Status without the inbox route or a manage token approves nothing", a_server_without_the_inbox_or_a_read_token_approves_nothing);
-    test_run("Status hiding cancels the inbox and review reads", hiding_cancels_the_reads);
+    test_run("Status hiding cancels the inbox and review reads, and showing reads them again", hiding_cancels_the_reads_and_showing_reads_them_again);
+    test_run("Status inbox polls wait out a refusal's Retry-After", a_refused_inbox_waits_for_its_retry_after);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }
