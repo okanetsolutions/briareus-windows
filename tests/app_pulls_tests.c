@@ -14,7 +14,7 @@ static int list_status;
 static const char *list_body, *retry_header, *page_body;
 static char page_url[512];
 static bool network_fail, reject_fresh, page_fail;
-static HANDLE hold, entered;
+static HANDLE hold, entered, page_hold, page_entered;   // gates on the board read and on an issue page read
 static Route routes[] = {
     { "GET", "/pulls", "read" }, { "GET", "/sessions", "read" }, { "GET", "/issues/{number}", "read" },
     { "GET", "/pulls/{pr}", "read" }, { "GET", "/issues", "read" }
@@ -33,6 +33,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     } else if (strstr(url, "/issues?")) {
         InterlockedIncrement(&page_calls); *status = 200; payload = page_body;
         snprintf(page_url, sizeof page_url, "%s", url);
+        if (page_hold) { SetEvent(page_entered); WaitForSingleObject(page_hold, 5000); }
         if (page_fail) { *error_message = xstrdup("Connection failed"); InterlockedIncrement(&replies); return false; }
     } else if (strstr(url, "/files?")) {
         InterlockedIncrement(&files_calls); *status = 200;
@@ -408,6 +409,65 @@ static void test_issue_pages_load_past_a_cut_board(void) {
     CHECK(!layout_contains(s, "Paged one")); CHECK(layout_contains(s, "Load more")); CHECK(layout_contains(s, "Board five"));
     DestroyWindow(GetAncestor(pane_hwnd(pane), GA_ROOT)); pane = original;
 }
+static bool layout_has_action(Screen *s, int action) {
+    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
+    bool found = false;
+    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action) found = true;
+    doc_free(&d); return found;
+}
+static void hold_pages(void) { page_hold = CreateEventW(NULL, TRUE, FALSE, NULL); page_entered = CreateEventW(NULL, TRUE, FALSE, NULL); }
+static void release_pages(void) { CloseHandle(page_hold); CloseHandle(page_entered); page_hold = page_entered = NULL; }
+static void more_issues_held(Screen *s) {
+    ResetEvent(page_hold); ResetEvent(page_entered);
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0});
+    CHECK_INT(WaitForSingleObject(page_entered, 5000), WAIT_OBJECT_0);
+    CHECK(((PullsScreen *)s)->req_issue_pages != NULL);
+}
+static const char STALE_PAGE[] = "{\"issues\":[{\"number\":3,\"title\":\"Stale three\"}],\"nextOffset\":40}";
+static void test_refresh_cancels_a_pending_issue_page(void) {
+    reset(); g_store.route_count = 5; list_body = CUT_BOARD;
+    Screen *s = board(); PullsScreen *ps = (PullsScreen *)s; s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    hold_pages(); page_body = STALE_PAGE; more_issues_held(s);
+    // F5 gives the page up while its read is still out, and the board is read again.
+    s->vt->refresh(s);
+    CHECK(ps->req_issue_pages == NULL); CHECK_INT(ps->issue_pages.count, 0);
+    drain(2); CHECK(layout_has_action(s, ACT_MORE_ISSUES));
+    // A page asked for after the refresh is its own read: the old answer neither fills it nor ends it.
+    page_body = "{\"issues\":[{\"number\":2,\"title\":\"Fresh two\"}],\"nextOffset\":null}";
+    s->vt->action(s, ACT_MORE_ISSUES, 0, (POINT){0});
+    CHECK(ps->req_issue_pages != NULL);
+    SetEvent(page_hold); drain(2); CHECK_INT(page_calls, 2);
+    CHECK(ps->req_issue_pages == NULL);
+    CHECK_INT(ps->issue_pages.count, 1); CHECK_INT(ps->issue_pages.count ? ps->issue_pages.issues[0].number : 0, 2);
+    CHECK(ps->issue_pages.ended); CHECK(ps->issue_pages.error == NULL);
+    CHECK(!layout_contains(s, "Stale three")); CHECK_INT(layout_count(s, "Fresh two"), 1);
+    CHECK(!layout_has_action(s, ACT_MORE_ISSUES));
+    // F5 with nothing asked for since: the cancelled answer adds no row and leaves the pages ready to load.
+    page_body = STALE_PAGE; s->vt->refresh(s); drain(2); more_issues_held(s);
+    s->vt->refresh(s); SetEvent(page_hold); drain(3); CHECK_INT(page_calls, 3);
+    CHECK(ps->req_issue_pages == NULL); CHECK_INT(ps->issue_pages.count, 0);
+    CHECK(!ps->issue_pages.answered); CHECK(!ps->issue_pages.ended); CHECK(ps->issue_pages.error == NULL);
+    CHECK(!layout_contains(s, "Stale three")); CHECK(layout_contains(s, "Board five")); CHECK(layout_has_action(s, ACT_MORE_ISSUES));
+    release_pages(); pane_set_root(pane, NULL);
+}
+static void test_teardown_discards_a_pending_issue_page(void) {
+    reset(); g_store.route_count = 5; list_body = CUT_BOARD; page_body = STALE_PAGE;
+    Screen *s = board(); s->vt->refresh(s); drain(2);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    hold_pages(); more_issues_held(s);
+    // Another board takes the pane while the page is out: the answer belongs to no screen.
+    s = board(); PullsScreen *ps = (PullsScreen *)s; s->vt->refresh(s);
+    SetEvent(page_hold); drain(3); CHECK_INT(page_calls, 1);
+    s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+    CHECK(ps->req_issue_pages == NULL); CHECK_INT(ps->issue_pages.count, 0); CHECK(!ps->issue_pages.answered);
+    CHECK(!layout_contains(s, "Stale three")); CHECK(layout_has_action(s, ACT_MORE_ISSUES));
+    // The pane empties with a page out; the answer is freed without a screen to reach.
+    more_issues_held(s);
+    pane_set_root(pane, NULL);
+    SetEvent(page_hold); drain(1); CHECK_INT(page_calls, 2);
+    release_pages();
+}
 static void test_issue_pages_need_a_cut_board_and_the_route(void) {
     reset(); list_body = CUT_BOARD;
     // A server without `issues` keeps the note that the list is cut.
@@ -718,12 +778,6 @@ static void test_pull_refresh_invalidates_inflight_rows(void) {
     CloseHandle(hold); CloseHandle(entered); hold = entered = NULL;
     pane_set_root(pane, NULL);
 }
-static bool layout_has_action(Screen *s, int action) {
-    Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
-    bool found = false;
-    for (size_t i = 0; i < d.count; i++) if (d.items[i].action == action) found = true;
-    doc_free(&d); return found;
-}
 static void select_pull_tab(Screen *s, const char *title) {
     Doc d; doc_init(&d); doc_begin(&d, NULL, 1000); s->vt->layout(s, &d);
     int action = 0; intptr_t arg = 0;
@@ -818,6 +872,8 @@ void app_pulls_tests(void) {
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
     test_run("pulls issue pages load, filter, retry, close and reset past a cut board", test_issue_pages_load_past_a_cut_board);
     test_run("pulls issue pages need a cut board and the route", test_issue_pages_need_a_cut_board_and_the_route);
+    test_run("pulls refresh cancels a pending issue page", test_refresh_cancels_a_pending_issue_page);
+    test_run("pulls teardown discards a pending issue page", test_teardown_discards_a_pending_issue_page);
     test_run("pulls legacy freshness, catalog and account transitions", test_legacy_freshness_and_catalog_account_changes);
     test_run("pulls older fresh argument and network recovery", test_old_fresh_rejection_and_network_error_preserve_board);
     test_run("pulls HTTP failures and permission gates", test_http_failures_keep_rows_and_permission_gates_stop_reads);
