@@ -9,17 +9,27 @@ static void heading(Doc *doc, Col c, const Json *r) {
     button->tip = xstrdup("Back to the table of code reviews (Backspace)");
     int h = button->rc.bottom - top, x = button->rc.right + px(14);
     const char *status = json_str(json_get(r, "status"));
-    BadgeSpec badge = {0, status, screen_pulls_review_color(status, false), false};
+    // A stopped review says whether its findings were handled; a running one is still writing them.
+    const char *handling = code_review_can_edit_findings(r) ? code_review_handling(r) : NULL;
+    bool handled = str_eq(handling, "handled");
+    BadgeSpec badges[] = {{0, status, screen_pulls_review_color(status, false), false},
+        {0, handled ? "Handled" : "Pending", handled ? theme.ok : theme.secondary, false}};
     char *title = xstrfmt("Review #%lld", (long long)code_review_id(r));
     int tw = text_width(doc->cv, title, FONT_TITLE3) + px(2), th = font_height(doc->cv, FONT_TITLE3);
-    int bw = doc_badges_width(doc, &badge, 1);
-    if (x + tw + px(10) + bw > c.ix + c.iw) { x = c.ix; top = doc->y + px(10); h = th; }
+    int bw = doc_badges_width(doc, badges, 1), hw = handling ? doc_badges_width(doc, &badges[1], 1) + px(6) : 0;
+    if (x + tw + px(10) + bw + hw > c.ix + c.iw) { x = c.ix; top = doc->y + px(10); h = th; }
     RECT t = {x, top + (h - th) / 2, x + tw, top + (h - th) / 2 + th};
     doc_text_at(doc, &t, title, FONT_TITLE3, theme.ink, DT_SINGLELINE); free(title);
     doc->y = top;
     screen_pulls_review_badge(doc, x + tw + px(10), bw, status, false, theme.canvas);
     Item *it = doc_item(doc, (int)doc->count - 1);
     OffsetRect(&it->rc, 0, (h - (it->rc.bottom - it->rc.top)) / 2);
+    if (handling) {
+        doc->y = top;
+        it = doc_item(doc, doc_badges(doc, x + tw + px(10) + bw + px(6), hw, &badges[1], 1, theme.canvas));
+        OffsetRect(&it->rc, 0, (h - (it->rc.bottom - it->rc.top)) / 2);
+        it->text = xstrfmt("Handling: %s", badges[1].text); it->tip = xstrdup(it->text); it->cell = true;
+    }
     doc->y = top + h;
 }
 // The reviewed commit, who reviewed it and when.
@@ -71,11 +81,13 @@ void screen_pulls_review_page(PullScreen *s, Doc *doc, Col c, const Json *review
     heading(doc, c, review);
     doc_space(doc, px(6));
     identity(s, doc, c, review);
+    screen_pulls_review_handling(s, doc, c, review);
     doc_space(doc, px(14));
     figures(doc, c, review);
     doc_space(doc, px(6));
     about(s, doc, c, review);
     if (!json_count(json_get(review, "findings"))) return;
+    screen_pulls_review_editor(s, doc, c, review);
     doc_space(doc, px(16));
     screen_pulls_review_findings(s, doc, c, review);
 }

@@ -49,9 +49,13 @@ void screen_pulls_review_history(PullScreen *s, Doc *doc, Col c) {
         char *counts = code_review_counts_compact(r);
         char *input = screen_pulls_review_amount(t.input, false, false, 0), *output = screen_pulls_review_amount(t.output, false, false, 0);
         char *cost = screen_pulls_review_amount(t.cost, true, t.estimated, t.unpriced_turns);
-        char *cells[] = {date, (char *)field(r, "status", "unknown"), context, provider, counts, input, output, cost};
+        // A stopped review's status says whether its findings were handled.
+        const char *handling = code_review_can_edit_findings(r) ? code_review_handling(r) : NULL;
+        char *status = handling ? xstrfmt("%s\n%s", field(r, "status", "unknown"), str_eq(handling, "handled") ? "Handled" : "Pending")
+                                : xstrdup(field(r, "status", "unknown"));
+        char *cells[] = {date, status, context, provider, counts, input, output, cost};
         history_row(doc, table, cells, false, code_review_id(r) == s->reviews.review_id, code_review_id(r), r);
-        free(date); free(context); free(provider); free(counts); free(input); free(output); free(cost);
+        free(date); free(status); free(context); free(provider); free(counts); free(input); free(output); free(cost);
     }
     CodeReviewTotals t = code_reviews_totals(s->reviews.items);
     char *scope = xstrfmt("Total\n%zu displayed reviews", t.reviews), *counts = xstrfmt("%zu findings", t.findings);

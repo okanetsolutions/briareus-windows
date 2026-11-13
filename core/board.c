@@ -387,7 +387,7 @@ static const BoardAction known_actions[] = {
     { "review", "Code review", "Run the provider\xE2\x80\x99s code review on this pull request and publish it", false, { NULL, NULL, false } },
     { "solve-conflicts", "Solve conflicts", "Merge the base branch in, resolve the conflicts and push the result", false, { NULL, NULL, false } },
     { "fix-checks", "Fix failing checks", "Read this pull request\xE2\x80\x99s failing CI checks, fix what the branch broke and push the fixes", false, { NULL, NULL, false } },
-    { "implement-feedback", "Implement feedback", "Address the review findings on this pull request, push the fixes, and have those changes reviewed automatically", false, { NULL, NULL, false } },
+    { "implement-feedback", "Implement feedback", "Read the review feedback on this pull request, fix what holds up, push the fixes and reply on each thread", false, { NULL, NULL, false } },
     { "custom-feedback", "Give feedback", "Say in your own words what to change on this pull request, and it is implemented and pushed", true,
       { "Your feedback", "What should change on this pull request?", true } },
     { "test-sheet", "Test sheet", "Derive the manual QA checklist from this pull request\xE2\x80\x99s diff and post it as one editable comment", false, { NULL, NULL, false } },

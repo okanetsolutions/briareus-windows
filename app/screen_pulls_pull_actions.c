@@ -32,6 +32,15 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
         s->reviews.summary_id = s->reviews.summary_id == s->reviews.review_id ? 0 : s->reviews.review_id; pane_relayout(base->pane); break;
     case ACT_REVIEW_ROW: screen_pulls_review_open(s, (int64_t)arg); break;
     case ACT_REVIEW_BACK: screen_pulls_review_close(s); break;
+    case ACT_REVIEW_HANDLING: screen_pulls_review_set_handled(s, (int64_t)arg); break;
+    case ACT_REVIEW_EDIT: screen_pulls_review_edit(s, (int64_t)arg); break;
+    case ACT_REVIEW_SAVE: screen_pulls_review_edit_save(s); break;
+    case ACT_REVIEW_CANCEL: screen_pulls_review_edit_cancel(s); break;
+    case ACT_REVIEW_VERDICT: case ACT_REVIEW_EVIDENCE:
+        if (!s->reviews.editing || s->reviews.req_write) break;
+        if (action == ACT_REVIEW_VERDICT) code_review_edit_choose_verdict(s->reviews.editing, (size_t)arg);
+        else code_review_edit_choose_verification(s->reviews.editing, (size_t)arg);
+        pane_relayout(base->pane); break;
     case ACT_REVIEW_FINDING:
         if (code_review_finding(code_review_find(s->reviews.items, s->reviews.review_id), (int64_t)arg)) { s->reviews.finding_id = (int64_t)arg; s->reviews.reset_inspector = true; }
         pane_relayout(base->pane); break;

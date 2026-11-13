@@ -339,6 +339,10 @@ static const ApiRoute ROUTES[] = {
     { "pull_reviews", "GET", "pulls/{pr}/reviews" },
     { "pull_review_comments", "GET", "pulls/{pr}/review-comments" },
     { "code_reviews", "GET", "pulls/{pr}/code-reviews" },
+    // A person marks a stored review handled or reopens it (`handlingStatus`), or overrules a finding's `shouldFix` with
+    // its `verification` and `comments` (code_reviews.c).
+    { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
+    { "update_code_review_finding", "PATCH", "pulls/{pr}/code-reviews/{reviewId}/findings/{findingId}" },
     { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },

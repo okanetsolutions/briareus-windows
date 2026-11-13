@@ -17,10 +17,12 @@ static void reveal_selection(PullScreen *s, Doc *doc, int first, int last) {
 }
 // The Code reviews tab: the table of reviews, or the findings of the one opened from it.
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c) {
+    s->reviews.reason_laid = false;   // until the editor lays its reason box out again
     if (!screen_pulls_reviews_sync(s)) {
         doc_notice(doc, c.ix, c.iw, "Stored code reviews are not supported by this server or token. Update the server or check project read access."); return;
     }
     PullReviews *r = &s->reviews;
+    if (r->save_error) doc_notice(doc, c.ix, c.iw, r->save_error);
     if (r->error) {
         doc_notice(doc, c.ix, c.iw, r->error);
         doc_text(doc, c.ix, c.iw, r->items ? "Previous snapshot below; totals may be stale. F5 retries." : "Review results are unavailable. F5 retries.", FONT_FOOTNOTE, theme.secondary, DT_WORDBREAK);
