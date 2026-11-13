@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
-enum { CI_POLL = 1, CI_REFRESH = 1800, CI_DAYS, CI_KIND, CI_REPO, CI_BRANCH, CI_MORE, CI_OPEN };
+enum { CI_POLL = 1, CI_REFRESH = 1800, CI_DAYS, CI_KIND, CI_REPO, CI_BRANCH, CI_MORE, CI_OPEN, CI_RETRY, CI_CLEAR };
 typedef struct {
     Screen base;
     ApiClient *client;
@@ -22,6 +22,9 @@ typedef struct {
 } CIScreen;
 double ci_now(const CIScreen *s);
 bool ci_current(CIScreen *s);
+// The last read of runs failed (a new read clears it), and the page Retry reads again or -1.
+bool ci_runs_failed(const CIScreen *s);
+int ci_retry_page(const CIScreen *s);
 void ci_load(CIScreen *s, bool reset);
 void ci_layout(Screen *base, Doc *doc);
 #endif

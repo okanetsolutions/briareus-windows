@@ -48,6 +48,28 @@ static void labels_and_unknowns(void) {
     json_set_num(j, "durationMs", 0); json_set_num(j, "runAt", 1793188800000.0);
     meta = ci_run_meta(j); CHECK(strstr(meta, "acme/shop · main · abcdef1 · 0.0 s") != NULL); CHECK(strstr(meta, "2026-10-28 12:00 UTC") != NULL); free(meta); json_free(j);
 }
+static void clearing_filters(void) {
+    CHECK(!ci_filtered(30, false, NULL, NULL)); CHECK(!ci_filtered(30, false, "", ""));
+    CHECK(ci_filtered(30, false, "acme/shop", NULL)); CHECK(ci_filtered(30, false, NULL, "main"));
+    CHECK(ci_filtered(30, true, NULL, NULL)); CHECK(ci_filtered(7, false, NULL, NULL));
+    // A longer window is kept, so it alone is not a filter to clear.
+    CHECK(!ci_filtered(90, false, NULL, NULL)); CHECK(ci_filtered(90, true, "acme/shop", "main"));
+    CHECK_INT(ci_cleared_days(7), 30); CHECK_INT(ci_cleared_days(30), 30); CHECK_INT(ci_cleared_days(90), 90);
+    const char *answers[] = {"{\"totals\":{\"total\":0}}", "{\"totals\":{\"total\":3}}", "{\"totals\":{\"total\":null}}", "{\"totals\":{}}"};
+    const bool empty[] = {true, false, false, false};
+    for (size_t i = 0; i < 4; i++) { Json *j = json_parsez(answers[i]); CHECK(ci_stats_empty(j) == empty[i]); json_free(j); }
+    CHECK(!ci_stats_empty(NULL));
+}
+static void retrying_a_failed_page(void) {
+    // Nothing failed: Load more follows the next page and there is nothing to retry.
+    CHECK_INT(ci_retry_offset(false, true, 50), -1); CHECK(ci_can_load_more(false, 50)); CHECK(!ci_can_load_more(false, -1));
+    // A failed first page lists nothing, so Retry reads it again.
+    CHECK_INT(ci_retry_offset(true, false, -1), 0); CHECK(!ci_can_load_more(true, -1));
+    // A failed later page keeps the runs and its offset; Retry replaces Load more.
+    CHECK_INT(ci_retry_offset(true, true, 50), 50); CHECK(!ci_can_load_more(true, 50));
+    CHECK_INT(ci_retry_offset(true, true, -1), -1);
+}
 void core_ci_tests(void) {
     test_run("CI query window", query_contract); test_run("CI response validation", parsing); test_run("CI states and unknown metrics", labels_and_unknowns);
+    test_run("CI clear filters never narrows the window", clearing_filters); test_run("CI retry reads only the failed page", retrying_a_failed_page);
 }

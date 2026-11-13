@@ -157,6 +157,46 @@ static void multipage_snapshot_survives_recovery_checks(void) {
     CHECK(!json_equal(s->window, window)); CHECK_INT(json_count(s->runs), 1); CHECK_INT(s->offset, 50);
     json_free(snapshot); json_free(window); cleanup(&f, s);
 }
+static void retry_reads_only_the_failed_page(void) {
+    Fixture f; CIScreen *s = setup(&f); use_fake_clock(s); load(&f, s); Json *window = json_clone(s->window);
+    f.statuses[1] = 429; s->base.vt->action(&s->base, CI_MORE, 0, (POINT){0}); screen_fixture_pump(&f.screen, 1);
+    CHECK(s->errors[1] != NULL); CHECK_INT(json_count(s->runs), 1); CHECK_INT(s->offset, 50); CHECK_INT(ci_retry_page(s), 50);
+    // Load more gives way to Retry, which waits for the Retry-After deadline.
+    clock_now += 120; s->base.vt->action(&s->base, CI_MORE, 0, (POINT){0}); CHECK(s->reads[1] == NULL); CHECK_INT(f.calls[1], 2);
+    clock_now -= 1; s->base.vt->action(&s->base, CI_RETRY, 0, (POINT){0}); CHECK(s->reads[1] == NULL); CHECK_INT(f.calls[1], 2);
+    f.statuses[1] = 200; f.block_runs = true; clock_now += 1;
+    f.answers[1] = "{\"runs\":[{\"id\":\"second\",\"name\":\"Synthetic second page\",\"repo\":\"example/synthetic\",\"status\":\"queued\"}],\"nextOffset\":null}";
+    s->base.vt->action(&s->base, CI_RETRY, 0, (POINT){0}); CHECK_INT(WaitForSingleObject(f.screen.entered, 10000), WAIT_OBJECT_0);
+    CHECK(s->reads[1] != NULL); CHECK(s->errors[1] == NULL); CHECK_INT(ci_retry_page(s), -1); CHECK(strstr(f.queries[1], "offset=50") != NULL);
+    SetEvent(f.screen.resume); screen_fixture_pump(&f.screen, 1); f.block_runs = false;
+    CHECK_INT(json_count(s->runs), 2); CHECK_INT(s->offset, -1); CHECK(s->errors[1] == NULL); CHECK(json_equal(s->window, window));
+    CHECK_INT(f.calls[0], 1); CHECK_INT(f.calls[1], 3);
+    // A failed first page for a new filter lists none of the previous window's runs, and Retry reads that page alone.
+    f.statuses[1] = 500; s->base.vt->action(&s->base, CI_KIND, 1, (POINT){0}); screen_fixture_pump(&f.screen, 2);
+    CHECK(s->stats != NULL); CHECK(s->runs == NULL); CHECK(s->errors[1] != NULL); CHECK_INT(ci_retry_page(s), 0);
+    f.statuses[1] = 200; f.answers[1] = CI_RUNS_FIXTURE; clock_now += 60;
+    s->base.vt->action(&s->base, CI_RETRY, 0, (POINT){0}); screen_fixture_pump(&f.screen, 1);
+    CHECK_INT(f.calls[0], 2); CHECK_INT(f.calls[1], 5); CHECK(strstr(f.queries[1], "offset=0") != NULL);
+    CHECK_INT(json_count(s->runs), 1); CHECK_INT(s->offset, 50); CHECK(s->errors[1] == NULL);
+    Doc doc; doc_init(&doc); screen_fixture_draw(&s->base, &doc); doc_free(&doc);
+    json_free(window); cleanup(&f, s);
+}
+static void clear_filters_keeps_a_longer_window(void) {
+    Fixture f; CIScreen *s = setup(&f); f.answers[0] = "{\"totals\":{\"total\":0},\"daily\":[],\"repositories\":[],\"checks\":[]}";
+    s->repo = xstrdup("acme/shop"); s->branch = xstrdup("main"); s->days = 7; s->statuses = true; load(&f, s);
+    Doc doc; doc_init(&doc); screen_fixture_draw(&s->base, &doc); doc_free(&doc);
+    s->base.vt->action(&s->base, CI_CLEAR, 0, (POINT){0}); screen_fixture_pump(&f.screen, 2);
+    CHECK_INT(s->days, 30); CHECK(!s->statuses); CHECK(s->repo == NULL); CHECK(s->branch == NULL);
+    CHECK(strstr(f.queries[0], "repo=") == NULL); CHECK(strstr(f.queries[0], "branch=") == NULL); CHECK(strstr(f.queries[0], "kind=check_run") != NULL);
+    CHECK(json_num_or(json_get(s->window, "until"), 0) - json_num_or(json_get(s->window, "since"), 0) == 2592000000.0);
+    // The default filter has nothing to clear.
+    s->base.vt->action(&s->base, CI_CLEAR, 0, (POINT){0}); CHECK_INT(f.calls[0], 2); CHECK(s->reads[0] == NULL);
+    s->base.vt->action(&s->base, CI_DAYS, 90, (POINT){0}); screen_fixture_pump(&f.screen, 2);
+    s->repo = xstrdup("acme/shop"); s->base.vt->action(&s->base, CI_CLEAR, 0, (POINT){0}); screen_fixture_pump(&f.screen, 2);
+    CHECK_INT(s->days, 90); CHECK(s->repo == NULL); CHECK_INT(f.calls[0], 4);
+    CHECK(json_num_or(json_get(s->window, "until"), 0) - json_num_or(json_get(s->window, "since"), 0) == 7776000000.0);
+    cleanup(&f, s);
+}
 
 void app_ci_tests(void) {
     screen_fixture_prepare();
@@ -165,4 +205,6 @@ void app_ci_tests(void) {
     test_run("CI summary polling and resume retain multiple pages", multipage_snapshot_survives_recovery_checks);
     test_run("CI read-only history and fixed paging", history_and_paging);
     test_run("CI failure backoff and capabilities", failures_and_capabilities); test_run("CI cancellation and identity", cancellation_and_identity);
+    test_run("CI Retry reads only the failed page of runs", retry_reads_only_the_failed_page);
+    test_run("CI Clear filters keeps a longer window", clear_filters_keeps_a_longer_window);
 }

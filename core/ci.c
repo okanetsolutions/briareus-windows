@@ -13,6 +13,20 @@ Json *ci_query(int days, double until_ms, bool statuses, const char *repo, const
     if (branch && *branch) json_set_str(q, "branch", branch);
     return q;
 }
+int ci_cleared_days(int days) { return days > CI_DEFAULT_DAYS ? days : CI_DEFAULT_DAYS; }
+bool ci_filtered(int days, bool statuses, const char *repo, const char *branch) {
+    if (statuses || (repo && *repo) || (branch && *branch)) return true;
+    return days != ci_cleared_days(days);
+}
+bool ci_stats_empty(const Json *stats) {
+    double total;
+    return json_num(json_get(json_get(stats, "totals"), "total"), &total) && total == 0;
+}
+int ci_retry_offset(bool failed, bool listed, int next_offset) {
+    if (!failed) return -1;
+    return listed ? next_offset : 0;
+}
+bool ci_can_load_more(bool failed, int next_offset) { return !failed && next_offset >= 0; }
 Json *ci_runs_query(const Json *window, int offset) {
     Json *q = json_clone(window); json_set_num(q, "limit", 50); json_set_num(q, "offset", offset); return q;
 }
