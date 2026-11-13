@@ -4,6 +4,7 @@
 #include "media.h"
 #include "resource.h"
 #include "screens.h"
+#include "session_tree.h"
 #include "str.h"
 #include "updater.h"
 #include <commctrl.h>
@@ -51,7 +52,7 @@ enum { TIMER_POLL = 1 };
 
 // MARK: - Sessions
 
-enum { ACT_BACK = 1100, ACT_BOARD, ACT_OPEN_SESSION, ACT_PICK, ACT_SELECT_ALL, ACT_BULK_CLOSE, ACT_BULK_DELETE, ACT_DELETE_ALL };
+enum { ACT_BACK = 1100, ACT_BOARD, ACT_OPEN_SESSION, ACT_PICK, ACT_SELECT_ALL, ACT_BULK_CLOSE, ACT_BULK_DELETE, ACT_DELETE_ALL, ACT_FOLD_SESSION };
 
 typedef struct {
     Screen base;
@@ -64,6 +65,7 @@ typedef struct {
     FooterRects footer;
     bool select_mode;
     char **picked; size_t picked_count;
+    SessionFolds folds;   // the orchestrators whose workers are hidden
     // a bulk close or delete works through the picked conversations one at a time
     char **queue; size_t queue_count, queue_done; bool queue_delete;
     char *bulk_error;
@@ -85,7 +87,9 @@ void screen_projects_sidebar_footer_paint(Canvas *cv, const RECT *rc, FooterRect
 bool screen_projects_sidebar_common_action(Pane *pane, int action);
 void screen_projects_doc_project_row(Doc *doc, int w, const char *name, int count, bool busy, bool selected, bool chevron, int h, int action, intptr_t arg);
 void screen_projects_paint_back_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
-void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg);
+/// `depth` indents a worker under its orchestrator; `fold` is -1 for a conversation with no workers on the list, else
+/// whether they are hidden, and draws the chevron that toggles them.
+void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg, int depth, int fold);
 void screen_projects_forget_cached_session(const char *repo, const char *id);
 void projects_recount_findings(void);
 void screen_projects_recount(Pane *sidebar);
@@ -94,6 +98,13 @@ const Project *projects_list(size_t *count);
 void sessions_forget(const char *repo, const char *id);
 void screen_projects_toggle_pick(SessionsScreen *s, const char *id);
 void screen_projects_clear_picks(SessionsScreen *s);
+/// The rows on show, as an owned array: each orchestrator's workers under it, a folded one's left out, but never the open conversation.
+SessionNode *screen_projects_shown_rows(SessionsScreen *s, size_t *count);
+/// Picks every row on show, and only those.
+void screen_projects_select_all(SessionsScreen *s);
+/// What a bulk Close (the open ones) or Delete acts on: with `all` every conversation, else the picked rows on show.
+/// Owned ids; release with str_array_free.
+char **screen_projects_bulk_ids(SessionsScreen *s, bool del, bool all, size_t *count);
 void screen_projects_bulk_start(SessionsScreen *s, bool del, bool all);
 int screen_projects_sessions_footer_height(Screen *base, int width);
 void screen_projects_sessions_footer_paint(Screen *base, Canvas *cv, const RECT *rc);

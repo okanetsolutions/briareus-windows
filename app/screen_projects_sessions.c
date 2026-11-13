@@ -98,6 +98,41 @@ void screen_projects_toggle_pick(SessionsScreen *s, const char *id) {
 
 void screen_projects_clear_picks(SessionsScreen *s) { str_array_free(s->picked, s->picked_count); s->picked = NULL; s->picked_count = 0; }
 
+/// The open conversation's place in the list, which folding never hides; SIZE_MAX while none of these is open.
+static size_t open_index(SessionsScreen *s) {
+    const char *selected = pane_selected_id(s->base.pane);
+    if (!str_has_prefix(selected, "conversation:")) return SIZE_MAX;
+    for (size_t i = 0; i < s->count; i++) if (str_eq(session_id(&s->sessions[i]), selected + strlen("conversation:"))) return i;
+    return SIZE_MAX;
+}
+
+SessionNode *screen_projects_shown_rows(SessionsScreen *s, size_t *count) {
+    SessionNode *rows = sessions_nested(s->sessions, s->count, count);
+    *count = sessions_folded(rows, *count, s->sessions, &s->folds, open_index(s));
+    return rows;
+}
+
+void screen_projects_select_all(SessionsScreen *s) {
+    screen_projects_clear_picks(s);
+    size_t n; SessionNode *rows = screen_projects_shown_rows(s, &n);
+    for (size_t k = 0; k < n; k++) screen_projects_toggle_pick(s, session_id(&s->sessions[rows[k].index]));
+    free(rows);
+}
+
+/// Folding drops the picks it hides, so a bulk Close or Delete never acts on a row out of sight.
+static void toggle_fold(SessionsScreen *s, const char *id) {
+    session_folds_toggle(&s->folds, id);
+    size_t n; SessionNode *rows = screen_projects_shown_rows(s, &n);
+    size_t kept = 0;
+    for (size_t p = 0; p < s->picked_count; p++) {
+        bool shown = false;
+        for (size_t k = 0; k < n && !shown; k++) shown = str_eq(session_id(&s->sessions[rows[k].index]), s->picked[p]);
+        if (shown) s->picked[kept++] = s->picked[p]; else free(s->picked[p]);
+    }
+    s->picked_count = kept;
+    free(rows);
+}
+
 /// Open = still holding a workspace and a database, the only kind Close has anything to release.
 static bool session_open(const Session *ses) { const char *st = session_status(ses); return str_eq(st, "queued") || str_eq(st, "preparing") || str_eq(st, "running") || str_eq(st, "idle"); }
 
@@ -126,16 +161,25 @@ static void bulk_next(SessionsScreen *s) {
     store_call(s->queue_delete ? "delete" : "close", args, 0, s, bulk_done, 0, &s->req_bulk);
 }
 
-void screen_projects_bulk_start(SessionsScreen *s, bool del, bool all) {
-    if (s->req_bulk) return;
-    size_t n = 0;
+char **screen_projects_bulk_ids(SessionsScreen *s, bool del, bool all, size_t *count) {
+    size_t n = 0, shown;
+    // Delete all takes every conversation; the picked ones come from the rows on show.
+    SessionNode *rows = screen_projects_shown_rows(s, &shown);
     char **ids = xcalloc(s->count, sizeof *ids);
-    for (size_t i = 0; i < s->count; i++) {
-        const Session *ses = &s->sessions[i];
+    for (size_t i = 0; i < (all ? s->count : shown); i++) {
+        const Session *ses = &s->sessions[all ? i : rows[i].index];
         if (!all && !is_picked(s, session_id(ses))) continue;
         if (!del && !session_open(ses)) continue;
         ids[n++] = xstrdup(session_id(ses));
     }
+    free(rows);
+    *count = n;
+    return ids;
+}
+
+void screen_projects_bulk_start(SessionsScreen *s, bool del, bool all) {
+    if (s->req_bulk) return;
+    size_t n; char **ids = screen_projects_bulk_ids(s, del, all, &n);
     if (!n) { str_array_free(ids, n); return; }
     char *title = del ? xstrfmt("Delete %zu conversation%s and their logs?", n, n == 1 ? "" : "s") : xstrfmt("Close %zu session%s?", n, n == 1 ? "" : "s");
     bool ok = app_confirm(title, del ? "This cannot be undone." : "Each one releases its workspace and database; the conversation stays readable.", del ? "Delete" : "Close", del);
@@ -151,7 +195,7 @@ static void sessions_destroy(Screen *base) {
     SessionsScreen *s = (SessionsScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_bulk); poller_stop(&s->poller);
     sessions_free(s->sessions, s->count); project_free(&s->project); free(s->error); free(s->bulk_error);
-    screen_projects_clear_picks(s); str_array_free(s->queue, s->queue_count);
+    screen_projects_clear_picks(s); str_array_free(s->queue, s->queue_count); session_folds_free(&s->folds);
     screen_release(base);
 }
 
@@ -168,13 +212,16 @@ static void sessions_layout(Screen *base, Doc *doc) {
     free(board_id);
     doc_space(doc, px(4));
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
-    for (size_t i = 0; i < s->count; i++) {
-        const Session *ses = &s->sessions[i];
+    size_t shown; SessionNode *rows = screen_projects_shown_rows(s, &shown);
+    for (size_t k = 0; k < shown; k++) {
+        const Session *ses = &s->sessions[rows[k].index];
         char *id = xstrfmt("conversation:%s", session_id(ses));
         bool lit = s->select_mode ? is_picked(s, session_id(ses)) : str_eq(selected, id);
-        screen_projects_doc_dashboard_session_row(doc, w, ses, lit, s->select_mode, is_picked(s, session_id(ses)), s->select_mode ? ACT_PICK : ACT_OPEN_SESSION, (intptr_t)i);
+        int fold = rows[k].workers ? session_folds_contains(&s->folds, session_id(ses)) : -1;
+        screen_projects_doc_dashboard_session_row(doc, w, ses, lit, s->select_mode, is_picked(s, session_id(ses)), s->select_mode ? ACT_PICK : ACT_OPEN_SESSION, (intptr_t)rows[k].index, rows[k].depth, fold);
         free(id);
     }
+    free(rows);
     if (s->loaded && !s->count) doc_text(doc, px(8), w - px(16), "No conversations here yet.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     if (!s->loaded) doc_loading(doc, 0, w, "Loading\xE2\x80\xA6");
     doc_space(doc, px(8));
@@ -199,6 +246,7 @@ static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
         app_show_detail(conversation_screen_new(&s->sessions[arg]));
         break;
     case ACT_PICK: if ((size_t)arg < s->count) { screen_projects_toggle_pick(s, session_id(&s->sessions[arg])); pane_footer_changed(base->pane); } break;
+    case ACT_FOLD_SESSION: if ((size_t)arg < s->count) { toggle_fold(s, session_id(&s->sessions[arg])); pane_relayout(base->pane); pane_footer_changed(base->pane); } break;
     }
 }
 

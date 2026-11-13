@@ -13,6 +13,7 @@ void core_server_stats_tests(void);
 void app_resources_tests(void);
 void app_server_resources_tests(void);
 void core_session_overview_tests(void);
+void core_session_tree_tests(void);
 void app_status_tests(void);
 
 // core_tests.exe

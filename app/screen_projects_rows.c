@@ -8,7 +8,7 @@ typedef struct { char *name; int count; bool busy, selected, chevron; } ProjectR
 typedef struct {
     char *title, *provider, *branch, *state, *ago, *pr_state;
     bool lit, select_mode, picked, orchestrator, zeus;
-    int meta_h;
+    int meta_h, indent;
 } SessionRowData;
 
 static void project_row_free(void *p);
@@ -100,7 +100,7 @@ static void paint_session_row(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
         if (d->picked) draw_check_mark(cv, &box, theme.on_accent);
         x += px(13) + px(8);
     }
-    x += px(8) + px(8);   // the fold gutter and the gap after it
+    x += d->indent + px(8) + px(8);   // a worker's indent, then the fold gutter and the gap after it
     int right = rc->right - px(8), line_h = px(23);
     // Line one: the mark and the title.
     RECT l1 = { x, top, right, top + line_h };
@@ -142,7 +142,13 @@ static char *session_age(const Session *s) {
     return format_relative(when);
 }
 
-void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg) {
+/// An orchestrator's chevron in the row's fold gutter: › while its workers are hidden, ⌄ while they show.
+static void paint_session_fold(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
+    const bool *folded = it->data;
+    draw_glyph(cv, *folded ? 0xE76C : 0xE70D, rc, FONT_ICON_SMALL, doc_item_hovered(doc, it) ? theme.ink : theme.muted);
+}
+
+void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s, bool lit, bool select_mode, bool picked, int action, intptr_t arg, int depth, int fold) {
     SessionRowData *d = xcalloc(1, sizeof *d);
     d->title = xstrdup(session_display_title(s));
     d->provider = xstrdup(session_provider(s) ? session_provider(s) : "");
@@ -154,9 +160,17 @@ void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s
     const char *pr_state = json_str(json_get(pr, "state"));
     if (pr_state) d->pr_state = xstrdup(str_eq(pr_state, "open") && json_bool_is(json_get(pr, "draft"), true) ? "draft" : pr_state);
     d->lit = lit; d->select_mode = select_mode; d->picked = picked;
-    int x = px(8) + (select_mode ? px(13) + px(8) : 0) + px(16);
+    d->indent = (depth > 4 ? 4 : depth) * px(14);
+    int gutter = px(8) + (select_mode ? px(13) + px(8) : 0) + d->indent, x = gutter + px(16);
     RECT rects[4];
     d->meta_h = meta_layout(doc->cv, d, w - x - px(8), rects);
-    int h = px(7) + px(23) + px(2) + d->meta_h + px(7);
+    int h = px(7) + px(23) + px(2) + d->meta_h + px(7), top = doc->y;
     doc_custom(doc, 0, w, h, paint_session_row, d, session_row_free, action, arg);
+    if (fold < 0) return;
+    // Over the row's gutter, beside its title line, so it takes the click before the row does.
+    RECT rc = { gutter, top + px(7), gutter + px(16), top + px(7) + px(23) };
+    Item *it = doc_item(doc, doc_add(doc, &rc, paint_session_fold));
+    bool *folded = xcalloc(1, sizeof *folded); *folded = fold > 0;
+    it->data = folded; it->free_data = free; it->action = ACT_FOLD_SESSION; it->arg = arg; it->hand = true;
+    it->tip = xstrdup(*folded ? "Show workers" : "Hide workers");
 }

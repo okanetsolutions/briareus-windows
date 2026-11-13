@@ -167,6 +167,62 @@ static void test_hidden_and_destroyed_project_discard_completions(void) {
     finish();
 }
 
+/// The conversation rows as laid out, each orchestrator's chevron after its row as "^id", and a copy of its tip. New string.
+static char *laid_out(SessionsScreen *s, char **tip) {
+    Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 320); s->base.vt->layout(&s->base, &doc);
+    Str out; str_init(&out);
+    for (size_t i = 0; i < doc.count; i++) {
+        const Item *it = &doc.items[i];
+        bool row = it->action == ACT_OPEN_SESSION || it->action == ACT_PICK;
+        if (row || it->action == ACT_FOLD_SESSION) str_appendf(&out, "%s%s%s", out.len ? " " : "", row ? "" : "^", session_id(&s->sessions[it->arg]));
+        if (it->action == ACT_FOLD_SESSION && tip) set_string(tip, it->tip);
+    }
+    doc_free(&doc); str_appendz(&out, "");
+    return out.data;
+}
+
+static char *bulk_ids(SessionsScreen *s, bool del) {
+    size_t n; char **ids = screen_projects_bulk_ids(s, del, false, &n);
+    Str out; str_init(&out);
+    for (size_t i = 0; i < n; i++) str_appendf(&out, "%s%s", i ? " " : "", ids[i]);
+    str_array_free(ids, n); str_appendz(&out, "");
+    return out.data;
+}
+
+static void test_workers_nest_under_their_orchestrator_and_fold(void) {
+    reset();
+    answer = "{\"sessions\":["
+        "{\"id\":\"w2\",\"repo\":\"o/one\",\"status\":\"running\",\"parentId\":\"o1\"},"
+        "{\"id\":\"a\",\"repo\":\"o/one\",\"status\":\"idle\"},"
+        "{\"id\":\"o1\",\"repo\":\"o/one\",\"status\":\"running\",\"orchestrator\":true},"
+        "{\"id\":\"w1\",\"repo\":\"o/one\",\"status\":\"closed\",\"parentId\":\"o1\"}]}";
+    SessionsScreen *s = open_sessions(&one); drain(1);
+    CHECK_INT(s->count, 4);
+    char *shown_tip = NULL, *folded_tip = NULL;
+    CHECK_OWNED_STR(laid_out(s, &shown_tip), "a o1 ^o1 w2 w1");
+    // Select all picks the rows on show; folding drops the picks of the workers it hides.
+    s->select_mode = true;
+    screen_projects_select_all(s); CHECK_INT(s->picked_count, 4);
+    s->base.vt->action(&s->base, ACT_FOLD_SESSION, 2, (POINT){0});
+    CHECK_OWNED_STR(laid_out(s, &folded_tip), "a o1 ^o1");
+    CHECK(shown_tip && folded_tip && !str_eq(shown_tip, folded_tip));
+    CHECK_INT(s->picked_count, 2); CHECK_OWNED_STR(bulk_ids(s, true), "a o1");
+    screen_projects_select_all(s); CHECK_INT(s->picked_count, 2);
+    // The open conversation stays on show under its folded orchestrator, and only then may be picked.
+    pane_set_selected_id(pane, "conversation:w2");
+    CHECK_OWNED_STR(laid_out(s, NULL), "a o1 ^o1 w2");
+    screen_projects_select_all(s); CHECK_INT(s->picked_count, 3);
+    CHECK_OWNED_STR(bulk_ids(s, false), "a o1 w2"); CHECK_OWNED_STR(bulk_ids(s, true), "a o1 w2");
+    pane_set_selected_id(pane, NULL);
+    // A pick a fold hides afterwards is still left out of the bulk action.
+    CHECK_OWNED_STR(bulk_ids(s, true), "a o1");
+    s->base.vt->action(&s->base, ACT_FOLD_SESSION, 2, (POINT){0});
+    CHECK_OWNED_STR(laid_out(s, NULL), "a o1 ^o1 w2 w1");
+    CHECK_OWNED_STR(bulk_ids(s, true), "a o1 w2");
+    free(shown_tip); free(folded_tip);
+    finish();
+}
+
 void app_projects_tests(void) {
     theme_init();
     HWND parent = CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -186,6 +242,7 @@ void app_projects_tests(void) {
     test_run("project sessions restore cached rows and handle errors and empty results", test_project_restores_cache_preserves_errors_and_accepts_empty);
     test_run("deleting a session clears its project cache", test_delete_updates_project_cache);
     test_run("project sessions discard hidden and destroyed request completions", test_hidden_and_destroyed_project_discard_completions);
+    test_run("project sessions nest workers under their orchestrator and fold them with their picks", test_workers_nest_under_their_orchestrator_and_fold);
     pane_destroy(pane); DestroyWindow(parent);
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir);
     api_client_release(g_store.client); server_address_free(&address); api_error_clear(&error);
