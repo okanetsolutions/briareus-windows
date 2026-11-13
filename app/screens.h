@@ -83,8 +83,8 @@ Screen *dashboard_screen_new(void);
 typedef enum { WEB_APP_WHATSAPP, WEB_APP_COUNT } WebApp;
 /// WhatsApp Web, from the sidebar strip's button.
 Screen *web_app_screen_new(WebApp app);
-/// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the database pool, the SSH
-/// servers, the Forge accounts, the mail accounts, each with ＋ New.
+/// The sidebar's ⚙ Settings, as the dashboard's settings page: the projects, the providers, the SSH servers, the Forge
+/// accounts, the mail accounts, each with ＋ New.
 Screen *settings_screen_new(void);
 bool home_assistant_offered(void);
 Screen *home_assistant_screen_new(void);
@@ -312,19 +312,10 @@ Screen *provider_settings_screen_new(const Json *row, const Json *defaults);
 /// The settings sidebar reads the providers again, after one was saved, cloned, deleted or logged in; `open_first` opens
 /// the first one left once read (after a delete).
 void settings_providers_changed(bool open_first);
-/// One server of the database pool, the dashboard's database server form. `row` is the server's DbServer (NULL with
-/// `defaults` for a new one).
-Screen *db_server_settings_screen_new(const Json *row, const Json *defaults);
-/// The settings sidebar reads the database pool again, after a server was saved or deleted; `open_first` opens the first
-/// server left once it is read, unless another settings form is up.
-void settings_db_servers_changed(bool open_first);
 /// What the settings sidebar last read, for the forms; NULL when it is not up.
 const Json *settings_project_rows(void);
 /// Updates the registered Settings sidebar after a form adopts its saved identity.
 void settings_select_id(const char *id);
-const Json *settings_db_server_rows(void);
-/// The servers in the pool, which is how many sessions with a database may be open at once.
-size_t settings_pool_capacity(void);
 /// How many rounds the saved conversations of these projects hold, for the sidebar's count.
 size_t findings_waiting(const Project *projects, size_t count);
 /// The Findings screen read the conversations again: the sidebar counts once more.

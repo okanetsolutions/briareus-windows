@@ -7,7 +7,6 @@ static void settings_done(void *owner, Request *req);
 static void ssh_done(void *owner, Request *req);
 static void forge_done(void *owner, Request *req);
 static void providers_done(void *owner, Request *req);
-static void servers_done(void *owner, Request *req);
 static void order_done(void *owner, Request *req);
 
 static void mcp_done(void *owner, Request *req) {
@@ -178,54 +177,7 @@ void settings_providers_changed(bool open_first) {
     screen_settings_providers_load(screen_settings_g_settings);
 }
 
-const Json *screen_settings_server_rows(SettingsScreen *s) { return json_get(s->servers, "list"); }
-
-void screen_settings_servers_open_row(SettingsScreen *s, size_t index) {
-    const Json *row = json_at(screen_settings_server_rows(s), index);
-    if (json_is_object(row)) app_show_detail(db_server_settings_screen_new(row, json_get(s->servers, "defaults")));
-}
-
-static void servers_done(void *owner, Request *req) {
-    SettingsScreen *s = owner;
-    s->servers_loaded = true;
-    if (!req->ok) { request_error_into(&s->servers_error, req); pane_relayout(s->base.pane); return; }
-    set_string(&s->servers_error, NULL);
-    json_free(s->servers);
-    s->servers = json_object();
-    json_object_set(s->servers, "list", json_clone(json_get(req->result, "servers")));
-    json_object_set(s->servers, "defaults", json_clone(json_get(req->result, "defaults")));
-    pane_relayout(s->base.pane);
-    // After a server was removed, the first one left takes its place, as a project's deletion opens the first project.
-    if (!s->open_first_server) return;
-    s->open_first_server = false;
-    Screen *root = pane_root(app_detail_pane());
-    if (root && screen_settings_is_form_id(root->id)) return;
-    if (json_count(screen_settings_server_rows(s))) screen_settings_servers_open_row(s, 0);
-    else app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults")));
-}
-
-void screen_settings_servers_load(SettingsScreen *s) {
-    if (s->req_servers || !store_supports("settings_db_servers")) { s->servers_loaded = true; return; }
-    store_call("settings_db_servers", json_object(), 0, s, servers_done, 0, &s->req_servers);
-}
-
-void settings_db_servers_changed(bool open_first) {
-    if (!screen_settings_g_settings) return;
-    screen_settings_g_settings->open_first_server = open_first;
-    request_cancel(&screen_settings_g_settings->req_servers);
-    screen_settings_servers_load(screen_settings_g_settings);
-}
-
 const Json *settings_project_rows(void) { return screen_settings_g_settings ? screen_settings_settings_rows(screen_settings_g_settings) : NULL; }
-
-const Json *settings_db_server_rows(void) { return screen_settings_g_settings ? screen_settings_server_rows(screen_settings_g_settings) : NULL; }
-
-size_t settings_pool_capacity(void) {
-    const Json *rows = settings_db_server_rows();
-    size_t n = 0;
-    for (size_t i = 0; i < json_count(rows); i++) if (json_bool_is(json_get(json_at(rows, i), "enabled"), true)) n++;
-    return n;
-}
 
 void screen_settings_settings_load(SettingsScreen *s) { screen_settings_projects_load(s); screen_settings_ssh_load(s); screen_settings_forge_load(s); screen_settings_mcp_load(s); screen_settings_mail_load(s); }
 

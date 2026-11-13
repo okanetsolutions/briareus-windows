@@ -1,6 +1,5 @@
 #ifndef BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
 #define BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
-#include "project_settings.h"
 #include "meeting.h"
 #include "mcp.h"
 #include "ssh_settings.h"
@@ -14,8 +13,8 @@
 
 // MARK: - The sidebar
 
-enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SERVER, ACT_OPEN_SERVER, ACT_NEW_SSH,
-       ACT_OPEN_SSH, ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_OPEN_MEETING, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_NEW_MAIL, ACT_OPEN_MAIL, ACT_OPEN_HOME, ACT_SLEEP };
+enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SSH, ACT_OPEN_SSH,
+       ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_OPEN_MEETING, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_NEW_MAIL, ACT_OPEN_MAIL, ACT_OPEN_HOME, ACT_SLEEP };
 
 enum { MENU_UP = 1, MENU_DOWN };
 
@@ -30,10 +29,6 @@ typedef struct {
     bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
     char *providers_error;
     Request *req_providers;
-    Json *servers;      // the database pool: the server's DbServer rows (`list`) and what a new one starts from (`defaults`)
-    bool servers_loaded, open_first_server;   // the second: open the first row once the list is read (after a delete)
-    char *servers_error;
-    Request *req_servers;
     Json *ssh;          // the server's SshServer rows as `list`, and `defaults`
     bool ssh_loaded;
     char *ssh_error;
@@ -49,7 +44,7 @@ typedef struct {
 } SettingsScreen;
 
 extern SettingsScreen *screen_settings_g_settings;
-typedef struct { char *label, *repo; bool enabled, db, selected, movable; } ProjectRowData;
+typedef struct { char *label, *repo; bool enabled, selected, movable; } ProjectRowData;
 
 typedef struct { char *label, *binary; bool active, login, endpoint, selected, unsaved; } ProviderRowData;
 
@@ -64,8 +59,8 @@ typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint
 enum {
     F_REPO, F_LABEL, F_ENABLED, F_MAIL_TOOLS, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
-    F_DB_NAME, F_DB_EXT, F_DB_POOL, F_DB_RESTORE,
-    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_BABYSIT, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    F_DB_NAME, F_DB_EXT,
+    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
     F_BUDGET, F_IS_SELF,
     F_ENV,
     F_RUN, F_PROFILES,
@@ -102,7 +97,6 @@ typedef struct {
     bool clipped[F_COUNT];
     int lines[F_COUNT];    // a long box's lines, which it grows to show, as the dashboard's textareas do
     bool bools[F_COUNT];
-    ProjectBabysit babysit;
     RuntimePick picks[R_COUNT];
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
@@ -215,13 +209,7 @@ void screen_settings_forge_load(SettingsScreen *s);
 void screen_settings_projects_load(SettingsScreen *s);
 void screen_settings_providers_load(SettingsScreen *s);
 void settings_providers_changed(bool open_first);
-const Json *screen_settings_server_rows(SettingsScreen *s);
-void screen_settings_servers_open_row(SettingsScreen *s, size_t index);
-void screen_settings_servers_load(SettingsScreen *s);
-void settings_db_servers_changed(bool open_first);
 const Json *settings_project_rows(void);
-const Json *settings_db_server_rows(void);
-size_t settings_pool_capacity(void);
 void screen_settings_settings_load(SettingsScreen *s);
 void settings_projects_changed(int select_id);
 void screen_settings_settings_ssh_changed(void);
@@ -244,7 +232,6 @@ bool screen_settings_is_multiline(int f);
 int screen_settings_shown_rows(FormScreen *s, int f);
 bool screen_settings_row_has(FormScreen *s, const char *key);
 bool screen_settings_field_offered(FormScreen *s, int f);
-bool screen_settings_field_enabled(FormScreen *s, int f);
 void screen_settings_pick_clear(RuntimePick *p);
 char *screen_settings_edit_text(HWND edit);
 void screen_settings_set_edit_text(HWND edit, const char *text);
@@ -302,6 +289,4 @@ void screen_settings_forge_ensure_controls(ForgeForm *s);
 void screen_settings_forge_toggle_repo(ForgeForm *s, size_t index);
 void screen_settings_forge_save(ForgeForm *s);
 Screen *screen_settings_forge_settings_screen_new(const Json *row, const Json *defaults);
-
-bool screen_settings_field_bool(FormScreen *s, int f);
 #endif

@@ -42,16 +42,8 @@ void screen_settings_paint_project_row(Doc *doc, Item *it, Canvas *cv, const REC
     int label_right = d->movable && (hovered || d->selected) ? rc->right - px(6) - px(22) * 2 - px(2) - px(6) : rc->right - px(8);
     RECT t = { x + px(7) + px(7), top, label_right, top + lh };
     draw_text(cv, d->label, &t, FONT_SUBHEADLINE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    int y2 = top + lh, right = rc->right - px(8);
-    if (d->db) {
-        // `rounded border border-line px-1 text-[11px]`: the database pool's tag.
-        int h; int bw = draw_chip(NULL, 0, 0, "db", theme.muted, theme.sidebar, &h);
-        int rw = text_width(cv, d->repo, FONT_CAPTION);
-        int bx = x + (rw < right - x - bw - px(8) ? rw : right - x - bw - px(8)) + px(8);
-        draw_chip(cv, bx, y2 + (px(18) - h) / 2, "db", theme.muted, hovered || d->selected ? theme.raise : theme.sidebar, &h);
-        right = bx - px(8);
-    }
-    RECT r = { x, y2, right, y2 + px(18) };
+    int y2 = top + lh;
+    RECT r = { x, y2, rc->right - px(8), y2 + px(18) };
     draw_text(cv, d->repo, &r, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 

@@ -27,11 +27,11 @@ void screen_settings_form_place(Screen *base, const RECT *content, int scroll_y)
     }
 }
 
-/// The next or previous edit that is laid out and enabled, for Tab.
+/// The next or previous edit that is laid out, for Tab.
 static int next_field(FormScreen *s, int from, int step) {
     for (int k = 1; k <= F_COUNT; k++) {
         int f = ((from + step * k) % F_COUNT + F_COUNT) % F_COUNT;
-        if (s->edits[f] && s->laid[f] && screen_settings_field_enabled(s, f)) return f;
+        if (s->edits[f] && s->laid[f]) return f;
     }
     return from;
 }
