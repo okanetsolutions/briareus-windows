@@ -9,7 +9,7 @@ int screen_settings_field_tab(int f) {
     // The project and how a checkout of it is set up, on one tab.
     if (f <= F_PHP) return T_PROJECT;
     if (f <= F_DB_EXT) return T_DATABASE;
-    if (f <= F_FEEDBACK_STEPS) return T_REVIEW;
+    if (f <= F_BENCHMARK) return T_REVIEW;
     if (f <= F_IS_SELF) return T_ORCHESTRATOR;
     if (f == F_ENV) return T_ENV;
     return T_RUN;
@@ -19,7 +19,7 @@ int screen_settings_runtime_tab(int r) { return r == R_WORKER ? T_ORCHESTRATOR :
 
 int screen_settings_line_count(const char *text) { int n = 1; for (const char *c = text; c && *c; c++) if (*c == '\n') n++; return n; }
 
-bool screen_settings_is_edit(int f) { return screen_settings_FIELDS[f].kind != K_BOOL; }
+bool screen_settings_is_edit(int f) { return screen_settings_FIELDS[f].kind != K_BOOL && screen_settings_FIELDS[f].kind != K_CHOICE; }
 
 bool screen_settings_is_multiline(int f) { return screen_settings_FIELDS[f].kind == K_LIST || screen_settings_FIELDS[f].kind == K_AREA; }
 
@@ -87,7 +87,8 @@ static void read_picks(FormScreen *s) { for (int r = 0; r < R_COUNT; r++) screen
 
 /// Fills every field from `s->row`. The edits only once they exist; the flags and pickers at once.
 void screen_settings_form_fill(FormScreen *s) {
-    for (int f = 0; f < F_COUNT; f++) if (!screen_settings_is_edit(f)) s->bools[f] = json_bool_is(json_get(s->row, screen_settings_FIELDS[f].key), true);
+    for (int f = 0; f < F_COUNT; f++) if (screen_settings_FIELDS[f].kind == K_BOOL) s->bools[f] = json_bool_is(json_get(s->row, screen_settings_FIELDS[f].key), true);
+    screen_settings_choices_fill(s);
     read_picks(s);
     s->filling = true;
     for (int f = 0; f < F_COUNT; f++) {
@@ -112,6 +113,11 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab) {
         const char *key = screen_settings_FIELDS[f].key;
         if (!screen_settings_field_offered(s, f)) continue;
         if (screen_settings_FIELDS[f].kind == K_BOOL) { json_set_bool(body, key, s->bools[f]); continue; }
+        if (screen_settings_FIELDS[f].kind == K_CHOICE || f == F_ROUND_LIMIT) {
+            char *bad = screen_settings_review_value(s, f, body);
+            if (bad) { *why = bad; *tab = T_REVIEW; json_free(body); return NULL; }
+            continue;
+        }
         if (!s->edits[f]) continue;
         char *text = screen_settings_edit_text(s->edits[f]);
         switch (screen_settings_FIELDS[f].kind) {
@@ -155,7 +161,7 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab) {
             json_object_set(body, key, board);
             break;
         }
-        case K_BOOL: break;
+        case K_BOOL: case K_CHOICE: break;
         }
         free(text);
     }

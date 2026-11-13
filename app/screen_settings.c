@@ -213,6 +213,8 @@ Screen *settings_screen_new(void) {
     return &s->base;
 }
 
+static const FieldChoice SECURITY_REVIEW_CHOICES[] = { { "off", "Off" }, { "advisory", "Advisory" }, { "required", "Required" } };
+
 const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_REPO] = { "repo", K_TEXT, "Repository", "owner/name", "Cloned over HTTPS with the machine's own git credentials.", 0, false },
     [F_LABEL] = { "label", K_TEXT, "Label", "shown in the project dropdown", NULL, 0, false },
@@ -231,6 +233,8 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_DB_EXT] = { "dbExtensions", K_LIST, "Postgres extensions", NULL,
         "One extension name per line, created in the session's database right after it is created. A fresh Postgres database carries only what template1 does, so migrations that declare a vector column fail without this. The extension itself must already be installed on the server. Ignored on MySQL.", 2, true },
     [F_REVIEW_AUTHOR] = { "prAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
+    [F_ROUND_LIMIT] = { "reviewRoundLimit", K_NUMBER, "Review rounds per pull request", "3",
+        "How many code review rounds a pull request gets across all its commits before a person has to grant one more, 1 to 20, or 0 for no limit. Leave empty for the server's default.", 0, false },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
     [F_AUTO_LOOP] = { "autonomousReviewLoop", K_BOOL, "Autonomous review loop: fix every finding and review again" },
@@ -242,6 +246,11 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
         "Appended to the end of the \xF0\x9F\x93\x8B Test sheet prompt: what this project wants done once the sheet is on the pull request. Leave empty to add nothing.", 4, false },
     [F_FEEDBACK_STEPS] = { "feedbackInstructions", K_AREA, "Feedback closing steps", NULL,
         "Appended to the end of the \xE2\x9A\x99 Implement feedback prompt: what this project wants done once the review comments are implemented. Leave empty to add nothing.", 4, false },
+    [F_SECURITY_REVIEW] = { "securityReview", K_CHOICE, "Security review", NULL,
+        "Whether every code review runs a security pass after discovery, one more turn on the review's runtime. Advisory shows its result; Required keeps the review outcome from passing until the pass has passed.",
+        .choices = SECURITY_REVIEW_CHOICES, .choice_count = sizeof SECURITY_REVIEW_CHOICES / sizeof *SECURITY_REVIEW_CHOICES },
+    [F_ENFORCE_OUTCOME] = { "enforceReviewOutcome", K_BOOL, "Publish the review outcome to GitHub as commit statuses" },
+    [F_BENCHMARK] = { "reviewBenchmark", K_BOOL, "Use this repository for the review benchmark" },
     [F_BUDGET] = { "workerBudgetUsd", K_NUMBER, "Budget (USD)", "no cap",
         "What one orchestration may spend \xE2\x80\x94 the supervisor's turns plus every worker's \xE2\x80\x94 before it pauses and waits for you. Only turns whose provider reports a cost count. Leave empty for no cap.", 0, false },
     [F_IS_SELF] = { "isSelf", K_BOOL, "This project is the dashboard itself" },
