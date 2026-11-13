@@ -86,6 +86,15 @@ static void test_formats_sizes(void) {
     CHECK_OWNED_STR(sftp_format_size(52428800), "50 MB");
 }
 
+static void test_builds_openssh_arguments_with_one_host_key_policy(void) {
+    CHECK_OWNED_STR(openssh_terminal_args("deploy", "example.test", 2222),
+                    "-p 2222 -l deploy -o StrictHostKeyChecking=accept-new -- example.test");
+    CHECK_OWNED_STR(openssh_sftp_args("deploy", "[fe80::1%eth0]", 22),
+                    "-P 22 -o User=deploy -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -- [fe80::1%eth0]");
+    CHECK_OWNED_STR(openssh_query_args("domain\\user", "db.example.test", 22),
+                    "-T -o ServerAliveInterval=30 -o LogLevel=ERROR -p 22 -l domain\\user -o StrictHostKeyChecking=accept-new -- db.example.test");
+}
+
 void sftp_tests(void) {
     test_run("sftp parses a long listing", test_parses_a_long_listing);
     test_run("sftp reads links and skips the dot entries", test_reads_links_and_skips_the_dot_entries);
@@ -93,4 +102,5 @@ void sftp_tests(void) {
     test_run("sftp quotes paths for the command line", test_quotes_paths_for_the_command_line);
     test_run("sftp does path arithmetic", test_does_path_arithmetic);
     test_run("sftp formats sizes", test_formats_sizes);
+    test_run("OpenSSH arguments share the accept-new host key policy", test_builds_openssh_arguments_with_one_host_key_policy);
 }

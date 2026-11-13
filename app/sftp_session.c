@@ -1,9 +1,9 @@
-// SFTP sessions: sftp.exe with its standard input and output on pipes (no console, so ssh asks for passwords and host
-// keys through SSH_ASKPASS, which is this program), a reader thread per session that hands what it prints to the UI
-// thread through a message-only window, and a queue of commands written one at a time. After each command the session
-// writes `version`, whose echo and answer mark where the command's own output ended: sftp echoes every command it reads
-// from a pipe as "sftp> <command>", and its errors arrive on the same pipe, in order. Each session runs in a job object,
-// so closing it (or the app) ends sftp and the ssh it started.
+// SFTP sessions: sftp.exe with its standard input and output on pipes (no console, so ssh asks for passwords, and a
+// jump host's unknown key, through SSH_ASKPASS, which is this program; a new server's key is saved), a reader thread
+// per session that hands what it prints to the UI thread through a message-only window, and a queue of commands written
+// one at a time. After each command the session writes `version`, whose echo and answer mark where the command's own
+// output ended: sftp echoes every command it reads from a pipe as "sftp> <command>", and its errors arrive on the same
+// pipe, in order. Each session runs in a job object, so closing it (or the app) ends sftp and the ssh it started.
 #include "sftp_session.h"
 #include "dialogs.h"
 #include "screens.h"
@@ -517,10 +517,10 @@ static bool spawn(SftpSession *s, char **error) {
     si.lpAttributeList = xmalloc(attr_size);
     bool ok = InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size)
            && UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit, sizeof inherit, NULL, NULL);
-    char *exe = wide_to_utf8(client);
-    char *line = xstrfmt("\"%s\" -P %d -o User=%s -o ServerAliveInterval=30 -- %s", exe, s->port, s->user, s->host);
+    char *exe = wide_to_utf8(client), *args = openssh_sftp_args(s->user, s->host, s->port);
+    char *line = xstrfmt("\"%s\" %s", exe, args);
     wchar_t *cmd = utf8_to_wide(line);
-    free(exe); free(line);
+    free(exe); free(args); free(line);
     wchar_t *env = sftp_child_environment();
     wchar_t *dir = NULL;
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &dir))) dir = NULL;

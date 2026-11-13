@@ -100,3 +100,18 @@ char *sftp_format_size(long long bytes) {
     do { v /= 1024; u++; } while (v >= 1024 && u < 3);
     return v < 10 ? xstrfmt("%.1f %s", v, units[u]) : xstrfmt("%.0f %s", v, units[u]);
 }
+
+// accept-new needs OpenSSH 7.6; Windows' own client ships 7.7 or later and Git for Windows' is newer.
+static const char HOST_KEY_OPTION[] = "-o StrictHostKeyChecking=accept-new";
+char *openssh_terminal_args(const char *user, const char *host, int port) {
+    return xstrfmt("-p %d -l %s %s -- %s", port, user, HOST_KEY_OPTION, host);
+}
+char *openssh_sftp_args(const char *user, const char *host, int port) {
+    return xstrfmt("-P %d -o User=%s -o ServerAliveInterval=30 %s -- %s", port, user, HOST_KEY_OPTION, host);
+}
+char *openssh_query_args(const char *user, const char *host, int port) {
+    char *ssh = openssh_terminal_args(user, host, port);
+    char *args = xstrfmt("-T -o ServerAliveInterval=30 -o LogLevel=ERROR %s", ssh);
+    free(ssh);
+    return args;
+}

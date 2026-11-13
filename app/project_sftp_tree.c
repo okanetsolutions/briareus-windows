@@ -110,7 +110,7 @@ static void layout_session(ProjectSftp *p, SftpSession *s, Doc *doc, int x, int 
         doc_loading(doc, x, w, line);
         free(line);
         doc_space(doc, px(8));
-        doc_text(doc, x, w, "A password or an unknown host key is asked for in a window of its own.", FONT_CAPTION, theme.muted, DT_CENTER | DT_WORDBREAK);
+        doc_text(doc, x, w, "A new server\xE2\x80\x99s host key is saved automatically. A password, or a jump host to trust, is asked for in a window of its own.", FONT_CAPTION, theme.muted, DT_CENTER | DT_WORDBREAK);
         return;
     }
     SftpNode *root = sftp_root(s);
@@ -155,7 +155,8 @@ void project_sftp_layout(ProjectSftp *p, Doc *doc, int w) {
         doc_space(doc, px(40));
         doc_empty_state(doc, rx, rw, 0xE8B7, "No open sessions",
                         "Click a server on the left to browse its files here, and upload and download them. It connects from this PC straight to the "
-                        "server with your own OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply; passwords are asked for in a window.");
+                        "server with your own OpenSSH client, so your keys, ssh-agent and ~/.ssh/config apply, though a new server\xE2\x80\x99s host key is "
+                        "saved without asking; passwords are asked for in a window.");
     } else {
         project_sftp_layout_tabs(p, doc, rx, rw);
         doc_space(doc, px(10));
