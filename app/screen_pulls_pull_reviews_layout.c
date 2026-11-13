@@ -17,7 +17,8 @@ static void reveal_selection(PullScreen *s, Doc *doc, int first, int last) {
 }
 // The Code reviews tab: the table of reviews, or the findings of the one opened from it.
 void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c) {
-    s->reviews.reason_laid = false; s->reviews.note_laid = false;   // until the editor and approval form lay their boxes out again
+    s->reviews.reason_laid = false;   // until the editor lays its reason box out again
+    approval_form_layout_begin(&s->reviews.approvals);
     if (!screen_pulls_reviews_sync(s)) {
         doc_notice(doc, c.ix, c.iw, "Stored code reviews are not supported by this server or token. Update the server or check project read access."); return;
     }
@@ -34,7 +35,7 @@ void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c) {
     // the note when there is none yet.
     screen_pulls_review_outcome(s, doc, c);
     screen_pulls_review_security(s, doc, c);
-    screen_pulls_review_approvals(s, doc, c);
+    approval_form_layout(&r->approvals, doc, c.ix, c.iw, r->outcome ? &r->outcome->approvals : NULL);
     if (!json_count(r->items)) { doc_text(doc, c.ix, c.iw, "No stored code reviews.", FONT_BODY, theme.secondary, DT_WORDBREAK); return; }
     screen_pulls_review_history(s, doc, c);
 }

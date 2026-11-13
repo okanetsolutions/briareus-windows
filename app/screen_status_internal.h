@@ -3,6 +3,8 @@
 #include "screens.h"
 #include "session_cache.h"
 #include "pull_attention.h"
+#include "review_approvals_card.h"
+#include "review_outcome_card.h"
 #include "session_overview.h"
 #include "str.h"
 #include <stdlib.h>
@@ -11,6 +13,8 @@
 #include <time.h>
 
 enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI, STATUS_PULL, STATUS_SECURITY };
+// Each pull request waiting on an approval takes APPROVAL_ACTIONS from here, in the order they are listed.
+enum { STATUS_APPROVALS_BASE = 1500 };
 typedef struct {
     Session session;
     Json *identity, *answered_question;
@@ -23,7 +27,19 @@ typedef struct {
     RECT label_rect, rect;
 } StatusCard;
 typedef struct { size_t card; int option; } StatusAction;
+typedef struct StatusScreen StatusScreen;
+// A pull request waiting on a person's approval (a `review-approval` attention item), approved in place: its review
+// outcome from its own `code_reviews` read and the approvals card, whose write it owns. Kept while that write is under
+// way, even once attention no longer lists it.
 typedef struct {
+    StatusScreen *screen;   // borrowed
+    char *repo, *summary; int number;
+    Json *outcome_state; ReviewOutcome *outcome;
+    char *error; bool read, stale;
+    Request *req;
+    ApprovalForm form;
+} StatusApproval;
+struct StatusScreen {
     Screen base;
     ApiClient *client; // retained connection identity, never reused for another server/token
     Project *projects; size_t project_count;
@@ -37,16 +53,28 @@ typedef struct {
     // click laid out before names the list it was laid out for.
     PullAttention *pulls; size_t pull_count;
     char *attention_error; unsigned pulls_generation; bool attention_loaded;
-    time_t attention_at;   // when the last attention read was sent
+    time_t attention_at, attention_retry_at;   // when the last attention read was sent; until when a refusal holds polls back
+    StatusApproval **approvals; size_t approval_count;
     Json *send_question, *send_identity;
     char *send_text, *error;
     Poller poller;
     bool loaded, shown;
-} StatusScreen;
+};
 bool status_current(StatusScreen *s);
 void status_rebuild(StatusScreen *s);
 void status_load(StatusScreen *s);
 void status_open_pull(StatusScreen *s, intptr_t arg);
+// Reads attention again now, as after an approval landed; `force` ignores the 30-second spacing.
+void status_attention_load(StatusScreen *s, bool force);
+// The approvals asked for in place (screen_status_approvals.c): kept in step with the attention list, laid out under
+// their item, and stopped with the screen.
+void status_approvals_merge(StatusScreen *s);
+StatusApproval *status_approval_for(StatusScreen *s, const PullAttention *pull);
+void status_approval_layout(StatusScreen *s, Doc *doc, int x, int w, StatusApproval *a);
+void status_approvals_place(StatusScreen *s, const RECT *content, int scroll_y);
+bool status_approvals_action(StatusScreen *s, int action, intptr_t arg);
+void status_approvals_cancel(StatusScreen *s);
+void status_approvals_free(StatusScreen *s);
 void status_questions_next(StatusScreen *s);
 void status_cancel_questions(StatusScreen *s);
 void status_send(StatusScreen *s, size_t card, const char *text);

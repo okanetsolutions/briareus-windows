@@ -86,6 +86,9 @@ static void waiting_pulls(StatusScreen *s, Doc *doc, int x, int w) {
         if (pull->summary) doc_text(doc, x + px(8), w - px(16), pull->summary, FONT_CAPTION, theme.muted, DT_WORDBREAK);
         doc_box_end(doc, box, px(8));
         doc_box_action(doc, box, STATUS_PULL, (intptr_t)((s->pulls_generation & 0xFFFF) << 16) | (intptr_t)i);
+        // One waiting on an approval is approved here, under its review outcome.
+        StatusApproval *approval = pull->kind == PULL_ATTENTION_APPROVAL ? status_approval_for(s, pull) : NULL;
+        if (approval) status_approval_layout(s, doc, x, w, approval);
         doc_rule(doc, x, w);
     }
 }
@@ -136,6 +139,7 @@ void status_layout(Screen *base, Doc *doc) {
     if (doc->y < waiting_bottom) doc->y = waiting_bottom;
 }
 void status_controls_hide(StatusScreen *s) {
+    status_approvals_place(s, NULL, 0);
     for (size_t i = 0; i < s->card_count; i++) {
         if (s->cards[i]->label) ShowWindow(s->cards[i]->label, SW_HIDE);
         if (s->cards[i]->edit) ShowWindow(s->cards[i]->edit, SW_HIDE);
@@ -202,6 +206,7 @@ void status_place(Screen *base, const RECT *content, int scroll_y) {
         SetWindowRgn(c->edit, CreateRectRgn(visible.left - r.left, visible.top - r.top, visible.right - r.left, visible.bottom - r.top), TRUE);
         ShowWindow(c->edit, SW_SHOWNA);
     }
+    status_approvals_place(s, content, scroll_y);
 }
 void status_command(Screen *base, int id, int code, HWND control) {
     (void)id; StatusScreen *s = (StatusScreen *)base;

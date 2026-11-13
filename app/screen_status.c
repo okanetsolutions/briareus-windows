@@ -1,4 +1,5 @@
 #include "screen_status_internal.h"
+#include <math.h>
 
 bool status_current(StatusScreen *s) { return s->client == g_store.client && store_connected(); }
 
@@ -100,15 +101,20 @@ static void attention_done(void *owner, Request *req) {
     if (req->ok && pull_attention_parse(req->result, &items, &count)) {
         pull_attention_free(s->pulls, s->pull_count); s->pulls = items; s->pull_count = count; s->pulls_generation++;
         set_string(&s->attention_error, NULL);
-    } else { char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error); }
+        status_approvals_merge(s);
+    } else {
+        char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error);
+        // A refusal's Retry-After holds the polls back; a refresh does not wait.
+        if (req->error.retry_after > 0) s->attention_retry_at = time(NULL) + (time_t)ceil(req->error.retry_after);
+    }
     pane_relayout(s->base.pane);
 }
 // Pull requests waiting on a person are read beside the sessions, on servers that list them, at most every 30 seconds
 // unless a refresh asks.
-static void attention_load(StatusScreen *s, bool force) {
+void status_attention_load(StatusScreen *s, bool force) {
     if (!status_current(s) || s->attention_read || !store_supports("attention")) return;
-    if (!force && s->attention_at && time(NULL) - s->attention_at < 30) return;
-    s->attention_at = time(NULL);
+    if (!force && ((s->attention_at && time(NULL) - s->attention_at < 30) || time(NULL) < s->attention_retry_at)) return;
+    s->attention_at = time(NULL); s->attention_retry_at = 0;
     store_call("attention", json_object(), 0, s, attention_done, 0, &s->attention_read);
 }
 // A listed pull request opens on its Code reviews tab; one of a project this token no longer lists opens on GitHub.
@@ -122,7 +128,7 @@ void status_open_pull(StatusScreen *s, intptr_t arg) {
     if (pull->href) open_web_url(pull->href);
 }
 void status_load(StatusScreen *s) {
-    attention_load(s, false);
+    status_attention_load(s, false);
     if (!status_current(s) || s->projects_read || s->sessions_read) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->projects_read);
 }
@@ -149,6 +155,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         return;
     }
     if (action == STATUS_PULL) { status_open_pull(s, arg); return; }
+    if (status_current(s) && status_approvals_action(s, action, arg)) return;
     if (!status_current(s) || arg < s->action_first || arg >= s->action_next) return;
     StatusAction a = s->actions[arg - s->action_first];
     if (a.card >= s->card_count) return;
@@ -175,9 +182,10 @@ static void timer(Screen *base, UINT id) {
 }
 static void visible(Screen *base, bool shown) {
     StatusScreen *s = (StatusScreen *)base; s->shown = shown;
-    if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); }
+    if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); status_approvals_merge(s); }
     else {
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
+        status_approvals_cancel(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
     }
@@ -186,7 +194,8 @@ static void activated(Screen *base, bool active) { if (active) visible(base, tru
 static void refresh(Screen *base) {
     StatusScreen *s = (StatusScreen *)base;
     request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
-    attention_load(s, true); status_load(s);
+    for (size_t i = 0; i < s->approval_count; i++) s->approvals[i]->stale = true;
+    status_attention_load(s, true); status_load(s);
 }
 static void destroy(Screen *base) {
     StatusScreen *s = (StatusScreen *)base; visible(base, false);
@@ -198,7 +207,7 @@ static void destroy(Screen *base) {
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);
-    pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
+    status_approvals_free(s); pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
     api_client_release(s->client); screen_release(base);
 }
 static const ScreenVTable VT = {
