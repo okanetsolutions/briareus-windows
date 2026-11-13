@@ -23,6 +23,7 @@ typedef struct {
     volatile LONG inbox_reads, review_reads, writes;
     char *url; Json *body;
     CRITICAL_SECTION lock;
+    HANDLE held, release;   // when set, the next review read waits here until released
 } Stub;
 static HWND dispatcher;
 static Pane *pane;
@@ -45,7 +46,9 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     else if (strstr(url, "/code-reviews")) { InterlockedIncrement(&stub->review_reads); answer = stub->review ? stub->review : REVIEW; }
     else if (strstr(url, "/projects")) answer = "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
     *response = xstrdup(answer); *len = strlen(answer);
+    bool hold = stub->held && strstr(url, "/code-reviews");
     LeaveCriticalSection(&stub->lock);
+    if (hold) { SetEvent(stub->held); WaitForSingleObject(stub->release, 10000); }
     return true;
 }
 static void pump(int expected) {
@@ -141,10 +144,14 @@ static void a_server_without_the_inbox_or_a_read_token_approves_nothing(void) {
 static void hiding_cancels_the_reads_and_showing_reads_them_again(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); pump(4);
     // A review read cut short by hiding Status is read again once it shows.
-    status_approvals_load(s, true); pump(1); CHECK(s->approvals[0]->req != NULL);
+    stub.held = CreateEventW(NULL, TRUE, FALSE, NULL); stub.release = CreateEventW(NULL, TRUE, FALSE, NULL);
+    status_approvals_load(s, true); pump(1);
+    CHECK_INT(WaitForSingleObject(stub.held, 10000), WAIT_OBJECT_0); CHECK(s->approvals[0]->req != NULL);
     s->base.vt->visible(&s->base, false);
     CHECK(s->attention_read == NULL); CHECK(s->approvals[0]->req == NULL);
-    settle();   // the cancelled read may still reach the transport
+    HANDLE held = stub.held; stub.held = NULL; SetEvent(stub.release);
+    settle();   // the cancelled read finishes and is discarded
+    CloseHandle(held); CloseHandle(stub.release); stub.release = NULL;
     LONG before = stub.review_reads;
     s->base.vt->visible(&s->base, true); settle();
     CHECK_INT(stub.review_reads, before + 1); CHECK(!s->approvals[0]->stale);
