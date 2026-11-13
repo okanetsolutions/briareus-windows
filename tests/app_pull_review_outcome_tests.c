@@ -57,6 +57,27 @@ static void the_outcome_heads_the_tab_and_follows_each_answer(void) {
     CHECK_INT(f.reads, 2);
     doc_free(&d); s->base.vt->destroy(&s->base); screen_fixture_clear(&f);
 }
+static void the_security_pass_shows_in_full_under_the_outcome(void) {
+    ScreenFixture f; PullScreen *s = setup(&f, "{" REVIEWS ",\"reviewOutcome\":{\"outcome\":\"changes_required\",\"security\":{\"policy\":\"required\","
+        "\"result\":\"failed\",\"blocking\":true,\"requiredByRisk\":\"high\",\"headSha\":\"abcdef1234567\",\"stage\":\"completed\","
+        "\"reasons\":[{\"code\":\"fix_required\",\"effect\":\"failed\",\"message\":\"Fix the logged token\"}],"
+        "\"coverage\":{\"categories\":[{\"id\":\"secrets\",\"applicable\":true,\"assessment\":\"A token is logged.\",\"findings\":1}],"
+        "\"entries\":[{\"id\":\"s1\",\"severity\":\"high\",\"title\":\"Token in the log\",\"filePath\":\"core/api.c\",\"startLine\":42}]},"
+        "\"counts\":{\"findings\":1,\"fix\":1}}}}");
+    Doc d; doc_init(&d); draw(s, &d);
+    CHECK(contains(&d, "Failed \xC2\xB7 required")); CHECK(contains(&d, "high risk tier")); CHECK(contains(&d, "Pass completed on abcdef1"));
+    CHECK(contains(&d, "1 finding \xC2\xB7 1 to fix")); CHECK(contains(&d, "Fix the logged token"));
+    CHECK(contains(&d, "Token in the log")); CHECK(contains(&d, "core/api.c:42"));
+    // What the pass examined is folded until it is opened.
+    CHECK(!contains(&d, "A token is logged.")); CHECK(contains(&d, "What the pass examined"));
+    act(s, ACT_REVIEW_SECURITY, 0); draw(s, &d);
+    CHECK(contains(&d, "Secrets")); CHECK(contains(&d, "Applies \xC2\xB7 1 finding")); CHECK(contains(&d, "A token is logged."));
+    // A project whose policy is off ran no pass: no block.
+    f.read_response = "{" REVIEWS ",\"reviewOutcome\":{\"outcome\":\"passed\",\"security\":{\"policy\":\"off\",\"result\":\"not_required\"}}}";
+    screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); draw(s, &d);
+    CHECK(contains(&d, "Review outcome: Passed")); CHECK(!contains(&d, "What the pass examined")); CHECK(!contains(&d, "Token in the log"));
+    doc_free(&d); s->base.vt->destroy(&s->base); screen_fixture_clear(&f);
+}
 static void an_older_server_shows_no_outcome(void) {
     ScreenFixture f; PullScreen *s = setup(&f, "{" REVIEWS "}");
     Doc d; doc_init(&d); draw(s, &d);
@@ -74,4 +95,5 @@ static void an_older_server_shows_no_outcome(void) {
 void app_pull_review_outcome_tests(void) {
     test_run("the review outcome heads the Code reviews tab and follows reads, verdict saves and handling saves", the_outcome_heads_the_tab_and_follows_each_answer);
     test_run("an older server shows no review outcome; an empty list still shows one", an_older_server_shows_no_outcome);
+    test_run("the security pass shows in full under the outcome, what it examined folded", the_security_pass_shows_in_full_under_the_outcome);
 }

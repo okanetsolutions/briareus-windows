@@ -96,7 +96,7 @@ enum {
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_SUMMARY, ACT_REVIEW_BACK,
     ACT_REVIEW_HANDLING, ACT_REVIEW_EDIT, ACT_REVIEW_VERDICT, ACT_REVIEW_EVIDENCE, ACT_REVIEW_SAVE, ACT_REVIEW_CANCEL,
-    ACT_REVIEW_APPROVE, ACT_REVIEW_WITHDRAW, ACT_REVIEW_APPROVAL_SEND, ACT_REVIEW_APPROVAL_CANCEL, ACT_REVIEW_RISK,
+    ACT_REVIEW_APPROVE, ACT_REVIEW_WITHDRAW, ACT_REVIEW_APPROVAL_SEND, ACT_REVIEW_APPROVAL_CANCEL, ACT_REVIEW_RISK, ACT_REVIEW_SECURITY,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -144,6 +144,7 @@ typedef struct {
     long long approval_form, approval_saving, note_for;
     char *approval_error;
     HWND note; RECT note_rc; bool note_laid, focus_note, risk_open;
+    bool security_open;   // "What the pass examined" unfolded in the security block
 } PullReviews;
 
 typedef struct {
@@ -354,6 +355,10 @@ COLORREF screen_pulls_review_tone_color(ReviewTone tone);
 void screen_pulls_review_reasons(Doc *doc, Col c, const ReviewReasons *reasons, int gap);
 /// Wrapped text, or nothing for NULL or an empty string.
 void screen_pulls_review_line(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color);
+/// A titled fact, "Security  Passed · required", on a line of its own; frees `value`.
+void screen_pulls_review_fact(Doc *doc, Col c, const char *title, char *value, ReviewTone tone);
+/// The security pass in full under the outcome (screen_pulls_pull_review_security.c).
+void screen_pulls_review_security(PullScreen *s, Doc *doc, Col c);
 /// Shows `box` over `laid` (content coordinates) clipped to the view below the pinned header; false when it is hidden.
 bool screen_pulls_review_box_place(PullScreen *s, HWND box, const RECT *laid, const RECT *content, int scroll_y);
 // The approvals block under the outcome (screen_pulls_pull_review_approvals.c) and its writes.

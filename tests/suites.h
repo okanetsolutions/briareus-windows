@@ -91,4 +91,5 @@ void app_pull_review_outcome_tests(void);
 void app_pull_review_approvals_tests(void);
 void core_review_outcome_tests(void);
 void core_review_approvals_tests(void);
+void core_review_security_tests(void);
 #endif

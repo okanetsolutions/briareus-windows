@@ -1,5 +1,6 @@
 #include "review_outcome.h"
 #include "review_approvals.h"
+#include "review_security.h"
 #include "str.h"
 #include <stdlib.h>
 #include <string.h>
@@ -53,15 +54,6 @@ void review_reasons_free(ReviewReasons *reasons) {
     free(reasons->items);
     memset(reasons, 0, sizeof *reasons);
 }
-static void security_parse(const Json *j, ReviewSecurity *out) {
-    const char *result = json_str_nonempty(json_get(j, "result"));
-    if (!json_is_object(j) || !result) return;
-    out->present = true; out->result = xstrdup(result);
-    const char *policy = json_str_nonempty(json_get(j, "policy"));
-    out->policy = xstrdup(policy ? policy : "off");
-    out->blocking = json_bool_is(json_get(j, "blocking"), true);
-    review_reasons_parse(json_get(j, "reasons"), &out->reasons);
-}
 static void rounds_parse(const Json *j, ReviewRounds *out) {
     double used;
     if (!json_is_object(j) || !json_num(json_get(j, "used"), &used)) return;
@@ -81,7 +73,7 @@ bool review_outcome_parse(const Json *state, ReviewOutcome *out) {
     out->published = json_bool_is(json_get(status, "published"), true);
     out->status_error = json_dup_nonempty(json_get(status, "error"));
     out->status_retried = !json_is_null(json_get(status, "retryAt"));
-    security_parse(json_get(o, "security"), &out->security);
+    review_security_parse(json_get(o, "security"), &out->security);
     review_approvals_parse(json_get(o, "approvals"), &out->approvals);
     rounds_parse(json_get(state, "reviewRounds"), &out->rounds);
     return true;
@@ -89,7 +81,7 @@ bool review_outcome_parse(const Json *state, ReviewOutcome *out) {
 void review_outcome_free(ReviewOutcome *o) {
     if (!o) return;
     review_reasons_free(&o->reasons); free(o->status_error);
-    free(o->security.policy); free(o->security.result); review_reasons_free(&o->security.reasons);
+    review_security_free(&o->security);
     review_approvals_free(&o->approvals);
     memset(o, 0, sizeof *o);
 }

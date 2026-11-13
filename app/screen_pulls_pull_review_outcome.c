@@ -1,9 +1,9 @@
 #include "screen_pulls_internal.h"
 
 // What the pull request's code review amounts to, at the top of the Code reviews tab (the Mac's ReviewOutcomeCard): the
-// outcome and the rounds used, whether it is ready, stale or still to reach GitHub, why, and the security pass. The
-// approvals the change's risk asks for follow in their own block (screen_pulls_pull_review_approvals.c). The words and
-// tones are review_outcome.c's.
+// outcome and the rounds used, whether it is ready, stale or still to reach GitHub, and why. The security pass and the
+// approvals the change's risk asks for follow in blocks of their own (screen_pulls_pull_review_security.c and
+// screen_pulls_pull_review_approvals.c). The words and tones are review_outcome.c's.
 
 // Keeps the outcome and rounds `answer` carries, as `source` decides, beside the reviews.
 void screen_pulls_review_outcome_take(PullReviews *r, const Json *answer, ReviewOutcomeSource source) {
@@ -48,9 +48,7 @@ void screen_pulls_review_reasons(Doc *doc, Col c, const ReviewReasons *list, int
 void screen_pulls_review_line(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color) {
     if (text && *text) doc_text(doc, x, w, text, f, color, DT_WORDBREAK);
 }
-// A titled fact, "Security  Passed · required", on a line of its own.
-static void fact(Doc *doc, Col c, const char *title, char *value, ReviewTone tone) {
-    doc_space(doc, px(8));
+void screen_pulls_review_fact(Doc *doc, Col c, const char *title, char *value, ReviewTone tone) {
     int top = doc->y, tw = text_width(doc->cv, title, FONT_FOOTNOTE_SEMIBOLD) + px(8);
     RECT t = {c.ix, top, c.ix + tw, top + font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD)};
     doc_text_at(doc, &t, title, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE);
@@ -97,10 +95,6 @@ void screen_pulls_review_outcome(PullScreen *s, Doc *doc, Col c) {
     }
     free(status);
     screen_pulls_review_reasons(doc, in, &o->reasons, px(8));
-    if (review_security_shown(&o->security)) {
-        fact(doc, in, "Security", review_security_line(&o->security), review_security_tone(&o->security));
-        screen_pulls_review_reasons(doc, in, &o->security.reasons, px(2));
-    }
     doc_box_end(doc, box, pad);
     doc_item(doc, box)->hover_fill = false;
     doc_space(doc, px(14));

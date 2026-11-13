@@ -13,8 +13,25 @@ typedef enum { REVIEW_OUTCOME_PENDING, REVIEW_OUTCOME_INCOMPLETE, REVIEW_OUTCOME
 // `message` falls back to the code in words.
 typedef struct { char *code, *effect, *message; } ReviewReason;
 typedef struct { ReviewReason *items; size_t count; } ReviewReasons;
-// The security pass under the project's policy (`off`, `advisory`, `required`), its result and its own reasons.
-typedef struct { bool present, blocking; char *policy, *result; ReviewReasons reasons; } ReviewSecurity;
+// One risk category the security pass assessed (`coverage.categories`): whether the change touches it, what was
+// examined and concluded, and how many of its findings fall under it.
+typedef struct { char *id, *assessment; bool applicable; int findings; } SecurityCategory;
+// One finding the pass recorded (`coverage.entries`); `start_line` 0 when it names none.
+typedef struct { char *category, *severity, *title, *file_path; int start_line; } SecurityEntry;
+// The review's findings marked security, and how they and earlier rounds' security claims stand (`counts`).
+typedef struct { int findings, fix, optional, dismissed, suppressed, unverified; } SecurityCounts;
+// The security pass under the project's policy (`off`, `advisory`, `required`), its result and its own reasons; the
+// rest is its overview (review_security.h): the tier that made it required, the stage and head it covered, and the
+// coverage record it left (`covered` false until a pass completed with one).
+typedef struct {
+    bool present, blocking, stale, covered;
+    char *policy, *result, *required_by_risk, *stage, *head_sha;   // the last three NULL when absent
+    ReviewReasons reasons;
+    SecurityCounts counts;
+    SecurityCategory *categories; size_t category_count;
+    SecurityEntry *entries; size_t entry_count;
+    int claims_fixed, claims_standing;   // earlier security claims the pass found fixed, or still standing
+} ReviewSecurity;
 // One approval on record (`Approval`): recorded by a person through Briareus, or read from GitHub (`from_github`, with
 // `user_id` 0). `counted` says whether it counts now; `reason` and `message` say why not.
 typedef struct {
