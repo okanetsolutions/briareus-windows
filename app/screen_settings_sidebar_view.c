@@ -145,14 +145,7 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     screen_settings_section_title(doc, w, "This computer", NULL, 0);
     char *sleep_label = sleep_after() ? xstrfmt("Sleep after: %d min", sleep_after()) : xstrdup("Sleep after: Never");
     doc_button(doc, px(8), w - px(16), sleep_label, BUTTON_BORDERED, ACT_SLEEP, 0, true);
-    free(sleep_label); doc_space(doc, px(8));
-    ProjectRowData *meeting = xcalloc(1, sizeof *meeting);
-    meeting->label = xstrdup("\xF0\x9F\x8E\x99 Meeting assistant");
-    meeting->repo = xstrdup(meeting_has_key(MEETING_KEY_ELEVENLABS) ? "ElevenLabs API key saved" : "add an ElevenLabs API key");
-    meeting->enabled = meeting_has_key(MEETING_KEY_ELEVENLABS);
-    meeting->selected = str_eq(selected, "settings-meeting");
-    doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), screen_settings_paint_project_row, meeting, screen_settings_project_row_free, ACT_OPEN_MEETING, 0);
-    doc_space(doc, px(16));
+    free(sleep_label); doc_space(doc, px(16));
     if (home_assistant_offered()) {
         doc_button(doc, 0, w, "Smart home", BUTTON_BORDERED, ACT_OPEN_HOME, 0, true);
         doc_space(doc, px(16));

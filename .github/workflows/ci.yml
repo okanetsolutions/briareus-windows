@@ -38,7 +38,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck curl
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cppcheck
       - name: Build the app and run the tests, warnings as errors
         run: mingw32-make WERROR=1
       - name: Build crash probe
@@ -65,7 +65,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-python-gcovr curl
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-python-gcovr
       - name: Measure line coverage of core/ (fails below the floor in the Makefile)
         run: |
           set -o pipefail
@@ -143,7 +143,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
-          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make curl
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make
       - name: Build with run-time checks and run the tests
         run: mingw32-make WERROR=1 sanitize
 

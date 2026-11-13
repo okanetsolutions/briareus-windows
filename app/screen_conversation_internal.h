@@ -3,7 +3,6 @@
 #include "saved_prompts.h"
 #include "attach_list.h"
 #include "dialogs.h"
-#include "meeting.h"
 #include "screens.h"
 #include "str.h"
 #include "session_working.h"

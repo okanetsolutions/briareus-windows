@@ -1,6 +1,6 @@
 # Briareus for Windows
 
-This repository is the native Windows client for Briareus. It uses C11, Win32, and one C++17 drawing file, `app/canvas.cpp`, because DirectWrite's SDK interface requires C++. The only third-party library is the pinned miniaudio download. Keep the executable statically linked and avoid new dependencies.
+This repository is the native Windows client for Briareus. It uses C11, Win32, and one C++17 drawing file, `app/canvas.cpp`, because DirectWrite's SDK interface requires C++. It uses no third-party libraries. Keep the executable statically linked and avoid new dependencies.
 
 ## Structure
 

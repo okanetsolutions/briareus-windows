@@ -45,7 +45,6 @@ static void pulls_destroy(Screen *base) {
 
 static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     PullsScreen *s = (PullsScreen *)base;
-    if (action == ACT_MEET) { meeting_menu(&s->project, pane_hwnd(base->pane), pt); pane_header_changed(base->pane); return; }
     if (project_ssh_action(s->ssh, action, arg, pt)) return;
     if (project_sftp_action(s->sftp, action, arg, pt)) return;
     if (project_run_action(s->run, action, arg, pt)) return;
@@ -71,13 +70,10 @@ static void pulls_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_TAB:
         // The side panel belongs to the Board tab's cards.
         if (s->tab == TAB_BOARD && arg != TAB_BOARD && !app_set_overlay(NULL)) return;
-        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || (arg == TAB_FILES && project_files_offered()) || arg == TAB_MEETING || arg == TAB_REVIEW ? (int)arg : TAB_PULLS;
+        s->tab = arg == TAB_ISSUES || ((arg == TAB_SSH || arg == TAB_SFTP) && project_ssh_offered()) || (arg == TAB_RUN && project_run_offered()) || (arg == TAB_DB && project_db_offered()) || (arg == TAB_FORGE && project_forge_offered()) || (arg == TAB_BOARD && board_tab_offered(&s->project)) || (arg == TAB_FILES && project_files_offered()) || arg == TAB_REVIEW ? (int)arg : TAB_PULLS;
         if (s->tab == TAB_RUN) project_run_open(s->run);
         if (s->tab == TAB_BOARD) board_tab_open(s->board_tab);
         if (s->tab == TAB_FILES) project_files_open(s->files);
-        // The transcript, like a conversation's, keeps to its latest line.
-        pane_stick_to_bottom(base->pane, s->tab == TAB_MEETING);
-        if (s->tab == TAB_MEETING) pane_scroll_to_bottom(base->pane);
         pane_relayout(base->pane); pane_header_changed(base->pane);
         break;
     case ACT_CLEAR: { if (s->tab == TAB_PULLS) s->hide_later_stacked = false; BoardFilter *f = screen_pulls_current_filter(s); board_filter_free(f); board_filter_init(f); s->has_opening = false; screen_pulls_filters_save(s); pane_relayout(base->pane); pane_header_changed(base->pane); break; }

@@ -177,9 +177,9 @@ def findings(path, source, app_headers, snapshot):
             if token.value in API_CALLS and path != "app/store.c":
                 result.append(Finding("direct-api", token.value, token.line,
                                       f"{token.value} bypasses store; use a store request helper"))
-            if token.value.startswith("WinHttp") and path != "app/ws.c":
+            if token.value.startswith("WinHttp"):
                 result.append(Finding("direct-http", token.value, token.line,
-                                      "WinHTTP belongs in core transport or app/ws.c, not screen/app helpers"))
+                                      "WinHTTP belongs in core transport, not screen/app helpers"))
     return result
 
 
@@ -269,10 +269,13 @@ def check(before, after):
     test_changes = any(
         path in after and token_values(before.get(path, "")) != token_values(after[path]) for path in core_tests
     )
-    # A removed core module may retire its own suite instead; deleting a suite never covers an edited module.
+    # A removed core module may retire its own suite instead; deleting a suite never covers an edited module. A module
+    # family (core/meet.c with core/meet_tools.c) removed whole may retire the family's one suite.
     retired = {match.group(1) for path in core_tests if path in before and path not in after
                for match in [re.fullmatch(r"tests/core_(.+)_tests\.c", path)] if match}
-    removed = lambda stem: stem in retired and not any(f"core/{stem}{ext}" in after for ext in (".c", ".h"))
+    gone = lambda stem: not any(f"core/{stem}{ext}" in after for ext in (".c", ".h"))
+    removed = lambda stem: gone(stem) and any(gone(suite) and (stem == suite or stem.startswith(suite + "_"))
+                                              for suite in retired)
     untested = [path for path in core_changes if not test_changes and not removed(PurePosixPath(path).stem)]
     if untested:
         errors.append("core test gate: add or update a meaningful tests/core_*tests.c suite for " + ", ".join(untested))

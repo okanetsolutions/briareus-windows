@@ -170,8 +170,8 @@ static void test_stack_filter_is_saved_and_keeps_next_prs(void) {
         "{\"number\":5,\"title\":\"Unknown stack\",\"stack\":{\"total\":3}}],\"issues\":[]}";
     Screen *s = board(); s->vt->refresh(s); drain(2);
     HeaderInfo h = header(s);
-    CHECK_INT(h.buttons[0].glyph, 0xE720);
-    CHECK_STR(h.buttons[0].tip, "Join a meeting with an assistant that can look up this project");
+    // A project's header has no microphone button.
+    for (int j = 0; j < h.button_count; j++) CHECK(h.buttons[j].glyph != 0xE720);
     const char *selectors[] = { "All authors \xE2\x96\xBE", "All reviewers \xE2\x96\xBE", "All labels \xE2\x96\xBE" };
     const char *tips[] = { "Filter by author", "Filter by reviewer", "Filter by label" };
     wchar_t glyphs[3] = {0};

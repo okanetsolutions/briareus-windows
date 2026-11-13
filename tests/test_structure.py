@@ -42,7 +42,7 @@ class StructureRules(unittest.TestCase):
             with self.subTest(call=call):
                 self.assertTrue(self.errors(f"void f(void) {{ {call}(c); }}"))
         self.assertEqual([], self.errors("void f(void) { api_call(c); }", path="app/store.c"))
-        self.assertEqual([], self.errors("void f(void) { WinHttpOpen(c); }", path="app/ws.c"))
+        self.assertTrue(self.errors("void f(void) { WinHttpOpen(c); }", path="app/store.c"))
 
     def test_if_line_limit_and_exact_boundary(self):
         self.assertEqual([], self.errors("if (a &&\n b &&\n c) f();"))
@@ -115,6 +115,17 @@ class StructureRules(unittest.TestCase):
         self.assertTrue(any("core test gate" in error and "core/a.c, core/a.h" in error for error in errors))
         after = {"core/a.c": "int x = 2;"}
         self.assertTrue(any("core test gate" in error for error in check(before, after)))
+
+    def test_deleted_core_module_family_may_retire_its_suite(self):
+        suite = "void test(void) { CHECK_INT(x, 1); }"
+        before = {"core/a.c": "int x = 1;", "core/a_tools.c": "int y = 1;", "core/ab.c": "int z = 1;",
+                  "tests/core_a_tests.c": suite}
+        self.assertEqual([], check(before, {"core/ab.c": before["core/ab.c"]}))
+        errors = check(before, {"core/a.c": before["core/a.c"], "core/ab.c": before["core/ab.c"]})
+        self.assertTrue(any("core test gate" in error and "core/a_tools.c" in error for error in errors))
+        errors = check(before, {})
+        self.assertTrue(any("core test gate" in error and "core/ab.c" in error and "core/a.c," not in error
+                            for error in errors))
 
     def test_deleted_core_files_are_not_covered_by_another_modules_suite(self):
         suite = "void test(void) { CHECK_INT(x, 1); }"
@@ -563,8 +574,10 @@ class GitIntegration(unittest.TestCase):
         self.assertEqual(0, self.run_check().returncode)
 
     def test_parenthesized_callees_use_call_rules(self):
+        # The core transport adapter is a core change, so its suite changes too.
+        self.write("tests/core_a_tests.c", "void test(void) { CHECK_INT(value, 2); }\n")
         for callee, diagnostic, adapter in [("api_call", "bypasses store", "app/store.c"),
-                                             ("WinHttpOpen", "WinHTTP belongs", "app/ws.c")]:
+                                             ("WinHttpOpen", "WinHTTP belongs", "core/api.c")]:
             for expression in [f"({callee})(c)", f"(({callee}))(c)", f"(*{callee})(c)"]:
                 with self.subTest(expression=expression):
                     self.write("app/helper.c", expression + ";\n")
