@@ -320,9 +320,6 @@ static const Expected ROUTE_TABLE[] = {
     { "test_provider", "POST", "settings/providers/test" }, { "provider_status", "GET", "settings/providers/{id}/status" },
     { "provider_login", "POST", "settings/providers/{id}/login" }, { "provider_login_start", "POST", "settings/providers/{id}/login/start" },
     { "provider_login_finish", "POST", "settings/providers/{id}/login/finish" },
-    { "settings_db_servers", "GET", "settings/db-servers" }, { "create_db_server", "POST", "settings/db-servers" },
-    { "update_db_server", "PUT", "settings/db-servers/{id}" }, { "delete_db_server", "DELETE", "settings/db-servers/{id}" },
-    { "test_db_server", "POST", "settings/db-servers/test" },
     { "settings_ssh_servers", "GET", "settings/ssh/servers" }, { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" }, { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
@@ -1202,6 +1199,10 @@ static void test_removed_integrations_are_unregistered(void) {
     CHECK(api_route("create_slack_workspace") == NULL);
     CHECK(api_route("update_slack_workspace") == NULL);
     CHECK(api_route("delete_slack_workspace") == NULL);
+    // The server dropped its per-session database server pool; SSH servers keep their database login.
+    static const char *const db_pool[] = { "settings_db_servers", "create_db_server", "update_db_server", "delete_db_server", "test_db_server" };
+    for (size_t i = 0; i < sizeof db_pool / sizeof *db_pool; i++) CHECK(api_route(db_pool[i]) == NULL);
+    CHECK(api_route("ssh_db_credentials") != NULL);
     CHECK(api_route("serve") != NULL);
     CHECK(api_route("serve_branch") != NULL);
     CHECK(api_route("browser_stream") != NULL);

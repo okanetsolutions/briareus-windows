@@ -17,10 +17,10 @@ static void settings_refresh(Screen *base);
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift);
 
 // Settings, as the dashboard's settings page: a sidebar of its own (Back to sessions, the mail accounts, the projects, the
-// providers, the database pool, the SSH servers, the Forge accounts, each with ＋ New) and a project's form, its
-// sections as tabs, or an SSH server's or a Forge account's on one tab, saved through
-// /settings/projects, /settings/ssh/servers, /settings/forge/accounts. The provider form is screen_provider_settings.c and a
-// database server's screen_db_servers.c. Those routes need an Admin token; any other token gets a sentence saying so.
+// providers, the SSH servers, the Forge accounts, each with ＋ New) and a project's form, its sections as tabs, or an SSH
+// server's or a Forge account's on one tab, saved through /settings/projects, /settings/ssh/servers,
+// /settings/forge/accounts. The provider form is screen_provider_settings.c. Those routes need an Admin token; any other
+// token gets a sentence saying so.
 
 static void sign_out(void) {
     if (!app_confirm("Sign out of this dashboard?", "The device token and the saved conversations are removed from this computer. Revoke the token itself in web Settings.", "Sign out", true)) return;
@@ -41,10 +41,10 @@ double screen_settings_ssh_row_id(const Json *row) { double id; return json_num(
 /// A Forge account's id is, like an SSH server's, the time it was added in milliseconds.
 char *screen_settings_forge_form_id(double id) { return id > 0 ? xstrfmt("settings-forge:%.0f", id) : xstrdup("settings-forge:new"); }
 
-/// A settings form in the detail pane: a project's, a provider's, a database server's, an SSH server's, a Forge account's,
-/// or the meeting assistant's.
+/// A settings form in the detail pane: a project's, a provider's, an SSH server's, a Forge account's, or the meeting
+/// assistant's.
 bool screen_settings_is_form_id(const char *id) {
-    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:") || str_has_prefix(id, "settings-db:")
+    return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:")
                   || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-home") || str_eq(id, "settings-meeting") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
 }
@@ -70,11 +70,10 @@ SettingsScreen *screen_settings_g_settings;
 static void settings_destroy(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (screen_settings_g_settings == s) screen_settings_g_settings = NULL;
-    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers); request_cancel(&s->req_servers);
+    request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers);
     request_cancel(&s->req_ssh); request_cancel(&s->req_forge);
     json_free(s->projects); free(s->error);
     json_free(s->providers); free(s->providers_error);
-    json_free(s->servers); free(s->servers_error);
     json_free(s->ssh); free(s->ssh_error); api_client_release(s->ssh_account); free(s->ssh_device);
     json_free(s->forge); free(s->forge_error);
     request_cancel(&s->req_mcp); json_free(s->mcp); free(s->mcp_error); api_client_release(s->mcp_account);
@@ -123,8 +122,6 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     case ACT_OPEN_PROJECT: screen_settings_settings_open_row(s, (size_t)arg); break;
     case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
     case ACT_OPEN_PROVIDER: screen_settings_settings_open_provider(s, (size_t)arg); break;
-    case ACT_NEW_SERVER: app_show_detail(db_server_settings_screen_new(NULL, json_get(s->servers, "defaults"))); break;
-    case ACT_OPEN_SERVER: screen_settings_servers_open_row(s, (size_t)arg); break;
     case ACT_NEW_SSH:
         if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) break;
         app_show_detail(screen_settings_ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
@@ -176,7 +173,6 @@ static void settings_visible(Screen *base, bool shown) {
     if (!shown) return;
     if (!s->loaded && !s->req) screen_settings_projects_load(s);
     if (!s->providers_loaded && !s->req_providers) screen_settings_providers_load(s);
-    if (!s->servers_loaded && !s->req_servers) screen_settings_servers_load(s);
     if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) screen_settings_ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) screen_settings_forge_load(s);
     if (!s->mcp_loaded || s->mcp_account != g_store.client) screen_settings_mcp_load(s);
@@ -188,7 +184,6 @@ static void settings_refresh(Screen *base) {
     request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_mcp);
     request_cancel(&s->req_mail); s->mail_loaded = false; screen_settings_settings_load(s);
     request_cancel(&s->req_providers); screen_settings_providers_load(s);
-    request_cancel(&s->req_servers); screen_settings_servers_load(s);
 }
 
 static bool settings_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
@@ -213,7 +208,6 @@ Screen *settings_screen_new(void) {
     s->base.vt = &settings_vt; s->base.id = xstrdup("settings");
     s->projects = json_object(); s->ssh = json_object(); s->forge = json_object();
     s->providers = json_object();
-    s->servers = json_object();
     s->mcp = json_object();
     s->mail = json_object();
     screen_settings_g_settings = s;
@@ -226,7 +220,7 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_ENABLED] = { "enabled", K_BOOL, "Active: sessions can be started on this project" },
     [F_MAIL_TOOLS] = { "mailToolsEnabled", K_BOOL, "Allow sessions to access connected email accounts" },
     [F_LOCAL_DIR] = { "localDir", K_TEXT, "Local checkout", "/home/you/www/your-checkout",
-        "This machine's own checkout of the repo. A session started in Local mode works directly in it: no clone, no setup steps, no pooled database, and the tree is used exactly as it stands. Leave empty to keep Local mode off for this project.", 0, true },
+        "This machine's own checkout of the repo. A session started in Local mode works directly in it: no clone, no setup steps, no database of its own, and the tree is used exactly as it stands. Leave empty to keep Local mode off for this project.", 0, true },
     [F_BOARD] = { "projectBoard", K_BOARD, "GitHub Projects board", "https://github.com/orgs/acme/projects/1/views/2",
         "The board the project's \xE2\x96\xA6 Board tab shows: its address on GitHub, with the view whose filter and columns it follows. The server's GitHub token needs Projects: read. Leave empty for no Board tab.", 0, true },
     [F_SETUP] = { "setupCommands", K_LIST, "Setup commands", NULL,
@@ -234,16 +228,12 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_PHP] = { "phpBinDir", K_TEXT, "PHP bin directory", "/usr/bin (or ~/.phpenv/versions/8.4/bin)",
         "Prepended to PATH for everything this project runs. Leave empty for the machine's PHP.", 0, true },
     [F_DB_NAME] = { "dbPoolDatabase", K_TEXT, "Database", "my_app",
-        "What DB_DATABASE is set to in the session's environment. With the pool on, created on the claimed server if it does not exist yet. With the pool off, every session gets a database of its own, this name plus the session id, created on the server the .env template points at, and written into the checkout's .env. Leave empty to use the .env template as-is. Migrations and seeding belong in the setup commands.", 0, true },
+        "What DB_DATABASE is set to in the session's environment. Every session gets a database of its own, this name plus the session id, created on the server the .env template points at, and written into the checkout's .env. Leave empty to use the .env template as-is. Migrations and seeding belong in the setup commands.", 0, true },
     [F_DB_EXT] = { "dbExtensions", K_LIST, "Postgres extensions", NULL,
         "One extension name per line, created in the session's database right after it is created. A fresh Postgres database carries only what template1 does, so migrations that declare a vector column fail without this. The extension itself must already be installed on the server. Ignored on MySQL.", 2, true },
-    [F_DB_POOL] = { "dbPoolEnabled", K_BOOL, "Give each session a database server of its own" },
-    [F_DB_RESTORE] = { "dbRestoreSql", K_TEXT, "Restore from .sql", "/home/you/dumps/my_app.sql",
-        "A dump on this machine, piped into the database every time a server is claimed, right after it is created, before the setup steps run. Leave empty to skip. The servers themselves are added under Database pool in the sidebar.", 0, true },
     [F_REVIEW_AUTHOR] = { "prAuthor", K_TEXT, "PR author", "github-username", NULL, 0, true },
     [F_PUBLISH] = { "reviewPublishInstructions", K_AREA, "Publish steps", NULL,
         "Sent to the agent as its own turn after a \xE2\x8C\x95 Code review: this text and nothing else. Leave empty to run no turn after the review.", 4, false },
-    [F_BABYSIT] = { "babysitPrs", K_BOOL, "Babysit pull requests" },
     [F_AUTO_LOOP] = { "autonomousReviewLoop", K_BOOL, "Autonomous review loop: fix every finding and review again" },
     [F_TEST_SHEET] = { "reviewTestSheet", K_BOOL, "Write a test sheet when the \xF0\x9F\x8E\xAC QA errand is started" },
     [F_TEST_RUN] = { "reviewTestRun", K_BOOL, "Execute the test sheet and record a video of each scenario" },

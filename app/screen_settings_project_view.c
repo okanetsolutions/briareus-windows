@@ -19,7 +19,6 @@ static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
 bool screen_settings_tab_changed(FormScreen *s, int t) {
     for (int f = 0; f < F_COUNT; f++) {
         if (screen_settings_field_tab(f) != t || !screen_settings_field_offered(s, f)) continue;
-        if (f == F_BABYSIT) { if (project_babysit_changed(&s->babysit)) return true; continue; }
         if (!screen_settings_is_edit(f)) { if (s->bools[f] != json_bool_is(json_get(s->row, screen_settings_FIELDS[f].key), true)) return true; continue; }
         if (!s->edits[f]) continue;
         char *now = screen_settings_edit_text(s->edits[f]), *saved = screen_settings_field_text(s->row, f);
@@ -58,18 +57,14 @@ static void layout_tabs(FormScreen *s, Doc *doc, int x, int w) {
 static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     FormScreen *s = it->data;
     int f = (int)it->arg;
-    bool on = screen_settings_field_enabled(s, f);
-    COLORREF border = s->focused == f ? theme.accent_dim : theme.line;
-    // A disabled edit paints the same fill, so only the border says the box is off.
-    fill_round_rect(cv, rc, px(6), theme.raise, on ? border : blend(border, theme.canvas, 0.5));
+    fill_round_rect(cv, rc, px(6), theme.raise, s->focused == f ? theme.accent_dim : theme.line);
 }
 
 /// A labelled box with its edit, the hint behind a help icon beside the label; advances.
 void screen_settings_field(FormScreen *s, Doc *doc, int x, int w, int f) {
     if (!screen_settings_field_offered(s, f)) return;
     const FieldDef *d = &screen_settings_FIELDS[f];
-    bool on = screen_settings_field_enabled(s, f);
-    doc_field_label(doc, x, w, d->label, on ? theme.ink : theme.muted, d->hint);
+    doc_field_label(doc, x, w, d->label, theme.ink, d->hint);
     doc_space(doc, px(6));
     FontId fid = d->mono ? FONT_MONO : FONT_BODY;
     int fh = edit_line_height(fid);
@@ -81,7 +76,6 @@ void screen_settings_field(FormScreen *s, Doc *doc, int x, int w, int f) {
     RECT er = screen_settings_is_multiline(f) ? (RECT){ x + px(10), box.top + px(8), x + w - px(3), box.bottom - px(8) }
                               : (RECT){ x + px(10), box.top + (h - fh) / 2, x + w - px(10), box.top + (h - fh) / 2 + fh };
     s->rects[f] = er; s->laid[f] = true;
-    if (s->edits[f]) EnableWindow(s->edits[f], on);
     doc->y = box.bottom;
     doc_space(doc, px(14));
 }
@@ -93,7 +87,7 @@ static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     // A pixel under the row's middle, so the box sits on the label's capitals rather than its line box.
     int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2 + px(1);
     RECT b = { rc->left, top, rc->left + size, top + size };
-    bool on = screen_settings_field_bool(s, f);
+    bool on = s->bools[f];
     fill_round_rect(cv, &b, px(3), on ? theme.accent : theme.field, on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
     if (on) draw_check_mark(cv, &b, theme.on_accent);
     RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
@@ -196,7 +190,6 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
     }
     case T_DATABASE:
         screen_settings_field(s, doc, x, col, F_DB_NAME); screen_settings_field(s, doc, x, col, F_DB_EXT);
-        check(s, doc, x, col, F_DB_POOL); screen_settings_field(s, doc, x, col, F_DB_RESTORE);
         break;
     case T_REVIEW:
         screen_settings_field(s, doc, x, (col - px(28)) / 3, F_REVIEW_AUTHOR);
@@ -205,9 +198,6 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
         check(s, doc, x, col, F_AUTO_LOOP);
         if (screen_settings_field_offered(s, F_AUTO_LOOP) && s->bools[F_AUTO_LOOP])
             screen_settings_note(doc, x, col, "Every finding of a session's review-loop round, low severity and parked ones too, goes to \xE2\x9A\x99 Implement feedback on its own, and the fix is pushed and reviewed again until a round comes back clean and code-approved. The loop's round limit and repeated-findings check still stop one that cannot converge. Sessions still need their review loop switched on; a standalone \xE2\x8C\x95 Code review keeps its manual findings.");
-        check(s, doc, x, col, F_BABYSIT);
-        const char *babysit_note = project_babysit_note(&s->babysit);
-        if (babysit_note) screen_settings_note(doc, x, col, babysit_note);
         // Each step runs as a turn of its own, on the code review's runtime unless it names one; a step switched off has none.
         check(s, doc, x, col, F_TEST_SHEET);
         if (s->bools[F_TEST_SHEET]) runtime_row(s, doc, x + px(23), col - px(23), R_TEST_SHEET);

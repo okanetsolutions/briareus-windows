@@ -26,15 +26,14 @@ static Screen *new_form(int kind) {
     case 1: return project_settings_screen_new(NULL, NULL);
     case 2: return provider_settings_screen_new(NULL, NULL);
     case 3: return screen_settings_ssh_settings_screen_new(NULL, NULL);
-    case 4: return screen_settings_forge_settings_screen_new(NULL, NULL);
-    default: return db_server_settings_screen_new(NULL, NULL);
+    default: return screen_settings_forge_settings_screen_new(NULL, NULL);
     }
 }
 static void settings_leave_lifetime(void) {
     static const ScreenVTable vt = {.action = check_leave};
     Screen navigation = {.vt = &vt};
     const int answers[] = {IDCANCEL, IDOK};
-    for (int kind = 0; kind < 6; kind++) {
+    for (int kind = 0; kind < 5; kind++) {
         for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
             ScreenFixture f; screen_fixture_init(&f, NULL, 0);
             Screen *s = new_form(kind); screen_fixture_pane(&f, s); pane_push(f.pane, s);

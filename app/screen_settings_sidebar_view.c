@@ -5,7 +5,6 @@ static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected)
 static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_forge(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_mail(SettingsScreen *s, Doc *doc, int w, const char *selected);
-static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
 
@@ -163,54 +162,17 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     screen_settings_section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected); doc_space(doc, px(8)); return; }
     layout_projects(s, doc, w, selected);
-    // The providers sessions start on, then the database pool, below the projects as on the dashboard; a server without
-    // the routes shows neither.
+    // The providers sessions start on, below the projects as on the dashboard; a server without the routes does not show
+    // them.
     if (store_supports("settings_providers")) {
         doc_space(doc, px(8));
         screen_settings_section_title(doc, w, "Providers", NULL, store_supports("create_provider") ? ACT_NEW_PROVIDER : 0);
         layout_providers(s, doc, w, selected);
     }
-    if (store_supports("settings_db_servers")) {
-        doc_space(doc, px(8));
-        // One open session with a database per server in the pool, so the pool's size heads the section, as the sessions
-        // it lets run at once (the dashboard's "· 2 parallel sessions with a database", cut to the sidebar's width).
-        size_t n = settings_pool_capacity();
-        char *screen_settings_note = n ? xstrfmt("\xC2\xB7 %zu session%s", n, n == 1 ? "" : "s") : NULL;
-        screen_settings_section_title(doc, w, "Database pool", screen_settings_note, store_supports("create_db_server") ? ACT_NEW_SERVER : 0);
-        free(screen_settings_note);
-        layout_servers(s, doc, w, selected);
-    }
     // The SSH servers agents may run commands on, as on the dashboard, then the Forge accounts on a server that has them.
     layout_ssh(s, doc, w, selected);
     if (store_supports("settings_forge_accounts")) layout_forge(s, doc, w, selected);
     if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected);
-}
-
-/// The database pool: each server with its dot and host:port.
-static void layout_servers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
-    if (s->servers_error) { doc_notice(doc, px(8), w - px(16), s->servers_error); doc_space(doc, px(8)); }
-    const Json *rows = screen_settings_server_rows(s);
-    int h = px(6) + px(22) + px(18) + px(6);
-    for (size_t i = 0; i < json_count(rows); i++) {
-        const Json *row = json_at(rows, i);
-        ProjectRowData *d = xcalloc(1, sizeof *d);
-        const char *host = json_str(json_get(row, "host"));
-        d->repo = xstrfmt("%s:%d", host ? host : "", json_int_or(json_get(row, "port"), 0));
-        d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
-        d->enabled = json_bool_is(json_get(row, "enabled"), true);
-        char *id = xstrfmt("settings-db:%d", screen_settings_row_id(row));
-        d->selected = str_eq(selected, id);
-        free(id);
-        doc_custom(doc, 0, w, h, screen_settings_paint_project_row, d, screen_settings_project_row_free, ACT_OPEN_SERVER, (intptr_t)i);
-    }
-    if (str_eq(selected, "settings-db:new")) {
-        ProjectRowData *d = xcalloc(1, sizeof *d);
-        d->label = xstrdup("New database server"); d->repo = xstrdup("not saved yet"); d->selected = true;
-        doc_custom(doc, 0, w, h, screen_settings_paint_project_row, d, screen_settings_project_row_free, 0, 0);
-    }
-    if (s->servers_loaded && !json_count(rows) && !s->servers_error) doc_text(doc, px(8), w - px(16), "No servers yet. Add one so sessions can claim a database of their own.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
-    if (!s->servers_loaded) doc_loading(doc, 0, w, "Loading the database pool\xE2\x80\xA6");
-    doc_space(doc, px(8));
 }
 
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected) {
@@ -253,7 +215,6 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         d->repo = xstrdup(repo ? repo : "");
         d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
         d->enabled = !json_bool_is(json_get(row, "enabled"), false);
-        d->db = json_bool_is(json_get(row, "dbPoolEnabled"), true);
         char *id = screen_settings_form_id(screen_settings_row_id(row));
         d->selected = str_eq(selected, id);
         free(id);
