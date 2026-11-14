@@ -223,6 +223,20 @@ void pane_place_control(HWND control, const RECT *rc) {
     if (moved || !shown) RedrawWindow(control, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME);
 }
 
+bool pane_place_clipped(Pane *pane, HWND box, const RECT *laid, const RECT *content, int scroll_y) {
+    HWND parent = pane_hwnd(pane);
+    if (GetParent(box) != parent) SetParent(box, parent);
+    RECT area; GetClientRect(parent, &area);
+    int left = (area.right - pane_content_width(pane)) / 2;
+    RECT rc = *laid, view = *content, visible;
+    OffsetRect(&rc, content->left + left, content->top - scroll_y);
+    if (pane_doc(pane)->pin_last) view.top += pane_doc(pane)->pin_bottom;
+    if (!IntersectRect(&visible, &rc, &view)) { ShowWindow(box, SW_HIDE); return false; }
+    MoveWindow(box, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, TRUE);
+    SetWindowRgn(box, CreateRectRgn(visible.left - rc.left, visible.top - rc.top, visible.right - rc.left, visible.bottom - rc.top), TRUE);
+    ShowWindow(box, SW_SHOWNA);
+    return true;
+}
 static RECT client(Pane *p) { RECT rc; GetClientRect(p->hwnd, &rc); return rc; }
 RECT pane_content_rect(Pane *p) {
     RECT rc = client(p);

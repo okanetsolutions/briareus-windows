@@ -1,6 +1,7 @@
 #ifndef BRIAREUS_SCREEN_SECURITY_INTERNAL_H
 #define BRIAREUS_SCREEN_SECURITY_INTERNAL_H
 #include "screens.h"
+#include "review_outcome_card.h"
 #include "review_security.h"
 #include "str.h"
 #include <stdlib.h>

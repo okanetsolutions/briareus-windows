@@ -394,6 +394,14 @@ void request_cancel(Request **slot) {
 char *request_error_text(const Request *req) { return api_error_description(&req->error); }
 void request_error_into(char **slot, const Request *req) { free(*slot); *slot = request_error_text(req); }
 bool request_outcome_unknown(const Request *req) { return !req->ok && !api_error_is_refusal(&req->error); }
+void request_write_error_into(char **slot, const Request *req) {
+    char *text = request_error_text(req);
+    if (request_outcome_unknown(req)) {
+        char *said = xstrfmt("%s It may still have been saved; refresh before trying again.", text);
+        free(text); text = said;
+    }
+    free(*slot); *slot = text;
+}
 char *request_error_or_unexpected(const Request *req) {
     return req->ok ? xstrdup("The server returned an unexpected response.") : request_error_text(req);
 }

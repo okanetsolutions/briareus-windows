@@ -23,7 +23,7 @@ static void change_verdict(PullScreen *s, Doc *doc, Col c, const Json *r, const 
     if (!screen_pulls_review_can_edit(r)) return;
     const CodeReviewFindingEdit *e = s->reviews.editing;
     bool open = e && e->review_id == code_review_id(r) && e->finding_id == code_review_id(f);
-    ButtonSpec button = {0xE70F, "Change verdict", BUTTON_BORDERED, ACT_REVIEW_EDIT, (intptr_t)code_review_id(f), !open && !s->reviews.req_write};
+    ButtonSpec button = {0xE70F, "Change verdict", BUTTON_BORDERED, ACT_REVIEW_EDIT, (intptr_t)code_review_id(f), !open && !screen_pulls_reviews_writing(&s->reviews)};
     doc_button_row(doc, c.ix, c.iw, &button, 1);
     doc_space(doc, px(10));
 }

@@ -158,7 +158,23 @@ static void a_security_pass_reads_its_policy_and_reasons(void) {
     CHECK(!o.security.present); CHECK(!o.approvals.present); CHECK(!review_security_shown(&o.security)); CHECK(!review_approvals_shown(&o.approvals));
     review_outcome_free(&o);
 }
+static void a_kept_outcome_follows_each_answer_and_drops(void) {
+    Json *state = NULL; ReviewOutcome *o = NULL;
+    Json *read = json_parsez(FULL); review_outcome_keep(&state, &o, read, REVIEW_OUTCOME_FROM_READ); json_free(read);
+    CHECK(o != NULL); if (o) { CHECK_INT(o->outcome, REVIEW_OUTCOME_CHANGES_REQUIRED); CHECK_INT(o->rounds.used, 3); }
+    // An approval's answer without an outcome replaces only the approvals and keeps the rounds.
+    Json *approved = json_parsez("{\"approvals\":{\"enabled\":true,\"result\":\"satisfied\",\"required\":2,\"valid\":2}}");
+    review_outcome_keep(&state, &o, approved, REVIEW_OUTCOME_FROM_APPROVAL); json_free(approved);
+    CHECK(o != NULL); if (o) { CHECK_STR(o->approvals.result, "satisfied"); CHECK_INT(o->rounds.used, 3); CHECK_INT(o->outcome, REVIEW_OUTCOME_CHANGES_REQUIRED); }
+    // An answer without anything this client knows leaves no outcome.
+    Json *empty = json_parsez("{\"codeReviews\":[]}"); review_outcome_keep(&state, &o, empty, REVIEW_OUTCOME_FROM_READ); json_free(empty);
+    CHECK(o == NULL); CHECK(state == NULL);
+    read = json_parsez(FULL); review_outcome_keep(&state, &o, read, REVIEW_OUTCOME_FROM_READ); json_free(read);
+    review_outcome_drop(&state, &o); CHECK(state == NULL); CHECK(o == NULL);
+    review_outcome_drop(&state, &o);
+}
 void core_review_outcome_tests(void) {
+    test_run("a kept review outcome follows each answer and drops", a_kept_outcome_follows_each_answer_and_drops);
     test_run("a review outcome answer reads its outcome, reasons, security pass, approvals and rounds", an_answer_reads_every_part);
     test_run("every review outcome has its own tone and title", every_outcome_has_its_tone);
     test_run("an older server or an unknown outcome leaves none", no_outcome_from_an_older_server_or_an_unknown_one);

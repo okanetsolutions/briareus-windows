@@ -86,6 +86,17 @@ void review_outcome_free(ReviewOutcome *o) {
     memset(o, 0, sizeof *o);
 }
 
+void review_outcome_keep(Json **state, ReviewOutcome **outcome, const Json *answer, ReviewOutcomeSource source) {
+    Json *next = review_outcome_state(answer, source, *state);
+    review_outcome_drop(state, outcome);
+    *state = next; *outcome = xcalloc(1, sizeof **outcome);
+    if (!review_outcome_parse(next, *outcome)) { free(*outcome); *outcome = NULL; }
+}
+void review_outcome_drop(Json **state, ReviewOutcome **outcome) {
+    json_free(*state); *state = NULL;
+    review_outcome_free(*outcome); free(*outcome); *outcome = NULL;
+}
+
 const char *review_outcome_title(ReviewOutcomeKind kind) {
     switch (kind) {
     case REVIEW_OUTCOME_PENDING: return "Pending";

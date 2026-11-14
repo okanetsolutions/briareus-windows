@@ -73,6 +73,10 @@ Json *review_outcome_state(const Json *answer, ReviewOutcomeSource source, const
 // server, or nothing read yet). Free with review_outcome_free.
 bool review_outcome_parse(const Json *state, ReviewOutcome *out);
 void review_outcome_free(ReviewOutcome *outcome);
+// What a screen keeps of a pull request's review: `*state` as review_outcome_state leaves it after `answer`, and
+// `*outcome` read from it (owned, NULL while it holds none this client knows). Drop frees both and leaves them NULL.
+void review_outcome_keep(Json **state, ReviewOutcome **outcome, const Json *answer, ReviewOutcomeSource source);
+void review_outcome_drop(Json **state, ReviewOutcome **outcome);
 
 // The server's `reasons` list read into `out`, every entry with a code; free with review_reasons_free.
 void review_reasons_parse(const Json *list, ReviewReasons *out);
