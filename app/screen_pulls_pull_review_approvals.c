@@ -55,7 +55,7 @@ static char *given(const ReviewApproval *a) {
 // One approval on record: who and whether it counts, where and for which head, when, its notes, and Withdraw.
 static void approval(PullScreen *s, Doc *doc, Col c, const ReviewApproval *a, bool form_open) {
     PullReviews *r = &s->reviews;
-    COLORREF tone = screen_pulls_review_tone_color(review_approval_tone(a));
+    COLORREF tone = review_tone_color(review_approval_tone(a));
     wchar_t glyph = a->counted ? 0xE73E : a->withdrawn ? 0xE7A7 : 0xE738;
     char *who = review_approval_who(a), *state = review_approval_state(a), *detail = review_approval_detail(a), *at = given(a);
     char *heading = xstrfmt("%s \xC2\xB7 %s", who, state);

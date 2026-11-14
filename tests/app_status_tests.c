@@ -6,7 +6,7 @@
 static Route routes[] = {
     { "GET", "/projects", "read" }, { "GET", "/sessions", "read" },
     { "GET", "/sessions/{sessionId}", "read" }, { "POST", "/sessions/{sessionId}/messages", "manage" },
-    { "GET", "/attention", "read" },
+    { "GET", "/attention", "read" }, { "GET", "/pulls", "read" }, { "GET", "/pulls/{number}/code-review-rounds", "read" },
 };
 static const char *lists = "["
     "{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\",\"awaitingAnswer\":true},"
@@ -637,11 +637,19 @@ static void test_waiting_pull_requests(void) {
     stub.attention = "not json"; s->base.vt->refresh(&s->base); pump(3);
     CHECK(s->attention_error != NULL); CHECK_INT(s->pull_count, 1);
     doc_free(&doc); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); cleanup(&stub);
-    // A server without the route reads nothing and counts nothing.
+    // A server without the route reads nothing and counts nothing, and offers no Security screen.
     memset(&stub, 0, sizeof stub); s = setup(&stub, "manage", 4); pump(3);
     CHECK_INT(stub.attention_reads, 0); CHECK(!s->attention_loaded); CHECK(!s->attention_poller.running);
     doc_init(&doc); draw(s, &doc); CHECK_INT(pull_arg(&doc, 0), -1);
+    HeaderInfo info = {0}; s->base.vt->header(&s->base, &info);
+    for (int i = 0; i < info.button_count; i++) CHECK(info.buttons[i].action != STATUS_SECURITY);
     doc_free(&doc); cleanup(&stub);
+    // One that lists pull requests and their rounds offers it in the header.
+    memset(&stub, 0, sizeof stub); stub.sessions = "[]"; s = setup(&stub, "manage", 7); pump(3);
+    memset(&info, 0, sizeof info); s->base.vt->header(&s->base, &info);
+    bool offered = false;
+    for (int i = 0; i < info.button_count; i++) offered |= info.buttons[i].action == STATUS_SECURITY;
+    CHECK(offered); cleanup(&stub);
 }
 static ULONGLONG clock_now;
 static ULONGLONG fake_clock(void) { return clock_now; }

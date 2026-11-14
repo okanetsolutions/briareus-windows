@@ -123,3 +123,33 @@ char *review_security_entry_location(const SecurityEntry *e) {
     if (!e->file_path) return NULL;
     return e->start_line > 0 ? xstrfmt("%s:%d", e->file_path, e->start_line) : xstrdup(e->file_path);
 }
+
+SecurityRank review_security_rank(const ReviewSecurity *s) {
+    if (!s || !s->present) return SECURITY_RANK_UNREAD;
+    if (str_eq(s->result, "not_required")) return SECURITY_RANK_OFF;
+    if (str_eq(s->result, "failed")) return SECURITY_RANK_FAILED;
+    if (str_eq(s->result, "incomplete")) return SECURITY_RANK_INCOMPLETE;
+    if (str_eq(s->result, "not_run")) return SECURITY_RANK_NOT_RUN;
+    return str_eq(s->result, "passed") ? SECURITY_RANK_PASSED : SECURITY_RANK_PENDING;
+}
+const char *review_security_rank_title(SecurityRank rank) {
+    switch (rank) {
+    case SECURITY_RANK_FAILED: return "Failed";
+    case SECURITY_RANK_UNREAD: return "Could not be read";
+    case SECURITY_RANK_INCOMPLETE: return "Incomplete";
+    case SECURITY_RANK_NOT_RUN: return "Not run";
+    case SECURITY_RANK_PENDING: return "Pending";
+    case SECURITY_RANK_PASSED: return "Passed";
+    case SECURITY_RANK_OFF: case SECURITY_RANKS: break;
+    }
+    return "Not asked";
+}
+char *review_security_summary(const size_t counts[SECURITY_RANKS]) {
+    static const char *const words[SECURITY_RANKS] = { "failed", "could not be read", "incomplete", "not run", "pending", "passed", "not asked" };
+    Str text; str_init(&text);
+    for (int rank = 0; rank < SECURITY_RANKS; rank++) {
+        if (counts[rank]) str_appendf(&text, "%s%u %s", text.len ? " \xC2\xB7 " : "", (unsigned)counts[rank], words[rank]);
+    }
+    if (!text.len) str_appendz(&text, "No open pull requests");
+    return str_detach(&text);
+}
