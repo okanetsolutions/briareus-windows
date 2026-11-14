@@ -28,7 +28,7 @@ typedef struct {
     Request *read;
     // `error` stops the scan (the project list could not be read); `skipped` names projects whose pull requests could not.
     char *error, *skipped;
-    bool shown, started, capped;
+    bool shown, started, capped, fresh;
     unsigned generation;   // changes whenever the list is replaced, so a click laid out before names the list it saw
 } SecurityScreen;
 bool security_current(SecurityScreen *s);

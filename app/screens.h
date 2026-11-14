@@ -78,6 +78,8 @@ Screen *status_screen_new(void);
 Screen *ci_screen_new(void);
 /// Every open pull request of the token's projects with its security review, worst first; opened from Status.
 Screen *security_screen_new(void);
+/// The three reads needed to scan security results across projects.
+bool security_supported(void);
 /// Session-specific, read-only resource figures; reads only while visible.
 Screen *server_resources_screen_new(void);
 Screen *resources_screen_new(const Session *session);

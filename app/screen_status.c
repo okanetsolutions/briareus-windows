@@ -1,5 +1,4 @@
 #include "screen_status_internal.h"
-#include <math.h>
 
 bool status_current(StatusScreen *s) { return s->client == g_store.client && store_connected(); }
 
@@ -93,28 +92,30 @@ static void projects_done(void *owner, Request *req) {
         s->loaded = true; poller_finished(&s->poller, true, req->error.retry_after); pane_relayout(s->base.pane);
     }
 }
+static double attention_now(const StatusScreen *s) { return (double)(s->clock ? s->clock() : GetTickCount64()); }
 static void attention_done(void *owner, Request *req) {
     StatusScreen *s = owner;
     if (!status_current(s)) return;
     PullAttention *items = NULL; size_t count = 0;
-    s->attention_loaded = true;
-    if (req->ok && pull_attention_parse(req->result, &items, &count)) {
+    bool ok = req->ok && pull_attention_parse(req->result, &items, &count);
+    if (ok) {
+        s->attention_loaded = true;
         pull_attention_free(s->pulls, s->pull_count); s->pulls = items; s->pull_count = count; s->pulls_generation++;
         set_string(&s->attention_error, NULL);
         status_approvals_merge(s);
-    } else {
-        char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error);
-        // A refusal's Retry-After holds the polls back; a refresh does not wait.
-        if (req->error.retry_after > 0) s->attention_retry_at = time(NULL) + (time_t)ceil(req->error.retry_after);
-    }
+    } else { char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error); }
+    if (!ok && req->error.retry_after > 0) s->attention_retry_until = attention_now(s) + req->error.retry_after * 1000;
+    poller_finished(&s->attention_poller, !ok, req->error.retry_after);
     pane_relayout(s->base.pane);
 }
 // Pull requests waiting on a person are read beside the sessions, on servers that list them, at most every 30 seconds
 // unless a refresh asks.
 void status_attention_load(StatusScreen *s, bool force) {
     if (!status_current(s) || s->attention_read || !store_supports("attention")) return;
-    if (!force && ((s->attention_at && time(NULL) - s->attention_at < 30) || time(NULL) < s->attention_retry_at)) return;
-    s->attention_at = time(NULL); s->attention_retry_at = 0;
+    double now = attention_now(s);
+    if (now < s->attention_retry_until) return;
+    if (!force && s->attention_at && now - s->attention_at < 30000) return;
+    s->attention_at = now;
     store_call("attention", json_object(), 0, s, attention_done, 0, &s->attention_read);
 }
 // A listed pull request opens on its Code reviews tab; one of a project this token no longer lists opens on GitHub.
@@ -136,7 +137,7 @@ static void header(Screen *base, HeaderInfo *info) {
     StatusScreen *s = (StatusScreen *)base;
     snprintf(info->title, sizeof info->title, "\xE2\x97\x89 Status");
     if (status_current(s) && store_supports("server_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D9, .action = STATUS_SERVER, .enabled = true, .tip = "Server resources"};
-    if (status_current(s) && store_supports("code_review_rounds") && store_supports("pulls")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xEA18, .action = STATUS_SECURITY, .enabled = true, .tip = "Security review of open pull requests"};
+    if (status_current(s) && security_supported()) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xEA18, .action = STATUS_SECURITY, .enabled = true, .tip = "Security review of open pull requests"};
     if (status_current(s) && store_supports("ci_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D5, .action = STATUS_CI, .enabled = true, .tip = "CI/CD history"};
     if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->loaded ? "Answer questions and follow active sessions" : "Loading sessions…");
 }
@@ -147,7 +148,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         return;
     }
     if (action == STATUS_SECURITY) {
-        if (status_current(s) && store_supports("code_review_rounds") && store_supports("pulls")) app_push_from(base, security_screen_new());
+        if (status_current(s) && security_supported()) app_push_from(base, security_screen_new());
         return;
     }
     if (action == STATUS_SERVER) {
@@ -175,6 +176,11 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
 static void timer(Screen *base, UINT id) {
     StatusScreen *s = (StatusScreen *)base;
     if (!status_current(s)) { status_controls_hide(s); return; }
+    if (poller_fired(&s->attention_poller, id)) {
+        status_attention_load(s, false);
+        if (!s->attention_read) poller_finished(&s->attention_poller, false, -1);
+        return;
+    }
     if (!poller_fired(&s->poller, id)) return;
     status_questions_next(s);
     if (s->projects_read || s->sessions_read) poller_finished(&s->poller, false, -1);
@@ -182,8 +188,14 @@ static void timer(Screen *base, UINT id) {
 }
 static void visible(Screen *base, bool shown) {
     StatusScreen *s = (StatusScreen *)base; s->shown = shown;
-    if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); status_approvals_merge(s); }
+    if (shown && status_current(s)) {
+        poller_start(&s->poller, base->pane, STATUS_POLL, 7000);
+        if (store_supports("attention")) poller_start(&s->attention_poller, base->pane, STATUS_ATTENTION_POLL, 30000);
+        status_load(s); status_approvals_merge(s);
+    }
     else {
+        poller_stop(&s->attention_poller);
+        if (s->attention_read) s->attention_at = 0;
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
         status_approvals_cancel(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }

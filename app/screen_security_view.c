@@ -3,7 +3,7 @@
 // The Security screen's page: how far the scan got, the pull requests counted per result, then each pull request worst
 // first with its result, why, and how its findings stand. One whose project asks for no security pass is only counted.
 
-static const ReviewSecurity *security_of(const SecurityPull *p) { return p->has_outcome ? &p->outcome.security : NULL; }
+static const ReviewSecurity *security_of(const SecurityPull *p) { return p->has_outcome && p->outcome.security.present ? &p->outcome.security : NULL; }
 // Worst first; within a rank, by repository and number.
 static const SecurityScreen *sorting;
 static int by_rank(const void *a, const void *b) {
@@ -70,7 +70,7 @@ void security_layout(Screen *base, Doc *doc) {
         char *summary = review_security_summary(counts);
         doc_text(doc, 0, w, summary, FONT_SUBHEADLINE_SEMIBOLD, theme.ink, DT_WORDBREAK); free(summary);
         doc_space(doc, px(12));
-    } else if (security_done(s)) doc_empty_state(doc, 0, w, 0xE73E, "No open pull requests", "Your projects have no open pull request to review.");
+    } else if (security_done(s) && !s->skipped) doc_empty_state(doc, 0, w, 0xE73E, "No open pull requests", "Your projects have no open pull request to review.");
     for (size_t i = 0; i < s->pull_count; i++) {
         const SecurityPull *p = &s->pulls[order[i]];
         if (p->read && review_security_rank(security_of(p)) == SECURITY_RANK_OFF && !p->error) continue;

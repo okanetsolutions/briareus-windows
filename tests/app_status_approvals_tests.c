@@ -160,9 +160,12 @@ static void a_refused_inbox_waits_for_its_retry_after(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); settle();
     stub.inbox_status = 429; stub.inbox_retry = "120";
     status_attention_load(s, true); settle(); CHECK(s->attention_error != NULL);
-    // Polls wait for it, past the usual 30 seconds; F5 reads at once.
-    s->attention_at = 1; status_attention_load(s, false); CHECK(s->attention_read == NULL); CHECK_INT(stub.inbox_reads, 2);
-    stub.inbox_status = 0; stub.inbox_retry = NULL; status_attention_load(s, true); settle(); CHECK_INT(stub.inbox_reads, 3); CHECK(s->attention_error == NULL);
+    // Polls wait for it past the usual 30 seconds, and so does the forced read an approval landing asks for.
+    s->attention_at = 1; status_attention_load(s, false); CHECK(s->attention_read == NULL);
+    status_attention_load(s, true); CHECK(s->attention_read == NULL); CHECK_INT(stub.inbox_reads, 2);
+    // Once it has passed, the next read goes out.
+    stub.inbox_status = 0; stub.inbox_retry = NULL; s->attention_retry_until = 0;
+    status_attention_load(s, true); settle(); CHECK_INT(stub.inbox_reads, 3); CHECK(s->attention_error == NULL);
     cleanup(&stub);
 }
 void app_status_approvals_tests(void) {

@@ -12,7 +12,7 @@
 #include <string.h>
 #include <time.h>
 
-enum { STATUS_POLL = 1, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI, STATUS_PULL, STATUS_SECURITY };
+enum { STATUS_POLL = 1, STATUS_ATTENTION_POLL, STATUS_OPEN = 1400, STATUS_OPTION, STATUS_SEND, STATUS_RESOLVE, STATUS_SERVER, STATUS_CI, STATUS_PULL, STATUS_SECURITY };
 // Each pull request waiting on an approval takes APPROVAL_ACTIONS from here, in the order they are listed.
 enum { STATUS_APPROVALS_BASE = 1500 };
 typedef struct {
@@ -53,11 +53,12 @@ struct StatusScreen {
     // click laid out before names the list it was laid out for.
     PullAttention *pulls; size_t pull_count;
     char *attention_error; unsigned pulls_generation; bool attention_loaded;
-    time_t attention_at, attention_retry_at;   // when the last attention read was sent; until when a refusal holds polls back
+    double attention_at, attention_retry_until; // monotonic milliseconds; cancellation clears the send time
+    ULONGLONG (*clock)(void); // NULL uses GetTickCount64; tests advance deadlines without sleeping.
     StatusApproval **approvals; size_t approval_count;
     Json *send_question, *send_identity;
     char *send_text, *error;
-    Poller poller;
+    Poller poller, attention_poller; // Independent completions must not overwrite each other's Retry-After.
     bool loaded, shown;
 };
 bool status_current(StatusScreen *s);
