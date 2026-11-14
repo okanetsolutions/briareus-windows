@@ -5,6 +5,13 @@
 #include "fixtures/code_reviews.h"
 #include <stdlib.h>
 
+static void security_findings_are_the_ones_the_server_marked(void) {
+    Json *j = json_parsez("[{\"id\":1,\"security\":true,\"type\":\"correctness\"},{\"id\":2,\"security\":false,\"type\":\"security\"},{\"id\":3}]");
+    // The server's mark decides, not the free-text type.
+    CHECK(code_review_finding_is_security(json_at(j, 0))); CHECK(!code_review_finding_is_security(json_at(j, 1)));
+    CHECK(!code_review_finding_is_security(json_at(j, 2))); CHECK(!code_review_finding_is_security(NULL));
+    json_free(j);
+}
 static void stored_contract(void) {
     Json *payload = json_parsez(CODE_REVIEWS_FIXTURE), *reviews = code_reviews_parse(payload);
     json_free(payload); CHECK(reviews != NULL); CHECK_INT(json_count(reviews), 2);
@@ -262,4 +269,5 @@ void core_code_reviews_tests(void) {
     test_run("stored code review nested public contract and null semantics", stored_contract);
     test_run("code reviews malformed is distinct from empty", malformed_and_empty);
     test_run("code reviews latest twenty, unique stable IDs and required fields", limit_and_validation);
+    test_run("a finding counts as a security one only when the server marked it", security_findings_are_the_ones_the_server_marked);
 }

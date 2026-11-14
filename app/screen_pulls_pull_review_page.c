@@ -86,6 +86,7 @@ void screen_pulls_review_page(PullScreen *s, Doc *doc, Col c, const Json *review
     figures(doc, c, review);
     doc_space(doc, px(6));
     about(s, doc, c, review);
+    screen_pulls_review_security_of(s, doc, c, review);
     if (!json_count(json_get(review, "findings"))) return;
     screen_pulls_review_editor(s, doc, c, review);
     doc_space(doc, px(16));

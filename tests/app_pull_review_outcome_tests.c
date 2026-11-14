@@ -78,6 +78,43 @@ static void the_security_pass_shows_in_full_under_the_outcome(void) {
     CHECK(contains(&d, "Review outcome: Passed")); CHECK(!contains(&d, "What the pass examined")); CHECK(!contains(&d, "Token in the log"));
     doc_free(&d); s->base.vt->destroy(&s->base); screen_fixture_clear(&f);
 }
+// Review 21 ran a required security pass that failed, with a coverage record and one security finding; review 20 ran
+// none under a policy that is off.
+#define SECURITY_REVIEWS "{\"codeReviews\":[" \
+    "{\"id\":21,\"status\":\"completed\",\"security\":{\"policy\":\"required\",\"result\":\"failed\",\"blocking\":true,\"stage\":\"completed\"," \
+    "\"reasons\":[{\"code\":\"fix_required\",\"effect\":\"failed\",\"message\":\"Fix the logged token\"}]," \
+    "\"coverage\":{\"findings\":1,\"categories\":[{\"id\":\"secrets\",\"applicable\":true,\"assessment\":\"Checked the logger\",\"findings\":1}," \
+    "{\"id\":\"dependencies\",\"applicable\":false,\"assessment\":\"No manifest changed\",\"findings\":0}]," \
+    "\"entries\":[{\"id\":1,\"category\":\"secrets\",\"severity\":\"high\",\"title\":\"Token logged\",\"filePath\":\"app/x.c\",\"startLine\":12,\"claim\":\"f-3\"}]," \
+    "\"claims\":[{\"findingRef\":\"f-7\",\"status\":\"fixed\",\"evidence\":\"Guard added\"}]}," \
+    "\"counts\":{\"findings\":1,\"fix\":1}}," \
+    "\"findings\":[{\"id\":101,\"severity\":\"high\",\"title\":\"Token logged\",\"security\":true,\"shouldFix\":\"fix\"}," \
+    "{\"id\":102,\"severity\":\"low\",\"title\":\"Naming\",\"security\":false}]}," \
+    "{\"id\":20,\"status\":\"completed\",\"security\":{\"policy\":\"off\",\"result\":\"not_required\",\"stage\":null},\"findings\":[]}]}"
+static int count_text(Doc *d, const char *text) {
+    int n = 0;
+    for (size_t i = 0; i < d->count; i++) n += d->items[i].text && str_eq(d->items[i].text, text);
+    return n;
+}
+static void an_opened_review_unfolds_its_own_security_pass(void) {
+    ScreenFixture f; PullScreen *s = setup(&f, SECURITY_REVIEWS);
+    Doc d; doc_init(&d);
+    act(s, ACT_REVIEW_ROW, 21); draw(s, &d);
+    CHECK(contains(&d, "Security review \xC2\xB7 Failed \xC2\xB7 required")); CHECK(!contains(&d, "Checked the logger"));
+    // The security finding says so in the table and in the inspector; the other one does not.
+    CHECK_INT(count_text(&d, "Security"), 1); CHECK(contains(&d, "Security finding"));
+    act(s, ACT_REVIEW_SECURITY, 21); draw(s, &d);
+    CHECK(contains(&d, "Pass completed")); CHECK(contains(&d, "1 finding \xC2\xB7 1 to fix")); CHECK(contains(&d, "Fix the logged token"));
+    CHECK(contains(&d, "Checked the logger")); CHECK(contains(&d, "Does not apply")); CHECK(contains(&d, "No manifest changed"));
+    CHECK(contains(&d, "Findings the pass recorded (1)")); CHECK(contains(&d, "app/x.c:12")); CHECK(contains(&d, "Raises f-3 again"));
+    CHECK(contains(&d, "f-7: fixed \xC2\xB7 Guard added"));
+    act(s, ACT_REVIEW_FINDING, 102); draw(s, &d); CHECK(!contains(&d, "Security finding"));
+    // Folding hides the detail without touching the pull request's block; a review that ran no pass shows no section.
+    act(s, ACT_REVIEW_SECURITY, 21); draw(s, &d); CHECK(!contains(&d, "Checked the logger")); CHECK(!s->reviews.security_open);
+    act(s, ACT_REVIEW_BACK, 0); act(s, ACT_REVIEW_ROW, 20); draw(s, &d);
+    CHECK(!contains(&d, "Security review")); CHECK(!contains(&d, "Checked the logger"));
+    doc_free(&d); s->base.vt->destroy(&s->base); screen_fixture_clear(&f);
+}
 static void an_older_server_shows_no_outcome(void) {
     ScreenFixture f; PullScreen *s = setup(&f, "{" REVIEWS "}");
     Doc d; doc_init(&d); draw(s, &d);
@@ -96,4 +133,5 @@ void app_pull_review_outcome_tests(void) {
     test_run("the review outcome heads the Code reviews tab and follows reads, verdict saves and handling saves", the_outcome_heads_the_tab_and_follows_each_answer);
     test_run("an older server shows no review outcome; an empty list still shows one", an_older_server_shows_no_outcome);
     test_run("the security pass shows in full under the outcome, what it examined folded", the_security_pass_shows_in_full_under_the_outcome);
+    test_run("an opened code review unfolds its own security pass and marks its security findings", an_opened_review_unfolds_its_own_security_pass);
 }
