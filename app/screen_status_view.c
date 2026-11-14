@@ -103,7 +103,10 @@ void status_layout(Screen *base, Doc *doc) {
     if (!s->loaded) doc_loading(doc, origin, w, "Loading Status…");
     bool complete = s->loaded && !s->error && !s->missing;
     char *ready = complete ? xstrfmt("Need you  %u     Working  %u     Ready  %u", (unsigned)s->overview.waiting_count, (unsigned)s->overview.working_count, (unsigned)s->overview.ready) : xstrdup("Need you  —     Working  —     Ready  —");
-    if (s->attention_loaded) { char *more = xstrfmt("%s     Pull requests  %u", ready, (unsigned)s->pull_count); free(ready); ready = more; }
+    if (store_supports("attention")) {
+        char *more = s->attention_loaded ? xstrfmt("%s     Pull requests  %u", ready, (unsigned)s->pull_count) : xstrfmt("%s     Pull requests  —", ready);
+        free(ready); ready = more;
+    }
     doc_text(doc, origin, w, ready, FONT_FOOTNOTE, theme.ink, DT_WORDBREAK); free(ready);
     doc_space(doc, px(20));
     bool columns = w >= px(1040);
@@ -111,7 +114,8 @@ void status_layout(Screen *base, Doc *doc) {
     int waiting_w = columns ? w - gap - working_w : w;
     int top = doc->y;
     doc_section(doc, origin, waiting_w, "Need you");
-    if (complete && !s->overview.waiting_count && !s->pull_count) doc_text(doc, origin, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
+    bool pulls_known = !store_supports("attention") || (s->attention_loaded && !s->attention_error);
+    if (complete && pulls_known && !s->overview.waiting_count && !s->pull_count) doc_text(doc, origin, waiting_w, "You're all caught up. Sessions needing your answer will appear here.", FONT_BODY, theme.muted, DT_WORDBREAK);
     for (size_t i = 0; i < s->overview.waiting_count; i++) {
         size_t index = card_index(s, &s->sessions[s->overview.waiting[i]]);
         if (index < s->card_count) waiting(s, doc, index, origin, waiting_w);

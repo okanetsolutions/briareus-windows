@@ -92,23 +92,29 @@ static void projects_done(void *owner, Request *req) {
         s->loaded = true; poller_finished(&s->poller, true, req->error.retry_after); pane_relayout(s->base.pane);
     }
 }
+static double attention_now(const StatusScreen *s) { return (double)(s->clock ? s->clock() : GetTickCount64()); }
 static void attention_done(void *owner, Request *req) {
     StatusScreen *s = owner;
     if (!status_current(s)) return;
     PullAttention *items = NULL; size_t count = 0;
-    s->attention_loaded = true;
-    if (req->ok && pull_attention_parse(req->result, &items, &count)) {
+    bool ok = req->ok && pull_attention_parse(req->result, &items, &count);
+    if (ok) {
+        s->attention_loaded = true;
         pull_attention_free(s->pulls, s->pull_count); s->pulls = items; s->pull_count = count; s->pulls_generation++;
         set_string(&s->attention_error, NULL);
     } else { char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error); }
+    if (!ok && req->error.retry_after > 0) s->attention_retry_until = attention_now(s) + req->error.retry_after * 1000;
+    poller_finished(&s->attention_poller, !ok, req->error.retry_after);
     pane_relayout(s->base.pane);
 }
 // Pull requests waiting on a person are read beside the sessions, on servers that list them, at most every 30 seconds
 // unless a refresh asks.
 static void attention_load(StatusScreen *s, bool force) {
     if (!status_current(s) || s->attention_read || !store_supports("attention")) return;
-    if (!force && s->attention_at && time(NULL) - s->attention_at < 30) return;
-    s->attention_at = time(NULL);
+    double now = attention_now(s);
+    if (now < s->attention_retry_until) return;
+    if (!force && s->attention_at && now - s->attention_at < 30000) return;
+    s->attention_at = now;
     store_call("attention", json_object(), 0, s, attention_done, 0, &s->attention_read);
 }
 // A listed pull request opens on its Code reviews tab; one of a project this token no longer lists opens on GitHub.
@@ -168,6 +174,11 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
 static void timer(Screen *base, UINT id) {
     StatusScreen *s = (StatusScreen *)base;
     if (!status_current(s)) { status_controls_hide(s); return; }
+    if (poller_fired(&s->attention_poller, id)) {
+        attention_load(s, false);
+        if (!s->attention_read) poller_finished(&s->attention_poller, false, -1);
+        return;
+    }
     if (!poller_fired(&s->poller, id)) return;
     status_questions_next(s);
     if (s->projects_read || s->sessions_read) poller_finished(&s->poller, false, -1);
@@ -175,8 +186,14 @@ static void timer(Screen *base, UINT id) {
 }
 static void visible(Screen *base, bool shown) {
     StatusScreen *s = (StatusScreen *)base; s->shown = shown;
-    if (shown && status_current(s)) { poller_start(&s->poller, base->pane, STATUS_POLL, 7000); status_load(s); }
+    if (shown && status_current(s)) {
+        poller_start(&s->poller, base->pane, STATUS_POLL, 7000);
+        if (store_supports("attention")) poller_start(&s->attention_poller, base->pane, STATUS_ATTENTION_POLL, 30000);
+        status_load(s);
+    }
     else {
+        poller_stop(&s->attention_poller);
+        if (s->attention_read) s->attention_at = 0;
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
