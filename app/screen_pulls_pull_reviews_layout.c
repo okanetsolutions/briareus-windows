@@ -30,8 +30,10 @@ void screen_pulls_layout_reviews(PullScreen *s, Doc *doc, Col c) {
     if (!r->items) { if (!r->error) doc_loading(doc, c.ix, c.iw, "Loading stored code reviews…"); return; }
     const Json *review = r->open ? code_review_find(r->items, r->review_id) : NULL;
     if (review) { screen_pulls_review_page(s, doc, c, review); return; }
-    // What the pull request's review amounts to and the approvals it asks for head the table, and the note when there is none yet.
+    // What the pull request's review amounts to, its security pass and the approvals it asks for head the table, and
+    // the note when there is none yet.
     screen_pulls_review_outcome(s, doc, c);
+    screen_pulls_review_security(s, doc, c);
     screen_pulls_review_approvals(s, doc, c);
     if (!json_count(r->items)) { doc_text(doc, c.ix, c.iw, "No stored code reviews.", FONT_BODY, theme.secondary, DT_WORDBREAK); return; }
     screen_pulls_review_history(s, doc, c);

@@ -41,6 +41,7 @@ void screen_pulls_pull_action(Screen *base, int action, intptr_t arg, POINT pt) 
     case ACT_REVIEW_APPROVAL_SEND: screen_pulls_review_approval_send(s); break;
     case ACT_REVIEW_APPROVAL_CANCEL: screen_pulls_review_approval_cancel(s); break;
     case ACT_REVIEW_RISK: s->reviews.risk_open = !s->reviews.risk_open; pane_relayout(base->pane); break;
+    case ACT_REVIEW_SECURITY: s->reviews.security_open = !s->reviews.security_open; pane_relayout(base->pane); break;
     case ACT_REVIEW_VERDICT: case ACT_REVIEW_EVIDENCE:
         if (!s->reviews.editing || s->reviews.req_write) break;
         if (action == ACT_REVIEW_VERDICT) code_review_edit_choose_verdict(s->reviews.editing, (size_t)arg);

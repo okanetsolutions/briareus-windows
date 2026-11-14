@@ -891,6 +891,7 @@ int main(void) {
     core_code_reviews_tests();
     core_review_outcome_tests();
     core_review_approvals_tests();
+    core_review_security_tests();
     board_tests();
     api_tests();
     contract_tests();

@@ -86,15 +86,7 @@ void screen_pulls_review_approvals(PullScreen *s, Doc *doc, Col c) {
     int pad = px(12);
     int box = doc_box_begin(doc, c.ix, c.iw, pad, theme.canvas, theme.line, px(8));
     Col in = {c.x, c.w, c.ix + pad, c.iw - 2 * pad};
-    char *summary = review_approvals_line(a), *title = xstrfmt("Approvals  %s", summary);
-    int top = doc->y, tw = text_width(doc->cv, "Approvals", FONT_FOOTNOTE_SEMIBOLD) + px(8);
-    RECT t = {in.ix, top, in.ix + tw, top + font_height(doc->cv, FONT_FOOTNOTE_SEMIBOLD)};
-    Item *label = doc_item(doc, doc_text_at(doc, &t, "Approvals", FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_SINGLELINE));
-    label->tip = xstrdup(title);
-    doc->y = top;
-    doc_text(doc, in.ix + tw, in.iw - tw, summary, FONT_FOOTNOTE, screen_pulls_review_tone_color(review_approvals_tone(a)), DT_WORDBREAK);
-    if (doc->y < t.bottom) doc->y = t.bottom;
-    free(summary); free(title);
+    screen_pulls_review_fact(doc, in, "Approvals", review_approvals_line(a), review_approvals_tone(a));
     if (a->explanation) { doc_space(doc, px(6)); screen_pulls_review_line(doc, in.ix, in.iw, a->explanation, FONT_FOOTNOTE, theme.secondary); }
     screen_pulls_review_reasons(doc, in, &a->reasons, px(4));
     risk(s, doc, in, a);
