@@ -102,6 +102,7 @@ static void attention_done(void *owner, Request *req) {
         s->attention_loaded = true;
         pull_attention_free(s->pulls, s->pull_count); s->pulls = items; s->pull_count = count; s->pulls_generation++;
         set_string(&s->attention_error, NULL);
+        status_approvals_merge(s);
     } else { char *error = request_error_or_unexpected(req); set_string(&s->attention_error, error); free(error); }
     if (!ok && req->error.retry_after > 0) s->attention_retry_until = attention_now(s) + req->error.retry_after * 1000;
     poller_finished(&s->attention_poller, !ok, req->error.retry_after);
@@ -109,7 +110,7 @@ static void attention_done(void *owner, Request *req) {
 }
 // Pull requests waiting on a person are read beside the sessions, on servers that list them, at most every 30 seconds
 // unless a refresh asks.
-static void attention_load(StatusScreen *s, bool force) {
+void status_attention_load(StatusScreen *s, bool force) {
     if (!status_current(s) || s->attention_read || !store_supports("attention")) return;
     double now = attention_now(s);
     if (now < s->attention_retry_until) return;
@@ -128,7 +129,7 @@ void status_open_pull(StatusScreen *s, intptr_t arg) {
     if (pull->href) open_web_url(pull->href);
 }
 void status_load(StatusScreen *s) {
-    attention_load(s, false);
+    status_attention_load(s, false);
     if (!status_current(s) || s->projects_read || s->sessions_read) return;
     store_call("projects", json_object(), 0, s, projects_done, 0, &s->projects_read);
 }
@@ -155,6 +156,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         return;
     }
     if (action == STATUS_PULL) { status_open_pull(s, arg); return; }
+    if (status_current(s) && status_approvals_action(s, action, arg)) return;
     if (!status_current(s) || arg < s->action_first || arg >= s->action_next) return;
     StatusAction a = s->actions[arg - s->action_first];
     if (a.card >= s->card_count) return;
@@ -175,7 +177,7 @@ static void timer(Screen *base, UINT id) {
     StatusScreen *s = (StatusScreen *)base;
     if (!status_current(s)) { status_controls_hide(s); return; }
     if (poller_fired(&s->attention_poller, id)) {
-        attention_load(s, false);
+        status_attention_load(s, false);
         if (!s->attention_read) poller_finished(&s->attention_poller, false, -1);
         return;
     }
@@ -189,12 +191,13 @@ static void visible(Screen *base, bool shown) {
     if (shown && status_current(s)) {
         poller_start(&s->poller, base->pane, STATUS_POLL, 7000);
         if (store_supports("attention")) poller_start(&s->attention_poller, base->pane, STATUS_ATTENTION_POLL, 30000);
-        status_load(s);
+        status_load(s); status_approvals_merge(s);
     }
     else {
         poller_stop(&s->attention_poller);
         if (s->attention_read) s->attention_at = 0;
         poller_stop(&s->poller); request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
+        status_approvals_cancel(s);
         if (s->write) { status_set_uncertain(s, s->cards[s->sending_card], true); set_string(&s->cards[s->sending_card]->error, "Send cancelled locally; its outcome is unknown. Check the conversation before retrying."); request_cancel(&s->write); }
         status_controls_hide(s);
     }
@@ -203,7 +206,8 @@ static void activated(Screen *base, bool active) { if (active) visible(base, tru
 static void refresh(Screen *base) {
     StatusScreen *s = (StatusScreen *)base;
     request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
-    attention_load(s, true); status_load(s);
+    for (size_t i = 0; i < s->approval_count; i++) s->approvals[i]->stale = true;
+    status_attention_load(s, true); status_load(s);
 }
 static void destroy(Screen *base) {
     StatusScreen *s = (StatusScreen *)base; visible(base, false);
@@ -215,7 +219,7 @@ static void destroy(Screen *base) {
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);
-    pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
+    status_approvals_free(s); pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
     api_client_release(s->client); screen_release(base);
 }
 static const ScreenVTable VT = {

@@ -17,7 +17,7 @@ static void entries(Doc *doc, Col c, const ReviewSecurity *sec) {
         if (e->severity) screen_pulls_review_badge(doc, c.ix, c.iw, e->severity, true, theme.canvas);
         doc_text(doc, c.ix, c.iw, e->title, FONT_FOOTNOTE_SEMIBOLD, theme.ink, DT_WORDBREAK);
         char *location = review_security_entry_location(e);
-        screen_pulls_review_line(doc, c.ix, c.iw, location, FONT_CAPTION, theme.muted); free(location);
+        review_line_draw(doc, c.ix, c.iw, location, FONT_CAPTION, theme.muted); free(location);
     }
 }
 // What the pass examined per risk category, folded: each category, whether it applies, and its assessment.
@@ -33,7 +33,7 @@ static void categories(PullScreen *s, Doc *doc, Col c, const ReviewSecurity *sec
         const SecurityCategory *category = &sec->categories[i];
         char *title = review_security_category_title(category);
         doc_space(doc, px(6));
-        screen_pulls_review_fact(doc, in, title, review_security_category_line(category), review_security_category_tone(category));
+        review_fact_draw(doc, in.ix, in.iw, title, review_security_category_line(category), review_security_category_tone(category));
         free(title);
         if (category->assessment) doc_text(doc, in.ix, in.iw, category->assessment, FONT_FOOTNOTE, theme.secondary, DT_WORDBREAK);
     }
@@ -46,16 +46,16 @@ void screen_pulls_review_security(PullScreen *s, Doc *doc, Col c) {
     int pad = px(12);
     int box = doc_box_begin(doc, c.ix, c.iw, pad, theme.canvas, theme.line, px(8));
     Col in = {c.x, c.w, c.ix + pad, c.iw - 2 * pad};
-    screen_pulls_review_fact(doc, in, "Security", review_security_line(sec), review_security_tone(sec));
+    review_fact_draw(doc, in.ix, in.iw, "Security", review_security_line(sec), review_security_tone(sec));
     doc_space(doc, px(4));
     char *risk = review_security_risk_note(sec), *scope = review_security_scope_line(sec);
     char *findings = review_security_findings_line(sec), *claims = review_security_claims_line(sec);
-    screen_pulls_review_line(doc, in.ix, in.iw, risk, FONT_FOOTNOTE, theme.secondary);
-    screen_pulls_review_line(doc, in.ix, in.iw, scope, FONT_CAPTION, theme.muted);
-    screen_pulls_review_line(doc, in.ix, in.iw, findings, FONT_FOOTNOTE, theme.ink);
-    screen_pulls_review_line(doc, in.ix, in.iw, claims, FONT_FOOTNOTE, theme.secondary);
+    review_line_draw(doc, in.ix, in.iw, risk, FONT_FOOTNOTE, theme.secondary);
+    review_line_draw(doc, in.ix, in.iw, scope, FONT_CAPTION, theme.muted);
+    review_line_draw(doc, in.ix, in.iw, findings, FONT_FOOTNOTE, theme.ink);
+    review_line_draw(doc, in.ix, in.iw, claims, FONT_FOOTNOTE, theme.secondary);
     free(risk); free(scope); free(findings); free(claims);
-    screen_pulls_review_reasons(doc, in, &sec->reasons, px(4));
+    review_reasons_draw(doc, in.ix, in.iw, &sec->reasons, px(4));
     entries(doc, in, sec);
     categories(s, doc, in, sec);
     doc_box_end(doc, box, pad);

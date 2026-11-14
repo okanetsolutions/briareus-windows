@@ -113,6 +113,9 @@ void pane_footer_changed(Pane *pane);
 /// Shows a child control (a footer's composer) at `rc`. A move redraws the control instead of keeping the pixels it had:
 /// the pane paints with Direct2D, so the bits Windows would carry along are stale background, not the control.
 void pane_place_control(HWND control, const RECT *rc);
+/// Shows a child box laid out over `laid` (content coordinates) in the scrolled page, clipped to the view below a pinned
+/// header; hides it when none of it is in view. False when hidden.
+bool pane_place_clipped(Pane *pane, HWND box, const RECT *laid, const RECT *content, int scroll_y);
 void pane_scroll_to_bottom(Pane *pane);
 void pane_scroll_to_top(Pane *pane);
 bool pane_at_bottom(Pane *pane);
