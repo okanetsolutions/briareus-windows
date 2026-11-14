@@ -73,10 +73,11 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
 }
 // The pull requests waiting on a person, each opening on its Code reviews tab: what it waits on, and the server's account.
 static void waiting_pulls(StatusScreen *s, Doc *doc, int x, int w) {
-    if (!s->pull_count && !s->attention_error) return;
+    if (!s->pull_count && !s->attention_error && !s->approval_notice) return;
     doc_space(doc, px(8));
     doc_section(doc, x, w, "Pull requests");
     if (s->attention_error) doc_notice(doc, x, w, s->attention_error);
+    if (s->approval_notice) doc_notice(doc, x, w, s->approval_notice);
     for (size_t i = 0; i < s->pull_count && i < 0xFFFF; i++) {
         const PullAttention *pull = &s->pulls[i];
         int box = doc_box_begin(doc, x, w, px(8), theme.canvas, theme.canvas, 0);

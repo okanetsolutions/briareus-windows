@@ -6,10 +6,13 @@
 
 static const ReviewApprovals *approvals_of(void *owner) {
     const StatusApproval *a = owner;
-    return a->outcome ? &a->outcome->approvals : NULL;
+    return a->listed && a->outcome ? &a->outcome->approvals : NULL;
 }
 static bool no_other_write(void *owner) { (void)owner; return false; }
-static void before_write(void *owner) { request_cancel(&((StatusApproval *)owner)->req); }
+static void before_write(void *owner) {
+    StatusApproval *a = owner;
+    request_cancel(&a->req);
+}
 static void approval_done(void *owner, Request *req);
 static const ApprovalFormHost host = {approvals_of, no_other_write, before_write, approval_done};
 
@@ -34,13 +37,22 @@ static void read_review(StatusApproval *a) {
 static void approval_done(void *owner, Request *req) {
     StatusApproval *a = owner; StatusScreen *s = a->screen;
     if (!status_current(s)) return;
-    switch (approval_form_finish(&a->form, req)) {
+    ApprovalSent sent = approval_form_finish(&a->form, req);
+    if (!a->listed) {
+        // The item has left attention: report its result without reopening an off-list form, even after another poll.
+        char *notice = xstrfmt("%s%s%s #%d: %s", s->approval_notice ? s->approval_notice : "", s->approval_notice ? "\n" : "",
+            a->repo, a->number, req->ok ? "Approval change saved." : a->form.error);
+        free(s->approval_notice); s->approval_notice = notice;
+    }
+    switch (sent) {
     case APPROVAL_LANDED:
         review_outcome_keep(&a->outcome_state, &a->outcome, req->result, REVIEW_OUTCOME_FROM_APPROVAL);
         // An attention read under way may predate the write: attention is read again after it.
-        request_cancel(&s->attention_read); status_attention_load(s, true);
+        request_cancel(&s->attention_read);
+        if (s->shown) status_attention_load(s, true);
+        else s->attention_at = 0; // Owed on show, even inside the normal polling interval.
         break;
-    case APPROVAL_STALE: read_review(a); break;
+    case APPROVAL_STALE: a->stale = true; if (a->listed) read_review(a); break;
     case APPROVAL_FAILED: break;
     }
     pane_relayout(s->base.pane);
@@ -75,20 +87,25 @@ void status_approvals_merge(StatusScreen *s) {
     StatusApproval **next = xcalloc(s->pull_count + s->approval_count + 1, sizeof *next);
     size_t n = 0;
     for (size_t i = 0; i < s->pull_count; i++) if (s->pulls[i].kind == PULL_ATTENTION_APPROVAL) next[n++] = take(s, &s->pulls[i]);
-    // One gone from the list stays while its write is under way; its answer is the person's to see.
+    for (size_t i = 0; i < n; i++) next[i]->listed = true;
+    // Keep the write's owner until completion, hide its controls immediately, and report its result in approval_notice.
     for (size_t i = 0; i < s->approval_count; i++) {
         StatusApproval *a = s->approvals[i];
         if (!a) continue;
-        if (approval_form_writing(&a->form)) next[n++] = a;
+        if (approval_form_writing(&a->form)) {
+            a->listed = false; approval_form_layout_begin(&a->form);
+            approval_form_place(&a->form, NULL, 0, false);
+            next[n++] = a;
+        }
         else item_free(a);
     }
     free(s->approvals); s->approvals = next; s->approval_count = n;
-    for (size_t i = 0; i < n; i++) if (next[i]->stale) read_review(next[i]);
+    for (size_t i = 0; i < n; i++) {
+        next[i]->form.action_base = STATUS_APPROVALS_BASE + (int)i * APPROVAL_ACTIONS;
+        if (next[i]->listed && next[i]->stale) read_review(next[i]);
+    }
 }
 void status_approval_layout(StatusScreen *s, Doc *doc, int x, int w, StatusApproval *a) {
-    size_t index = 0;
-    while (index < s->approval_count && s->approvals[index] != a) index++;
-    a->form.action_base = STATUS_APPROVALS_BASE + (int)index * APPROVAL_ACTIONS;
     approval_form_layout_begin(&a->form);
     doc_space(doc, px(8));
     if (a->error) doc_notice(doc, x, w, a->error);
@@ -99,10 +116,10 @@ void status_approval_layout(StatusScreen *s, Doc *doc, int x, int w, StatusAppro
 }
 void status_approvals_place(StatusScreen *s, const RECT *content, int scroll_y) {
     bool shown = content && s->shown && status_current(s);
-    for (size_t i = 0; i < s->approval_count; i++) approval_form_place(&s->approvals[i]->form, content, scroll_y, shown);
+    for (size_t i = 0; i < s->approval_count; i++) approval_form_place(&s->approvals[i]->form, content, scroll_y, shown && s->approvals[i]->listed);
 }
 bool status_approvals_action(StatusScreen *s, int action, intptr_t arg) {
-    for (size_t i = 0; i < s->approval_count; i++) if (approval_form_action(&s->approvals[i]->form, action, arg)) return true;
+    for (size_t i = 0; i < s->approval_count; i++) if (s->approvals[i]->listed && approval_form_action(&s->approvals[i]->form, action, arg)) return true;
     return false;
 }
 // Reads stop with the screen and are owed again when it shows; a write under way finishes, since its outcome is the

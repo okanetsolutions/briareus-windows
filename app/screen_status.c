@@ -205,6 +205,7 @@ static void visible(Screen *base, bool shown) {
 static void activated(Screen *base, bool active) { if (active) visible(base, true); }
 static void refresh(Screen *base) {
     StatusScreen *s = (StatusScreen *)base;
+    set_string(&s->approval_notice, NULL);
     request_cancel(&s->projects_read); request_cancel(&s->sessions_read); request_cancel(&s->attention_read); status_cancel_questions(s);
     for (size_t i = 0; i < s->approval_count; i++) s->approvals[i]->stale = true;
     status_attention_load(s, true); status_load(s);
@@ -219,7 +220,7 @@ static void destroy(Screen *base) {
     }
     free(s->cards); free(s->actions); free(s->error); free(s->send_text); json_free(s->send_question); json_free(s->send_identity);
     projects_free(s->projects, s->project_count); sessions_free(s->sessions, s->count); session_overview_free(&s->overview);
-    status_approvals_free(s); pull_attention_free(s->pulls, s->pull_count); free(s->attention_error);
+    status_approvals_free(s); pull_attention_free(s->pulls, s->pull_count); free(s->attention_error); free(s->approval_notice);
     api_client_release(s->client); screen_release(base);
 }
 static const ScreenVTable VT = {

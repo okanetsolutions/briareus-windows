@@ -349,9 +349,13 @@ static void test_request_error_helpers(void) {
     char *slot = xstrdup("old");
     request_error_into(&slot, &req);
     CHECK_STR(slot, "The server is rate limiting requests. Updates will resume after a delay.");
+    request_write_error_into(&slot, &req);
+    CHECK_STR(slot, "The server is rate limiting requests. Updates will resume after a delay.");
     api_error_set(&req.error, API_NETWORK, 0, "Connection reset", -1);
     request_error_into(&slot, &req);
     CHECK_STR(slot, "Connection reset");
+    request_write_error_into(&slot, &req);
+    CHECK_STR(slot, "Connection reset It may still have been saved; refresh before trying again.");
     free(slot);
     api_error_clear(&req.error);
 }

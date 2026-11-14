@@ -35,7 +35,7 @@ typedef struct {
     StatusScreen *screen;   // borrowed
     char *repo, *summary; int number;
     Json *outcome_state; ReviewOutcome *outcome;
-    char *error; bool read, stale;
+    char *error; bool read, stale, listed;
     Request *req;
     ApprovalForm form;
 } StatusApproval;
@@ -52,6 +52,7 @@ struct StatusScreen {
     // Pull requests waiting on a person (`attention`); `pulls_generation` changes whenever the list is replaced, so a
     // click laid out before names the list it was laid out for.
     PullAttention *pulls; size_t pull_count;
+    char *approval_notice; // Off-list write results, retained until explicit refresh or destruction.
     char *attention_error; unsigned pulls_generation; bool attention_loaded;
     double attention_at, attention_retry_until; // monotonic milliseconds; cancellation clears the send time
     ULONGLONG (*clock)(void); // NULL uses GetTickCount64; tests advance deadlines without sleeping.

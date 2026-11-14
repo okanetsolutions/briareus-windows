@@ -10,15 +10,6 @@ CodeReviewHandlingAction screen_pulls_review_handling_action(const Json *review)
 bool screen_pulls_review_can_edit(const Json *review) {
     return store_supports("update_code_review_finding") && code_review_can_edit_findings(review);
 }
-// A failed write's message: a refusal as said, anything else noting that it may have been saved all the same.
-static void failure(char **slot, const Request *req) {
-    char *text = request_error_text(req);
-    if (request_outcome_unknown(req)) {
-        char *said = xstrfmt("%s It may still have been saved; refresh before trying again.", text);
-        free(text); text = said;
-    }
-    free(*slot); *slot = text;
-}
 // The answer is for the reviews shown; otherwise they are read again for the connection that is current now.
 static bool answered(PullScreen *s, const Request *req) {
     if (screen_pulls_reviews_current(s, req)) return true;
@@ -29,7 +20,7 @@ static void handling_done(void *owner, Request *req) {
     PullScreen *s = owner; PullReviews *r = &s->reviews;
     r->saving_review = 0;
     if (!answered(s, req)) return;
-    if (!req->ok) failure(&r->save_error, req);
+    if (!req->ok) request_write_error_into(&r->save_error, req);
     // An answer that cannot be folded in is read again in full.
     else if (!code_reviews_replace_review(r->items, json_get(req->result, "review"))) screen_pulls_reviews_load(s, true);
     pane_relayout(s->base.pane);
@@ -37,7 +28,7 @@ static void handling_done(void *owner, Request *req) {
 static void verdict_done(void *owner, Request *req) {
     PullScreen *s = owner; PullReviews *r = &s->reviews;
     if (!answered(s, req)) return;
-    if (!req->ok) { failure(&r->edit_error, req); pane_relayout(s->base.pane); return; }
+    if (!req->ok) { request_write_error_into(&r->edit_error, req); pane_relayout(s->base.pane); return; }
     int64_t review = (int64_t)json_num_or(json_get(req->args, "reviewId"), 0), finding = (int64_t)json_num_or(json_get(req->args, "findingId"), 0);
     if (!code_reviews_replace_finding(r->items, review, json_get(req->result, "finding"))) screen_pulls_reviews_load(s, true);
     // A changed verdict or evidence changes the review outcome at once; the rounds stay as read.
@@ -51,7 +42,7 @@ bool screen_pulls_reviews_writing(const PullReviews *r) { return r->req_write ||
 static void send_write(PullScreen *s, const char *call, Json *args, RequestDone done) {
     PullReviews *r = &s->reviews;
     request_cancel(&r->req);
-    set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL);
+    set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL); set_string(&r->approvals.error, NULL);
     store_call(call, args, 0, s, done, 0, &r->req_write);
     pane_relayout(s->base.pane);
 }
@@ -95,7 +86,11 @@ static const ReviewApprovals *approvals_of(void *owner) {
     return s->reviews.outcome ? &s->reviews.outcome->approvals : NULL;
 }
 static bool other_write(void *owner) { return ((PullScreen *)owner)->reviews.req_write != NULL; }
-static void before_write(void *owner) { request_cancel(&((PullScreen *)owner)->reviews.req); }
+static void before_write(void *owner) {
+    PullReviews *r = &((PullScreen *)owner)->reviews;
+    request_cancel(&r->req);
+    set_string(&r->save_error, NULL); set_string(&r->edit_error, NULL);
+}
 static void approval_done(void *owner, Request *req) {
     PullScreen *s = owner; PullReviews *r = &s->reviews;
     if (!answered(s, req)) return;

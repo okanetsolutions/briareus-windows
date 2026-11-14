@@ -55,7 +55,9 @@ static void a_stopped_review_is_marked_handled_and_reopened(void) {
     act(s, ACT_REVIEW_BACK, 0); act(s, ACT_REVIEW_ROW, 20); draw(s, &d);
     CHECK(has_text(&d, "Handling: Pending")); CHECK(find(&d, ACT_REVIEW_HANDLING, 20) >= 0); CHECK(has_text(&d, "Mark handled"));
     f.write_response = "{\"review\":{\"id\":20,\"status\":\"completed\",\"handlingStatus\":\"handled\",\"findings\":[{\"id\":99,\"severity\":\"low\",\"title\":\"Historical duplicate\"}]}}";
+    set_string(&s->reviews.approvals.error, "Earlier approval refusal");
     f.block_write = true; act(s, ACT_REVIEW_HANDLING, 20);
+    CHECK(s->reviews.approvals.error == NULL);
     CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
     // While it is saved, a second click and a poll both wait for it.
     draw(s, &d); CHECK(has_text(&d, "Saving\xE2\x80\xA6")); CHECK_INT(find(&d, ACT_REVIEW_HANDLING, 20), -1);

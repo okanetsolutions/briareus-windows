@@ -23,7 +23,8 @@ typedef struct {
     volatile LONG inbox_reads, review_reads, writes;
     char *url; Json *body;
     CRITICAL_SECTION lock;
-    HANDLE held, release;   // when set, the next review read waits here until released
+    HANDLE held, release;   // holds a review read, or a write when hold_write is set
+    bool hold_write;
 } Stub;
 static HWND dispatcher;
 static Pane *pane;
@@ -46,7 +47,7 @@ static bool transport(void *ctx, const char *method, const char *url, const char
     else if (strstr(url, "/code-reviews")) { InterlockedIncrement(&stub->review_reads); answer = stub->review ? stub->review : REVIEW; }
     else if (strstr(url, "/projects")) answer = "[{\"repo\":\"one/repo\",\"label\":\"One\"}]";
     *response = xstrdup(answer); *len = strlen(answer);
-    bool hold = stub->held && strstr(url, "/code-reviews");
+    bool hold = stub->held && (stub->hold_write ? str_eq(method, "POST") : strstr(url, "/code-reviews") != NULL);
     LeaveCriticalSection(&stub->lock);
     if (hold) { SetEvent(stub->held); WaitForSingleObject(stub->release, 10000); }
     return true;
@@ -168,6 +169,96 @@ static void a_refused_inbox_waits_for_its_retry_after(void) {
     status_attention_load(s, true); settle(); CHECK_INT(stub.inbox_reads, 3); CHECK(s->attention_error == NULL);
     cleanup(&stub);
 }
+static void a_pull_leaving_attention_hides_controls_and_reports_the_write(void) {
+    const int statuses[] = {503, 403, 200};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); pump(4);
+        ShowWindow(dispatcher, SW_SHOWNA);
+        RECT bounds = {0, 0, 900, 2000}; pane_set_bounds(pane, &bounds);
+        Doc doc; doc_init(&doc);
+        act(s, STATUS_APPROVALS_BASE + APPROVAL_ACT_APPROVE, 0); draw(s, &doc);
+        RECT content = pane_content_rect(pane); status_approvals_place(s, &content, 0);
+        ApprovalForm *form = &s->approvals[0]->form; HWND box = form->box;
+        CHECK(box != NULL); CHECK(IsWindowVisible(box)); CHECK(IsWindowEnabled(box));
+        stub.held = CreateEventW(NULL, TRUE, FALSE, NULL); stub.release = CreateEventW(NULL, TRUE, FALSE, NULL);
+        stub.hold_write = true; stub.write_status = statuses[i];
+        stub.write = statuses[i] == 200 ? "{}" : "{\"error\":\"Fixture write failed\"}";
+        act(s, STATUS_APPROVALS_BASE + APPROVAL_ACT_SEND, 0);
+        CHECK_INT(WaitForSingleObject(stub.held, 10000), WAIT_OBJECT_0);
+        stub.inbox = "{\"items\":[]}";
+        status_attention_load(s, true); pump(1);
+        CHECK_INT(s->approval_count, 1); CHECK(approval_form_writing(form));
+        // Controls disappear as soon as the list changes, even before the pending repaint.
+        CHECK(!IsWindowVisible(box)); CHECK(!IsWindowEnabled(box));
+        draw(s, &doc); status_approvals_place(s, &content, 0);
+        SetEvent(stub.release); pump(statuses[i] == 200 ? 2 : 1);
+        // The result survives the next poll freeing the owner, including an uncertain write outcome.
+        CHECK(s->approval_notice != NULL);
+        if (statuses[i] != 200) {
+            CHECK(!IsWindowVisible(box)); CHECK(!IsWindowEnabled(box));
+            BYTE keys[256] = {0}, previous[256]; GetKeyboardState(previous); keys[VK_CONTROL] = 0x80; SetKeyboardState(keys);
+            SendMessageW(box, WM_KEYDOWN, VK_RETURN, 0); SetKeyboardState(previous);
+            act(s, STATUS_APPROVALS_BASE + APPROVAL_ACT_SEND, 0);
+            approval_form_action(form, form->action_base + APPROVAL_ACT_SEND, 0);
+            settle(); CHECK_INT(stub.writes, 1);
+        }
+        status_attention_load(s, true); pump(1); CHECK_INT(s->approval_count, 0);
+        draw(s, &doc); CHECK(contains(&doc, "one/repo #12:"));
+        if (statuses[i] != 200) CHECK(contains(&doc, "Fixture write failed"));
+        if (statuses[i] == 503) CHECK(contains(&doc, "may still have been saved"));
+        CHECK_INT(find(&doc, STATUS_APPROVALS_BASE + APPROVAL_ACT_SEND, 0), -1);
+        CloseHandle(stub.held); CloseHandle(stub.release); doc_free(&doc); cleanup(&stub); ShowWindow(dispatcher, SW_HIDE);
+    }
+}
+static void hidden_write_results_defer_reads_until_showing(void) {
+    const int statuses[] = {409, 200};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 5, 9); pump(4);
+        stub.held = CreateEventW(NULL, TRUE, FALSE, NULL); stub.release = CreateEventW(NULL, TRUE, FALSE, NULL);
+        stub.hold_write = true; stub.write_status = statuses[i];
+        stub.write = statuses[i] == 409 ? "{\"error\":\"Head moved\",\"code\":\"head_moved\"}" : "{}";
+        act(s, STATUS_APPROVALS_BASE + APPROVAL_ACT_APPROVE, 0); act(s, STATUS_APPROVALS_BASE + APPROVAL_ACT_SEND, 0);
+        CHECK_INT(WaitForSingleObject(stub.held, 10000), WAIT_OBJECT_0);
+        s->base.vt->visible(&s->base, false); SetEvent(stub.release); settle();
+        CHECK_INT(stub.review_reads, 1); CHECK_INT(stub.inbox_reads, 1);
+        if (statuses[i] == 409) CHECK(s->approvals[0]->stale);
+        else stub.inbox = "{\"items\":[]}";
+        s->base.vt->visible(&s->base, true); settle();
+        if (statuses[i] == 409) { CHECK_INT(stub.review_reads, 2); CHECK(!s->approvals[0]->stale); }
+        else { CHECK_INT(stub.inbox_reads, 2); CHECK_INT(s->approval_count, 0); }
+        CloseHandle(stub.held); CloseHandle(stub.release); cleanup(&stub);
+    }
+}
+static void merged_cards_have_distinct_actions_before_layout(void) {
+    Stub stub = {0};
+    stub.inbox = "{\"items\":[{\"kind\":\"review-approval\",\"repo\":\"one/repo\",\"prNumber\":12},"
+        "{\"kind\":\"review-approval\",\"repo\":\"one/repo\",\"prNumber\":13}]}";
+    StatusScreen *s = setup(&stub, "manage", 5, 9); pump(5);
+    CHECK_INT(s->approval_count, 2);
+    act(s, STATUS_APPROVALS_BASE + APPROVAL_ACTIONS + APPROVAL_ACT_APPROVE, 0);
+    CHECK_INT(s->approvals[0]->form.open, 0); CHECK_INT(s->approvals[1]->form.open, APPROVAL_FORM_APPROVE);
+    cleanup(&stub);
+}
+static void concurrent_unlisted_writes_keep_both_results(void) {
+    Stub stub = {0};
+    stub.inbox = "{\"items\":[{\"kind\":\"review-approval\",\"repo\":\"one/repo\",\"prNumber\":12},"
+        "{\"kind\":\"review-approval\",\"repo\":\"one/repo\",\"prNumber\":13}]}";
+    StatusScreen *s = setup(&stub, "manage", 5, 9); pump(5);
+    stub.held = CreateEventW(NULL, TRUE, FALSE, NULL); stub.release = CreateEventW(NULL, TRUE, FALSE, NULL);
+    stub.hold_write = true; stub.write_status = 503; stub.write = "{\"error\":\"Fixture write failed\"}";
+    for (int i = 0; i < 2; i++) {
+        int base = STATUS_APPROVALS_BASE + i * APPROVAL_ACTIONS;
+        act(s, base + APPROVAL_ACT_APPROVE, 0); act(s, base + APPROVAL_ACT_SEND, 0);
+    }
+    ULONGLONG until = GetTickCount64() + 10000;
+    while (InterlockedCompareExchange(&stub.writes, 0, 0) < 2 && GetTickCount64() < until) Sleep(1);
+    CHECK_INT(stub.writes, 2);
+    stub.inbox = "{\"items\":[]}"; status_attention_load(s, true); pump(1);
+    SetEvent(stub.release); pump(2);
+    Doc doc; doc_init(&doc); draw(s, &doc);
+    CHECK(contains(&doc, "one/repo #12:")); CHECK(contains(&doc, "one/repo #13:"));
+    CloseHandle(stub.held); CloseHandle(stub.release); doc_free(&doc); cleanup(&stub);
+}
 void app_status_approvals_tests(void) {
     if (!theme.canvas) theme_init();
     dispatcher = CreateWindowExW(0, L"STATIC", L"Status approvals dispatcher", 0, 0, 0, 10, 10, NULL, NULL, GetModuleHandleW(NULL), NULL);
@@ -180,5 +271,9 @@ void app_status_approvals_tests(void) {
     test_run("Status without the inbox route or a manage token approves nothing", a_server_without_the_inbox_or_a_read_token_approves_nothing);
     test_run("Status hiding cancels the inbox and review reads, and showing reads them again", hiding_cancels_the_reads_and_showing_reads_them_again);
     test_run("Status attention polls wait out a refusal's Retry-After", a_refused_inbox_waits_for_its_retry_after);
+    test_run("Status hides an unlisted approval's controls and retains its write result", a_pull_leaving_attention_hides_controls_and_reports_the_write);
+    test_run("Status defers hidden stale and landed approval reads until showing", hidden_write_results_defer_reads_until_showing);
+    test_run("Status routes multiple cards before their first layout", merged_cards_have_distinct_actions_before_layout);
+    test_run("Status preserves results of concurrent unlisted approval writes", concurrent_unlisted_writes_keep_both_results);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }

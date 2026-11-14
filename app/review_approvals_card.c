@@ -177,20 +177,11 @@ bool approval_form_action(ApprovalForm *f, int action, intptr_t arg) {
     relayout(f);
     return true;
 }
-// A failed write's message: a refusal as said, anything else noting that it may have been saved all the same.
-static void failure(ApprovalForm *f, const Request *req) {
-    char *text = request_error_text(req);
-    if (request_outcome_unknown(req)) {
-        char *said = xstrfmt("%s It may still have been saved; refresh before trying again.", text);
-        free(text); text = said;
-    }
-    free(f->error); f->error = text;
-}
 ApprovalSent approval_form_finish(ApprovalForm *f, const Request *req) {
     long long sent = f->saving;
     f->saving = 0;
     if (req->ok) { if (f->open == sent) close_form(f); set_string(&f->error, NULL); relayout(f); return APPROVAL_LANDED; }
-    failure(f, req);
+    request_write_error_into(&f->error, req);
     relayout(f);
     return review_approval_rereads(req->error.code) ? APPROVAL_STALE : APPROVAL_FAILED;
 }
@@ -201,7 +192,7 @@ ApprovalSent approval_form_finish(ApprovalForm *f, const Request *req) {
 static LRESULT CALLBACK box_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref) {
     ApprovalForm *f = (ApprovalForm *)ref;
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-    if (msg == WM_KEYDOWN && wp == VK_RETURN && ctrl) { approval_form_action(f, f->action_base + APPROVAL_ACT_SEND, 0); return 0; }
+    if (msg == WM_KEYDOWN && wp == VK_RETURN && ctrl && IsWindowVisible(hwnd) && IsWindowEnabled(hwnd)) { approval_form_action(f, f->action_base + APPROVAL_ACT_SEND, 0); return 0; }
     if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { approval_form_action(f, f->action_base + APPROVAL_ACT_CANCEL, 0); return 0; }
     if (msg == WM_CHAR && (wp == '\n' || wp == VK_ESCAPE)) return 0;   // Ctrl+Enter arrives as a line feed
     if (msg == WM_NCDESTROY) RemoveWindowSubclass(hwnd, box_proc, id);
@@ -209,7 +200,7 @@ static LRESULT CALLBACK box_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT
 }
 void approval_form_place(ApprovalForm *f, const RECT *content, int scroll_y, bool shown) {
     Pane *pane = f->screen ? f->screen->pane : NULL;
-    if (!shown || !content || !pane || !f->open || !f->box_laid) { if (f->box) ShowWindow(f->box, SW_HIDE); return; }
+    if (!shown || !content || !pane || !f->open || !f->box_laid) { if (f->box) { EnableWindow(f->box, FALSE); ShowWindow(f->box, SW_HIDE); } return; }
     if (!f->box) {
         f->box = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             0, 0, 10, 10, pane_hwnd(pane), NULL, GetModuleHandleW(NULL), NULL);

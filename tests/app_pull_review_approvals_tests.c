@@ -69,7 +69,9 @@ static void a_person_approves_the_reviewed_head_with_a_note(void) {
     type_note(&f, s, &d, L"  Checked the migration\r\nand rollback  ");
     f.write_response = "{\"approval\":{\"id\":5},\"reviewOutcome\":{\"outcome\":\"passed\",\"ready\":true,\"approvals\":"
         APPROVALS("satisfied", "2", MINE_OLD "," THEIRS "," GITHUB "," MINE_NOW) "}}";
+    set_string(&s->reviews.save_error, "Earlier handling failure"); set_string(&s->reviews.edit_error, "Earlier verdict failure");
     f.block_write = true; act(s, SEND, 0);
+    CHECK(s->reviews.save_error == NULL); CHECK(s->reviews.edit_error == NULL);
     CHECK_INT(WaitForSingleObject(f.entered, 5000), WAIT_OBJECT_0);
     // While it is saved, a second send, a withdrawal and a poll all wait for it.
     draw(s, &d); CHECK(contains(&d, "Saving\xE2\x80\xA6"));
