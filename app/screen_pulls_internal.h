@@ -140,7 +140,8 @@ typedef struct {
     // NULL while the server has sent none.
     Json *outcome_state; ReviewOutcome *outcome;
     ApprovalForm approvals;   // the approvals card under the outcome, initialised with the reviews (screen_pulls_review_approvals_init)
-    bool security_open;   // "What the pass examined" unfolded in the security block
+    bool security_open;   // "What the pass examined" unfolded in the pull request's security block
+    int64_t security_id;  // the opened review whose own security pass is unfolded
 } PullReviews;
 
 typedef struct {
@@ -346,8 +347,10 @@ void screen_pulls_review_edit_cancel(PullScreen *s);
 void screen_pulls_review_edit_save(PullScreen *s);
 void screen_pulls_review_handling(PullScreen *s, Doc *doc, Col c, const Json *review);
 void screen_pulls_review_editor(PullScreen *s, Doc *doc, Col c, const Json *review);
-/// The security pass in full under the outcome (screen_pulls_pull_review_security.c).
+/// The pull request's security pass in full under the outcome, and an opened review's own folded under its result
+/// (screen_pulls_pull_review_security.c).
 void screen_pulls_review_security(PullScreen *s, Doc *doc, Col c);
+void screen_pulls_review_security_of(PullScreen *s, Doc *doc, Col c, const Json *review);
 // The approvals card's owner side (screen_pulls_pull_review_writes.c): it starts with the reviews for this pull request.
 void screen_pulls_review_approvals_init(PullScreen *s);
 /// A write of the tab is under way, the approvals card's included: other writes and reads wait for it.

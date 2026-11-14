@@ -39,6 +39,12 @@ static void finding_details(PullScreen *s, Doc *doc, Col c, const Json *r, const
         {0, code_review_verification(r, f), screen_pulls_review_color(code_review_verification(r, f), false)}};
     int badge = doc_badges(doc, c.ix, c.iw, badges, str_eq(badges[1].text, badges[2].text) ? 2 : 3, theme.canvas);
     doc_item(doc, badge)->text = xstrfmt("Severity: %s · Verdict: %s · Verification: %s", badges[0].text, badges[1].text, badges[2].text);
+    // A finding that counts towards the review's security result says so.
+    if (code_review_finding_is_security(f)) {
+        doc_space(doc, px(6));
+        BadgeSpec security = {0xE72E, "Security", theme.warn, false};
+        doc_item(doc, doc_badges(doc, c.ix, c.iw, &security, 1, theme.canvas))->text = xstrdup("Security finding");
+    }
     doc_space(doc, px(10));
     change_verdict(s, doc, c, r, f);
     const char *path = json_str(json_get(f, "filePath"));
