@@ -227,6 +227,11 @@ Screen *pull_detail_screen_new(const Project *project, int number, const StackPo
     s->files = pull_files_new(project, number, &s->base, ACT_FILES_BASE, TIMER_FILES_PAGE);
     return &s->base;
 }
+Screen *pull_code_reviews_screen_new(const Project *project, int number) {
+    PullScreen *s = (PullScreen *)pull_detail_screen_new(project, number, NULL, NULL);
+    s->tab = PR_TAB_CODE_REVIEWS;
+    return &s->base;
+}
 
 void screen_pulls_board_open_run(PullsScreen *s, size_t index) {
     const PullSummary *pull = &s->pulls[index];

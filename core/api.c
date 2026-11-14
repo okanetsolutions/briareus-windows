@@ -313,6 +313,7 @@ bool api_catalog(ApiClient *c, Route **routes, size_t *count, ApiError *error) {
 static const ApiRoute ROUTES[] = {
     {"ci_stats", "GET", "stats/ci"},
     {"ci_runs", "GET", "ci/runs"},
+    {"attention", "GET", "attention"},   // what waits on this token's person; Status keeps the pull request items (pull_attention.c)
     {"server_stats", "GET", "stats/server", NULL, NULL, NULL},
     {"sessions_stats", "GET", "stats/sessions", NULL, NULL, NULL},
     {"session_stats", "GET", "sessions/{sessionId}/stats", NULL, NULL, NULL},
