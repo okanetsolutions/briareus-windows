@@ -1,8 +1,11 @@
 #include "screen_security_internal.h"
 #include "board.h"
 
+bool security_supported(void) {
+    return store_supports("projects") && store_supports("pulls") && store_supports("code_review_rounds");
+}
 bool security_current(SecurityScreen *s) {
-    if (s->client != g_store.client || !store_supports("code_review_rounds") || !store_supports("pulls")) return false;
+    if (s->client != g_store.client || !security_supported()) return false;
     Json *device = device_json(&g_store.device);
     bool same = json_equal(device, s->device); json_free(device); return same;
 }
@@ -76,6 +79,7 @@ static void step(SecurityScreen *s) {
     if (!s->started) { s->started = true; json_free(args); store_call("projects", json_object(), 0, s, projects_done, 0, &s->read); return; }
     if (s->next_project < s->project_count && !s->capped) {
         json_set_str(args, "repo", s->projects[s->next_project].repo);
+        if (s->fresh) json_set_str(args, "fresh", "1");
         store_call("pulls", args, 0, s, pulls_done, 0, &s->read); return;
     }
     s->next_project = s->project_count;
@@ -94,7 +98,7 @@ static void visible(Screen *base, bool shown) {
 }
 static void refresh(Screen *base) {
     SecurityScreen *s = (SecurityScreen *)base;
-    clear(s); step(s); pane_relayout(base->pane);
+    clear(s); s->fresh = true; step(s); pane_relayout(base->pane);
 }
 static void header(Screen *base, HeaderInfo *info) {
     SecurityScreen *s = (SecurityScreen *)base;
@@ -117,7 +121,7 @@ static void destroy(Screen *base) {
     json_free(s->device); api_client_release(s->client); screen_release(base);
 }
 static const ScreenVTable VT = {.destroy = destroy, .layout = security_layout, .header = header, .action = action,
-    .visible = visible, .refresh = refresh, .activated = activated, .detachable = true};
+    .visible = visible, .refresh = refresh, .activated = activated, .detachable = true, .effective_visibility = true};
 Screen *security_screen_new(void) {
     SecurityScreen *s = xcalloc(1, sizeof *s); s->base.vt = &VT;
     s->client = api_client_retain(g_store.client); s->device = device_json(&g_store.device);

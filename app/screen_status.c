@@ -136,7 +136,7 @@ static void header(Screen *base, HeaderInfo *info) {
     StatusScreen *s = (StatusScreen *)base;
     snprintf(info->title, sizeof info->title, "\xE2\x97\x89 Status");
     if (status_current(s) && store_supports("server_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D9, .action = STATUS_SERVER, .enabled = true, .tip = "Server resources"};
-    if (status_current(s) && store_supports("code_review_rounds") && store_supports("pulls")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xEA18, .action = STATUS_SECURITY, .enabled = true, .tip = "Security review of open pull requests"};
+    if (status_current(s) && security_supported()) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xEA18, .action = STATUS_SECURITY, .enabled = true, .tip = "Security review of open pull requests"};
     if (status_current(s) && store_supports("ci_stats")) info->buttons[info->button_count++] = (HeaderButton){.glyph = 0xE9D5, .action = STATUS_CI, .enabled = true, .tip = "CI/CD history"};
     if (status_current(s)) snprintf(info->subtitle, sizeof info->subtitle, "%s", s->loaded ? "Answer questions and follow active sessions" : "Loading sessions…");
 }
@@ -147,7 +147,7 @@ static void action(Screen *base, int action, intptr_t arg, POINT point) {
         return;
     }
     if (action == STATUS_SECURITY) {
-        if (status_current(s) && store_supports("code_review_rounds") && store_supports("pulls")) app_push_from(base, security_screen_new());
+        if (status_current(s) && security_supported()) app_push_from(base, security_screen_new());
         return;
     }
     if (action == STATUS_SERVER) {
