@@ -137,6 +137,107 @@ static void test_current_action_defaults_and_pr_author(void) {
     free(why); json_free(body); cleanup(&f); json_free(row);
 }
 
+// The review rules on the Code review tab: which of them the form draws, as items a click reaches.
+static bool drawn(Form *f, int action, intptr_t arg) {
+    screen_fixture_draw(&f->form->base, &f->doc);
+    for (size_t i = 0; i < f->doc.count; i++) if (f->doc.items[i].action == action && f->doc.items[i].arg == arg) return true;
+    return false;
+}
+static bool has_key(const Json *object, const char *key) {
+    for (size_t i = 0; i < json_count(object); i++) if (str_eq(json_key(object, i), key)) return true;
+    return false;
+}
+static Json *body_of(Form *f, char **why, int *tab) { *why = NULL; *tab = T_PROJECT; return screen_settings_form_body(f->form, why, tab); }
+static void test_review_rules_edit_and_save(void) {
+    Json *row = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"prAuthor\":\"octocat\",\"reviewRoundLimit\":3,\"securityReview\":\"advisory\","
+        "\"enforceReviewOutcome\":false,\"reviewBenchmark\":true}");
+    Form f; setup(&f, row, false);
+    CHECK(drawn(&f, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE));
+    CHECK(drawn(&f, ACT_TOGGLE, F_ENFORCE_OUTCOME)); CHECK(drawn(&f, ACT_TOGGLE, F_BENCHMARK));
+    CHECK(f.form->laid[F_ROUND_LIMIT]); CHECK_STR(f.form->choices[F_SECURITY_REVIEW], "advisory");
+    CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[F_ROUND_LIMIT]), "3");
+    CHECK(f.form->bools[F_BENCHMARK]); CHECK(!screen_settings_tab_changed(f.form, T_REVIEW));
+    // Required, then back to Advisory, leaves nothing changed; an index past the choices changes nothing.
+    f.form->base.vt->action(&f.form->base, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE + 2, (POINT){0});
+    CHECK_STR(f.form->choices[F_SECURITY_REVIEW], "required"); CHECK(screen_settings_tab_changed(f.form, T_REVIEW));
+    f.form->base.vt->action(&f.form->base, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE + 1, (POINT){0});
+    CHECK(!screen_settings_tab_changed(f.form, T_REVIEW));
+    CHECK(!screen_settings_choose(f.form, F_SECURITY_REVIEW, 3)); CHECK(!screen_settings_choose(f.form, F_ENFORCE_OUTCOME, 0));
+    CHECK_STR(f.form->choices[F_SECURITY_REVIEW], "advisory");
+    f.form->base.vt->action(&f.form->base, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE, (POINT){0});
+    f.form->base.vt->action(&f.form->base, ACT_TOGGLE, F_ENFORCE_OUTCOME, (POINT){0});
+    screen_settings_set_edit_text(f.form->edits[F_ROUND_LIMIT], "");
+    f.fixture.write_response = "{\"project\":{\"id\":4,\"repo\":\"o/r\",\"reviewRoundLimit\":null,\"securityReview\":\"off\",\"enforceReviewOutcome\":true}}";
+    screen_settings_form_save(f.form); screen_fixture_pump(&f.fixture, 1);
+    CHECK_STR(f.fixture.method, "PUT");
+    CHECK_STR(json_str(json_get(f.fixture.body, "securityReview")), "off");
+    CHECK(json_bool_is(json_get(f.fixture.body, "enforceReviewOutcome"), true));
+    CHECK(json_bool_is(json_get(f.fixture.body, "reviewBenchmark"), true));
+    CHECK(has_key(f.fixture.body, "reviewRoundLimit")); CHECK(json_is_null(json_get(f.fixture.body, "reviewRoundLimit")));
+    CHECK_STR(json_str(json_get(f.fixture.body, "prAuthor")), "octocat");
+    // The saved row refills the form.
+    CHECK(!f.form->dirty); CHECK_STR(f.form->choices[F_SECURITY_REVIEW], "off"); CHECK(f.form->bools[F_ENFORCE_OUTCOME]);
+    cleanup(&f); json_free(row);
+}
+static void test_review_round_limit_bounds(void) {
+    Json *row = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"reviewRoundLimit\":null}");
+    Form f; setup(&f, row, false);
+    CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[F_ROUND_LIMIT]), "");
+    static const struct { const char *typed; int sent; } accepted[] = { {"0", 0}, {"1", 1}, {" 20 ", 20} };
+    for (size_t i = 0; i < sizeof accepted / sizeof *accepted; i++) {
+        screen_settings_set_edit_text(f.form->edits[F_ROUND_LIMIT], accepted[i].typed);
+        char *why; int tab; Json *body = body_of(&f, &why, &tab);
+        CHECK(body != NULL); CHECK(why == NULL);
+        CHECK_INT(json_int_or(json_get(body, "reviewRoundLimit"), -1), accepted[i].sent);
+        json_free(body); free(why);
+    }
+    static const char *const refused[] = { "21", "-1", "2.5", "three", "3x" };
+    for (size_t i = 0; i < sizeof refused / sizeof *refused; i++) {
+        screen_settings_set_edit_text(f.form->edits[F_ROUND_LIMIT], refused[i]);
+        char *why; int tab; Json *body = body_of(&f, &why, &tab);
+        CHECK(body == NULL); CHECK(why != NULL); CHECK_INT(tab, T_REVIEW);
+        free(why);
+    }
+    // A refused save names the field and sends nothing.
+    screen_settings_form_save(f.form);
+    CHECK(f.form->error != NULL); CHECK(f.form->req_save == NULL); CHECK_INT(screen_settings_g_tab, T_REVIEW);
+    cleanup(&f); json_free(row);
+}
+static void test_security_review_empty_and_unknown(void) {
+    // Empty, a row from before the setting: the key is left out and the server keeps what it has.
+    Json *empty = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"securityReview\":null}");
+    Form f; setup(&f, empty, false);
+    CHECK(drawn(&f, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE)); CHECK_STR(f.form->choices[F_SECURITY_REVIEW], "");
+    char *why; int tab; Json *body = body_of(&f, &why, &tab);
+    CHECK(body != NULL); CHECK(!has_key(body, "securityReview"));
+    json_free(body); free(why); cleanup(&f); json_free(empty);
+    // A value this client does not list is refused rather than sent back blind.
+    Json *unknown = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"securityReview\":\"strict\"}");
+    setup(&f, unknown, false);
+    body = body_of(&f, &why, &tab);
+    CHECK(body == NULL); CHECK(why != NULL); CHECK_INT(tab, T_REVIEW);
+    free(why);
+    CHECK(screen_settings_choose(f.form, F_SECURITY_REVIEW, 1));
+    body = body_of(&f, &why, &tab);
+    CHECK(body != NULL); CHECK_STR(json_str(json_get(body, "securityReview")), "advisory");
+    json_free(body); free(why); cleanup(&f); json_free(unknown);
+}
+static void test_review_rules_absent_on_older_server(void) {
+    Json *row = json_parsez("{\"id\":4,\"repo\":\"o/r\",\"prAuthor\":\"octocat\",\"autonomousReviewLoop\":false}");
+    Form f; setup(&f, row, false);
+    CHECK(!drawn(&f, ACT_CHOOSE, F_SECURITY_REVIEW * CHOICE_STRIDE));
+    CHECK(!drawn(&f, ACT_TOGGLE, F_ENFORCE_OUTCOME)); CHECK(!drawn(&f, ACT_TOGGLE, F_BENCHMARK));
+    CHECK(f.form->laid[F_REVIEW_AUTHOR]); CHECK(!f.form->laid[F_ROUND_LIMIT]);
+    CHECK(!screen_settings_choose(f.form, F_SECURITY_REVIEW, 0));
+    f.form->base.vt->action(&f.form->base, ACT_TOGGLE, F_BENCHMARK, (POINT){0});
+    CHECK(!f.form->dirty);
+    char *why; int tab; Json *body = body_of(&f, &why, &tab);
+    CHECK(body != NULL);
+    static const char *const keys[] = { "reviewRoundLimit", "securityReview", "enforceReviewOutcome", "reviewBenchmark" };
+    for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) CHECK(!has_key(body, keys[i]));
+    json_free(body); free(why); cleanup(&f); json_free(row);
+}
+
 void app_project_settings_tests(void) {
     screen_fixture_prepare();
     test_run("project settings round trip current action defaults and PR author", test_current_action_defaults_and_pr_author);
@@ -144,4 +245,8 @@ void app_project_settings_tests(void) {
     test_run("project create and clone send only offered settings, never removed ones", test_create_and_clone_send_only_offered_settings);
     test_run("project save failure keeps edits and discard preserves saved value", test_failure_and_discard);
     test_run("project save completion is cancelled on navigation", test_destroy_during_save);
+    test_run("project review rules edit choose toggle and save", test_review_rules_edit_and_save);
+    test_run("project review round limit takes 0 to 20 or empty", test_review_round_limit_bounds);
+    test_run("project security review left out when empty and refused when unknown", test_security_review_empty_and_unknown);
+    test_run("project review rules neither shown nor sent when the server lacks them", test_review_rules_absent_on_older_server);
 }

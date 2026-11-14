@@ -3,9 +3,7 @@
 static void layout_tabs(FormScreen *s, Doc *doc, int x, int w);
 static void paint_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
-static void check(FormScreen *s, Doc *doc, int x, int w, int f);
 static char *pick_text(FormScreen *s, int r, int part);
-static void runtime_row(FormScreen *s, Doc *doc, int x, int w, int r);
 
 static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
     [T_PROJECT] = { "Project", 0xE8B7 }, [T_DATABASE] = { "Database", 0xE1D3 },
@@ -19,6 +17,7 @@ static const struct { const char *title; wchar_t glyph; } TABS[T_COUNT] = {
 bool screen_settings_tab_changed(FormScreen *s, int t) {
     for (int f = 0; f < F_COUNT; f++) {
         if (screen_settings_field_tab(f) != t || !screen_settings_field_offered(s, f)) continue;
+        if (screen_settings_FIELDS[f].kind == K_CHOICE) { if (screen_settings_choice_changed(s, f)) return true; continue; }
         if (!screen_settings_is_edit(f)) { if (s->bools[f] != json_bool_is(json_get(s->row, screen_settings_FIELDS[f].key), true)) return true; continue; }
         if (!s->edits[f]) continue;
         char *now = screen_settings_edit_text(s->edits[f]), *saved = screen_settings_field_text(s->row, f);
@@ -94,7 +93,7 @@ static void paint_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     draw_text(cv, screen_settings_FIELDS[f].label, &t, FONT_FOOTNOTE, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
-static void check(FormScreen *s, Doc *doc, int x, int w, int f) {
+void screen_settings_check(FormScreen *s, Doc *doc, int x, int w, int f) {
     if (!screen_settings_field_offered(s, f)) return;
     int i = doc_custom(doc, x, w, px(26), paint_check, s, NULL, ACT_TOGGLE, f);
     doc_item(doc, i)->hand = true;
@@ -130,7 +129,7 @@ static char *pick_text(FormScreen *s, int r, int part) {
 }
 
 /// Provider, model and effort side by side, as the dashboard's `.runtime-row`; advances.
-static void runtime_row(FormScreen *s, Doc *doc, int x, int w, int r) {
+void screen_settings_runtime_row(FormScreen *s, Doc *doc, int x, int w, int r) {
     if (!screen_settings_row_has(s, screen_settings_RUNTIMES[r].step ? "stepRuntimes" : screen_settings_RUNTIMES[r].provider_key)) return;
     int gap = px(14), cw = (w - 2 * gap) / 3, top = doc->y, h = px(36);
     static const char *const labels[] = { NULL, "Model", "Effort" };
@@ -174,10 +173,10 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
         doc->y = top;
         screen_settings_field(s, doc, x + half + gap, col - half - gap, F_LABEL);
         if (doc->y < left_bottom) doc->y = left_bottom;
-        check(s, doc, x, col, F_ENABLED);
+        screen_settings_check(s, doc, x, col, F_ENABLED);
         if (screen_settings_field_offered(s, F_ENABLED) && !s->bools[F_ENABLED])
             screen_settings_note(doc, x, col, "Inactive: no session can be started on it and it is left out of the project lists; its settings are kept for when it is switched back on.");
-        check(s, doc, x, col, F_MAIL_TOOLS);
+        screen_settings_check(s, doc, x, col, F_MAIL_TOOLS);
         if (screen_settings_field_offered(s, F_MAIL_TOOLS))
             screen_settings_note(doc, x, col, "Allows interactive sessions in this project to access the operator's connected mailboxes. Off by default.");
         doc_space(doc, px(4));
@@ -191,26 +190,12 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
     case T_DATABASE:
         screen_settings_field(s, doc, x, col, F_DB_NAME); screen_settings_field(s, doc, x, col, F_DB_EXT);
         break;
-    case T_REVIEW:
-        screen_settings_field(s, doc, x, (col - px(28)) / 3, F_REVIEW_AUTHOR);
-        runtime_row(s, doc, x, col, R_REVIEW);
-        screen_settings_field(s, doc, x, col, F_PUBLISH);
-        check(s, doc, x, col, F_AUTO_LOOP);
-        if (screen_settings_field_offered(s, F_AUTO_LOOP) && s->bools[F_AUTO_LOOP])
-            screen_settings_note(doc, x, col, "Every finding of a session's review-loop round, low severity and parked ones too, goes to \xE2\x9A\x99 Implement feedback on its own, and the fix is pushed and reviewed again until a round comes back clean and code-approved. The loop's round limit and repeated-findings check still stop one that cannot converge. Sessions still need their review loop switched on; a standalone \xE2\x8C\x95 Code review keeps its manual findings.");
-        // Each step runs as a turn of its own, on the code review's runtime unless it names one; a step switched off has none.
-        check(s, doc, x, col, F_TEST_SHEET);
-        if (s->bools[F_TEST_SHEET]) runtime_row(s, doc, x + px(23), col - px(23), R_TEST_SHEET);
-        check(s, doc, x, col, F_TEST_RUN);
-        if (s->bools[F_TEST_RUN]) runtime_row(s, doc, x + px(23), col - px(23), R_TEST_RUN);
-        doc_space(doc, px(4));
-        screen_settings_field(s, doc, x, col, F_QA_NOTES); screen_settings_field(s, doc, x, col, F_SHEET_STEPS); screen_settings_field(s, doc, x, col, F_FEEDBACK_STEPS);
-        break;
+    case T_REVIEW: screen_settings_review_layout(s, doc, x, col); break;
     case T_ORCHESTRATOR:
-        runtime_row(s, doc, x, col, R_WORKER);
+        screen_settings_runtime_row(s, doc, x, col, R_WORKER);
         screen_settings_field(s, doc, x, col, F_BUDGET);
         screen_settings_note(doc, x, col, "The orchestrator's standing instructions for this project live under Prompts on the web dashboard, in the \xE2\x80\x9C" "Orchestrator instructions\xE2\x80\x9D template.");
-        check(s, doc, x, col, F_IS_SELF);
+        screen_settings_check(s, doc, x, col, F_IS_SELF);
         screen_settings_note(doc, x, col, "Tick it on the repository whose code is running right now, and on no other. An orchestrator on any project that finds a flaw in the tooling running it (a briefing, a worker tool, a loop) can then send a fix worker here, review loop armed, and merge its pull request once the loop approves and the checks are green. The running dashboard keeps its code until you redeploy.");
         break;
     case T_ENV: screen_settings_field(s, doc, x, col, F_ENV); break;

@@ -49,17 +49,21 @@ typedef struct { char *label, *binary; bool active, login, endpoint, selected, u
 
 // MARK: - The project form
 
-typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD } FieldKind;
+typedef enum { K_TEXT, K_LIST, K_AREA, K_NUMBER, K_BOOL, K_BOARD, K_CHOICE } FieldKind;
 
-// K_BOARD: the Projects board, edited as its address
+/// One value a K_CHOICE field may take, and what its picker says for it.
+typedef struct { const char *value, *title; } FieldChoice;
+// K_BOARD: the Projects board, edited as its address. K_CHOICE: one of `choices`, kept as its value's text.
 /// One of the form's fields: the Project key it edits, how, and the words around it. `rows` sizes a multi-line box.
-typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; } FieldDef;
+typedef struct { const char *key; FieldKind kind; const char *label, *cue, *hint; int rows; bool mono; const FieldChoice *choices; size_t choice_count; } FieldDef;
 
 enum {
     F_REPO, F_LABEL, F_ENABLED, F_MAIL_TOOLS, F_LOCAL_DIR, F_BOARD,
     F_SETUP, F_PHP,
     F_DB_NAME, F_DB_EXT,
-    F_REVIEW_AUTHOR, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    // The round limit follows the PR author, so Return goes from one to the other.
+    F_REVIEW_AUTHOR, F_ROUND_LIMIT, F_PUBLISH, F_AUTO_LOOP, F_TEST_SHEET, F_TEST_RUN, F_QA_NOTES, F_SHEET_STEPS, F_FEEDBACK_STEPS,
+    F_SECURITY_REVIEW, F_ENFORCE_OUTCOME, F_BENCHMARK,
     F_BUDGET, F_IS_SELF,
     F_ENV,
     F_RUN, F_PROFILES,
@@ -82,7 +86,9 @@ typedef struct { int provider_id; char *model, *effort; } RuntimePick;
 enum { T_PROJECT, T_DATABASE, T_REVIEW, T_ORCHESTRATOR, T_ENV, T_RUN, T_COUNT };
 
 extern int screen_settings_g_tab;
-enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_PICK, ACT_FOCUS };
+enum { ACT_SAVE = 1100, ACT_CLONE, ACT_DELETE, ACT_TAB, ACT_TOGGLE, ACT_PICK, ACT_FOCUS, ACT_CHOOSE };
+/// ACT_CHOOSE's argument: the field times CHOICE_STRIDE, plus the choice's index.
+enum { CHOICE_STRIDE = 16 };
 
 enum { ID_FIELD = 2000 };
 
@@ -96,6 +102,7 @@ typedef struct {
     bool clipped[F_COUNT];
     int lines[F_COUNT];    // a long box's lines, which it grows to show, as the dashboard's textareas do
     bool bools[F_COUNT];
+    char *choices[F_COUNT];   // a K_CHOICE field's value as it stands, owned; "" for none
     RuntimePick picks[R_COUNT];
     bool has_catalog; RuntimeCatalog catalog;
     Request *req_save, *req_delete, *req_runtimes;
@@ -241,6 +248,17 @@ Json *screen_settings_form_body(FormScreen *s, char **why, int *tab);
 void screen_settings_form_changed(FormScreen *s);
 bool screen_settings_tab_changed(FormScreen *s, int t);
 void screen_settings_field(FormScreen *s, Doc *doc, int x, int w, int f);
+void screen_settings_check(FormScreen *s, Doc *doc, int x, int w, int f);
+void screen_settings_runtime_row(FormScreen *s, Doc *doc, int x, int w, int r);
+/// The Code review tab: its layout, the security review choice and the round limit (screen_settings_project_review.c).
+void screen_settings_review_layout(FormScreen *s, Doc *doc, int x, int w);
+void screen_settings_choices_fill(FormScreen *s);
+void screen_settings_choices_free(FormScreen *s);
+bool screen_settings_choice_changed(FormScreen *s, int f);
+/// Picks choice `index` of K_CHOICE field `f`; false when it names none or the field is not offered.
+bool screen_settings_choose(FormScreen *s, int f, size_t index);
+/// Puts a choice field or the round limit into `body`; NULL when it did, else why it cannot be sent (owned).
+char *screen_settings_review_value(FormScreen *s, int f, Json *body);
 void screen_settings_select_free(void *p);
 void screen_settings_paint_select(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_settings_note(Doc *doc, int x, int w, const char *text);
