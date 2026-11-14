@@ -6,6 +6,7 @@
 #include "issue_pages.h"
 #include "markdown.h"
 #include "pull_conversation.h"
+#include "review_approvals.h"
 #include "review_outcome.h"
 #include "screens.h"
 #include "str.h"
@@ -95,6 +96,7 @@ enum {
     ACT_DELETE_RUN, ACT_DELETE_SERVED, ACT_WEB_RELOAD, ACT_WEB_BROWSER, ACT_WEB_BACK, ACT_WEB_FORWARD, ACT_RUN_PROFILE, ACT_RUN_RETRY, ACT_PR_PROJECT,
     ACT_REVIEW_ROW, ACT_REVIEW_FINDING, ACT_EDIT, ACT_EDIT_ASSIGNEES, ACT_EDIT_LABELS, ACT_UPDATE_BRANCH, ACT_REVIEW_SUMMARY, ACT_REVIEW_BACK,
     ACT_REVIEW_HANDLING, ACT_REVIEW_EDIT, ACT_REVIEW_VERDICT, ACT_REVIEW_EVIDENCE, ACT_REVIEW_SAVE, ACT_REVIEW_CANCEL,
+    ACT_REVIEW_APPROVE, ACT_REVIEW_WITHDRAW, ACT_REVIEW_APPROVAL_SEND, ACT_REVIEW_APPROVAL_CANCEL, ACT_REVIEW_RISK,
     ACT_FILES_BASE = 1200,   // the Files changed tab's own actions, PULL_FILES_ACTIONS of them
 };
 
@@ -108,6 +110,8 @@ enum { PR_TAB_BODY, PR_TAB_CONVERSATION, PR_TAB_SESSIONS, PR_TAB_FILES, PR_TAB_R
 typedef struct { const char *op, *field; } screen_pulls_conv_feeds_type;
 extern const screen_pulls_conv_feeds_type screen_pulls_conv_feeds[CONV_FEEDS];
 enum { LINKED_ISSUES_MAX = 10 };
+/// The approvals block's note form open for Approve; any other nonzero form is the id of the approval being withdrawn.
+enum { REVIEW_APPROVE_FORM = -1 };
 
 typedef struct { Json *items, *incoming; bool read; char *error; Request *req; } ConvFeed;
 
@@ -121,8 +125,9 @@ typedef struct {
     int64_t review_id, finding_id, summary_id;
     int list_scroll;
     bool open, reveal_row, reset_inspector;
-    // One write at a time: Mark handled or Reopen on `saving_review`, or the verdict in `editing`, the editor open on a
-    // finding of the open review. A handling save's error shows on the tab, a verdict save's in the editor.
+    // One write at a time: Mark handled or Reopen on `saving_review`, the verdict in `editing`, the editor open on a
+    // finding of the open review, or the approval form `approval_saving` names. A handling save's error shows on the tab,
+    // a verdict save's in the editor, an approval's in the approvals block.
     Request *req_write;
     int64_t saving_review;
     CodeReviewFindingEdit *editing;
@@ -133,6 +138,12 @@ typedef struct {
     // What the reviews amount to, as the last read or verdict save answered it (review_outcome_state); `outcome` is
     // NULL while the server has sent none.
     Json *outcome_state; ReviewOutcome *outcome;
+    // The approvals block: its note form (`approval_form`, 0 when closed, else REVIEW_APPROVE_FORM or an approval id),
+    // the native note box over `note_rc` while `note_laid`, holding the note of form `note_for`, and whether "What set
+    // the risk" is unfolded.
+    long long approval_form, approval_saving, note_for;
+    char *approval_error;
+    HWND note; RECT note_rc; bool note_laid, focus_note, risk_open;
 } PullReviews;
 
 typedef struct {
@@ -338,6 +349,23 @@ void screen_pulls_review_edit_cancel(PullScreen *s);
 void screen_pulls_review_edit_save(PullScreen *s);
 void screen_pulls_review_handling(PullScreen *s, Doc *doc, Col c, const Json *review);
 void screen_pulls_review_editor(PullScreen *s, Doc *doc, Col c, const Json *review);
+COLORREF screen_pulls_review_tone_color(ReviewTone tone);
+/// The server's reasons, those that hold it back first in their tones and the notes after, `gap` above them.
+void screen_pulls_review_reasons(Doc *doc, Col c, const ReviewReasons *reasons, int gap);
+/// Wrapped text, or nothing for NULL or an empty string.
+void screen_pulls_review_line(Doc *doc, int x, int w, const char *text, FontId f, COLORREF color);
+/// Shows `box` over `laid` (content coordinates) clipped to the view below the pinned header; false when it is hidden.
+bool screen_pulls_review_box_place(PullScreen *s, HWND box, const RECT *laid, const RECT *content, int scroll_y);
+// The approvals block under the outcome (screen_pulls_pull_review_approvals.c) and its writes.
+void screen_pulls_review_approvals(PullScreen *s, Doc *doc, Col c);
+void screen_pulls_review_approvals_place(PullScreen *s, const RECT *content, int scroll_y);
+bool screen_pulls_review_can_approve(const PullScreen *s);
+bool screen_pulls_review_can_withdraw(const ReviewApproval *approval);
+void screen_pulls_review_approval_open(PullScreen *s, long long form);
+void screen_pulls_review_approval_cancel(PullScreen *s);
+void screen_pulls_review_approval_send(PullScreen *s);
+/// Whether the note form is open on something it may still send: Approve while offered, or a withdrawable approval.
+bool screen_pulls_review_approval_form_open(const PullScreen *s);
 void screen_pulls_review_editor_place(PullScreen *s, const RECT *content, int scroll_y);
 void screen_pulls_review_editor_command(PullScreen *s, HWND control, int code);
 void screen_pulls_review_outcome_take(PullReviews *r, const Json *answer, ReviewOutcomeSource source);

@@ -58,6 +58,8 @@ const char *json_str_nonempty(const Json *value);
 const char *json_str_or(const Json *value, const char *fallback);
 /// A new copy of the string, or NULL for anything else.
 char *json_dup_str(const Json *value);
+/// A new copy of a nonempty string, or NULL for an empty one or anything else.
+char *json_dup_nonempty(const Json *value);
 /// New copies of the strings in an array, skipping anything that is not one; `*count` receives the number.
 char **json_dup_strings(const Json *array, size_t *count);
 /// True with the number in `*out` when the value is one.

@@ -343,6 +343,10 @@ static const ApiRoute ROUTES[] = {
     // its `verification` and `comments` (code_reviews.c).
     { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
     { "update_code_review_finding", "PATCH", "pulls/{pr}/code-reviews/{reviewId}/findings/{findingId}" },
+    // A person records their approval of the reviewed head (`headSha`, an optional `note`) or withdraws one of theirs;
+    // each answers the requirement and the outcome computed after it (review_approvals.c).
+    { "approve_pull", "POST", "pulls/{pr}/approvals" },
+    { "withdraw_pull_approval", "POST", "pulls/{pr}/approvals/{approvalId}/withdraw" },
     { "findings", "GET", "pulls/{pr}/findings" },
     { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },

@@ -123,6 +123,7 @@ const char *json_str(const Json *value) { return value && value->type == JSON_ST
 const char *json_str_nonempty(const Json *value) { const char *s = json_str(value); return s && *s ? s : NULL; }
 const char *json_str_or(const Json *value, const char *fallback) { const char *s = json_str(value); return s ? s : fallback; }
 char *json_dup_str(const Json *value) { return xstrdup(json_str(value)); }
+char *json_dup_nonempty(const Json *value) { return xstrdup(json_str_nonempty(value)); }
 char **json_dup_strings(const Json *array, size_t *count) {
     size_t n = json_count(array), m = 0;
     char **out = xmalloc(n * sizeof *out);

@@ -91,6 +91,7 @@ char *wide_to_utf8(const wchar_t *w);
 #define json_str_nonempty heap_json_str_nonempty
 #define json_str_or heap_json_str_or
 #define json_dup_str heap_json_dup_str
+#define json_dup_nonempty heap_json_dup_nonempty
 #define json_dup_strings heap_json_dup_strings
 #define json_num heap_json_num
 #define json_num_or heap_json_num_or
@@ -131,6 +132,7 @@ const char *json_str(const Json *value);
 const char *json_str_nonempty(const Json *value);
 const char *json_str_or(const Json *value, const char *fallback);
 char *json_dup_str(const Json *value);
+char *json_dup_nonempty(const Json *value);
 char **json_dup_strings(const Json *array, size_t *count);
 bool json_num(const Json *value, double *out);
 double json_num_or(const Json *value, double fallback);
