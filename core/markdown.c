@@ -1,4 +1,5 @@
 #include "markdown.h"
+#include "remote_image.h"
 #include "str.h"
 #include <ctype.h>
 #include <stdlib.h>
@@ -297,6 +298,17 @@ static bool triple_emphasis_open(const char *text, const char *p, const char *en
     return p[1] == marker && p[2] == marker && !isspace((unsigned char)p[3]);
 }
 
+/// A link's address from between its parentheses: `<in angle brackets>`, where it may hold spaces, or up to the title.
+static char *link_destination(const char *raw, size_t len) {
+    const char *end = raw + len;
+    while (raw < end && isspace((unsigned char)*raw)) raw++;
+    const char *close = raw < end && *raw == '<' ? memchr(raw, '>', (size_t)(end - raw)) : NULL;
+    if (close) return xstrndup(raw + 1, (size_t)(close - raw - 1));
+    const char *stop = raw;
+    while (stop < end && !isspace((unsigned char)*stop)) stop++;
+    return xstrndup(raw, (size_t)(stop - raw));
+}
+
 static void parse_inline(Spans *out, const char *text, size_t len, unsigned flags) {
     const char *p = text, *end = text + len;
     Str plain; str_init(&plain);
@@ -324,7 +336,8 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
                 p = close + 2; continue;
             }
         }
-        if (c == '!' && p + 1 < end && p[1] == '[') { p++; c = '['; }
+        bool image = c == '!' && p + 1 < end && p[1] == '[';
+        if (image) { p++; c = '['; }
         if (c == '`') {
             size_t ticks = 0; while (p + ticks < end && p[ticks] == '`') ticks++;
             const char *q = p + ticks;
@@ -375,20 +388,22 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
                 const char *paren = NULL; int parens = 0;
                 for (const char *q = close + 2; q < end && !paren; q++) { if (*q == '(') parens++; else if (*q == ')' && parens-- == 0) paren = q; }
                 if (paren) {
-                    char *url = xstrndup(close + 2, (size_t)(paren - close - 2));
-                    char *space = strchr(url, ' '); if (space) *space = 0;
+                    char *url = link_destination(close + 2, (size_t)(paren - close - 2));
                     FLUSH();
                     size_t label_len = (size_t)(close - p - 1);
                     Spans label = { 0 };
-                    parse_inline(&label, p + 1, label_len, flags | SPAN_LINK);
+                    unsigned link = flags | SPAN_LINK | (image ? SPAN_IMAGE : 0);
+                    parse_inline(&label, p + 1, label_len, link);
                     for (size_t i = 0; i < label.count; i++) {
                         if (out->count == out->cap) { out->cap = out->cap ? out->cap * 2 : 8; out->items = xrealloc(out->items, out->cap * sizeof *out->items); }
-                        out->items[out->count] = label.items[i];
-                        out->items[out->count].url = xstrdup(url);
-                        out->count++;
+                        MdSpan item = label.items[i];
+                        // A picture inside a link keeps its own address: it is what is shown.
+                        bool own_picture = !image && item.url && (item.flags & SPAN_IMAGE);
+                        if (!own_picture) { free(item.url); item.url = xstrdup(url); }
+                        out->items[out->count++] = item;
                     }
                     // An empty label shows the link itself.
-                    if (!label.count && *url) emit(out, flags | SPAN_LINK, url, strlen(url), url);
+                    if (!label.count && *url) emit(out, link, url, strlen(url), url);
                     free(label.items); free(url);
                     p = paren + 1; continue;
                 }
@@ -439,6 +454,55 @@ char *md_plain(const char *text) {
     for (size_t i = 0; i < n; i++) str_appendz(&s, spans[i].text);
     md_spans_free(spans, n);
     return str_detach(&s);
+}
+
+// MARK: - Pictures
+
+static const char *const *block_texts(const MdBlock *b, size_t *count) {
+    if (b->kind == MD_TABLE) { *count = b->rows * b->cols; return (const char *const *)b->cells; }
+    *count = b->kind == MD_CODE || b->kind == MD_RULE || !b->text ? 0 : 1;
+    return (const char *const *)&b->text;
+}
+
+static bool span_shows_picture(const MdSpan *span) {
+    if (!span->url) return false;
+    return (span->flags & SPAN_IMAGE) ? remote_image_address(span->url) : remote_image_url(span->url);
+}
+
+MdImage *md_block_images(const MdBlock *block, size_t *count) {
+    MdImage *images = NULL; size_t n = 0, texts = 0;
+    const char *const *text = block_texts(block, &texts);
+    for (size_t t = 0; t < texts; t++) {
+        // Nothing is fetched but over HTTPS, so most text is passed without reading its spans.
+        if (!text[t] || !str_icontains(text[t], "https://")) continue;
+        size_t sn; MdSpan *spans = md_inline(text[t], &sn);
+        const char *label_url = NULL;   // the link the last span belonged to, whose label the next may continue
+        for (size_t i = 0; i < sn; i++) {
+            const MdSpan *span = &spans[i];
+            bool continues = label_url && str_eq(span->url, label_url);
+            label_url = span->url;
+            if (!span_shows_picture(span)) continue;
+            if (continues && n) {
+                char *joined = xstrfmt("%s%s", images[n - 1].alt, span->text);
+                free(images[n - 1].alt); images[n - 1].alt = joined;
+                continue;
+            }
+            bool seen = false;
+            for (size_t k = 0; k < n && !seen; k++) seen = str_eq(images[k].url, span->url);
+            if (seen) { label_url = NULL; continue; }
+            images = xrealloc(images, (n + 1) * sizeof *images);
+            images[n].url = xstrdup(span->url); images[n].alt = xstrdup(span->text); n++;
+        }
+        md_spans_free(spans, sn);
+    }
+    *count = n;
+    return images;
+}
+
+void md_images_free(MdImage *images, size_t count) {
+    if (!images) return;
+    for (size_t i = 0; i < count; i++) { free(images[i].url); free(images[i].alt); }
+    free(images);
 }
 
 /// What GitHub shows of a description: without HTML comments and raw HTML lines (bots' badges and footers), code blocks kept whole.

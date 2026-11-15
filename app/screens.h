@@ -20,6 +20,9 @@ const Project *projects_list(size_t *count);
 /// After a conversation was deleted: drops it from the saved list and from the sidebar, which then asks the server again.
 void sessions_forget(const char *repo, const char *session_id);
 Screen *conversation_screen_new(const Session *session);
+/// A picture a conversation showed, opened on its own: fitted to the pane or at any zoom, saved, or sent to the browser.
+/// `url` names a picture the image cache holds ready.
+Screen *image_screen_new(const char *url);
 /// A session's ⚡ Webhook (an admin token's): arm it, set its caps and the instructions webhook, copy its URLs and keys,
 /// and rotate the keys.
 Screen *mail_wake_screen_new(const Session *session);

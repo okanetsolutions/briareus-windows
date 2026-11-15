@@ -43,6 +43,7 @@ static char *spans_desc(const char *text) {
         if (f & SPAN_CODE) str_appendc(&s, 'C');
         if (f & SPAN_LINK) str_appendc(&s, 'L');
         if (f & SPAN_STRIKE) str_appendc(&s, 'S');
+        if (f & SPAN_IMAGE) str_appendc(&s, 'P');
         str_appendc(&s, ':'); str_appendz(&s, spans[i].text);
         if (spans[i].url) { str_appendc(&s, '@'); str_appendz(&s, spans[i].url); }
         str_appendc(&s, ']');
@@ -386,7 +387,7 @@ static void test_brackets_that_are_not_links_are_literal(void) {
 }
 
 static void test_images_show_their_alt_text_as_a_link(void) {
-    CHECK_OWNED_STR(spans_desc("![diagram](https://x.example/d.png)"), "[L:diagram@https://x.example/d.png]");
+    CHECK_OWNED_STR(spans_desc("![diagram](https://x.example/d.png)"), "[LP:diagram@https://x.example/d.png]");
     CHECK_OWNED_STR(spans_desc("Wow! [x](u)"), "[:Wow! ][L:x@u]");
     CHECK_OWNED_STR(spans_desc("!["), "[:[]");
     CHECK_OWNED_STR(spans_desc("!"), "[:!]");
@@ -436,6 +437,62 @@ static void test_spans_with_the_same_style_merge(void) {
     CHECK_OWNED_STR(spans_desc("**a** **b**"), "[B:a][: ][B:b]");
 }
 
+static void test_link_addresses_take_angle_brackets_and_titles(void) {
+    CHECK_OWNED_STR(spans_desc("[shot](<https://x.example/files/ab/my shot.png>)"), "[L:shot@https://x.example/files/ab/my shot.png]");
+    CHECK_OWNED_STR(spans_desc("[shot](<https://x.example/a.png> \"A title\")"), "[L:shot@https://x.example/a.png]");
+    CHECK_OWNED_STR(spans_desc("[shot](https://x.example/a.png \"A title\")"), "[L:shot@https://x.example/a.png]");
+    CHECK_OWNED_STR(spans_desc("[shot]( https://x.example/a.png )"), "[L:shot@https://x.example/a.png]");
+    CHECK_OWNED_STR(spans_desc("[](<https://x.example/a.png>)"), "[L:https://x.example/a.png@https://x.example/a.png]");
+}
+
+static void test_images_are_links_marked_as_pictures(void) {
+    CHECK_OWNED_STR(spans_desc("see ![the **chart**](https://x.example/c) now"),
+                    "[:see ][LP:the @https://x.example/c][BLP:chart@https://x.example/c][: now]");
+    CHECK_OWNED_STR(spans_desc("![](https://x.example/c.png)"), "[LP:https://x.example/c.png@https://x.example/c.png]");
+    CHECK_OWNED_STR(spans_desc("[a link](https://x.example/c.png)"), "[L:a link@https://x.example/c.png]");
+    // A picture that is itself a link keeps its own address; the other words of the label take the link's.
+    CHECK_OWNED_STR(spans_desc("[![badge](https://x.example/b.png) status](https://x.example/page)"),
+                    "[LP:badge@https://x.example/b.png][L: status@https://x.example/page]");
+    CHECK_OWNED_STR(spans_desc("[https://a.example](https://b.example)"), "[L:https://a.example@https://b.example]");
+}
+
+/// A block's pictures written out as `alt@url`, one per line.
+static char *images_desc(const char *source) {
+    size_t n; MdBlock *b = md_parse(source, &n);
+    Str s; str_init(&s);
+    for (size_t i = 0; i < n; i++) {
+        size_t count = 99; MdImage *images = md_block_images(&b[i], &count);
+        if (!count) CHECK(images == NULL);
+        for (size_t k = 0; k < count; k++) str_appendf(&s, "%s@%s\n", images[k].alt, images[k].url);
+        md_images_free(images, count);
+    }
+    md_free(b, n);
+    return str_detach(&s);
+}
+
+static void test_a_block_lists_the_pictures_it_links_to(void) {
+    CHECK_OWNED_STR(images_desc("Before ![the **chart**](https://x.example/render?id=4) and [shot](<https://x.example/files/ab/my%20shot.png>)."),
+                    "the chart@https://x.example/render?id=4\nshot@https://x.example/files/ab/my%20shot.png\n");
+    CHECK_OWNED_STR(images_desc("Bare https://x.example/a.PNG, and <https://x.example/b.jpg>"),
+                    "https://x.example/a.PNG@https://x.example/a.PNG\nhttps://x.example/b.jpg@https://x.example/b.jpg\n");
+    CHECK_OWNED_STR(images_desc("- item ![one](https://x.example/1.png)\n\n> quoted [two](https://x.example/2.gif)\n\n## Title [three](https://x.example/3.webp)"),
+                    "one@https://x.example/1.png\ntwo@https://x.example/2.gif\nthree@https://x.example/3.webp\n");
+    CHECK_OWNED_STR(images_desc("| Name | Shot |\n| --- | --- |\n| a | ![a](https://x.example/a.png) |"), "a@https://x.example/a.png\n");
+    // Each address once in a block, whatever its label.
+    CHECK_OWNED_STR(images_desc("![a](https://x.example/a.png) again [a](https://x.example/a.png)"), "a@https://x.example/a.png\n");
+    CHECK_OWNED_STR(images_desc("[![badge](https://x.example/b.png)](https://x.example/page)"), "badge@https://x.example/b.png\n");
+}
+
+static void test_other_links_and_code_show_no_picture(void) {
+    CHECK_OWNED_STR(images_desc("A [report](https://x.example/report.pdf), https://x.example/page and [docs](https://x.example/a.png/readme)."), "");
+    CHECK_OWNED_STR(images_desc("![plain](http://x.example/a.png) ![local](shots/a.png) ![auth](https://user@x.example/a.png)"), "");
+    CHECK_OWNED_STR(images_desc("[spaced](<https://x.example/my shot.png>)"), "");
+    CHECK_OWNED_STR(images_desc("```\n![a](https://x.example/a.png)\n```"), "");
+    CHECK_OWNED_STR(images_desc("`![a](https://x.example/a.png)`"), "");
+    CHECK_OWNED_STR(images_desc("---"), "");
+    md_images_free(NULL, 0);
+}
+
 static void test_md_plain_strips_every_marker(void) {
     CHECK_OWNED_STR(md_plain("# not a block"), "# not a block");
     CHECK_OWNED_STR(md_plain("**b** *i* ~~s~~ `c` [l](u) ![img](u) <https://x.y> &amp;"), "b i s c l img https://x.y &");
@@ -455,6 +512,10 @@ static void test_visible_markdown_preserves_rendered_body(void) {
 }
 
 void markdown_tests(void) {
+    test_run("link addresses take angle brackets and titles", test_link_addresses_take_angle_brackets_and_titles);
+    test_run("images are links marked as pictures", test_images_are_links_marked_as_pictures);
+    test_run("a block lists the pictures it links to", test_a_block_lists_the_pictures_it_links_to);
+    test_run("other links and code show no picture", test_other_links_and_code_show_no_picture);
     test_run("visible Markdown preserves rendered body semantics", test_visible_markdown_preserves_rendered_body);
     test_run("empty and null sources have no blocks", test_empty_and_null_sources_have_no_blocks);
     test_run("headings take one to six hashes and a space", test_headings_take_one_to_six_hashes_and_a_space);

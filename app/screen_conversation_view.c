@@ -7,6 +7,7 @@ static char *status_line(const Session *ss);
 void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     ConversationScreen *s = (ConversationScreen *)base;
     int x = screen_conversation_column_x(doc->width), w = screen_conversation_column_w(doc->width);
+    doc->picture = screen_conversation_layout_picture;
     doc_space(doc, px(18));
     if (s->removed) doc_notice_box(doc, x, w, "This review session is no longer available. Published output remains in the pull request comments.");
     if (s->error) { doc_notice_box(doc, x, w, s->error); doc_space(doc, px(12)); }
@@ -268,5 +269,6 @@ void screen_conversation_conversation_action(Screen *base, int action, intptr_t 
     case ACT_REFRESH_OUTCOME: s->uncertain = false; s->reloading = true; set_string(&s->write_error, NULL); screen_conversation_refresh(s, false); pane_relayout(base->pane); break;
     case ACT_DISMISS_ERROR: set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_REOPEN: screen_conversation_confirm_and_mutate(s, "reopen"); break;
+    default: screen_conversation_picture_action(s, action, arg); break;
     }
 }

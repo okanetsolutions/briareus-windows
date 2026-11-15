@@ -240,6 +240,7 @@ static bool conversation_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
 static void conversation_destroy(Screen *base) {
     ConversationScreen *s = (ConversationScreen *)base;
     request_cancel(&s->req_refresh); request_cancel(&s->req_mutate);
+    image_cache_unwatch(s);
     poller_stop(&s->poller);
     if (base->pane) { KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE); }
     if (s->voice) voice_free(s->voice);
@@ -268,6 +269,7 @@ Screen *conversation_screen_new(const Session *initial) {
     transcript_init(&s->transcript);
     s->composer_lines = 1; s->at_bottom = true;
     s->files = attach_list_new(&s->base, "message");
+    image_cache_watch(screen_conversation_pictures_changed, s);
     screen_conversation_prompts_init(s);
     if (store_can_transcribe()) s->voice = voice_new(screen_conversation_voice_changed, s);
     return &s->base;

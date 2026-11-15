@@ -31,6 +31,7 @@ void doc_begin(Doc *doc, Canvas *cv, int width) {
     doc->pin_last = doc->pin_bottom = doc->pin_shift = 0;
     doc->regions_kept = doc->region_count; doc->region_count = 0;
     doc->drag_first = doc->drag_last = 0;
+    doc->picture = NULL; doc->picture_ctx = NULL;
 }
 void doc_end(Doc *doc) { doc->cv = NULL; search_rebuild(doc); }
 Item *doc_item(Doc *doc, int index) { return index >= 0 && (size_t)index < doc->count ? &doc->items[index] : NULL; }
@@ -818,12 +819,19 @@ static void doc_table(Doc *doc, int x, int w, const MdBlock *b, FontId base) {
     doc->y += y;
 }
 
+static void block_pictures(Doc *doc, int x, int w, const MdBlock *b) {
+    size_t n; MdImage *images = md_block_images(b, &n);
+    for (size_t i = 0; i < n; i++) doc->picture(doc, x, w, &images[i], doc->picture_ctx);
+    md_images_free(images, n);
+}
+
 void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
     size_t n; MdBlock *blocks = md_parse(source, &n);
     int gap = px(6);
     for (size_t i = 0; i < n; i++) {
         if (i) doc_space(doc, gap);
         MdBlock *b = &blocks[i];
+        int text_x = x;   // where the block's text starts, and its pictures with it
         switch (b->kind) {
         case MD_PARAGRAPH: doc_rich(doc, x, w, b->text, base, theme.text); break;
         case MD_HEADING:
@@ -846,12 +854,14 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
                 RECT mr = { x + indent, top, x + indent + marker_w, top + font_height(doc->cv, base) + px(3) };
                 doc_text_at(doc, &mr, b->marker, base, theme.secondary, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
             }
-            doc_rich(doc, x + indent + marker_w, w - indent - marker_w, b->text, base, b->task == 2 ? theme.secondary : theme.text);
+            text_x = x + indent + marker_w;
+            doc_rich(doc, text_x, w - indent - marker_w, b->text, base, b->task == 2 ? theme.secondary : theme.text);
             break;
         }
         case MD_QUOTE: {
             int top = doc->y;
-            doc_rich(doc, x + px(12), w - px(12), b->text, base, theme.muted);
+            text_x = x + px(12);
+            doc_rich(doc, text_x, w - px(12), b->text, base, theme.muted);
             RECT bar = { x, top, x + px(2), doc->y };
             doc_add(doc, &bar, quote_bar);
             break;
@@ -874,6 +884,7 @@ void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base) {
         case MD_RULE: doc_space(doc, px(4)); doc_rule(doc, x, w); doc_space(doc, px(4)); break;
         case MD_TABLE: doc_table(doc, x, w, b, base); break;
         }
+        if (doc->picture) block_pictures(doc, text_x, x + w - text_x, b);
     }
     md_free(blocks, n);
 }
