@@ -268,7 +268,7 @@ static void emit(Spans *s, unsigned flags, const char *text, size_t len, const c
     }
     if (s->count == s->cap) { s->cap = s->cap ? s->cap * 2 : 8; s->items = xrealloc(s->items, s->cap * sizeof *s->items); }
     MdSpan *span = &s->items[s->count++];
-    span->flags = flags; span->text = xstrndup(text, len); span->url = xstrdup(url);
+    span->flags = flags; span->text = xstrndup(text, len); span->url = xstrdup(url); span->image = NULL;
 }
 
 static bool is_url_start(const char *p) { return str_has_prefix(p, "https://") || str_has_prefix(p, "http://"); }
@@ -384,9 +384,11 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             const char *close = NULL; int depth = 0;
             for (const char *q = p; q < end; q++) { if (*q == '[') depth++; else if (*q == ']') { if (--depth == 0) { close = q; break; } } }
             if (close && close + 1 < end && close[1] == '(') {
-                // Parentheses inside the URL come in pairs, as in Wikipedia's links.
+                // Parentheses inside the URL come in pairs, as in Wikipedia's links; in angle brackets they are any.
                 const char *paren = NULL; int parens = 0;
-                for (const char *q = close + 2; q < end && !paren; q++) { if (*q == '(') parens++; else if (*q == ')' && parens-- == 0) paren = q; }
+                const char *from = close + 2, *angle = from < end && *from == '<' ? memchr(from, '>', (size_t)(end - from)) : NULL;
+                if (angle) from = angle + 1;
+                for (const char *q = from; q < end && !paren; q++) { if (*q == '(') parens++; else if (*q == ')' && parens-- == 0) paren = q; }
                 if (paren) {
                     char *url = link_destination(close + 2, (size_t)(paren - close - 2));
                     FLUSH();
@@ -397,13 +399,16 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
                     for (size_t i = 0; i < label.count; i++) {
                         if (out->count == out->cap) { out->cap = out->cap ? out->cap * 2 : 8; out->items = xrealloc(out->items, out->cap * sizeof *out->items); }
                         MdSpan item = label.items[i];
-                        // A picture inside a link keeps its own address: it is what is shown.
-                        bool own_picture = !image && item.url && (item.flags & SPAN_IMAGE);
-                        if (!own_picture) { free(item.url); item.url = xstrdup(url); }
+                        // A picture inside a link keeps its own address to show; a click follows the link.
+                        if (image && !item.image) item.image = xstrdup(url);
+                        free(item.url); item.url = xstrdup(url);
                         out->items[out->count++] = item;
                     }
                     // An empty label shows the link itself.
-                    if (!label.count && *url) emit(out, link, url, strlen(url), url);
+                    if (!label.count && *url) {
+                        emit(out, link, url, strlen(url), url);
+                        if (image) out->items[out->count - 1].image = xstrdup(url);
+                    }
                     free(label.items); free(url);
                     p = paren + 1; continue;
                 }
@@ -444,7 +449,7 @@ MdSpan *md_inline(const char *text, size_t *count) {
 
 void md_spans_free(MdSpan *spans, size_t count) {
     if (!spans) return;
-    for (size_t i = 0; i < count; i++) { free(spans[i].text); free(spans[i].url); }
+    for (size_t i = 0; i < count; i++) { free(spans[i].text); free(spans[i].url); free(spans[i].image); }
     free(spans);
 }
 
@@ -464,9 +469,11 @@ static const char *const *block_texts(const MdBlock *b, size_t *count) {
     return (const char *const *)&b->text;
 }
 
-static bool span_shows_picture(const MdSpan *span) {
-    if (!span->url) return false;
-    return (span->flags & SPAN_IMAGE) ? remote_image_address(span->url) : remote_image_url(span->url);
+/// The address of the picture a span stands for: an image's own, or a link's when it names a picture file. NULL for
+/// any other span, and for an address pictures are not fetched from.
+static const char *span_picture(const MdSpan *span) {
+    if (span->image) return remote_image_address(span->image) ? span->image : NULL;
+    return span->url && remote_image_url(span->url) ? span->url : NULL;
 }
 
 MdImage *md_block_images(const MdBlock *block, size_t *count) {
@@ -476,22 +483,22 @@ MdImage *md_block_images(const MdBlock *block, size_t *count) {
         // Nothing is fetched but over HTTPS, so most text is passed without reading its spans.
         if (!text[t] || !str_icontains(text[t], "https://")) continue;
         size_t sn; MdSpan *spans = md_inline(text[t], &sn);
-        const char *label_url = NULL;   // the link the last span belonged to, whose label the next may continue
+        const char *last = NULL;   // the picture the span before stood for, whose words the next may continue
         for (size_t i = 0; i < sn; i++) {
-            const MdSpan *span = &spans[i];
-            bool continues = label_url && str_eq(span->url, label_url);
-            label_url = span->url;
-            if (!span_shows_picture(span)) continue;
+            const char *picture = span_picture(&spans[i]);
+            bool continues = last && str_eq(picture, last);
+            last = picture;
+            if (!picture) continue;
             if (continues && n) {
-                char *joined = xstrfmt("%s%s", images[n - 1].alt, span->text);
+                char *joined = xstrfmt("%s%s", images[n - 1].alt, spans[i].text);
                 free(images[n - 1].alt); images[n - 1].alt = joined;
                 continue;
             }
             bool seen = false;
-            for (size_t k = 0; k < n && !seen; k++) seen = str_eq(images[k].url, span->url);
-            if (seen) { label_url = NULL; continue; }
+            for (size_t k = 0; k < n && !seen; k++) seen = str_eq(images[k].url, picture);
+            if (seen) { last = NULL; continue; }
             images = xrealloc(images, (n + 1) * sizeof *images);
-            images[n].url = xstrdup(span->url); images[n].alt = xstrdup(span->text); n++;
+            images[n].url = xstrdup(picture); images[n].alt = xstrdup(spans[i].text); n++;
         }
         md_spans_free(spans, sn);
     }

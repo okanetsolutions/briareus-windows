@@ -7,18 +7,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { ENTRIES = 256, HOSTS = 32, DOWNLOADS = 4, PREVIEW_W = 720, PREVIEW_H = 480 };
-// Room for the files and previews together; pictures no layout asked for in the last while give way first.
+enum { ENTRIES = 1024, HOSTS = 32, DOWNLOADS = 4, PREVIEW_W = 720, PREVIEW_H = 480 };
+// Room for the files and previews together. Past it, pictures not painted for a while give theirs up, and are fetched
+// again when they come back into view: a long transcript keeps what is on screen, not everything it ever showed.
 static const size_t BUDGET = 256u * 1024 * 1024;
-static const ULONGLONG IN_USE_MS = 120000;
+static const ULONGLONG IN_VIEW_MS = 15000, IN_USE_MS = 120000;
+static size_t budget = 256u * 1024 * 1024;
+static ULONGLONG in_view_ms = 15000;
 
 typedef struct {
     char *url; ImageState state;
-    bool waiting;             // IMAGE_LOADING without a download of its own yet
-    Picture preview; int width, height;
+    bool queued, fetching;    // wants a download; has one under way
+    bool shed;                // IMAGE_READY whose file and preview gave way: its sizes stay for the layout
+    Picture preview; int preview_w, preview_h, width, height;
     void *bytes; size_t len;
     char *error;
-    ULONGLONG used;           // when a layout last asked for it
+    ULONGLONG used, painted;  // when a layout last asked for it; when it was last drawn, or arrived
 } Entry;
 
 typedef struct {
@@ -31,10 +35,11 @@ typedef struct { ImageCacheChanged changed; void *ctx; } Watcher;
 // Everything a picture keeps is a kept allocation: it outlives the screen that asked for it.
 static Entry *entries[ENTRIES]; static size_t entry_count;
 static char *hosts[HOSTS]; static size_t host_count;
+static bool hosts_read;       // the saved list was taken from this connection's cache
 static Watcher *watchers; static size_t watcher_count;
 static size_t generation; static int downloads;
 
-static void start_waiting(void);
+static void start_queued(void);
 
 static char *kept_string(const char *z) {
     if (!z) return NULL;
@@ -45,9 +50,15 @@ static char *kept_string(const char *z) {
 static void *kept_copy(const void *bytes, size_t len) { void *copy = xmalloc_kept(len); memcpy(copy, bytes, len); return copy; }
 
 static size_t entry_size(const Entry *e) { return e->len + (size_t)e->preview.width * e->preview.height * 4; }
+/// Lets go of the file and the preview, which is all of an entry that weighs anything.
+static void entry_unload(Entry *e) {
+    xfree_kept(e->preview.pixels); xfree_kept(e->bytes);
+    memset(&e->preview, 0, sizeof e->preview); e->bytes = NULL; e->len = 0;
+}
 static void entry_clear(Entry *e) {
-    xfree_kept(e->preview.pixels); xfree_kept(e->bytes); xfree_kept(e->error);
-    memset(&e->preview, 0, sizeof e->preview); e->bytes = NULL; e->len = 0; e->error = NULL; e->width = e->height = 0;
+    entry_unload(e);
+    xfree_kept(e->error); e->error = NULL;
+    e->width = e->height = e->preview_w = e->preview_h = 0; e->shed = false;
 }
 static void entry_free(Entry *e) { entry_clear(e); xfree_kept(e->url); xfree_kept(e); }
 static Entry *find(const char *url) {
@@ -61,9 +72,38 @@ static void notify(void) {
 
 // MARK: - Who may be fetched
 
+// The allowed hosts are saved with the connection's responses, so they last as long as it does and go when it is
+// forgotten, revoked or replaced.
+static const char HOSTS_KEY[] = "picture-hosts";
+
+static void forget_hosts(void) {
+    for (size_t i = 0; i < host_count; i++) xfree_kept(hosts[i]);
+    host_count = 0; hosts_read = false;
+}
+static void read_hosts(void) {
+    if (hosts_read || !g_store.cache) return;
+    hosts_read = true;
+    Json *saved = cache_value(g_store.cache, HOSTS_KEY);
+    for (size_t i = 0; i < json_count(saved) && host_count < HOSTS; i++) {
+        const char *host = json_str(json_at(saved, i));
+        if (host && *host) hosts[host_count++] = kept_string(host);
+    }
+    // Read is use: pruning leaves the list alone while the app is opened.
+    if (saved) cache_touch(g_store.cache, HOSTS_KEY);
+    json_free(saved);
+}
+static void save_hosts(void) {
+    if (!g_store.cache) return;
+    Json *list = json_array();
+    for (size_t i = 0; i < host_count; i++) json_array_push(list, json_string(hosts[i]));
+    cache_store(g_store.cache, list, HOSTS_KEY);
+    json_free(list);
+}
+
 static bool host_allowed(const char *url) {
     const ServerAddress *server = g_store.client ? api_client_address(g_store.client) : NULL;
     if (server && remote_image_from_origin(url, server->origin)) return true;
+    read_hosts();
     char *host = remote_image_host(url);
     bool allowed = false;
     for (size_t i = 0; host && i < host_count && !allowed; i++) allowed = str_eq(hosts[i], host);
@@ -71,30 +111,47 @@ static bool host_allowed(const char *url) {
     return allowed;
 }
 static void allow_host(const char *url) {
-    if (host_allowed(url) || host_count == HOSTS) return;
+    if (host_allowed(url)) return;
     char *host = remote_image_host(url);
-    if (host) hosts[host_count++] = kept_string(host);
+    if (!host) return;
+    // A full list lets its oldest host go.
+    if (host_count == HOSTS) { xfree_kept(hosts[0]); memmove(&hosts[0], &hosts[1], (HOSTS - 1) * sizeof *hosts); host_count--; }
+    hosts[host_count++] = kept_string(host);
     free(host);
+    save_hosts();
 }
 
 // MARK: - Room
 
-/// Makes room for one more picture by dropping those no layout asked for lately, oldest first; `forced` drops the
-/// oldest in use as well, as a picture the user asked for needs. False when the cache stays full.
+/// Makes room for one more picture's entry by dropping one no layout asked for lately, oldest first; `forced` drops
+/// the oldest in use as well, as a picture the user asked for needs. False when the cache stays full.
 static bool make_room(bool forced) {
+    if (entry_count < ENTRIES) return true;
+    size_t oldest = entry_count;
+    for (size_t i = 0; i < entry_count; i++) {
+        if (entries[i]->queued || entries[i]->fetching) continue;
+        if (oldest == entry_count || entries[i]->used < entries[oldest]->used) oldest = i;
+    }
+    if (oldest == entry_count) return false;
+    if (!forced && GetTickCount64() - entries[oldest]->used < IN_USE_MS) return false;
+    entry_free(entries[oldest]);
+    entries[oldest] = entries[--entry_count];
+    return true;
+}
+
+/// Over the budget, the pictures longest out of view give up their file and preview; `keep` just arrived.
+static void trim(const Entry *keep) {
     ULONGLONG now = GetTickCount64();
     for (;;) {
-        size_t held = 0, oldest = entry_count;
+        size_t held = 0; Entry *oldest = NULL;
         for (size_t i = 0; i < entry_count; i++) {
-            held += entry_size(entries[i]);
-            if (entries[i]->state == IMAGE_LOADING) continue;
-            if (oldest == entry_count || entries[i]->used < entries[oldest]->used) oldest = i;
+            Entry *e = entries[i];
+            held += entry_size(e);
+            if (e == keep || e->state != IMAGE_READY || e->shed || now - e->painted < in_view_ms) continue;
+            if (!oldest || e->painted < oldest->painted) oldest = e;
         }
-        if (entry_count < ENTRIES && held < BUDGET) return true;
-        if (oldest == entry_count) return false;
-        if (!forced && now - entries[oldest]->used < IN_USE_MS) return false;
-        entry_free(entries[oldest]);
-        entries[oldest] = entries[--entry_count];
+        if (held <= budget || !oldest) return;
+        entry_unload(oldest); oldest->shed = true;
     }
 }
 
@@ -123,36 +180,45 @@ static void job_done(void *p) {
     Job *job = p;
     Entry *e = job->generation == generation ? find(job->url) : NULL;
     if (job->generation == generation) downloads--;
-    if (e && e->state == IMAGE_LOADING && !e->waiting) {
+    if (e && e->fetching) {
         entry_clear(e);
+        e->fetching = false;
         if (job->error) { e->state = IMAGE_FAILED; e->error = kept_string(job->error); }
         else {
             e->state = IMAGE_READY; e->bytes = job->bytes; e->len = job->len; e->preview = job->preview;
-            e->width = job->width; e->height = job->height;
+            e->preview_w = job->preview.width; e->preview_h = job->preview.height;
+            e->width = job->width; e->height = job->height; e->painted = GetTickCount64();
             job->bytes = NULL; job->preview.pixels = NULL;
+            trim(e);
         }
     }
     job_free(job);
-    start_waiting();
+    start_queued();
     notify();
 }
 
-static void start(Entry *e) {
-    e->state = IMAGE_LOADING; e->waiting = true;
-    start_waiting();
-}
-
-static void start_waiting(void) {
-    for (size_t i = 0; i < entry_count && downloads < DOWNLOADS; i++) {
+/// Starts downloads while there is room for them, the pictures asked for last first: in a transcript those are the
+/// ones nearest its end, where the view is.
+static void start_queued(void) {
+    for (size_t i = entry_count; i-- > 0 && downloads < DOWNLOADS;) {
         Entry *e = entries[i];
-        if (e->state != IMAGE_LOADING || !e->waiting) continue;
+        if (!e->queued) continue;
         Job *job = xcalloc(1, sizeof *job);
         job->url = xstrdup(e->url); job->generation = generation; job->max_w = px(PREVIEW_W); job->max_h = px(PREVIEW_H);
-        e->waiting = false;
-        if (async_try_run(job_work, job_done, job)) { downloads++; continue; }
+        e->queued = false;
+        if (async_try_run(job_work, job_done, job)) { downloads++; e->fetching = true; continue; }
         job_free(job);
+        entry_clear(e);
         e->state = IMAGE_FAILED; e->error = kept_string("The picture could not be fetched: Windows started no worker.");
     }
+}
+
+/// A picture not fetched yet, or one that failed, starts over; one that gave way keeps its place while it comes back.
+static void fetch(Entry *e) {
+    if (e->queued || e->fetching) return;
+    if (!e->shed) { entry_clear(e); e->state = IMAGE_LOADING; }
+    e->queued = true;
+    start_queued();
 }
 
 // MARK: - The cache
@@ -161,8 +227,10 @@ static ImageInfo info_of(const Entry *e, const char *url) {
     ImageInfo info; memset(&info, 0, sizeof info);
     if (!e) { info.state = IMAGE_ASK; info.host_allowed = host_allowed(url); return info; }
     info.state = e->state; info.host_allowed = true;
-    if (e->state == IMAGE_READY) { info.preview = &e->preview; info.width = e->width; info.height = e->height; info.bytes = e->len; }
     if (e->state == IMAGE_FAILED) info.error = e->error;
+    if (e->state != IMAGE_READY) return info;
+    info.preview = e->shed ? NULL : &e->preview; info.preview_w = e->preview_w; info.preview_h = e->preview_h;
+    info.width = e->width; info.height = e->height; info.bytes = e->len;
     return info;
 }
 
@@ -178,37 +246,48 @@ ImageInfo image_cache_get(const char *url) {
     if (e) { e->used = GetTickCount64(); return info_of(e, url); }
     if (!remote_image_address(url) || !host_allowed(url) || !make_room(false)) return info_of(NULL, url);
     e = add(url);
-    start(e);
+    fetch(e);
     return info_of(e, url);
 }
 
-const Picture *image_cache_preview(const char *url) {
+const Picture *image_cache_shown(const char *url) {
     Entry *e = find(url);
-    return e && e->state == IMAGE_READY ? &e->preview : NULL;
+    if (!e || e->state != IMAGE_READY) return NULL;
+    e->painted = GetTickCount64();
+    if (!e->shed) return &e->preview;
+    fetch(e);
+    return NULL;
 }
 
 void image_cache_allow(const char *url) {
     if (!remote_image_address(url)) return;
     allow_host(url);
-    if (!host_allowed(url)) return;
     Entry *e = find(url);
     if (!e && make_room(true)) e = add(url);
-    if (e && e->state != IMAGE_LOADING && e->state != IMAGE_READY) start(e);
+    if (e && e->state != IMAGE_LOADING && e->state != IMAGE_READY) fetch(e);
     notify();
 }
 
 void image_cache_retry(const char *url) {
     Entry *e = find(url);
     if (!e || e->state != IMAGE_FAILED) return;
-    entry_clear(e);
-    start(e);
+    fetch(e);
     notify();
+}
+
+void image_cache_retry_failed(void) {
+    bool any = false;
+    for (size_t i = 0; i < entry_count; i++) {
+        if (entries[i]->state != IMAGE_FAILED) continue;
+        fetch(entries[i]); any = true;
+    }
+    if (any) notify();
 }
 
 void *image_cache_bytes(const char *url, size_t *len) {
     Entry *e = find(url);
     *len = 0;
-    if (!e || e->state != IMAGE_READY) return NULL;
+    if (!e || e->state != IMAGE_READY || e->shed) return NULL;
     void *copy = xmalloc(e->len); memcpy(copy, e->bytes, e->len);
     *len = e->len;
     return copy;
@@ -228,10 +307,15 @@ void image_cache_unwatch(void *ctx) {
     if (!watcher_count) { free(watchers); watchers = NULL; }
 }
 
+void image_cache_set_limits(size_t bytes, unsigned view_ms) {
+    budget = bytes ? bytes : BUDGET;
+    in_view_ms = bytes ? view_ms : IN_VIEW_MS;
+}
+
 void image_cache_reset(void) {
     bool had = entry_count || host_count;
     for (size_t i = 0; i < entry_count; i++) entry_free(entries[i]);
-    for (size_t i = 0; i < host_count; i++) xfree_kept(hosts[i]);
-    entry_count = 0; host_count = 0; downloads = 0; generation++;
+    forget_hosts();
+    entry_count = 0; downloads = 0; generation++;
     if (had) notify();
 }

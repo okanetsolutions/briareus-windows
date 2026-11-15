@@ -55,6 +55,7 @@ typedef struct {
     // footer hit rects
     RECT mic_rc, send_rc, discard_rc, attach_rc, prompts_rc;
     bool at_bottom;
+    int return_scroll;   // where the view was when a picture was opened from above the end; -1 otherwise
 } ConversationScreen;
 
 // MARK: - Footer (composer)

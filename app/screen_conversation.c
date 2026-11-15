@@ -203,7 +203,9 @@ static void conversation_visible(Screen *base, bool shown) {
         pane_stick_to_bottom(base->pane, true); pane_show_bottom_button(base->pane, true);
         if (!s->removed) poller_start(&s->poller, base->pane, TIMER_POLL, session_is_active(screen_conversation_session(s)) ? 2000 : 7000);
         if (session_is_active(screen_conversation_session(s))) SetTimer(pane_hwnd(base->pane), TIMER_WORKING, 120, NULL);
-        pane_scroll_to_bottom(base->pane);
+        if (s->return_scroll < 0) pane_scroll_to_bottom(base->pane);
+        else { pane_stick_to_bottom(base->pane, false); pane_relayout(base->pane); pane_scroll_after_layout(base->pane, s->return_scroll); }
+        s->return_scroll = -1;
     } else {
         poller_stop(&s->poller); KillTimer(pane_hwnd(base->pane), TIMER_WORKING); KillTimer(pane_hwnd(base->pane), TIMER_VOICE);
         request_cancel(&s->req_refresh); s->loading = false;
@@ -218,7 +220,8 @@ static void conversation_window_visible(Screen *base, bool shown) {
     prompt_picker_visible(((ConversationScreen *)base)->prompts, shown);
 }
 
-static void conversation_refresh(Screen *base) { ConversationScreen *s = (ConversationScreen *)base; screen_conversation_refresh(s, true); }
+/// Reads everything again, the pictures that failed with it.
+static void conversation_refresh(Screen *base) { image_cache_retry_failed(); screen_conversation_refresh((ConversationScreen *)base, true); }
 
 static void conversation_scrolled(Screen *base, bool at_bottom) { ConversationScreen *s = (ConversationScreen *)base; s->at_bottom = at_bottom; pane_stick_to_bottom(base->pane, at_bottom); }
 
@@ -230,10 +233,8 @@ static void conversation_activated(Screen *base, bool active) {
 }
 
 static bool conversation_key(Screen *base, WPARAM vk, bool ctrl, bool shift) {
-    ConversationScreen *s = (ConversationScreen *)base;
     (void)shift;
-    if (vk == VK_F5) { screen_conversation_refresh(s, true); return true; }
-    if (ctrl && vk == 'R') { screen_conversation_refresh(s, true); return true; }
+    if (vk == VK_F5 || (ctrl && vk == 'R')) { conversation_refresh(base); return true; }
     return false;
 }
 
@@ -267,7 +268,7 @@ Screen *conversation_screen_new(const Session *initial) {
     s->base.vt = &conversation_vt; s->base.id = xstrfmt("conversation:%s", session_id(initial));
     session_copy(&s->initial, initial);
     transcript_init(&s->transcript);
-    s->composer_lines = 1; s->at_bottom = true;
+    s->composer_lines = 1; s->at_bottom = true; s->return_scroll = -1;
     s->files = attach_list_new(&s->base, "message");
     image_cache_watch(screen_conversation_pictures_changed, s);
     screen_conversation_prompts_init(s);

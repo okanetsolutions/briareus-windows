@@ -43,6 +43,14 @@ static void test_only_https_addresses_without_credentials_are_fetched(void) {
     CHECK(!remote_image_address("https://:443/shot.png"));
     CHECK(!remote_image_address("https://user:secret@files.example/shot.png"));
     CHECK(!remote_image_address("https://files.example%2Fevil/shot.png"));
+    // Nothing between the host and the path that another reader of the address could take for the host.
+    CHECK(!remote_image_address("https://files.example?@evil.test/shot.png"));
+    CHECK(!remote_image_address("https://files.example#@evil.test/shot.png"));
+    CHECK(!remote_image_address("https://files.example?shot.png"));
+    CHECK(!remote_image_address("https://files.example;evil.test/shot.png"));
+    CHECK(!remote_image_address("https://files.example,evil.test/shot.png"));
+    CHECK(remote_image_address("https://[2001:db8::1]:8443/shot.png"));
+    CHECK(remote_image_address("https://files.example"));
     CHECK(!remote_image_address("https://files.example/a b.png"));
     CHECK(!remote_image_address("https://files.example\\shot.png"));
     CHECK(!remote_image_address("https://files.example/shot.png\n"));
@@ -84,6 +92,9 @@ static void test_only_the_paired_origin_is_its_own(void) {
     CHECK(!remote_image_from_origin("https://briareus.example:8443/shot.png", "https://briareus.example"));
     CHECK(!remote_image_from_origin("https://briareus.example.evil.test/shot.png", "https://briareus.example"));
     CHECK(!remote_image_from_origin("https://evil.test/briareus.example/shot.png", "https://briareus.example"));
+    CHECK(!remote_image_from_origin("https://briareus.example?@evil.test/shot.png", "https://briareus.example"));
+    CHECK(!remote_image_from_origin("https://briareus.example#@evil.test/shot.png", "https://briareus.example"));
+    CHECK(!remote_image_from_origin("https://briareus.example@evil.test/shot.png", "https://briareus.example"));
     CHECK(!remote_image_from_origin("https://briareus.example/shot.png", NULL));
     CHECK(!remote_image_from_origin("http://briareus.example/shot.png", "https://briareus.example"));
 }

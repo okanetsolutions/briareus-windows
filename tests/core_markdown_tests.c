@@ -46,6 +46,9 @@ static char *spans_desc(const char *text) {
         if (f & SPAN_IMAGE) str_appendc(&s, 'P');
         str_appendc(&s, ':'); str_appendz(&s, spans[i].text);
         if (spans[i].url) { str_appendc(&s, '@'); str_appendz(&s, spans[i].url); }
+        // A picture's own address, where it is not what a click opens.
+        if (spans[i].image && !str_eq(spans[i].image, spans[i].url)) { str_appendc(&s, '!'); str_appendz(&s, spans[i].image); }
+        if (!spans[i].image != !(f & SPAN_IMAGE)) str_appendz(&s, "?");
         str_appendc(&s, ']');
     }
     md_spans_free(spans, n);
@@ -443,6 +446,8 @@ static void test_link_addresses_take_angle_brackets_and_titles(void) {
     CHECK_OWNED_STR(spans_desc("[shot](https://x.example/a.png \"A title\")"), "[L:shot@https://x.example/a.png]");
     CHECK_OWNED_STR(spans_desc("[shot]( https://x.example/a.png )"), "[L:shot@https://x.example/a.png]");
     CHECK_OWNED_STR(spans_desc("[](<https://x.example/a.png>)"), "[L:https://x.example/a.png@https://x.example/a.png]");
+    // In angle brackets a parenthesis needs no partner.
+    CHECK_OWNED_STR(spans_desc("[shot](<https://x.example/a).png>) after"), "[L:shot@https://x.example/a).png][: after]");
 }
 
 static void test_images_are_links_marked_as_pictures(void) {
@@ -450,10 +455,12 @@ static void test_images_are_links_marked_as_pictures(void) {
                     "[:see ][LP:the @https://x.example/c][BLP:chart@https://x.example/c][: now]");
     CHECK_OWNED_STR(spans_desc("![](https://x.example/c.png)"), "[LP:https://x.example/c.png@https://x.example/c.png]");
     CHECK_OWNED_STR(spans_desc("[a link](https://x.example/c.png)"), "[L:a link@https://x.example/c.png]");
-    // A picture that is itself a link keeps its own address; the other words of the label take the link's.
+    // A picture inside a link opens the link, as a badge does, and keeps its own address to show.
     CHECK_OWNED_STR(spans_desc("[![badge](https://x.example/b.png) status](https://x.example/page)"),
-                    "[LP:badge@https://x.example/b.png][L: status@https://x.example/page]");
+                    "[LP:badge@https://x.example/page!https://x.example/b.png][L: status@https://x.example/page]");
     CHECK_OWNED_STR(spans_desc("[https://a.example](https://b.example)"), "[L:https://a.example@https://b.example]");
+    CHECK_OWNED_STR(spans_desc("![a [b](https://x.example/inner)](https://x.example/outer.png)"),
+                    "[LP:a @https://x.example/outer.png][LP:b@https://x.example/outer.png]");
 }
 
 /// A block's pictures written out as `alt@url`, one per line.

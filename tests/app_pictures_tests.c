@@ -55,8 +55,20 @@ static void start(ScreenFixture *f, Net *net) {
     changes = 0;
 }
 static void finish(ScreenFixture *f) {
-    image_cache_reset(); remote_image_set_transport(NULL, NULL);
+    image_cache_reset(); image_cache_set_limits(0, 0); remote_image_set_transport(NULL, NULL);
     screen_fixture_clear(f);
+}
+
+/// Saved responses in a directory of their own, as a connection has; `directory` takes MAX_PATH characters.
+static void open_saved_responses(wchar_t *directory) {
+    wchar_t temp[MAX_PATH];
+    CHECK(GetTempPathW(MAX_PATH, temp) != 0);
+    CHECK(GetTempFileNameW(temp, L"pic", 0, directory) != 0); DeleteFileW(directory);
+    CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
+}
+static void close_saved_responses(const wchar_t *directory) {
+    cache_remove_all(g_store.cache); cache_free(g_store.cache); g_store.cache = NULL;
+    RemoveDirectoryW(directory);
 }
 
 static void pictures_decode_premultiplied_and_scaled(void) {
@@ -70,11 +82,11 @@ static void pictures_decode_premultiplied_and_scaled(void) {
         CHECK(memcmp(p.pixels + 5 * 4, clear, 4) == 0);
         CHECK(memcmp(p.pixels + 7 * 4, grey, 4) == 0);
     }
-    Picture small; int sw = 0, sh = 0;
-    CHECK(picture_decode(PNG_4X2, sizeof PNG_4X2, 2, 2, &small, &sw, &sh));
-    CHECK_INT(small.width, 2); CHECK_INT(small.height, 1); CHECK_INT(sw, 4); CHECK_INT(sh, 2);
-    CHECK(small.key != 0 && small.key != p.key);
-    picture_free(&p); picture_free(&small);
+    Picture scaled; int sw = 0, sh = 0;
+    CHECK(picture_decode(PNG_4X2, sizeof PNG_4X2, 2, 2, &scaled, &sw, &sh));
+    CHECK_INT(scaled.width, 2); CHECK_INT(scaled.height, 1); CHECK_INT(sw, 4); CHECK_INT(sh, 2);
+    CHECK(scaled.key != 0 && scaled.key != p.key);
+    picture_free(&p); picture_free(&scaled);
     CHECK(p.pixels == NULL);
     Picture none; int nw = 9, nh = 9;
     CHECK(!picture_decode("<!doctype html><html></html>", 28, 0, 0, &none, &nw, &nh));
@@ -94,13 +106,14 @@ static void another_hosts_picture_waits_for_the_users_word(void) {
     ImageInfo info = image_cache_get(OTHER);
     CHECK_INT(info.state, IMAGE_ASK); CHECK(!info.host_allowed); CHECK(info.preview == NULL);
     deliver(50);
-    CHECK_INT(net.calls, 0); CHECK(image_cache_preview(OTHER) == NULL);
+    CHECK_INT(net.calls, 0); CHECK(image_cache_shown(OTHER) == NULL);
     size_t len = 9; CHECK(image_cache_bytes(OTHER, &len) == NULL); CHECK_INT(len, 0);
     image_cache_allow(OTHER);
     CHECK_INT(loaded_state(OTHER), IMAGE_READY); CHECK_INT(net.calls, 1); CHECK(changes >= 2);
     info = image_cache_get(OTHER);
     CHECK(info.preview != NULL); CHECK_INT(info.width, 4); CHECK_INT(info.height, 2); CHECK_INT(info.bytes, sizeof PNG_4X2);
-    if (info.preview) { CHECK_INT(info.preview->width, 4); CHECK_INT(info.preview->height, 2); CHECK(info.preview == image_cache_preview(OTHER)); }
+    CHECK_INT(info.preview_w, 4); CHECK_INT(info.preview_h, 2);
+    if (info.preview) { CHECK_INT(info.preview->width, 4); CHECK_INT(info.preview->height, 2); CHECK(info.preview == image_cache_shown(OTHER)); }
     void *bytes = image_cache_bytes(OTHER, &len);
     CHECK_INT(len, sizeof PNG_4X2); CHECK(bytes && memcmp(bytes, PNG_4X2, sizeof PNG_4X2) == 0); free(bytes);
     // The host was allowed, not the one address; any other host still waits.
@@ -112,13 +125,33 @@ static void another_hosts_picture_waits_for_the_users_word(void) {
     image_cache_allow("http://plain.test/a.png");
     CHECK_INT(image_cache_get("http://plain.test/a.png").state, IMAGE_ASK);
     deliver(50); CHECK_INT(net.calls, 2);
-    // A changed connection forgets the pictures and the hosts.
+    // Without saved responses to keep it in, a changed connection forgets the host with the pictures.
     int before = changes;
     image_cache_reset();
-    CHECK(changes > before); CHECK(image_cache_preview(OTHER) == NULL);
+    CHECK(changes > before); CHECK(image_cache_shown(OTHER) == NULL);
     info = image_cache_get(OTHER); CHECK_INT(info.state, IMAGE_ASK); CHECK(!info.host_allowed);
     image_cache_unwatch(&net);
     before = changes; image_cache_allow(OTHER); CHECK_INT(loaded_state(OTHER), IMAGE_READY); CHECK_INT(changes, before);
+    finish(&f);
+}
+
+static void an_allowed_host_lasts_as_long_as_the_connections_saved_responses(void) {
+    ScreenFixture f; Net net; start(&f, &net);
+    wchar_t directory[MAX_PATH]; open_saved_responses(directory);
+    CHECK_INT(image_cache_get(OTHER).state, IMAGE_ASK);
+    image_cache_allow(OTHER);
+    CHECK_INT(loaded_state(OTHER), IMAGE_READY); CHECK_INT(net.calls, 1);
+    // The pictures go with the app or a reconnection; the host is read back from what the connection saved.
+    image_cache_reset();
+    CHECK(image_cache_shown(OTHER) == NULL);
+    CHECK_INT(image_cache_get(OTHER).state, IMAGE_LOADING);
+    CHECK_INT(loaded_state(OTHER), IMAGE_READY); CHECK_INT(net.calls, 2);
+    CHECK_INT(image_cache_get("https://elsewhere.test/a.png").state, IMAGE_ASK);
+    // Forgetting the connection erases what it saved, and the host with it.
+    image_cache_reset(); cache_remove_all(g_store.cache);
+    ImageInfo info = image_cache_get(OTHER); CHECK_INT(info.state, IMAGE_ASK); CHECK(!info.host_allowed);
+    deliver(50); CHECK_INT(net.calls, 2);
+    close_saved_responses(directory);
     finish(&f);
 }
 
@@ -134,9 +167,48 @@ static void the_paired_servers_pictures_load_and_a_failure_is_retried_on_request
     net.status = 200;
     image_cache_retry(OWN);
     CHECK_INT(loaded_state(OWN), IMAGE_READY); CHECK_INT(net.calls, 2);
-    image_cache_retry(OWN); deliver(50); CHECK_INT(net.calls, 2);
+    image_cache_retry(OWN); image_cache_retry_failed(); deliver(50); CHECK_INT(net.calls, 2);
+    // Reading a screen again retries every picture that failed, and only those.
+    net.status = 404;
+    CHECK_INT(loaded_state("https://example.com/files/ab/one.png"), IMAGE_FAILED);
+    CHECK_INT(loaded_state("https://example.com/files/ab/two.png"), IMAGE_FAILED); CHECK_INT(net.calls, 4);
+    net.status = 200;
+    image_cache_retry_failed();
+    CHECK_INT(loaded_state("https://example.com/files/ab/one.png"), IMAGE_READY);
+    CHECK_INT(loaded_state("https://example.com/files/ab/two.png"), IMAGE_READY); CHECK_INT(net.calls, 6);
     CHECK_INT(image_cache_get("https://example.com.evil.test/files/ab/shot.png").state, IMAGE_ASK);
-    CHECK_INT(net.calls, 2);
+    deliver(50); CHECK_INT(net.calls, 6);
+    finish(&f);
+}
+
+/// Delivers completions until the picture's preview is held; false when that takes too long.
+static bool held(const char *url) {
+    ULONGLONG until = GetTickCount64() + 10000;
+    while (!image_cache_get(url).preview && GetTickCount64() < until) deliver(1);
+    return image_cache_get(url).preview != NULL;
+}
+
+static void pictures_out_of_view_give_way_and_come_back_when_shown(void) {
+    static const char A[] = "https://example.com/files/ab/a.png", B[] = "https://example.com/files/ab/b.png", C[] = "https://example.com/files/ab/c.png";
+    ScreenFixture f; Net net; start(&f, &net);
+    // Room for two of these files with their previews, and nothing counts as in view but the picture that just arrived.
+    image_cache_set_limits(300, 0);
+    CHECK_INT(loaded_state(A), IMAGE_READY); CHECK_INT(loaded_state(B), IMAGE_READY);
+    CHECK(image_cache_get(A).preview != NULL); CHECK(image_cache_get(B).preview != NULL);
+    CHECK_INT(loaded_state(C), IMAGE_READY); CHECK_INT(net.calls, 3);
+    // The first gave way: a layout still has its size, and nothing holds its pixels or its file.
+    ImageInfo info = image_cache_get(A);
+    CHECK_INT(info.state, IMAGE_READY); CHECK(info.preview == NULL); CHECK_INT(info.preview_w, 4); CHECK_INT(info.preview_h, 2);
+    CHECK_INT(info.width, 4); CHECK_INT(info.bytes, 0);
+    size_t len = 9; CHECK(image_cache_bytes(A, &len) == NULL); CHECK_INT(len, 0);
+    CHECK(image_cache_get(B).preview != NULL); CHECK(image_cache_get(C).preview != NULL);
+    // Asking for it in a layout fetches nothing; painting it does, once, and the one longest unseen gives way for it.
+    deliver(50); CHECK_INT(net.calls, 3);
+    CHECK(image_cache_shown(A) == NULL); CHECK(image_cache_shown(A) == NULL);
+    CHECK_INT(image_cache_get(A).state, IMAGE_READY);
+    CHECK(held(A)); CHECK_INT(net.calls, 4);
+    CHECK(image_cache_shown(A) != NULL);
+    CHECK(image_cache_get(B).preview == NULL); CHECK(image_cache_get(C).preview != NULL);
     finish(&f);
 }
 
@@ -148,7 +220,7 @@ static void a_download_under_way_is_dropped_when_the_connection_goes(void) {
     while (!net.calls && GetTickCount64() < until) Sleep(1);
     image_cache_reset();
     SetEvent(net.hold); deliver(300);
-    CHECK_INT(net.calls, 1); CHECK(image_cache_preview(OWN) == NULL);
+    CHECK_INT(net.calls, 1); CHECK(image_cache_shown(OWN) == NULL);
     CHECK_INT(loaded_state(OWN), IMAGE_READY); CHECK_INT(net.calls, 2);
     CloseHandle(net.hold);
     finish(&f);
@@ -170,10 +242,7 @@ static int clickable_item(Doc *doc) {
 static void a_replys_pictures_follow_it_and_open_in_the_viewer(void) {
     ScreenFixture f; Net net; start(&f, &net);
     g_store.routes = ROUTES; g_store.route_count = 1;
-    wchar_t temp[MAX_PATH], directory[MAX_PATH];
-    CHECK(GetTempPathW(MAX_PATH, temp) != 0);
-    CHECK(GetTempFileNameW(temp, L"pic", 0, directory) != 0); DeleteFileW(directory);
-    CHECK(CreateDirectoryW(directory, NULL)); g_store.cache = cache_new(directory);
+    wchar_t directory[MAX_PATH]; open_saved_responses(directory);
     Session session = {0}; session.raw = json_parsez("{\"id\":\"pictures\",\"status\":\"idle\"}");
     Screen *screen = conversation_screen_new(&session); session_free(&session);
     screen_fixture_pane(&f, screen); screen->vt->visible(screen, true);
@@ -225,15 +294,16 @@ static void a_replys_pictures_follow_it_and_open_in_the_viewer(void) {
     doc_free(&doc); screen->vt->destroy(screen);
     // A closed conversation no longer hears of the pictures.
     image_cache_reset();
-    cache_remove_all(g_store.cache); cache_free(g_store.cache); g_store.cache = NULL;
-    RemoveDirectoryW(directory); finish(&f);
+    close_saved_responses(directory); finish(&f);
 }
 
 void app_pictures_tests(void) {
     screen_fixture_prepare();
     test_run("pictures decode premultiplied and scaled to fit", pictures_decode_premultiplied_and_scaled);
     test_run("another host's picture waits for the user's word", another_hosts_picture_waits_for_the_users_word);
+    test_run("an allowed host lasts as long as the connection's saved responses", an_allowed_host_lasts_as_long_as_the_connections_saved_responses);
     test_run("the paired server's pictures load, and a failure is retried on request", the_paired_servers_pictures_load_and_a_failure_is_retried_on_request);
+    test_run("pictures out of view give way and come back when shown", pictures_out_of_view_give_way_and_come_back_when_shown);
     test_run("a download under way is dropped when the connection goes", a_download_under_way_is_dropped_when_the_connection_goes);
     test_run("a reply's pictures follow it and open in the viewer", a_replys_pictures_follow_it_and_open_in_the_viewer);
 }

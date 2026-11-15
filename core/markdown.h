@@ -23,9 +23,10 @@ void md_free(MdBlock *blocks, size_t count);
 /// A table block written back as Markdown, pipes in cells escaped, as a new string.
 char *md_table_source(const MdBlock *table);
 
-/// SPAN_IMAGE marks the label of `![alt](url)`, which is a link as well.
+/// SPAN_IMAGE marks the label of `![alt](url)`, which is a link as well: `image` is the picture's address and `url` what
+/// a click opens, which is the enclosing link's address for a picture inside a link, as a badge is.
 enum { SPAN_BOLD = 1, SPAN_ITALIC = 2, SPAN_CODE = 4, SPAN_LINK = 8, SPAN_STRIKE = 16, SPAN_IMAGE = 32 };
-typedef struct { unsigned flags; char *text; char *url; } MdSpan;
+typedef struct { unsigned flags; char *text; char *url; char *image; } MdSpan;
 
 /// Inline syntax: `code`, **bold**, *italic*, ~~strike~~, [text](url), ![alt](url), <url>, bare URLs and HTML entities.
 /// A link's address may be in angle brackets and be followed by a title, which is dropped. Newlines stay in the text.

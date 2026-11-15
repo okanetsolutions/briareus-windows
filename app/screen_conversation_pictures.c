@@ -26,13 +26,13 @@ static char *tile_label(const MdImage *image) {
 static char *tile_note(const ImageInfo *info, const char *url) {
     switch (info->state) {
     case IMAGE_LOADING: return xstrdup("Loading\xE2\x80\xA6");
-    case IMAGE_FAILED: return xstrfmt("%s Click to try again.", info->error ? info->error : "The picture could not be loaded.");
+    case IMAGE_FAILED: return xstrfmt("Click to try again \xC2\xB7 %s", info->error ? info->error : "The picture could not be loaded.");
     case IMAGE_READY: return NULL;
     case IMAGE_ASK: break;
     }
     if (info->host_allowed) return xstrdup("Click to show this picture");
     char *host = remote_image_host(url);
-    char *note = xstrfmt("Click to show pictures from %s", host ? host : "this address");
+    char *note = xstrfmt("Click to always show pictures from %s", host ? host : "this address");
     free(host);
     return note;
 }
@@ -50,7 +50,8 @@ static int tile_action(const ImageInfo *info) {
 static void paint_preview(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
     Tile *t = it->data;
     fill_round_rect(cv, rc, px(8), theme.sunken, doc_item_hovered(doc, it) ? theme.accent : theme.line);
-    const Picture *preview = image_cache_preview(t->url);
+    // Drawing it is what keeps it: a preview that gave way to others comes back once it is in view again.
+    const Picture *preview = image_cache_shown(t->url);
     if (!preview) return;
     RECT inner = { rc->left + 1, rc->top + 1, rc->right - 1, rc->bottom - 1 };
     canvas_clip_round(cv, &inner, px(7));
@@ -81,13 +82,13 @@ void screen_conversation_layout_picture(Doc *doc, int x, int w, const MdImage *i
     int item;
     if (info.state == IMAGE_READY) {
         int tw, th, room = w > px(40) ? w - 2 : px(40);
-        picture_fit(info.preview->width, info.preview->height, room, 0, &tw, &th);
+        picture_fit(info.preview_w, info.preview_h, room, 0, &tw, &th);
         item = doc_custom(doc, x, tw + 2, th + 2, paint_preview, t, tile_free, tile_action(&info), (intptr_t)t->url);
         doc_item(doc, item)->tip = xstrfmt("%s \xC2\xB7 %d \xC3\x97 %d", t->label, info.width, info.height);
     } else {
         int tw = w < px(520) ? w : px(520);
         item = doc_custom(doc, x, tw, px(36), paint_note, t, tile_free, tile_action(&info), (intptr_t)t->url);
-        doc_item(doc, item)->tip = xstrdup(t->url);
+        doc_item(doc, item)->tip = info.error ? xstrfmt("%s\n%s", info.error, t->url) : xstrdup(t->url);
     }
     doc_item(doc, item)->hover_fill = false;
     doc_space(doc, px(2));
@@ -104,7 +105,11 @@ bool screen_conversation_picture_action(ConversationScreen *s, int action, intpt
     char *url = xstrdup((const char *)arg);
     if (action == ACT_PICTURE_ALLOW) image_cache_allow(url);
     else if (action == ACT_PICTURE_RETRY) image_cache_retry(url);
-    else if (s->base.pane) pane_push(s->base.pane, image_screen_new(url));
+    else if (s->base.pane && image_cache_get(url).preview) {
+        // Back from the picture, the conversation is where it was left rather than at its end.
+        s->return_scroll = s->at_bottom ? -1 : pane_scroll_y(s->base.pane);
+        pane_push(s->base.pane, image_screen_new(url));
+    }
     free(url);
     return true;
 }

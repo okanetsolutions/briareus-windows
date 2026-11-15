@@ -15,7 +15,7 @@ extern "C" {
 }
 
 /// A part of a picture as the target holds it: pictures larger than a GPU texture are kept in tiles.
-typedef struct { unsigned long long key; int x, y; ID2D1Bitmap *bitmap; size_t bytes; unsigned stamp; } PictureTile;
+typedef struct { unsigned long long key; int x, y; ID2D1Bitmap *bitmap; size_t bytes; unsigned stamp; bool drawn; } PictureTile;
 enum { PICTURE_TILES = 32, PICTURE_TILE_SIDE = 4096 };
 static const size_t PICTURE_BUDGET = 384u * 1024 * 1024;
 
@@ -197,6 +197,14 @@ extern "C" void canvas_set_font(FontId id, const wchar_t *face, float size, int 
 static void drop_pictures(Canvas *cv) {
     for (int i = 0; i < PICTURE_TILES; i++) { release(cv->tiles[i].bitmap); cv->tiles[i].key = 0; cv->tiles[i].bytes = 0; }
 }
+/// After a frame: a tile the frame did not draw is let go, so a picture scrolled away or closed holds no texture.
+static void sweep_pictures(Canvas *cv) {
+    for (int i = 0; i < PICTURE_TILES; i++) {
+        PictureTile *t = &cv->tiles[i];
+        if (t->bitmap && !t->drawn) { release(t->bitmap); t->bytes = 0; }
+        t->drawn = false;
+    }
+}
 static void drop_target(Canvas *cv) {
     drop_pictures(cv);
     release(cv->brush);
@@ -252,6 +260,7 @@ extern "C" bool canvas_begin(Canvas *cv) {
 extern "C" void canvas_end(Canvas *cv) {
     if (!cv || !cv->rt) return;
     while (cv->clips > 0) canvas_unclip(cv);
+    sweep_pictures(cv);
     HRESULT hr = cv->rt->EndDraw();
     ReleaseDC(cv->hwnd, cv->window_dc); cv->window_dc = NULL;
     if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {
@@ -280,6 +289,7 @@ extern "C" Canvas *canvas_begin_dc(HDC hdc, const RECT *rc) {
 extern "C" void canvas_end_dc(Canvas *cv) {
     if (!cv || !dc_rt) return;
     while (cv->clips > 0) canvas_unclip(cv);
+    sweep_pictures(cv);
     if (dc_rt->EndDraw() == (HRESULT)D2DERR_RECREATE_TARGET) { drop_pictures(&dc_canvas); release(dc_canvas.brush); release(dc_rt); dc_canvas.rt = NULL; }
 }
 
@@ -473,7 +483,7 @@ extern "C" void draw_picture(Canvas *cv, const Picture *p, const RECT *rc) {
                 if (FAILED(cv->rt->CreateBitmap(D2D1::SizeU((UINT32)w, (UINT32)h), first, (UINT32)p->width * 4, &props, &t->bitmap))) { t->bitmap = NULL; continue; }
                 t->key = p->key; t->x = x; t->y = y; t->bytes = bytes;
             }
-            t->stamp = cv->stamp;
+            t->stamp = cv->stamp; t->drawn = true;
             // Tiles meet on whole source pixels, so their scaled edges are computed from the same numbers.
             D2D1_RECT_F to = D2D1::RectF(rc->left + x * sx, rc->top + y * sy, rc->left + (x + w) * sx, rc->top + (y + h) * sy);
             if (dc && (sx < 0.99f || sy < 0.99f)) dc->DrawBitmap(t->bitmap, &to, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, NULL, NULL);

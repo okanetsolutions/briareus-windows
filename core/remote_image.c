@@ -21,11 +21,15 @@ static const char *path_end(const char *path) {
 bool remote_image_address(const char *url) {
     if (!url || _strnicmp(url, "https://", 8) != 0) return false;
     const char *authority = url + 8, *end = authority_end(authority);
-    if (end == authority || *authority == ':') return false;
-    for (const char *p = authority; *p; p++) {
+    // The host ends at a path or at the end, so nothing after it can be taken for the host by another reader of the
+    // address ("https://a?@b/"), and it is spelled with nothing but what a host name, a port or an IPv6 literal has.
+    if (end == authority || *authority == ':' || (*end && *end != '/')) return false;
+    for (const char *p = authority; p < end; p++) {
+        if (!isalnum((unsigned char)*p) && !strchr("-._:[]", *p)) return false;
+    }
+    for (const char *p = end; *p; p++) {
         unsigned char c = (unsigned char)*p;
         if (c <= 32 || c == 127 || c == '\\') return false;
-        if (p < end && (c == '@' || c == '%')) return false;
     }
     return true;
 }
@@ -68,9 +72,9 @@ char *remote_image_name(const char *url) {
     for (const char *p = start; p < end; p++) {
         int high = *p == '%' && end - p > 2 ? hex_digit(p[1]) : -1, low = high >= 0 ? hex_digit(p[2]) : -1;
         // A decoded control character or separator stays out of what is shown and offered as a file name.
-        int byte = low >= 0 ? high * 16 + low : (unsigned char)*p;
+        int code = low >= 0 ? high * 16 + low : (unsigned char)*p;
         if (low >= 0) p += 2;
-        str_appendc(&name, byte < 32 || byte == 127 || byte == '/' || byte == '\\' ? '_' : (char)byte);
+        str_appendc(&name, code < 32 || code == 127 || code == '/' || code == '\\' ? '_' : (char)code);
     }
     if (!name.len) { str_free(&name); return host; }
     free(host);
