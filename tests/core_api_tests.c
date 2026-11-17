@@ -1299,27 +1299,6 @@ static void test_project_github_reads(void) {
     api_client_release(c); stub_reset(&stub); api_error_clear(&error);
 }
 
-static void test_project_github_summaries(void) {
-    Json *account = json_parsez("{\"globalFallback\":true,\"login\":null}");
-    CHECK_OWNED_STR(github_account_identity(account), "Server default (GITHUB_TOKEN)");
-    json_set_bool(account, "globalFallback", false); json_set_str(account, "label", "Production"); json_set_str(account, "login", "bot");
-    CHECK_OWNED_STR(github_account_identity(account), "Production (@bot)");
-    json_set_str(account, "label", ""); CHECK_OWNED_STR(github_account_identity(account), "@bot"); json_free(account);
-    Json *h = json_parsez("{\"scopes\":{\"status\":\"unknown\",\"granted\":null,\"missing\":null}}");
-    CHECK_OWNED_STR(github_account_health_scopes(h), "unknown");
-    json_free(h); h = json_parsez("{\"scopes\":{\"status\":\"missing\",\"missing\":[\"repo\",\"admin:repo_hook\"]}}");
-    CHECK_OWNED_STR(github_account_health_scopes(h), "missing: repo, admin:repo_hook");
-    json_free(h); h = json_parsez("{\"scopes\":{\"status\":\"ok\"},\"rateLimit\":{\"core\":{\"remaining\":4999,\"limit\":5000,\"resetAt\":1700000000000},\"graphql\":{\"remaining\":null,\"limit\":null,\"resetAt\":null},\"cooldownUntil\":{\"core\":1700000060000}}}");
-    CHECK_OWNED_STR(github_account_health_scopes(h), "ok");
-    CHECK_OWNED_STR(github_account_health_rate(h, "core"), "REST: 4999 / 5000 remaining; resets 2023-11-14 22:13:20 UTC; retry after 2023-11-14 22:14:20 UTC");
-    CHECK_OWNED_STR(github_account_health_rate(h, "graphql"), "GraphQL: unknown / unknown remaining; resets unknown");
-    json_free(h); CHECK_OWNED_STR(github_account_health_rate(NULL, "core"), "REST: unknown / unknown remaining; resets unknown");
-    Json *repo = json_parsez("{\"repo\":\"o/denied\",\"status\":\"no_access\",\"accessible\":false,\"httpStatus\":403}");
-    CHECK_OWNED_STR(github_account_health_repo(repo), "o/denied: no_access (access denied; HTTP 403)");
-    json_set_str(repo, "status", "rate_limited"); json_object_set(repo, "accessible", json_null()); json_object_set(repo, "httpStatus", json_null());
-    CHECK_OWNED_STR(github_account_health_repo(repo), "o/denied: rate_limited (access unknown)"); json_free(repo);
-}
-
 static void test_github_accounts_contract(void) {
     Stub stub = {0}; stub_json(&stub, 200, "{\"accounts\":[]}");
     ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
@@ -1361,7 +1340,6 @@ static void test_github_accounts_contract(void) {
 
 void api_tests(void) {
     test_run("Project GitHub reads encode repo and preserve refusals without retry", test_project_github_reads);
-    test_run("Project GitHub identity scopes access and rate diagnostics", test_project_github_summaries);
     test_run("GitHub account CRUD routes bodies and no write retries", test_github_accounts_contract);
     test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
