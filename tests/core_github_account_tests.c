@@ -29,7 +29,7 @@ static void test_project_github_summaries(void) {
     char *overall = github_account_health_overall(h);
     CHECK(strstr(overall, "yes") != NULL); free(overall);
     char *token = github_account_health_token(h);
-    CHECK(strstr(token, "valid") && strstr(token, "HTTP 200")); free(token);
+    CHECK(strstr(token, " valid") && strstr(token, "HTTP 200")); free(token);
     CHECK_OWNED_STR(github_account_health_scopes(h), "unknown");
     json_free(h);
     h = json_parsez("{\"healthy\":false,\"token\":{\"status\":\"rate_limited\",\"httpStatus\":null},"

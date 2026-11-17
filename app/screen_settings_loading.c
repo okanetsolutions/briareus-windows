@@ -97,7 +97,9 @@ static void settings_done(void *owner, Request *req) {
     if (str_eq(req->operation, "projects")) return;
     // The dashboard's settings page opens on its first project, or on a new one when there is none; so does this,
     // unless a settings form is already up.
-    Screen *root = pane_root(app_detail_pane());
+    Pane *detail = app_detail_pane();
+    if (!detail) return;
+    Screen *root = pane_root(detail);
     if (root && screen_settings_is_form_id(root->id)) return;
     if (json_count(screen_settings_settings_rows(s))) screen_settings_settings_open_row(s, 0);
     else if (store_supports("settings_projects")) app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
