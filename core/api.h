@@ -21,6 +21,7 @@ typedef struct {
     ApiErrorKind kind;
     int status;           // for API_HTTP
     char *message;        // server's `error` or the transport's words
+    bool has_server_message; // API_HTTP message came from a nonempty JSON `error`, rather than the status fallback
     double retry_after;   // seconds; < 0 without a Retry-After header
     char *code;           // the refusal's machine-readable `code` when the server gave one (`review_round_limit`); NULL otherwise
 } ApiError;

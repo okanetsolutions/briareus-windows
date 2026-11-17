@@ -107,7 +107,7 @@ void screen_settings_forge_layout(Screen *base, Doc *doc) {
     forge_field(s, doc, x + half + gap, col - half - gap, G_ORG);
     if (doc->y < bottom) doc->y = bottom;
     forge_field(s, doc, x, col, G_TOKEN);
-    screen_settings_repos_layout(doc, x, col, s->repos, ACT_FORGE_REPO, "Only these projects offer the account's Forge servers and sites to their clients.");
+    screen_settings_repos_layout(doc, x, col, s->repos, ACT_FORGE_REPO, "Only these projects offer the account's Forge servers and sites to their clients.", SETTINGS_REPOS_EXACT);
     doc_space(doc, px(40));
 }
 
@@ -193,7 +193,7 @@ void screen_settings_forge_ensure_controls(ForgeForm *s) {
 }
 
 void screen_settings_forge_toggle_repo(ForgeForm *s, size_t index) {
-    if (screen_settings_repos_toggle(&s->repos, index)) {
+    if (screen_settings_repos_toggle(&s->repos, index, SETTINGS_REPOS_EXACT)) {
         screen_settings_forge_changed(s);
         pane_relayout(s->base.pane);
     }

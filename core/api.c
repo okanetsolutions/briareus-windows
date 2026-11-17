@@ -33,7 +33,7 @@
 
 // MARK: - Errors
 
-void api_error_init(ApiError *e) { e->kind = API_OK; e->status = 0; e->message = NULL; e->retry_after = -1; e->code = NULL; }
+void api_error_init(ApiError *e) { e->kind = API_OK; e->status = 0; e->message = NULL; e->has_server_message = false; e->retry_after = -1; e->code = NULL; }
 void api_error_clear(ApiError *e) { if (!e) return; free(e->message); free(e->code); api_error_init(e); }
 void api_error_set(ApiError *e, ApiErrorKind kind, int status, const char *message, double retry_after) {
     if (!e) return;
@@ -42,7 +42,7 @@ void api_error_set(ApiError *e, ApiErrorKind kind, int status, const char *messa
 }
 void api_error_copy(ApiError *into, const ApiError *from) {
     api_error_set(into, from->kind, from->status, from->message, from->retry_after);
-    if (into) into->code = xstrdup(from->code);
+    if (into) { into->code = xstrdup(from->code); into->has_server_message = from->has_server_message; }
 }
 bool api_error_unauthorized(const ApiError *e) { return e && e->kind == API_HTTP && e->status == 401; }
 bool api_error_is_refusal(const ApiError *e) { return e && e->kind == API_HTTP && e->status >= 400 && e->status < 500; }
@@ -81,7 +81,10 @@ static const char *status_text(int status) {
 static void http_refusal(ApiError *error, int status, const Json *payload, const char *retry) {
     const char *message = json_str_nonempty(json_get(payload, "error"));
     api_error_set(error, API_HTTP, status, message ? message : status_text(status), api_retry_after(retry, time(NULL)));
-    if (error) error->code = xstrdup(json_str_nonempty(json_get(payload, "code")));
+    if (error) {
+        error->code = xstrdup(json_str_nonempty(json_get(payload, "code")));
+        error->has_server_message = message != NULL;
+    }
 }
 
 // MARK: - Address

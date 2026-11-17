@@ -115,6 +115,28 @@ static void verification_failures_precede_create(void) {
     }
 }
 
+static void gateway_and_tokenless_failures_have_unknown_outcomes(void) {
+    const struct { bool create, token; int status; const char *response; } cases[] = {
+        {true, true, 502, "<html>Bad gateway</html>"},
+        {false, true, 502, "{}"},
+        {false, false, 503, "{}"},
+        {false, false, 503, "{\"error\":\"Service unavailable\"}"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        Form f; setup(&f, cases[i].create); edit(&f, GH_LABEL, "Unconfirmed draft");
+        if (cases[i].token) edit(&f, GH_TOKEN, "unsaved-fixture");
+        f.fixture.write_status = cases[i].status; f.fixture.write_response = cases[i].response;
+        save(&f);
+        CHECK_STR(f.fixture.method, cases[i].create ? "POST" : "PUT");
+        CHECK_INT(json_str_nonempty(json_get(f.fixture.body, "token")) != NULL, cases[i].token);
+        CHECK(strstr(f.form->error, "It may still have been saved") != NULL);
+        CHECK(f.form->dirty); CHECK_INT(f.fixture.writes, 1);
+        CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_LABEL]), "Unconfirmed draft");
+        CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_TOKEN]), cases[i].token ? "unsaved-fixture" : "");
+        cleanup(&f);
+    }
+}
+
 static void delete_confirmation_and_errors(void) {
     Form f; setup(&f, false);
     pane_push(f.fixture.pane, &f.form->base);
@@ -181,7 +203,7 @@ static void shared_forge_picker_preserves_projects(void) {
     Json *row = json_parsez("{\"id\":8,\"organization\":\"fixture\",\"hasToken\":true,\"repos\":[\"o/gone\",\"o/r\"]}");
     ForgeForm *forge = (ForgeForm *)screen_settings_forge_settings_screen_new(row, NULL); json_free(row);
     forge->base.pane = f.pane;
-    Json *choices = screen_settings_repos_choices(forge->repos);
+    Json *choices = screen_settings_repos_choices(forge->repos, SETTINGS_REPOS_EXACT);
     CHECK_INT(json_count(choices), 3); CHECK_STR(json_str(json_at(choices, 0)), "o/r");
     CHECK_STR(json_str(json_at(choices, 1)), "o/second"); CHECK_STR(json_str(json_at(choices, 2)), "o/gone");
     json_free(choices);
@@ -189,7 +211,7 @@ static void shared_forge_picker_preserves_projects(void) {
     CHECK_INT(json_count(forge->repos), 3); CHECK(forge->dirty);
     screen_settings_forge_toggle_repo(forge, 2);
     Json *expected = json_parsez("[\"o/second\",\"o/r\"]");
-    CHECK(screen_settings_repos_same(forge->repos, expected)); json_free(expected);
+    CHECK(screen_settings_repos_same(forge->repos, expected, SETTINGS_REPOS_EXACT)); json_free(expected);
     screen_settings_forge_toggle_repo(forge, 50); CHECK_INT(json_count(forge->repos), 2);
     forge->base.vt->destroy(&forge->base); base->vt->destroy(base); screen_fixture_clear(&f);
 }
@@ -352,14 +374,34 @@ static void shared_picker_matches_project_case(void) {
     ForgeForm *forge = (ForgeForm *)screen_settings_forge_settings_screen_new(row, NULL); json_free(row);
     github->base.pane = forge->base.pane = f.pane;
     Json *expected = json_parsez("[\"owner/repo\"]");
-    CHECK(screen_settings_repos_same(github->repos, expected)); CHECK(screen_settings_repos_same(forge->repos, expected));
-    Json *choices = screen_settings_repos_choices(github->repos);
+    CHECK(screen_settings_repos_same(github->repos, expected, SETTINGS_REPOS_IGNORE_CASE));
+    CHECK(!screen_settings_repos_same(forge->repos, expected, SETTINGS_REPOS_EXACT));
+    Json *choices = screen_settings_repos_choices(github->repos, SETTINGS_REPOS_IGNORE_CASE);
     CHECK(json_equal(choices, expected)); json_free(choices);
-    screen_settings_github_toggle_repo(github, 0); screen_settings_forge_toggle_repo(forge, 0);
-    CHECK_INT(json_count(github->repos), 0); CHECK_INT(json_count(forge->repos), 0);
-    screen_settings_github_toggle_repo(github, 0); screen_settings_forge_toggle_repo(forge, 0);
-    CHECK(json_equal(github->repos, expected)); CHECK(json_equal(forge->repos, expected));
-    CHECK(!screen_settings_github_form_changed(github));
+    choices = screen_settings_repos_choices(forge->repos, SETTINGS_REPOS_EXACT);
+    CHECK_INT(json_count(choices), 3);
+    CHECK_STR(json_str(json_at(choices, 0)), "owner/repo");
+    CHECK_STR(json_str(json_at(choices, 1)), "OWNER/REPO");
+    CHECK_STR(json_str(json_at(choices, 2)), "Owner/Repo"); json_free(choices);
+    CHECK(!github->tab_dot); CHECK(!forge->tab_dot);
+    screen_settings_github_toggle_repo(github, 0);
+    CHECK_INT(json_count(github->repos), 0); CHECK(github->tab_dot);
+    screen_settings_github_toggle_repo(github, 0);
+    CHECK(json_equal(github->repos, expected));
+    CHECK(!screen_settings_github_form_changed(github)); CHECK(!github->tab_dot);
+    // Selecting the renamed Forge project must leave the old, missing assignment ticked.
+    screen_settings_forge_toggle_repo(forge, 0);
+    CHECK_INT(json_count(forge->repos), 2);
+    CHECK_STR(json_str(json_at(forge->repos, 0)), "Owner/Repo");
+    CHECK_STR(json_str(json_at(forge->repos, 1)), "owner/repo"); CHECK(forge->tab_dot);
+    screen_settings_forge_toggle_repo(forge, 0);
+    CHECK(json_equal(forge->repos, json_get(forge->row, "repos"))); CHECK(!forge->tab_dot);
+    // Untick the missing project and tick its new spelling: this is an unsaved Forge change.
+    screen_settings_forge_toggle_repo(forge, 2);
+    CHECK_INT(json_count(forge->repos), 0);
+    screen_settings_forge_toggle_repo(forge, 0);
+    CHECK(json_equal(forge->repos, expected));
+    CHECK(screen_settings_forge_form_changed(forge)); CHECK(forge->tab_dot);
     json_free(expected); github->base.vt->destroy(&github->base); forge->base.vt->destroy(&forge->base);
     base->vt->destroy(base); screen_fixture_clear(&f);
 }
@@ -367,11 +409,12 @@ static void shared_picker_matches_project_case(void) {
 void app_github_settings_tests(void) {
     screen_fixture_prepare();
     test_run("GitHub create verification failures are definite refusals", verification_failures_precede_create);
+    test_run("GitHub gateway and tokenless failures retain unknown outcomes", gateway_and_tokenless_failures_have_unknown_outcomes);
     test_run("GitHub project delete and rename reload account assignments", project_changes_refresh_assignments);
     test_run("GitHub delete preserves the underlying unsaved editor", delete_preserves_underlying_editor);
     test_run("GitHub modals tolerate destruction and connection changes", modal_teardown_and_connection_changes);
     test_run("GitHub discard cancellation preserves the draft", discard_cancel_keeps_draft);
-    test_run("shared GitHub and Forge picker matches project names ignoring case", shared_picker_matches_project_case);
+    test_run("shared picker ignores case only for GitHub and marks Forge spelling changes", shared_picker_matches_project_case);
     test_run("GitHub account unchanged automatic labels follow token rotation", automatic_labels_survive_rotation);
     test_run("GitHub account pending writes disable edits and project actions", pending_writes_freeze_edits);
     test_run("shared Forge project picker retains removed projects and order independence", shared_forge_picker_preserves_projects);
