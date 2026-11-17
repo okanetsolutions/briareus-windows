@@ -230,7 +230,7 @@ const FieldDef screen_settings_FIELDS[F_COUNT] = {
     [F_LOCAL_DIR] = { "localDir", K_TEXT, "Local checkout", "/home/you/www/your-checkout",
         "This machine's own checkout of the repo. A session started in Local mode works directly in it: no clone, no setup steps, no database of its own, and the tree is used exactly as it stands. Leave empty to keep Local mode off for this project.", 0, true },
     [F_BOARD] = { "projectBoard", K_BOARD, "GitHub Projects board", "https://github.com/orgs/acme/projects/1/views/2",
-        "The board the project's \xE2\x96\xA6 Board tab shows: its address on GitHub, with the view whose filter and columns it follows. The server's GitHub token needs Projects: read. Leave empty for no Board tab.", 0, true },
+        "The board the project's \xE2\x96\xA6 Board tab shows: its address on GitHub, with the view whose filter and columns it follows. Reading it requires Projects: read on the project's GitHub account or GITHUB_TOKEN fallback. Leave empty for no Board tab.", 0, true },
     [F_SETUP] = { "setupCommands", K_LIST, "Setup commands", NULL,
         "One shell command per line, run in the checkout in order before the session starts. The first failure aborts the session.", 6, true },
     [F_PHP] = { "phpBinDir", K_TEXT, "PHP bin directory", "/usr/bin (or ~/.phpenv/versions/8.4/bin)",

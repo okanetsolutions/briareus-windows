@@ -63,7 +63,7 @@ char *screen_settings_review_value(FormScreen *s, int f, Json *body) {
 
 static const char *rule_note(int f, bool on) {
     if (f == F_ENFORCE_OUTCOME) return on
-        ? "Each pull request's review outcome is written to its head as briareus/code-review, and its approvals as briareus/approvals, which branch protection can require. The server's GitHub token must be allowed to write commit statuses."
+        ? "Each pull request's review outcome is written to its head as briareus/code-review, and its approvals as briareus/approvals, which branch protection can require. The project's GitHub account (or GITHUB_TOKEN fallback) must be allowed to write commit statuses."
         : "The outcome is still computed and shown here; nothing is written to GitHub.";
     if (f == F_BENCHMARK && on) return "A benchmark run opens pull requests and branches in this repository and closes them again: keep it for a repository nobody works in.";
     return NULL;

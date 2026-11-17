@@ -896,6 +896,7 @@ int main(void) {
     core_pull_attention_tests();
     board_tests();
     api_tests();
+    core_github_account_tests();
     contract_tests();
     cache_tests();
     vt_tests();

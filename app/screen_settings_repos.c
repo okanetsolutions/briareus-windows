@@ -3,7 +3,7 @@
 typedef struct { char *text; bool on, gone, enabled; } ForgeCheck;
 
 static bool repos_has(const Json *repos, const char *repo) {
-    for (size_t i = 0; i < json_count(repos); i++) if (str_eq(json_str(json_at(repos, i)), repo)) return true;
+    for (size_t i = 0; i < json_count(repos); i++) if (str_ieq(json_str(json_at(repos, i)), repo)) return true;
     return false;
 }
 
@@ -52,7 +52,7 @@ void screen_settings_repos_layout(Doc *doc, int x, int w, const Json *repos, int
     for (size_t i = 0; i < json_count(choices); i++) {
         const char *repo = json_str(json_at(choices, i));
         bool listed = false;
-        for (size_t k = 0; k < json_count(rows); k++) listed |= str_eq(json_str(json_get(json_at(rows, k), "repo")), repo);
+        for (size_t k = 0; k < json_count(rows); k++) listed |= str_ieq(json_str(json_get(json_at(rows, k), "repo")), repo);
         ForgeCheck *d = xcalloc(1, sizeof *d);
         d->on = repos_has(repos, repo); d->gone = !listed; d->enabled = action != 0;
         d->text = listed ? xstrdup(repo) : xstrfmt("%s (not a project)", repo);
@@ -72,7 +72,7 @@ bool screen_settings_repos_toggle(Json **repos, size_t index) {
         Json *next = json_array();
         for (size_t i = 0; i < json_count(*repos); i++) {
             const char *r = json_str(json_at(*repos, i));
-            if (r && !str_eq(r, repo)) json_array_push(next, json_string(r));
+            if (r && !str_ieq(r, repo)) json_array_push(next, json_string(r));
         }
         if (!repos_has(*repos, repo)) json_array_push(next, json_string(repo));
         json_free(*repos); *repos = next;
