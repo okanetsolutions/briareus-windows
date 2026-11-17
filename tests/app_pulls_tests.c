@@ -524,9 +524,10 @@ static void test_http_failures_keep_rows_and_permission_gates_stop_reads(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
     const int statuses[] = { 403, 404, 409, 502, 503 };
     for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
-        expire(); list_status = statuses[i]; list_body = "{\"error\":\"Read refused\"}";
+        expire(); list_status = statuses[i];
+        list_body = statuses[i] == 503 ? "{\"error\":\"no GitHub token for o/r\"}" : "{\"error\":\"Read refused\"}";
         s->vt->refresh(s); drain(2); CHECK(layout_contains(s, "Keep this row"));
-        CHECK(layout_contains(s, "Read refused"));
+        CHECK(layout_contains(s, statuses[i] == 503 ? "no GitHub token for o/r" : "Read refused"));
     }
     LONG sent = list_calls; g_store.device.permission = "unknown";
     s->vt->refresh(s); CHECK_INT(list_calls, sent);
@@ -713,11 +714,12 @@ static void test_successful_list_completions_reset_shared_backoff(void) {
         Screen *s = screen_kind == 0 ? pulls_screen_new(&p) : screen_kind == 1 ?
             issue_detail_screen_new(&p, &issue) : pull_detail_screen_new(&p, 1, NULL, NULL);
         pane_set_root(pane, s); s->vt->refresh(s); drain(screen_kind ? 3 : 2);
-        list_status = 503; list_body = "{\"error\":\"Unavailable\"}";
+        list_status = 503; list_body = "{\"error\":\"GitHub account registry is unavailable; initialize it before use\"}";
         time_t before = time(NULL);
         s->vt->refresh(s); drain(screen_kind ? 3 : 2);
         time_t deadline = pulls_retry_deadline("o/r");
         CHECK(deadline >= before + 2 && deadline <= time(NULL) + 2);
+        if (screen_kind < 2) CHECK(layout_contains(s, "GitHub account registry is unavailable"));
         LONG sent = list_calls;
         s->vt->refresh(s); drain(screen_kind ? 2 : 1); CHECK_INT(list_calls, sent);
         api_error_clear(&e); pane_set_root(pane, NULL);

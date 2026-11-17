@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// A project's Files tab: its repository as PhpStorm's project view shows it, read through the server's GitHub token
+// A project's Files tab: its repository as PhpStorm's project view shows it, read through the project's GitHub account (with GITHUB_TOKEN fallback)
 // (`repo_tree`, `repo_file`), so no checkout or token of the user's own is needed. The tree is on the left, folders
 // first, at the branch the header's picker names (the default one until another is picked). Files open as tabs on the
 // right, each read at the commit the tree was read at, so what opens matches the tree shown while the branch moves on;
