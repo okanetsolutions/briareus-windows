@@ -372,8 +372,9 @@ static void test_issues_partial_errors_preserve_server_diagnostics(void) {
         reset();
         Json *body = json_object(); json_set_str(body, "issuesError", messages[i]);
         char *response = json_serialize(body, false); json_free(body); list_body = response;
-        Screen *s = board(); s->vt->refresh(s); drain(2);
-        ((PullsScreen *)s)->tab = TAB_ISSUES;
+        Screen *s = board();
+        s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+        s->vt->refresh(s); drain(2);
         CHECK(layout_contains(s, messages[i]));
         pane_set_root(pane, NULL); list_body = NULL; free(response);
     }
