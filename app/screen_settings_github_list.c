@@ -1,7 +1,7 @@
 #include "screen_settings_github_internal.h"
 
 bool screen_settings_github_offered(void) {
-    return g_store.has_device && str_eq(g_store.device.permission, "admin") && store_supports("settings_github_accounts");
+    return store_supports("settings_github_accounts");
 }
 
 bool screen_settings_github_current(GithubForm *s) {
@@ -77,6 +77,11 @@ void screen_settings_github_section(SettingsScreen *s, Doc *doc, int w, const ch
     if (!screen_settings_github_offered()) return;
     doc_space(doc, px(8));
     screen_settings_section_title(doc, w, "GitHub accounts", NULL, store_supports("create_github_account") ? ACT_NEW_GITHUB : 0);
+    if (str_eq(selected, "settings-github:new")) {
+        ProjectRowData *d = xcalloc(1, sizeof *d);
+        d->label = xstrdup("New GitHub account"); d->repo = xstrdup("not saved yet"); d->selected = true;
+        doc_custom(doc, 0, w, px(52), screen_settings_paint_project_row, d, screen_settings_project_row_free, 0, 0);
+    }
     if (s->github_error) doc_notice(doc, px(8), w - px(16), s->github_error);
     if (s->github_client != g_store.client || !s->github_loaded) { doc_loading(doc, 0, w, "Loading GitHub accounts…"); return; }
     const Json *rows = json_get(s->github, "accounts");

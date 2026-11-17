@@ -186,6 +186,11 @@ void settings_projects_changed(int select_id) {
     if (!screen_settings_g_settings) return;
     request_cancel(&screen_settings_g_settings->req);
     screen_settings_projects_load(screen_settings_g_settings);
+    // Project deletion/rename can change assignments; do not offer the old account snapshot during a refresh.
+    json_free(screen_settings_g_settings->github); screen_settings_g_settings->github = NULL;
+    screen_settings_g_settings->github_loaded = false;
+    set_string(&screen_settings_g_settings->github_error, NULL);
+    screen_settings_github_changed_list();
 }
 
 void screen_settings_settings_ssh_changed(void) {

@@ -45,6 +45,9 @@ static void github_show_error(GithubForm *s, char *text) {
 static void github_write_error(GithubForm *s, Request *req) {
     char *text = NULL;
     if (req->ok) text = xstrdup("The server returned an unexpected response. It may still have been saved; refresh before trying again.");
+    // These account verification failures happen before create/update saves anything.
+    else if (req->error.kind == API_HTTP && (req->error.status == 502 || req->error.status == 503) && !str_eq(req->operation, "delete_github_account"))
+        request_error_into(&text, req);
     else request_write_error_into(&text, req);
     github_show_error(s, text);
 }
@@ -86,8 +89,10 @@ static void github_delete_done(void *owner, Request *req) {
     s->dirty = false;
     Pane *pane = s->base.pane;
     screen_settings_github_changed_list();
-    if (pane == app_detail_pane()) app_clear_detail();
-    else if (pane_contains_screen(pane, &s->base)) pane_set_root(pane, NULL);
+    if (pane_top(pane) != &s->base) return;
+    if (pane_root(pane) != &s->base) pane_pop(pane);
+    else if (pane == app_detail_pane()) app_clear_detail();
+    else pane_set_root(pane, NULL);
 }
 
 static void github_delete(GithubForm *s) {

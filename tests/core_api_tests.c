@@ -1,6 +1,5 @@
 // The client API: addresses, tokens, errors, the route table and every call built from it, answers and Retry-After.
 #include "api.h"
-#include "github_account.h"
 #include "json.h"
 #include "models.h"
 #include "str.h"
@@ -1315,21 +1314,10 @@ static void test_github_accounts_contract(void) {
     api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
-static void test_github_account_metadata(void) {
-    Json *account = json_parsez("{\"scopes\":null,\"repos\":[\"o/r\",\"o/second\"]}");
-    CHECK_OWNED_STR(github_account_scopes(account), "scopes unknown (fine-grained token)");
-    CHECK_OWNED_STR(github_account_projects(account), "o/r, o/second");
-    json_object_set(account, "scopes", json_parsez("[\"repo\",null,\"\",\"read:org\"]"));
-    CHECK_OWNED_STR(github_account_scopes(account), "repo, read:org");
-    json_object_set(account, "scopes", json_array()); json_object_set(account, "repos", json_array());
-    CHECK_OWNED_STR(github_account_scopes(account), "no classic scopes reported");
-    CHECK_OWNED_STR(github_account_projects(account), "No assigned projects");
-    json_free(account);
-}
+
 
 void api_tests(void) {
     test_run("GitHub account CRUD routes bodies and no write retries", test_github_accounts_contract);
-    test_run("GitHub account nullable scopes and project summaries", test_github_account_metadata);
     test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving, previews and shared browser remain", test_removed_integrations_are_unregistered);

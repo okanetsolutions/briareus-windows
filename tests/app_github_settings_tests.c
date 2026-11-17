@@ -69,7 +69,7 @@ static void create_update_and_rotate(void) {
 }
 
 static void errors_preserve_drafts_without_retry(void) {
-    const int statuses[] = {400, 404, 409, 502, 503};
+    const int statuses[] = {400, 404, 409, 500, 502, 503};
     for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
         Form f; setup(&f, false);
         edit(&f, GH_LABEL, "Unsaved label"); edit(&f, GH_TOKEN, "unsaved-fixture");
@@ -78,19 +78,41 @@ static void errors_preserve_drafts_without_retry(void) {
         f.fixture.write_retry = "1";
         save(&f);
         CHECK(strstr(f.form->error, "Server explains assignment or verification failure") != NULL);
+        CHECK_INT(strstr(f.form->error, "It may still have been saved") != NULL, statuses[i] == 500);
         CHECK(f.form->dirty); CHECK(f.form->req_save == NULL); CHECK_INT(f.fixture.writes, 1);
         CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_LABEL]), "Unsaved label");
         CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_TOKEN]), "unsaved-fixture");
         CHECK_INT(json_count(f.form->repos), 0);
         CHECK_STR(json_str(json_get(f.form->row, "label")), "Production");
-        // A layout and timer delivery must not resubmit a failed write, including throttled verification.
+        // Pump beyond Retry-After so any scheduled write retry would reach the transport.
         Doc doc; doc_init(&doc); screen_fixture_draw(&f.form->base, &doc); doc_free(&doc);
-        if (f.form->base.vt->timer) f.form->base.vt->timer(&f.form->base, 1);
+        ULONGLONG end = GetTickCount64() + 1200;
+        while (GetTickCount64() < end) {
+            MSG msg;
+            while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+                if (msg.message == WM_APP_REQUEST_DONE) store_handle_message(msg.message, msg.wParam, msg.lParam);
+                else DispatchMessageW(&msg);
+            }
+            Sleep(1);
+        }
         CHECK_INT(f.fixture.writes, 1); cleanup(&f);
     }
     Form f; setup(&f, false); edit(&f, GH_LABEL, "Unknown outcome"); f.fixture.fail_write = true;
     save(&f); CHECK(f.form->error != NULL); CHECK(f.form->dirty); CHECK_INT(f.fixture.writes, 1);
+    CHECK(strstr(f.form->error, "It may still have been saved") != NULL);
     cleanup(&f);
+}
+
+static void verification_failures_precede_create(void) {
+    const int statuses[] = {502, 503};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        Form f; setup(&f, true); edit(&f, GH_TOKEN, "unsaved-fixture");
+        f.fixture.write_status = statuses[i]; f.fixture.write_response = "{\"error\":\"Verification refused\"}";
+        save(&f);
+        CHECK(strstr(f.form->error, "Verification refused") != NULL);
+        CHECK(strstr(f.form->error, "It may still have been saved") == NULL);
+        CHECK(f.form->dirty); CHECK_INT(f.fixture.writes, 1); cleanup(&f);
+    }
 }
 
 static void delete_confirmation_and_errors(void) {
@@ -224,8 +246,132 @@ static void pending_writes_freeze_edits(void) {
     }
 }
 
+static void project_changes_refresh_assignments(void) {
+    const char *repos[] = {"[]", "[\"o/renamed\"]"};
+    for (size_t k = 0; k < sizeof repos / sizeof *repos; k++) {
+        ScreenFixture f; screen_fixture_init(&f, ROUTES, sizeof ROUTES / sizeof *ROUTES);
+        Screen *base = settings_screen_new(); SettingsScreen *s = (SettingsScreen *)base;
+        screen_fixture_pane(&f, base);
+        char *initial = xstrfmt("{\"accounts\":[%s]}", ACCOUNT); f.read_response = initial;
+        screen_settings_github_load(s); screen_fixture_pump(&f, 1);
+        CHECK_INT(json_count(json_get(json_at(json_get(s->github, "accounts"), 0), "repos")), 1);
+        char *refreshed = xstrfmt("{\"accounts\":[{\"id\":7,\"repos\":%s}]}", repos[k]);
+        f.read_response = refreshed; f.block_read = true;
+        settings_projects_changed(0);
+        if (s->req_github) {
+            CHECK_INT(WaitForSingleObject(f.entered, 10000), WAIT_OBJECT_0);
+            CHECK(!s->github_loaded); CHECK(s->github == NULL);
+            Doc doc; doc_init(&doc); doc_begin(&doc, NULL, 500);
+            screen_settings_github_section(s, &doc, 500, NULL); doc_end(&doc);
+            for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != ACT_OPEN_GITHUB);
+            doc_free(&doc);
+            f.read_status = 503; SetEvent(f.resume); screen_fixture_pump(&f, 1);
+            CHECK(s->github_error != NULL); CHECK(s->github == NULL);
+            f.block_read = false; f.read_status = 200;
+            screen_settings_github_load(s); screen_fixture_pump(&f, 1);
+        }
+        CHECK_INT(f.reads, 3);
+        const Json *row = json_at(json_get(s->github, "accounts"), 0);
+        GithubForm *form = (GithubForm *)screen_settings_github_settings_screen_new(row, NULL);
+        char *why = NULL; Json *body = screen_settings_github_body(form, &why);
+        Json *expected = json_parsez(repos[k]);
+        CHECK(json_equal(json_get(body, "repos"), expected));
+        CHECK(why == NULL);
+        json_free(expected); json_free(body); free(why); form->base.vt->destroy(&form->base);
+        base->vt->destroy(base); screen_fixture_clear(&f); free(initial); free(refreshed);
+    }
+}
+
+static Form *modal_form;
+static bool modal_leave;
+static void discard_action(Screen *base, int action, intptr_t arg, POINT pt) {
+    (void)base; (void)action; (void)arg; (void)pt;
+    modal_leave = modal_form->form->base.vt->can_leave(&modal_form->form->base);
+}
+static const ScreenVTable discard_driver_vt = {.action = discard_action};
+static void destroy_during_modal(void) {
+    GithubForm *form = modal_form->form;
+    CHECK(!form->base.vt->can_leave(&form->base));
+    screen_settings_github_save(form); CHECK(form->req_save == NULL);
+    form->base.vt->destroy(&form->base); modal_form->form = NULL;
+}
+static void switch_client_during_modal(void) { g_store.client = NULL; }
+static void switch_device_during_modal(void) { g_store.device.id = "another-device"; }
+
+static void modal_teardown_and_connection_changes(void) {
+    void (*const during[])(void) = {destroy_during_modal, switch_client_during_modal, switch_device_during_modal};
+    for (int discard = 0; discard < 2; discard++) {
+        for (size_t i = 0; i < sizeof during / sizeof *during; i++) {
+            Form f; setup(&f, false); edit(&f, GH_LABEL, "Unsaved modal draft"); modal_form = &f;
+            Screen driver = {.vt = &discard_driver_vt};
+            Screen *target = discard ? &driver : &f.form->base;
+            modal_driver_action_during(target, discard ? 0 : ACT_GITHUB_DELETE, 0, IDOK, during[i]);
+            CHECK_INT(f.fixture.writes, 0);
+            if (discard) CHECK(modal_leave);
+            if (f.form) {
+                CHECK(f.form->req_delete == NULL); CHECK(!screen_settings_github_current(f.form));
+                screen_settings_github_save(f.form); CHECK(f.form->req_save == NULL);
+                cleanup(&f);
+            } else screen_fixture_clear(&f.fixture);
+        }
+    }
+    modal_form = NULL;
+}
+
+static void discard_cancel_keeps_draft(void) {
+    Form f; setup(&f, false); edit(&f, GH_TOKEN, "unsaved-fixture"); modal_form = &f;
+    Screen driver = {.vt = &discard_driver_vt};
+    modal_driver_action(&driver, 0, 0, IDCANCEL);
+    CHECK(!modal_leave); CHECK(f.form->dirty);
+    CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_TOKEN]), "unsaved-fixture");
+    modal_driver_action(&driver, 0, 0, IDOK);
+    CHECK(modal_leave); CHECK(!f.form->dirty); CHECK_INT(f.fixture.writes, 0);
+    cleanup(&f); modal_form = NULL;
+}
+
+static bool retain_underlying_editor(Screen *base) { (void)base; return false; }
+static void underlying_destroy(Screen *base) { screen_release(base); }
+static const ScreenVTable underlying_vt = {.destroy = underlying_destroy, .can_leave = retain_underlying_editor};
+static void delete_preserves_underlying_editor(void) {
+    Form f; setup(&f, false);
+    Screen *underlying = xcalloc(1, sizeof *underlying); underlying->vt = &underlying_vt;
+    pane_push(f.fixture.pane, underlying); pane_push(f.fixture.pane, &f.form->base);
+    f.fixture.write_response = "{\"ok\":true}";
+    modal_driver_action(&f.form->base, ACT_GITHUB_DELETE, 0, IDOK); screen_fixture_pump(&f.fixture, 1);
+    CHECK(pane_root(f.fixture.pane) == underlying); CHECK(pane_top(f.fixture.pane) == underlying);
+    CHECK(!pane_can_leave(f.fixture.pane));
+    screen_fixture_clear(&f.fixture);
+}
+
+static void shared_picker_matches_project_case(void) {
+    ScreenFixture f; screen_fixture_init(&f, ROUTES, sizeof ROUTES / sizeof *ROUTES);
+    Screen *base = settings_screen_new(); SettingsScreen *s = (SettingsScreen *)base; screen_fixture_pane(&f, base);
+    json_object_set(s->projects, "list", json_parsez("[{\"repo\":\"owner/repo\"},{\"repo\":\"OWNER/REPO\"}]"));
+    Json *row = json_parsez("{\"id\":8,\"repos\":[\"Owner/Repo\"]}");
+    GithubForm *github = (GithubForm *)screen_settings_github_settings_screen_new(row, NULL);
+    ForgeForm *forge = (ForgeForm *)screen_settings_forge_settings_screen_new(row, NULL); json_free(row);
+    github->base.pane = forge->base.pane = f.pane;
+    Json *expected = json_parsez("[\"owner/repo\"]");
+    CHECK(screen_settings_repos_same(github->repos, expected)); CHECK(screen_settings_repos_same(forge->repos, expected));
+    Json *choices = screen_settings_repos_choices(github->repos);
+    CHECK(json_equal(choices, expected)); json_free(choices);
+    screen_settings_github_toggle_repo(github, 0); screen_settings_forge_toggle_repo(forge, 0);
+    CHECK_INT(json_count(github->repos), 0); CHECK_INT(json_count(forge->repos), 0);
+    screen_settings_github_toggle_repo(github, 0); screen_settings_forge_toggle_repo(forge, 0);
+    CHECK(json_equal(github->repos, expected)); CHECK(json_equal(forge->repos, expected));
+    CHECK(!screen_settings_github_form_changed(github));
+    json_free(expected); github->base.vt->destroy(&github->base); forge->base.vt->destroy(&forge->base);
+    base->vt->destroy(base); screen_fixture_clear(&f);
+}
+
 void app_github_settings_tests(void) {
     screen_fixture_prepare();
+    test_run("GitHub create verification failures are definite refusals", verification_failures_precede_create);
+    test_run("GitHub project delete and rename reload account assignments", project_changes_refresh_assignments);
+    test_run("GitHub delete preserves the underlying unsaved editor", delete_preserves_underlying_editor);
+    test_run("GitHub modals tolerate destruction and connection changes", modal_teardown_and_connection_changes);
+    test_run("GitHub discard cancellation preserves the draft", discard_cancel_keeps_draft);
+    test_run("shared GitHub and Forge picker matches project names ignoring case", shared_picker_matches_project_case);
     test_run("GitHub account unchanged automatic labels follow token rotation", automatic_labels_survive_rotation);
     test_run("GitHub account pending writes disable edits and project actions", pending_writes_freeze_edits);
     test_run("shared Forge project picker retains removed projects and order independence", shared_forge_picker_preserves_projects);
