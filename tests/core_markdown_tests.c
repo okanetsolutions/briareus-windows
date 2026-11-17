@@ -448,6 +448,8 @@ static void test_link_addresses_take_angle_brackets_and_titles(void) {
     CHECK_OWNED_STR(spans_desc("[](<https://x.example/a.png>)"), "[L:https://x.example/a.png@https://x.example/a.png]");
     // In angle brackets a parenthesis needs no partner.
     CHECK_OWNED_STR(spans_desc("[shot](<https://x.example/a).png>) after"), "[L:shot@https://x.example/a).png][: after]");
+    // A `>` further on that no title or parenthesis follows closes nothing: the link ends at the first parenthesis.
+    CHECK_OWNED_STR(spans_desc("[x](<oops) and 5 > 3)"), "[L:x@<oops][: and 5 > 3)]");
 }
 
 static void test_images_are_links_marked_as_pictures(void) {

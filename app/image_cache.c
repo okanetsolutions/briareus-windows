@@ -38,6 +38,7 @@ static char *hosts[HOSTS]; static size_t host_count;
 static bool hosts_read;       // the saved list was taken from this connection's cache
 static Watcher *watchers; static size_t watcher_count;
 static size_t generation; static int downloads;
+static UINT_PTR trim_timer;    // trims again once the pictures that kept the cache over its budget leave the view
 
 static void start_queued(void);
 
@@ -139,18 +140,39 @@ static bool make_room(bool forced) {
     return true;
 }
 
-/// Over the budget, the pictures longest out of view give up their file and preview; `keep` just arrived.
+static void trim(const Entry *keep);
+static void CALLBACK trim_later(HWND hwnd, UINT msg, UINT_PTR id, DWORD tick) {
+    (void)hwnd; (void)msg; (void)tick;
+    KillTimer(NULL, id);
+    if (id == trim_timer) trim_timer = 0;
+    trim(NULL);
+}
+
+/// Over the budget, the pictures longest out of view give up their file and preview; `keep` just arrived. Pictures
+/// still counted as in view are trimmed again once they no longer are: a burst of arrivals is otherwise held for good.
 static void trim(const Entry *keep) {
     ULONGLONG now = GetTickCount64();
     for (;;) {
-        size_t held = 0; Entry *oldest = NULL;
+        size_t held = 0; Entry *oldest = NULL; ULONGLONG wait = 0;
         for (size_t i = 0; i < entry_count; i++) {
             Entry *e = entries[i];
             held += entry_size(e);
-            if (e == keep || e->state != IMAGE_READY || e->shed || now - e->painted < in_view_ms) continue;
+            if (e->state != IMAGE_READY || e->shed) continue;
+            ULONGLONG since = now - e->painted;
+            if (e == keep || since < in_view_ms) {
+                ULONGLONG left = since < in_view_ms ? in_view_ms - since : 0;
+                if (left && (!wait || left < wait)) wait = left;
+                continue;
+            }
             if (!oldest || e->painted < oldest->painted) oldest = e;
         }
-        if (held <= budget || !oldest) return;
+        if (held <= budget) return;
+        if (!oldest) {
+            if (!wait) return;
+            if (trim_timer) KillTimer(NULL, trim_timer);
+            trim_timer = SetTimer(NULL, 0, (UINT)wait, trim_later);
+            return;
+        }
         entry_unload(oldest); oldest->shed = true;
     }
 }
@@ -316,6 +338,7 @@ void image_cache_reset(void) {
     bool had = entry_count || host_count;
     for (size_t i = 0; i < entry_count; i++) entry_free(entries[i]);
     forget_hosts();
+    if (trim_timer) { KillTimer(NULL, trim_timer); trim_timer = 0; }
     entry_count = 0; downloads = 0; generation++;
     if (had) notify();
 }

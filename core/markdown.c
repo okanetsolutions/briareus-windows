@@ -298,11 +298,22 @@ static bool triple_emphasis_open(const char *text, const char *p, const char *en
     return p[1] == marker && p[2] == marker && !isspace((unsigned char)p[3]);
 }
 
+/// The `>` closing the angle-bracket address that opens at `open`, or NULL: as in CommonMark it ends at a line break or
+/// another `<`, and only a title or the closing parenthesis may follow it. Otherwise the address is read as one without.
+static const char *angle_close(const char *open, const char *end) {
+    const char *q = open + 1;
+    while (q < end && *q != '>' && *q != '\n' && *q != '<') q++;
+    if (q >= end || *q != '>') return NULL;
+    const char *after = q + 1;
+    while (after < end && (*after == ' ' || *after == '\t')) after++;
+    return after == end || *after == ')' || *after == '"' || *after == '\'' || *after == '(' ? q : NULL;
+}
+
 /// A link's address from between its parentheses: `<in angle brackets>`, where it may hold spaces, or up to the title.
 static char *link_destination(const char *raw, size_t len) {
     const char *end = raw + len;
     while (raw < end && isspace((unsigned char)*raw)) raw++;
-    const char *close = raw < end && *raw == '<' ? memchr(raw, '>', (size_t)(end - raw)) : NULL;
+    const char *close = raw < end && *raw == '<' ? angle_close(raw, end) : NULL;
     if (close) return xstrndup(raw + 1, (size_t)(close - raw - 1));
     const char *stop = raw;
     while (stop < end && !isspace((unsigned char)*stop)) stop++;
@@ -386,7 +397,7 @@ static void parse_inline(Spans *out, const char *text, size_t len, unsigned flag
             if (close && close + 1 < end && close[1] == '(') {
                 // Parentheses inside the URL come in pairs, as in Wikipedia's links; in angle brackets they are any.
                 const char *paren = NULL; int parens = 0;
-                const char *from = close + 2, *angle = from < end && *from == '<' ? memchr(from, '>', (size_t)(end - from)) : NULL;
+                const char *from = close + 2, *angle = from < end && *from == '<' ? angle_close(from, end) : NULL;
                 if (angle) from = angle + 1;
                 for (const char *q = from; q < end && !paren; q++) { if (*q == '(') parens++; else if (*q == ')' && parens-- == 0) paren = q; }
                 if (paren) {

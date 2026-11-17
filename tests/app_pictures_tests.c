@@ -212,6 +212,42 @@ static void pictures_out_of_view_give_way_and_come_back_when_shown(void) {
     finish(&f);
 }
 
+/// Runs the cache's own timers for a while, as the app's message loop does.
+static void run_timers(DWORD ms) {
+    ULONGLONG until = GetTickCount64() + ms;
+    do {
+        MSG msg;
+        while (PeekMessageW(&msg, NULL, WM_TIMER, WM_TIMER, PM_REMOVE)) DispatchMessageW(&msg);
+        Sleep(1);
+    } while (GetTickCount64() < until);
+}
+static int previews_held(const char *const *urls, int count) {
+    int n = 0;
+    for (int i = 0; i < count; i++) n += image_cache_get(urls[i]).preview != NULL;
+    return n;
+}
+
+static void a_burst_of_arrivals_gives_way_once_it_leaves_the_view(void) {
+    static const char *const URLS[] = { "https://example.com/files/ab/a.png", "https://example.com/files/ab/b.png", "https://example.com/files/ab/c.png" };
+    ScreenFixture f; Net net; start(&f, &net);
+    // Room for two, and a picture counts as in view for a moment after it arrives: a layout asks for all three at once.
+    image_cache_set_limits(300, 200);
+    net.hold = CreateEventW(NULL, TRUE, FALSE, NULL);
+    for (int i = 0; i < 3; i++) CHECK_INT(image_cache_get(URLS[i]).state, IMAGE_LOADING);
+    ULONGLONG until = GetTickCount64() + 10000;
+    while (net.calls < 3 && GetTickCount64() < until) Sleep(1);
+    SetEvent(net.hold);
+    for (int i = 0; i < 3; i++) CHECK_INT(loaded_state(URLS[i]), IMAGE_READY);
+    // Nothing paints or arrives after the burst; the cache still comes back within its budget once the moment passes.
+    until = GetTickCount64() + 10000;
+    while (previews_held(URLS, 3) > 2 && GetTickCount64() < until) run_timers(1);
+    CHECK_INT(previews_held(URLS, 3), 2);
+    run_timers(300);
+    CHECK_INT(previews_held(URLS, 3), 2); CHECK_INT(net.calls, 3);
+    CloseHandle(net.hold);
+    finish(&f);
+}
+
 static void a_download_under_way_is_dropped_when_the_connection_goes(void) {
     ScreenFixture f; Net net; start(&f, &net);
     net.hold = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -304,6 +340,7 @@ void app_pictures_tests(void) {
     test_run("an allowed host lasts as long as the connection's saved responses", an_allowed_host_lasts_as_long_as_the_connections_saved_responses);
     test_run("the paired server's pictures load, and a failure is retried on request", the_paired_servers_pictures_load_and_a_failure_is_retried_on_request);
     test_run("pictures out of view give way and come back when shown", pictures_out_of_view_give_way_and_come_back_when_shown);
+    test_run("a burst of arrivals gives way once it leaves the view", a_burst_of_arrivals_gives_way_once_it_leaves_the_view);
     test_run("a download under way is dropped when the connection goes", a_download_under_way_is_dropped_when_the_connection_goes);
     test_run("a reply's pictures follow it and open in the viewer", a_replys_pictures_follow_it_and_open_in_the_viewer);
 }
