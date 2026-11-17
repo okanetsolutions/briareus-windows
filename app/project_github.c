@@ -21,8 +21,7 @@ void project_github_clear(ProjectGithub *g) {
 }
 
 static bool current(ProjectGithub *g) {
-    return g->client == g_store.client && str_eq(g->device, g_store.device.id)
-        && str_eq(g->permission, g_store.device.permission) && project_github_offered();
+    return store_connection_matches(g->client, g->device, g->permission) && project_github_offered();
 }
 
 static void prepare(ProjectGithub *g) {
@@ -97,18 +96,18 @@ void project_github_layout(ProjectGithub *g, Doc *doc, int x, int w) {
     if (g->health_error) doc_notice_box(doc, x, w, g->health_error);
     if (g->health) {
         const Json *h = g->health;
-        summary(doc, x, w, xstrfmt("Healthy: %s", json_bool_is(json_get(h, "healthy"), true) ? "yes" : "no"));
+        summary(doc, x, w, github_account_health_overall(h));
         summary(doc, x, w, github_account_identity(json_get(h, "account")));
-        const Json *token = json_get(h, "token");
-        int status = json_int_or(json_get(token, "httpStatus"), 0);
-        char *suffix = status ? xstrfmt(" (HTTP %d)", status) : xstrdup("");
-        summary(doc, x, w, xstrfmt("Token: %s%s", json_str_or(json_get(token, "status"), "unavailable"), suffix)); free(suffix);
+        summary(doc, x, w, github_account_health_token(h));
         char *scopes = github_account_health_scopes(h);
         summary(doc, x, w, xstrfmt("Scopes: %s", scopes)); free(scopes);
         const Json *repos = json_get(h, "repos");
-        for (size_t i = 0; i < json_count(repos); i++) summary(doc, x, w, github_account_health_repo(json_at(repos, i)));
-        summary(doc, x, w, github_account_health_rate(h, "core"));
-        summary(doc, x, w, github_account_health_rate(h, "graphql"));
+        size_t count = json_count(repos);
+        if (!count) summary(doc, x, w, xstrdup("No repositories checked"));
+        for (size_t i = 0; i < count; i++) summary(doc, x, w, github_account_health_repo(json_at(repos, i)));
+        time_t now = time(NULL);
+        summary(doc, x, w, github_account_health_rate(h, "core", now));
+        summary(doc, x, w, github_account_health_rate(h, "graphql", now));
     }
     doc_space(doc, px(16));
 }

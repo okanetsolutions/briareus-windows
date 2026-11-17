@@ -41,7 +41,7 @@ static void save_done(void *owner, Request *req) {
 }
 
 void screen_settings_form_save(FormScreen *s) {
-    if (s->req_save || s->req_delete || !store_supports(s->id ? "update_project" : "create_project")) return;
+    if (s->read_only || s->req_save || s->req_delete || !store_supports(s->id ? "update_project" : "create_project")) return;
     char *why = NULL; int tab = screen_settings_g_tab;
     Json *body = screen_settings_form_body(s, &why, &tab);
     if (!body) {
@@ -82,6 +82,7 @@ static void form_delete(FormScreen *s) {
 }
 
 static void form_clone(FormScreen *s) {
+    if (s->read_only) return;
     char *why = NULL; int tab = screen_settings_g_tab;
     Json *copy = screen_settings_form_body(s, &why, &tab);
     if (!copy) { set_string(&s->error, why); free(why); screen_settings_g_tab = tab; pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }

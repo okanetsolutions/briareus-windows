@@ -33,6 +33,22 @@ char *github_account_identity(const Json *account) {
     return label ? xstrfmt("%s (@%s)", label, login) : xstrfmt("@%s", login);
 }
 
+static char *http_suffix(const Json *check) {
+    int status = json_int_or(json_get(check, "httpStatus"), 0);
+    return status ? xstrfmt("; HTTP %d", status) : xstrdup("");
+}
+
+char *github_account_health_overall(const Json *health) {
+    return xstrfmt("Healthy: %s", json_bool_is(json_get(health, "healthy"), true) ? "yes" : "no");
+}
+
+char *github_account_health_token(const Json *health) {
+    const Json *token = json_get(health, "token");
+    char *suffix = http_suffix(token);
+    char *text = xstrfmt("Token: %s%s", json_str_or(json_get(token, "status"), "unavailable"), suffix);
+    free(suffix); return text;
+}
+
 char *github_account_health_scopes(const Json *health) {
     const Json *scopes = json_get(health, "scopes");
     const char *status = json_str_or(json_get(scopes, "status"), "unknown");
@@ -47,20 +63,16 @@ char *github_account_health_repo(const Json *repo) {
     const char *access = json_is_null(accessible) ? "access unknown"
         : json_bool_is(accessible, true) ? "accessible" : "access denied";
     const char *status = json_str_or(json_get(repo, "status"), "not_checked");
-    int http = json_int_or(json_get(repo, "httpStatus"), 0);
-    char *suffix = http ? xstrfmt("; HTTP %d", http) : xstrdup("");
+    char *suffix = http_suffix(repo);
     char *text = xstrfmt("%s: %s (%s%s)", json_str_or(json_get(repo, "repo"), "unknown"), status, access, suffix);
     free(suffix); return text;
 }
 
-static char *reset_time(const Json *value) {
-    double ms = json_num_or(value, 0);
-    char date[40] = "unknown";
-    if (isfinite(ms) && ms > 0 && ms <= 253402300799000.0) {
-        time_t seconds = (time_t)(ms / 1000); struct tm *utc = gmtime(&seconds);
-        if (utc) strftime(date, sizeof date, "%Y-%m-%d %H:%M:%S UTC", utc);
-    }
-    return xstrdup(date);
+static char *reset_time(double ms) {
+    if (!isfinite(ms) || ms <= 0 || ms > 253402300799000.0) return NULL;
+    time_t seconds = (time_t)(ms / 1000); struct tm *utc = gmtime(&seconds);
+    char date[40];
+    return utc && strftime(date, sizeof date, "%Y-%m-%d %H:%M:%S UTC", utc) ? xstrdup(date) : NULL;
 }
 
 static char *allowance(const Json *value) {
@@ -68,13 +80,13 @@ static char *allowance(const Json *value) {
     return json_num(value, &n) && isfinite(n) && n >= 0 ? xstrfmt("%.0f", n) : xstrdup("unknown");
 }
 
-char *github_account_health_rate(const Json *health, const char *bucket) {
+char *github_account_health_rate(const Json *health, const char *bucket, time_t now) {
     const Json *limits = json_get(health, "rateLimit"), *rate = json_get(limits, bucket);
     char *remaining = allowance(json_get(rate, "remaining")), *limit = allowance(json_get(rate, "limit"));
-    char *reset = reset_time(json_get(rate, "resetAt"));
-    const Json *until = json_get(json_get(limits, "cooldownUntil"), bucket);
-    char *cooldown = json_num_or(until, 0) > 0 ? reset_time(until) : NULL;
+    char *reset = reset_time(json_num_or(json_get(rate, "resetAt"), 0));
+    double until = json_num_or(json_get(json_get(limits, "cooldownUntil"), bucket), 0);
+    char *cooldown = until > (double)now * 1000 ? reset_time(until) : NULL;
     char *text = xstrfmt("%s: %s / %s remaining; resets %s%s%s", str_eq(bucket, "core") ? "REST" : "GraphQL",
-        remaining, limit, reset, cooldown ? "; retry after " : "", cooldown ? cooldown : "");
+        remaining, limit, reset ? reset : "unknown", cooldown ? "; retry after " : "", cooldown ? cooldown : "");
     free(remaining); free(limit); free(reset); free(cooldown); return text;
 }

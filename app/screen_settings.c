@@ -121,7 +121,10 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     SettingsScreen *s = (SettingsScreen *)base;
     switch (action) {
     case ACT_BACK: settings_back(s); break;
-    case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
+    case ACT_NEW_PROJECT:
+        if (!store_supports("settings_projects") || !store_supports("create_project")) break;
+        app_show_detail(project_settings_screen_new(NULL, screen_settings_projects_current(s) ? json_get(s->projects, "defaults") : NULL));
+        break;
     case ACT_OPEN_PROJECT: screen_settings_settings_open_row(s, (size_t)arg); break;
     case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
     case ACT_OPEN_PROVIDER: screen_settings_settings_open_provider(s, (size_t)arg); break;
@@ -175,8 +178,7 @@ static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (!shown) return;
-    if (!s->loaded || s->projects_client != g_store.client || !str_eq(s->projects_device, g_store.device.id)
-        || !str_eq(s->projects_permission, g_store.device.permission)) screen_settings_projects_load(s);
+    if (!s->loaded || !screen_settings_projects_current(s)) screen_settings_projects_load(s);
     if (!s->providers_loaded && !s->req_providers) screen_settings_providers_load(s);
     if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) screen_settings_ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) screen_settings_forge_load(s);

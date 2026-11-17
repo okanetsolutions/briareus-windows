@@ -71,6 +71,7 @@ void screen_settings_paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RE
 }
 
 void screen_settings_settings_open_row(SettingsScreen *s, size_t index) {
+    if (!screen_settings_projects_current(s)) return;
     const Json *row = json_at(json_get(s->projects, "list"), index);
     if (json_is_object(row)) app_show_detail(project_settings_screen_new(row, json_get(s->projects, "defaults")));
 }

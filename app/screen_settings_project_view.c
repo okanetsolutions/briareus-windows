@@ -219,7 +219,7 @@ void screen_settings_form_header(Screen *base, HeaderInfo *info) {
         snprintf(info->title, sizeof info->title, "New project");
         snprintf(info->subtitle, sizeof info->subtitle, "A project is a repository a session can be started against.");
     }
-    if (!store_supports("settings_projects")) return;
+    if (s->read_only || !store_supports("settings_projects")) return;
     bool busy = s->req_save || s->req_delete;
     HeaderButton *b = &info->buttons[info->button_count++];
     snprintf(b->label, sizeof b->label, "%s", s->req_save ? "Saving\xE2\x80\xA6" : "Save");

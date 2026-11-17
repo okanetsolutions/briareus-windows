@@ -26,6 +26,7 @@ typedef struct {
     char *error;
     Request *req, *req_order;
     ApiClient *projects_client; char *projects_device, *projects_permission;
+    const char *projects_operation; // the route used for the current list, or NULL when unavailable
     Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
     bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
     char *providers_error;
@@ -227,6 +228,7 @@ void screen_settings_github_open(SettingsScreen *s, intptr_t index);
 void screen_settings_github_section(SettingsScreen *s, Doc *doc, int w, const char *selected);
 Screen *screen_settings_github_settings_screen_new(const Json *row, const Json *defaults);
 void screen_settings_projects_load(SettingsScreen *s);
+bool screen_settings_projects_current(const SettingsScreen *s);
 void screen_settings_providers_load(SettingsScreen *s);
 void settings_providers_changed(bool open_first);
 const Json *settings_project_rows(void);
