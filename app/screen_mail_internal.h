@@ -35,7 +35,6 @@ typedef struct {
 } MailScreen;
 
 bool mail_settings_offered(void);
-double screen_mail_now_ms(void);
 void screen_mail_set_text(char **slot, const char *text);
 bool mail_settings_result_current(bool shown, const Request *r);
 int mail_settings_retry_ms(int failures, double retry_after);

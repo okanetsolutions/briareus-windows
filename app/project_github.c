@@ -79,12 +79,6 @@ static void summary(Doc *doc, int x, int w, char *text) {
     doc_space(doc, px(6));
 }
 
-static double epoch_milliseconds(void) {
-    FILETIME ft; GetSystemTimeAsFileTime(&ft);
-    ULARGE_INTEGER stamp; stamp.LowPart = ft.dwLowDateTime; stamp.HighPart = ft.dwHighDateTime;
-    return (double)(stamp.QuadPart / 10000ULL) - 11644473600000.0;
-}
-
 void project_github_layout(ProjectGithub *g, Doc *doc, int x, int w) {
     project_github_load(g, false);
     if (str_empty(g->repo) || !project_github_offered()) return;

@@ -17,9 +17,13 @@ static void test_github_account_metadata(void) {
 }
 
 static void test_project_github_summaries(void) {
-    Json *account = json_parsez("{\"globalFallback\":true,\"label\":\"Production\",\"login\":\"bot\"}");
+    Json *account = json_parsez("{\"globalFallback\":true,\"hasToken\":true,\"label\":\"Production\",\"login\":\"bot\"}");
     char *identity = github_account_identity(account);
-    CHECK(strstr(identity, "GITHUB_TOKEN") && !strstr(identity, "@bot")); free(identity);
+    CHECK(strstr(identity, "GITHUB_TOKEN") && !strstr(identity, "@bot"));
+    CHECK(!strstr(identity, "not configured")); free(identity);
+    json_set_bool(account, "hasToken", false);
+    identity = github_account_identity(account);
+    CHECK(strstr(identity, "GITHUB_TOKEN") && strstr(identity, "not configured")); free(identity);
     json_set_bool(account, "globalFallback", false);
     identity = github_account_identity(account);
     CHECK(strstr(identity, "Production") && strstr(identity, "@bot")); free(identity);

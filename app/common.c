@@ -4,6 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+double epoch_milliseconds(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER stamp;
+    stamp.LowPart = ft.dwLowDateTime;
+    stamp.HighPart = ft.dwHighDateTime;
+    return (double)(stamp.QuadPart / 10000ULL - 11644473600000ULL);
+}
+
 bool form_shortcut_character(WPARAM character, bool multiline) {
     switch (character) {
     case '\t': case 0x13: case 0x01: case 0x1B: return true;

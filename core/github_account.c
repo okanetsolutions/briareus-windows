@@ -27,7 +27,11 @@ char *github_account_projects(const Json *account) {
 }
 
 char *github_account_identity(const Json *account) {
-    if (json_bool_is(json_get(account, "globalFallback"), true)) return xstrdup("Server default (GITHUB_TOKEN)");
+    if (json_bool_is(json_get(account, "globalFallback"), true)) {
+        return xstrdup(json_bool_is(json_get(account, "hasToken"), false)
+            ? "Server default (GITHUB_TOKEN not configured)"
+            : "Server default (GITHUB_TOKEN)");
+    }
     const char *login = json_str_or(json_get(account, "login"), "unknown");
     const char *label = json_str_nonempty(json_get(account, "label"));
     return label ? xstrfmt("%s (@%s)", label, login) : xstrfmt("@%s", login);

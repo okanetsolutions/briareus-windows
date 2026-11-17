@@ -68,7 +68,7 @@ static void start_done(void *owner, Request *r) {
     if (!screen_mail_current(s, r)) return;
     if (!r->ok) failed(s, r, false);
     else if (!mail_sign_in_parse(r->result, s->starting_provider, s->starting_id, &s->accounts, &s->sign_in)
-             || screen_mail_now_ms() >= s->sign_in.expires_at
+             || epoch_milliseconds() >= s->sign_in.expires_at
              || (!s->sign_in.server_finish && !store_supports("finish_mail_account"))) {
         screen_mail_stop_waiting(s); screen_mail_set_error(s, "The server returned an invalid or expired sign-in. Start again.", false);
     } else {
@@ -162,7 +162,7 @@ void screen_mail_finish(MailScreen *s) {
     if (!screen_mail_modal_end(s)) { free(url); return; }
     if (!url) return;
     if (!s->shown || s->blocked || GetTickCount64() < s->retry_until || !store_supports("finish_mail_account")) { free(url); return; }
-    Json *body = mail_sign_in_finish(&s->sign_in, url, screen_mail_now_ms()); free(url);
+    Json *body = mail_sign_in_finish(&s->sign_in, url, epoch_milliseconds()); free(url);
     if (!body) { screen_mail_set_error(s, "Callback does not match this sign-in, contains an error, or has expired. Check the final address or start again.", false); screen_mail_repaint(s); return; }
     request_cancel(&s->read); KillTimer(pane_hwnd(s->base.pane), TIMER_MAIL);
     s->next_read = 0;

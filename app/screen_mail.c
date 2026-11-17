@@ -9,8 +9,6 @@ static Screen *open_mail_settings(int account_id);
 
 bool mail_settings_offered(void) { return g_store.has_device && permission_rank(g_store.device.permission) == 2 && store_supports("settings_mail_accounts"); }
 
-double screen_mail_now_ms(void) { FILETIME ft; GetSystemTimeAsFileTime(&ft); ULARGE_INTEGER n; n.LowPart = ft.dwLowDateTime; n.HighPart = ft.dwHighDateTime; return (double)(n.QuadPart / 10000ULL - 11644473600000ULL); }
-
 void screen_mail_set_text(char **slot, const char *text) { free(*slot); *slot = xstrdup(text); }
 
 bool mail_settings_result_current(bool shown, const Request *r) { return shown && !r->cancelled && r->client && r->client == g_store.client && mail_settings_offered(); }
@@ -75,7 +73,7 @@ void screen_mail_action(Screen *base, int act, intptr_t arg, POINT pt) {
 static void timer(Screen *base, UINT id) {
     if (id != TIMER_MAIL) return;
     MailScreen *s = (MailScreen *)base; KillTimer(pane_hwnd(base->pane), id);
-    if (s->sign_in.state && screen_mail_now_ms() >= s->sign_in.expires_at) {
+    if (s->sign_in.state && epoch_milliseconds() >= s->sign_in.expires_at) {
         screen_mail_stop_waiting(s); screen_mail_set_text(&s->notice, NULL);
         screen_mail_set_error(s, "Sign-in waiting expired. Check the browser result and refresh before starting again.", false);
     }
