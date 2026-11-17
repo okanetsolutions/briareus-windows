@@ -46,7 +46,7 @@ char *screen_settings_forge_form_id(double id) { return id > 0 ? xstrfmt("settin
 bool screen_settings_is_form_id(const char *id) {
     return id && (str_has_prefix(id, "settings-project:") || str_has_prefix(id, "settings-provider:")
                   || str_has_prefix(id, "settings-ssh:") || str_has_prefix(id, "settings-forge:")
-                  || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-home") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
+                  || str_has_prefix(id, "settings-github:") || str_has_prefix(id, "settings-mcp:") || str_eq(id, "settings-home") || str_eq(id, "mail-settings") || str_has_prefix(id, "mail-settings:"));
 }
 
 /// Why `what` cannot be shown here, as a new string; NULL when it can. `path` is the list's route.
@@ -76,6 +76,8 @@ static void settings_destroy(Screen *base) {
     json_free(s->providers); free(s->providers_error);
     json_free(s->ssh); free(s->ssh_error); api_client_release(s->ssh_account); free(s->ssh_device);
     json_free(s->forge); free(s->forge_error);
+    request_cancel(&s->req_github); json_free(s->github); free(s->github_error);
+    api_client_release(s->github_client); free(s->github_device);
     request_cancel(&s->req_mcp); json_free(s->mcp); free(s->mcp_error); api_client_release(s->mcp_account);
     request_cancel(&s->req_mail); json_free(s->mail); free(s->mail_error); api_client_release(s->mail_client);
     screen_release(base);
@@ -126,6 +128,8 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
         if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) break;
         app_show_detail(screen_settings_ssh_settings_screen_new(NULL, json_get(s->ssh, "defaults"))); break;
     case ACT_OPEN_SSH: screen_settings_ssh_open_row(s, (size_t)arg); break;
+    case ACT_NEW_GITHUB: screen_settings_github_open(s, -1); break;
+    case ACT_OPEN_GITHUB: screen_settings_github_open(s, arg); break;
     case ACT_NEW_FORGE: app_show_detail(screen_settings_forge_settings_screen_new(NULL, json_get(s->forge, "defaults"))); break;
     case ACT_OPEN_FORGE: screen_settings_forge_open_row(s, (size_t)arg); break;
     case ACT_NEW_MCP:
@@ -174,6 +178,7 @@ static void settings_visible(Screen *base, bool shown) {
     if (!s->providers_loaded && !s->req_providers) screen_settings_providers_load(s);
     if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) screen_settings_ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) screen_settings_forge_load(s);
+    if (!s->github_loaded || s->github_client != g_store.client || !str_eq(s->github_device, g_store.device.id)) screen_settings_github_load(s);
     if (!s->mcp_loaded || s->mcp_account != g_store.client) screen_settings_mcp_load(s);
     if (mail_settings_offered() && (!s->mail_loaded || s->mail_client != g_store.client)) screen_settings_mail_load(s);
 }
@@ -181,7 +186,7 @@ static void settings_visible(Screen *base, bool shown) {
 static void settings_refresh(Screen *base) {
     SettingsScreen *s = (SettingsScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_ssh); request_cancel(&s->req_forge); request_cancel(&s->req_mcp);
-    request_cancel(&s->req_mail); s->mail_loaded = false; screen_settings_settings_load(s);
+    request_cancel(&s->req_github); request_cancel(&s->req_mail); s->mail_loaded = false; screen_settings_settings_load(s);
     request_cancel(&s->req_providers); screen_settings_providers_load(s);
 }
 

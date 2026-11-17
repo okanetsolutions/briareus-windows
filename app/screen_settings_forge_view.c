@@ -1,16 +1,9 @@
 #include "screen_settings_internal.h"
 
-typedef struct { char *text; bool on, gone; } ForgeCheck;
-
 static bool forge_has_token(const ForgeForm *s);
-static bool repos_has(const Json *repos, const char *repo);
-static Json *forge_choices(ForgeForm *s);
 static void forge_fill_edits(ForgeForm *s);
 static void paint_forge_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 static void forge_field(ForgeForm *s, Doc *doc, int x, int w, int f);
-static void forge_check_free(void *p);
-static void paint_forge_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
-static void forge_projects(ForgeForm *s, Doc *doc, int x, int w);
 static LRESULT CALLBACK forge_field_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref);
 
 static const FieldDef FORGE_FIELDS[G_COUNT] = {
@@ -26,34 +19,6 @@ char *screen_settings_forge_field_text(const Json *row, int f) {
     if (f == G_TOKEN) return xstrdup("");
     const char *v = json_str(json_get(row, FORGE_FIELDS[f].key));
     return xstrdup(v ? v : "");
-}
-
-static bool repos_has(const Json *repos, const char *repo) {
-    for (size_t i = 0; i < json_count(repos); i++) if (str_eq(json_str(json_at(repos, i)), repo)) return true;
-    return false;
-}
-
-/// Whether two project lists hold the same projects, in any order.
-bool screen_settings_repos_same(const Json *a, const Json *b) {
-    if (json_count(a) != json_count(b)) return false;
-    for (size_t i = 0; i < json_count(a); i++) if (!repos_has(b, json_str(json_at(a, i)))) return false;
-    return true;
-}
-
-/// What the Projects list offers: every project, then any ticked one that is no longer a project (the server refuses it
-/// on save, so it stays visible to be unticked).
-static Json *forge_choices(ForgeForm *s) {
-    Json *out = json_array();
-    const Json *rows = screen_settings_g_settings ? screen_settings_settings_rows(screen_settings_g_settings) : NULL;
-    for (size_t i = 0; i < json_count(rows); i++) {
-        const char *repo = json_str_nonempty(json_get(json_at(rows, i), "repo"));
-        if (repo && !repos_has(out, repo)) json_array_push(out, json_string(repo));
-    }
-    for (size_t i = 0; i < json_count(s->repos); i++) {
-        const char *repo = json_str(json_at(s->repos, i));
-        if (repo && !repos_has(out, repo)) json_array_push(out, json_string(repo));
-    }
-    return out;
 }
 
 /// The edits take the row's text, and the token's box says whether one is stored.
@@ -122,40 +87,6 @@ static void forge_field(ForgeForm *s, Doc *doc, int x, int w, int f) {
     doc_space(doc, px(14));
 }
 
-static void forge_check_free(void *p) { ForgeCheck *d = p; free(d->text); free(d); }
-
-static void paint_forge_check(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    ForgeCheck *d = it->data;
-    bool hovered = doc_item_hovered(doc, it);
-    int size = px(15), top = rc->top + (rc->bottom - rc->top - size) / 2;
-    RECT b = { rc->left, top, rc->left + size, top + size };
-    fill_round_rect(cv, &b, px(3), d->on ? theme.accent : theme.field, d->on ? theme.accent : hovered ? theme.accent_dim : theme.line_strong);
-    if (d->on) draw_glyph(cv, 0xE73E, &b, FONT_ICON_SMALL, theme.on_accent);
-    RECT t = { b.right + px(8), rc->top, rc->right, rc->bottom };
-    draw_text(cv, d->text, &t, FONT_FOOTNOTE, d->gone ? theme.muted : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-}
-
-/// The projects the account is available to, one tick box each, as the web form's multiple select.
-static void forge_projects(ForgeForm *s, Doc *doc, int x, int w) {
-    doc_field_label(doc, x, w, "Projects", theme.ink, "Only these projects offer the account's Forge servers and sites to their clients.");
-    doc_space(doc, px(6));
-    Json *choices = forge_choices(s);
-    const Json *rows = screen_settings_g_settings ? screen_settings_settings_rows(screen_settings_g_settings) : NULL;
-    for (size_t i = 0; i < json_count(choices); i++) {
-        const char *repo = json_str(json_at(choices, i));
-        bool listed = false;
-        for (size_t k = 0; k < json_count(rows); k++) listed |= str_eq(json_str(json_get(json_at(rows, k), "repo")), repo);
-        ForgeCheck *d = xcalloc(1, sizeof *d);
-        d->on = repos_has(s->repos, repo); d->gone = !listed;
-        d->text = listed ? xstrdup(repo) : xstrfmt("%s (not a project)", repo);
-        int it = doc_custom(doc, x, w, px(28), paint_forge_check, d, forge_check_free, ACT_FORGE_REPO, (intptr_t)i);
-        doc_item(doc, it)->hand = true;
-    }
-    if (!json_count(choices)) doc_text(doc, x, w, "No projects yet. Add one under Projects first.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
-    json_free(choices);
-    doc_space(doc, px(14));
-}
-
 void screen_settings_forge_layout(Screen *base, Doc *doc) {
     ForgeForm *s = (ForgeForm *)base;
     memset(s->laid, 0, sizeof s->laid);
@@ -176,7 +107,7 @@ void screen_settings_forge_layout(Screen *base, Doc *doc) {
     forge_field(s, doc, x + half + gap, col - half - gap, G_ORG);
     if (doc->y < bottom) doc->y = bottom;
     forge_field(s, doc, x, col, G_TOKEN);
-    forge_projects(s, doc, x, col);
+    screen_settings_repos_layout(doc, x, col, s->repos, ACT_FORGE_REPO, "Only these projects offer the account's Forge servers and sites to their clients.", SETTINGS_REPOS_EXACT);
     doc_space(doc, px(40));
 }
 
@@ -262,18 +193,8 @@ void screen_settings_forge_ensure_controls(ForgeForm *s) {
 }
 
 void screen_settings_forge_toggle_repo(ForgeForm *s, size_t index) {
-    Json *choices = forge_choices(s);
-    const char *repo = json_str(json_at(choices, index));
-    if (repo) {
-        Json *next = json_array();
-        for (size_t i = 0; i < json_count(s->repos); i++) {
-            const char *r = json_str(json_at(s->repos, i));
-            if (r && !str_eq(r, repo)) json_array_push(next, json_string(r));
-        }
-        if (!repos_has(s->repos, repo)) json_array_push(next, json_string(repo));
-        json_free(s->repos); s->repos = next;
+    if (screen_settings_repos_toggle(&s->repos, index, SETTINGS_REPOS_EXACT)) {
         screen_settings_forge_changed(s);
         pane_relayout(s->base.pane);
     }
-    json_free(choices);
 }

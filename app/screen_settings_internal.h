@@ -13,7 +13,7 @@
 // MARK: - The sidebar
 
 enum { ACT_BACK = 1000, ACT_NEW_PROJECT, ACT_OPEN_PROJECT, ACT_NEW_PROVIDER, ACT_OPEN_PROVIDER, ACT_NEW_SSH, ACT_OPEN_SSH,
-       ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_NEW_MAIL, ACT_OPEN_MAIL, ACT_OPEN_HOME, ACT_SLEEP };
+       ACT_NEW_FORGE, ACT_OPEN_FORGE, ACT_NEW_MCP, ACT_OPEN_MCP, ACT_MOVE_UP, ACT_MOVE_DOWN, ACT_NEW_MAIL, ACT_OPEN_MAIL, ACT_OPEN_HOME, ACT_SLEEP, ACT_NEW_GITHUB, ACT_OPEN_GITHUB };
 
 enum { MENU_UP = 1, MENU_DOWN };
 
@@ -39,6 +39,8 @@ typedef struct {
     Request *req_forge;
     Json *mcp; Request *req_mcp; ApiClient *mcp_account; char *mcp_error; bool mcp_loaded;
     Json *mail; Request *req_mail; ApiClient *mail_client; char *mail_error; bool mail_loaded;
+    Json *github; Request *req_github; ApiClient *github_client; char *github_device;
+    char *github_error; bool github_loaded;
     RECT signout_rc;
 } SettingsScreen;
 
@@ -212,6 +214,12 @@ void screen_settings_mail_load(SettingsScreen *s);
 void settings_mail_changed(const Json *list);
 void screen_settings_ssh_load(SettingsScreen *s);
 void screen_settings_forge_load(SettingsScreen *s);
+bool screen_settings_github_offered(void);
+void screen_settings_github_load(SettingsScreen *s);
+void screen_settings_github_changed_list(void);
+void screen_settings_github_open(SettingsScreen *s, intptr_t index);
+void screen_settings_github_section(SettingsScreen *s, Doc *doc, int w, const char *selected);
+Screen *screen_settings_github_settings_screen_new(const Json *row, const Json *defaults);
 void screen_settings_projects_load(SettingsScreen *s);
 void screen_settings_providers_load(SettingsScreen *s);
 void settings_providers_changed(bool open_first);
@@ -294,7 +302,11 @@ void screen_settings_ssh_pick(SshForm *s, int p, POINT pt);
 void screen_settings_ssh_save(SshForm *s);
 Screen *screen_settings_ssh_settings_screen_new(const Json *row, const Json *defaults);
 char *screen_settings_forge_field_text(const Json *row, int f);
-bool screen_settings_repos_same(const Json *a, const Json *b);
+typedef enum { SETTINGS_REPOS_EXACT, SETTINGS_REPOS_IGNORE_CASE } SettingsReposMatch;
+Json *screen_settings_repos_choices(const Json *repos, SettingsReposMatch match);
+void screen_settings_repos_layout(Doc *doc, int x, int w, const Json *repos, int action, const char *hint, SettingsReposMatch match);
+bool screen_settings_repos_toggle(Json **repos, size_t index, SettingsReposMatch match);
+bool screen_settings_repos_same(const Json *a, const Json *b, SettingsReposMatch match);
 void screen_settings_forge_fill(ForgeForm *s);
 Json *screen_settings_forge_body(ForgeForm *s, char **why);
 bool screen_settings_forge_form_changed(ForgeForm *s);

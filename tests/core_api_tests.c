@@ -327,6 +327,8 @@ static const Expected ROUTE_TABLE[] = {
     { "settings_ssh_servers", "GET", "settings/ssh/servers" }, { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" }, { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
+    { "settings_github_accounts", "GET", "settings/github/accounts" }, { "create_github_account", "POST", "settings/github/accounts" },
+    { "update_github_account", "PUT", "settings/github/accounts/{id}" }, { "delete_github_account", "DELETE", "settings/github/accounts/{id}" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "mail_messages", "GET", "mail/messages" },
@@ -762,10 +764,16 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     Stub stub = { 0 };
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
+    CHECK(!e.has_server_message);
     stub_json(&stub, 422, "{\"error\":\"Repository is required\",\"field\":\"repo\"}");
     CHECK(api_call(c, "create_project", NULL, 0, &e) == NULL);
     CHECK(e.kind == API_HTTP && e.status == 422); CHECK_STR(e.message, "Repository is required"); CHECK(e.retry_after < 0);
     CHECK_OWNED_STR(api_error_description(&e), "Repository is required (HTTP 422)");
+    CHECK(e.has_server_message);
+    ApiError copy; api_error_init(&copy); api_error_copy(&copy, &e);
+    CHECK(copy.has_server_message); CHECK_STR(copy.message, "Repository is required");
+    api_error_set(&copy, API_NETWORK, 0, "Timeout", -1); CHECK(!copy.has_server_message);
+    api_error_clear(&copy);
     struct { int status; const char *text; } fallback[] = {
         { 400, "bad request" }, { 401, "unauthorized" }, { 403, "forbidden" }, { 404, "not found" }, { 405, "method not allowed" },
         { 408, "request timeout" }, { 409, "conflict" }, { 413, "request too large" }, { 422, "unprocessable entity" },
@@ -775,13 +783,13 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     for (size_t i = 0; i < sizeof fallback / sizeof *fallback; i++) {
         // An HTML error page, a JSON body without a string `error`, and a JSON body that does not parse all fall back to the status.
         stub_json(&stub, fallback[i].status, "<html>Bad gateway</html>"); stub.content_type = "text/html";
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP); CHECK_INT(e.status, fallback[i].status); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP); CHECK_INT(e.status, fallback[i].status); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":{\"code\":7},\"message\":\"nope\"}");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":\"\"}");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
     }
     // The server's `error` is read only from a JSON answer.
     stub_json(&stub, 400, "{\"error\":\"Hidden\"}"); stub.content_type = "text/plain";
@@ -792,7 +800,8 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     stub_json(&stub, 401, "{\"error\":\"Token expired\"}");
     CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(api_error_unauthorized(&e)); CHECK_STR(e.message, "Token expired");
     CHECK_OWNED_STR(api_error_description(&e), "This token has expired or was revoked. Reconnect with a new token.");
-    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+    CHECK(e.has_server_message); api_error_clear(&e); CHECK(!e.has_server_message);
+    api_client_release(c); stub_reset(&stub);
 }
 static void test_error_answers_keep_the_servers_code(void) {
     Stub stub = { 0 };
@@ -1275,7 +1284,47 @@ static void ssh_approval_routes(void) {
     json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_github_accounts_contract(void) {
+    Stub stub = {0}; stub_json(&stub, 200, "{\"accounts\":[]}");
+    ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    Json *answer = call(c, "settings_github_accounts", "{}", &error);
+    CHECK(json_is_array(json_get(answer, "accounts"))); json_free(answer);
+    CHECK_STR(stub.last_method, "GET"); CHECK_STR(stub.last_url, BASE "settings/github/accounts");
+    CHECK(stub.last_body == NULL);
+    stub_json(&stub, 201, "{\"account\":{\"id\":7,\"login\":\"bot\",\"githubId\":42,\"scopes\":null,\"hasToken\":true,\"repos\":[\"o/r\"]}}");
+    answer = call(c, "create_github_account", "{\"label\":\"Production\",\"token\":\"fixture-secret\",\"repos\":[\"o/r\"]}", &error);
+    CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_url, BASE "settings/github/accounts");
+    CHECK_STR(stub.last_body, "{\"label\":\"Production\",\"token\":\"fixture-secret\",\"repos\":[\"o/r\"]}");
+    CHECK_INT(json_int_or(json_get(json_get(answer, "account"), "githubId"), 0), 42); json_free(answer);
+    answer = call(c, "update_github_account", "{\"id\":7,\"label\":\"Renamed\",\"repos\":[]}", &error); json_free(answer);
+    CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_url, BASE "settings/github/accounts/7");
+    CHECK_STR(stub.last_body, "{\"label\":\"Renamed\",\"repos\":[]}");
+    answer = call(c, "update_github_account", "{\"id\":7,\"token\":\"rotated-fixture\"}", &error); json_free(answer);
+    CHECK_STR(stub.last_body, "{\"token\":\"rotated-fixture\"}");
+    stub_json(&stub, 200, "{\"ok\":true}");
+    answer = call(c, "delete_github_account", "{\"id\":7}", &error); CHECK(json_bool_is(json_get(answer, "ok"), true)); json_free(answer);
+    CHECK_STR(stub.last_method, "DELETE"); CHECK_STR(stub.last_url, BASE "settings/github/accounts/7"); CHECK(stub.last_body == NULL);
+    const int statuses[] = {400, 404, 409, 502, 503};
+    const char *writes[] = {"create_github_account", "update_github_account", "delete_github_account"};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        stub_json(&stub, statuses[i], "{\"error\":\"GitHub registry message\"}"); stub.retry_after = "30";
+        for (size_t k = 0; k < sizeof writes / sizeof *writes; k++) {
+            int before = stub.calls;
+            answer = call(c, writes[k], "{\"id\":7}", &error);
+            CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.status, statuses[i]);
+            CHECK_STR(error.message, "GitHub registry message");
+        }
+    }
+    stub.fail = true; stub.fail_message = "fixture timeout"; int before = stub.calls;
+    answer = call(c, "update_github_account", "{\"id\":7}", &error);
+    CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.kind, API_NETWORK);
+    api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
+
+
 void api_tests(void) {
+    test_run("GitHub account CRUD routes bodies and no write retries", test_github_accounts_contract);
     test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving, previews and shared browser remain", test_removed_integrations_are_unregistered);

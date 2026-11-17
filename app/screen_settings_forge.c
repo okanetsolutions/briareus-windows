@@ -13,7 +13,7 @@ static bool forge_can_leave(Screen *base);
 
 /// Whether the form holds a change not saved yet, for the dot after the tab's title.
 bool screen_settings_forge_form_changed(ForgeForm *s) {
-    if (!screen_settings_repos_same(s->repos, json_get(s->row, "repos"))) return true;
+    if (!screen_settings_repos_same(s->repos, json_get(s->row, "repos"), SETTINGS_REPOS_EXACT)) return true;
     for (int f = 0; f < G_COUNT; f++) {
         if (!s->edits[f]) continue;
         char *now = screen_settings_edit_text(s->edits[f]), *saved = screen_settings_forge_field_text(s->row, f);
