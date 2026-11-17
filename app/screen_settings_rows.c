@@ -71,6 +71,7 @@ void screen_settings_paint_provider_row(Doc *doc, Item *it, Canvas *cv, const RE
 }
 
 void screen_settings_settings_open_row(SettingsScreen *s, size_t index) {
+    if (!screen_settings_projects_current(s)) return;
     const Json *row = json_at(json_get(s->projects, "list"), index);
     if (json_is_object(row)) app_show_detail(project_settings_screen_new(row, json_get(s->projects, "defaults")));
 }
@@ -119,4 +120,14 @@ void screen_settings_layout_move_arrows(SettingsScreen *s, Doc *doc, int row, si
         it->action = enabled ? (up ? ACT_MOVE_UP : ACT_MOVE_DOWN) : ACTION_TIP; it->arg = (intptr_t)i; it->hand = enabled;
         it->tip = xstrdup(up ? "Move up" : "Move down");
     }
+}
+
+// Read tokens use the project summaries they are allowed to read, without requesting admin settings.
+bool screen_settings_project_accounts_offered(void) {
+    return project_github_offered() && store_supports("projects");
+}
+
+char *screen_settings_project_row_form_id(const Json *row) {
+    int id = screen_settings_row_id(row);
+    return id ? screen_settings_form_id(id) : xstrfmt("settings-project:%s", json_str_or(json_get(row, "repo"), "new"));
 }

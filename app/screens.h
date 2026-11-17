@@ -410,6 +410,8 @@ void pulls_note_success(const char *repo);
 time_t pulls_sync_time(const Json *result, bool saved, time_t now);
 
 void set_string(char **slot, const char *value);
+/// Current wall-clock time in Unix epoch milliseconds.
+double epoch_milliseconds(void);
 /// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.
 const char *finding_severity_label(const char *severity, COLORREF *color);
 /// The decisions a finding can be given, as the API spells them and as the segmented control titles them.

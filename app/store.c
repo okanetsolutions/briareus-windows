@@ -72,6 +72,9 @@ void store_shutdown(void) {
     free(g_store.server); free(g_store.connection_error);
 }
 bool store_connected(void) { return g_store.client != NULL; }
+bool store_connection_matches(const ApiClient *client, const char *device, const char *permission) {
+    return client == g_store.client && str_eq(device, g_store.device.id) && str_eq(permission, g_store.device.permission);
+}
 bool store_can_manage(void) { return g_store.has_device && device_can_manage(&g_store.device); }
 bool store_can_transcribe(void) { return store_can_manage(); }
 bool store_supports(const char *call) {

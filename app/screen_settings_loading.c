@@ -85,6 +85,7 @@ void settings_mail_changed(const Json *list) {
 
 static void settings_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
+    if (req->client != s->projects_client || !screen_settings_projects_current(s)) return;
     s->loaded = true;
     if (!req->ok) { request_error_into(&s->error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->error, NULL);
@@ -93,12 +94,15 @@ static void settings_done(void *owner, Request *req) {
     json_object_set(s->projects, "list", json_clone(json_get(req->result, "projects")));
     json_object_set(s->projects, "defaults", json_clone(json_get(req->result, "defaults")));
     pane_relayout(s->base.pane);
+    if (str_eq(req->operation, "projects")) return;
     // The dashboard's settings page opens on its first project, or on a new one when there is none; so does this,
     // unless a settings form is already up.
-    Screen *root = pane_root(app_detail_pane());
+    Pane *detail = app_detail_pane();
+    if (!detail) return;
+    Screen *root = pane_root(detail);
     if (root && screen_settings_is_form_id(root->id)) return;
     if (json_count(screen_settings_settings_rows(s))) screen_settings_settings_open_row(s, 0);
-    else app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
+    else if (store_supports("settings_projects")) app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
 }
 
 static void ssh_done(void *owner, Request *req) {
@@ -141,9 +145,27 @@ void screen_settings_forge_load(SettingsScreen *s) {
     store_call("settings_forge_accounts", json_object(), 0, s, forge_done, 0, &s->req_forge);
 }
 
+static const char *projects_operation(void) {
+    if (store_supports("settings_projects")) return "settings_projects";
+    return screen_settings_project_accounts_offered() ? "projects" : NULL;
+}
+
+bool screen_settings_projects_current(const SettingsScreen *s) {
+    return store_connection_matches(s->projects_client, s->projects_device, s->projects_permission)
+        && str_eq(s->projects_operation, projects_operation());
+}
+
 void screen_settings_projects_load(SettingsScreen *s) {
-    if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
-    store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
+    if (!screen_settings_projects_current(s)) {
+        request_cancel(&s->req); request_cancel(&s->req_order); api_client_release(s->projects_client);
+        s->projects_client = api_client_retain(g_store.client); set_string(&s->projects_device, g_store.device.id);
+        set_string(&s->projects_permission, g_store.device.permission);
+        s->projects_operation = projects_operation();
+        json_free(s->projects); s->projects = json_object(); s->loaded = false; set_string(&s->error, NULL);
+    }
+    if (s->req) return;
+    if (!s->projects_operation) { s->loaded = true; return; }
+    store_call(s->projects_operation, json_object(), 0, s, settings_done, 0, &s->req);
 }
 
 static void providers_done(void *owner, Request *req) {
@@ -223,6 +245,7 @@ void screen_settings_forge_open_row(SettingsScreen *s, size_t index) {
 
 static void order_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
+    if (req->client != s->projects_client || !screen_settings_projects_current(s)) return;
     if (!req->ok) { request_error_into(&s->error, req); }
     else if (json_is_array(json_get(req->result, "projects"))) {
         json_object_set(s->projects, "list", json_clone(json_get(req->result, "projects")));
@@ -235,7 +258,7 @@ static void order_done(void *owner, Request *req) {
 void screen_settings_settings_move(SettingsScreen *s, size_t index, int delta) {
     const Json *rows = screen_settings_settings_rows(s);
     size_t n = json_count(rows);
-    if (s->req_order || index >= n) return;
+    if (s->req_order || index >= n || !screen_settings_projects_current(s)) return;
     if ((delta < 0 && index == 0) || (delta > 0 && index + 1 >= n)) return;
     size_t other = delta < 0 ? index - 1 : index + 1;
     Json *ids = json_array();

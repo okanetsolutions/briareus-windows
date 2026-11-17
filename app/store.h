@@ -42,6 +42,8 @@ extern Store g_store;
 void store_init(HWND main_window);
 void store_shutdown(void);
 bool store_connected(void);
+/// Whether a retained client and its device scope still describe the current connection.
+bool store_connection_matches(const ApiClient *client, const char *device, const char *permission);
 bool store_can_manage(void);
 /// The microphone shows for any device allowed to write the message a note becomes.
 bool store_can_transcribe(void);

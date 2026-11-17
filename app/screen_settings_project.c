@@ -34,12 +34,14 @@ static void save_done(void *owner, Request *req) {
     set_string(&s->error, NULL);
     form_set_id(s, screen_settings_row_id(row));
     screen_settings_form_fill(s);
+    project_github_clear(&s->github);
+    project_github_init(&s->github, &s->base, json_str(json_get(s->row, "repo")));
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
     settings_projects_changed(s->id);
 }
 
 void screen_settings_form_save(FormScreen *s) {
-    if (s->req_save || s->req_delete || !store_supports(s->id ? "update_project" : "create_project")) return;
+    if (s->read_only || s->req_save || s->req_delete || !store_supports(s->id ? "update_project" : "create_project")) return;
     char *why = NULL; int tab = screen_settings_g_tab;
     Json *body = screen_settings_form_body(s, &why, &tab);
     if (!body) {
@@ -80,6 +82,7 @@ static void form_delete(FormScreen *s) {
 }
 
 static void form_clone(FormScreen *s) {
+    if (s->read_only) return;
     char *why = NULL; int tab = screen_settings_g_tab;
     Json *copy = screen_settings_form_body(s, &why, &tab);
     if (!copy) { set_string(&s->error, why); free(why); screen_settings_g_tab = tab; pane_relayout(s->base.pane); pane_scroll_to_top(s->base.pane); return; }
@@ -106,6 +109,7 @@ static void form_release(FormScreen *s) {
 static void form_destroy(Screen *base) {
     FormScreen *s = (FormScreen *)base;
     request_cancel(&s->req_save); request_cancel(&s->req_delete); request_cancel(&s->req_runtimes);
+    project_github_clear(&s->github);
     if (s->modal) { s->retired = true; return; }
     form_release(s);
 }
@@ -113,6 +117,8 @@ static void form_destroy(Screen *base) {
 static void form_action(Screen *base, int action, intptr_t arg, POINT pt) {
     FormScreen *s = (FormScreen *)base;
     switch (action) {
+    case ACT_PROJECT_GITHUB_CHECK: project_github_check(&s->github); break;
+    case ACT_PROJECT_GITHUB_RELOAD: project_github_load(&s->github, true); break;
     case ACT_SAVE: screen_settings_form_save(s); break;
     case ACT_CLONE: form_clone(s); break;
     case ACT_DELETE: form_delete(s); break;
@@ -173,6 +179,8 @@ static void form_visible(Screen *base, bool shown) {
     FormScreen *s = (FormScreen *)base;
     s->shown = shown;
     if (shown) {
+        project_github_load(&s->github, false);
+        if (s->read_only || !store_supports("settings_projects")) return;
         screen_settings_form_ensure_controls(s);
         // Asked once the screen is up: a screen made and then refused (its predecessor kept its changes) asks nothing.
         if (!s->has_catalog && !s->req_runtimes) screen_settings_load_runtimes(s);
@@ -207,9 +215,11 @@ Screen *project_settings_screen_new(const Json *row, const Json *defaults) {
     // A saved row, a clone's values without an id, or a new project from the server's defaults.
     s->row = json_is_object(row) ? json_clone(row) : json_is_object(defaults) ? json_clone(defaults) : json_object();
     s->id = screen_settings_row_id(s->row);
-    s->base.id = screen_settings_form_id(s->id);
+    s->read_only = !store_supports("settings_projects");
+    s->base.id = s->read_only ? screen_settings_project_row_form_id(s->row) : screen_settings_form_id(s->id);
+    project_github_init(&s->github, &s->base, s->id || s->read_only ? json_str(json_get(s->row, "repo")) : NULL);
     // A new project starts where its repository is typed.
-    if (!s->id) { s->focus_first = F_REPO; screen_settings_g_tab = T_PROJECT; }
+    if (!s->id && !s->read_only) { s->focus_first = F_REPO; screen_settings_g_tab = T_PROJECT; }
     screen_settings_form_fill(s);
     return &s->base;
 }

@@ -76,6 +76,7 @@ void app_action_runtime_tests(void);
 void app_provider_settings_tests(void);
 void app_project_settings_tests(void);
 void app_github_settings_tests(void);
+void app_project_github_tests(void);
 void core_ssh_servers_tests(void);
 void core_ssh_settings_tests(void);
 void app_ssh_servers_tests(void);

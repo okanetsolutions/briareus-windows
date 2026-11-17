@@ -161,12 +161,17 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
     // The whole pane, as the pull request page uses it, rather than the dashboard's 720px column.
     int col = doc->width, x = 0;
     doc_space(doc, px(8));
+    if (s->read_only || !store_supports("settings_projects")) {
+        project_github_layout(&s->github, doc, x, col);
+        if (project_github_offered()) return;
+    }
     char *why = screen_settings_settings_unavailable();
     if (why) { doc_space(doc, px(10)); doc_text(doc, x, col, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); doc_space(doc, px(12)); return; }
     layout_tabs(s, doc, x, col);
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
     switch (screen_settings_g_tab) {
     case T_PROJECT: {
+        project_github_layout(&s->github, doc, x, col);
         int gap = px(14), half = (col - gap) / 2, top = doc->y;
         screen_settings_field(s, doc, x, half, F_REPO);
         int left_bottom = doc->y;
@@ -207,14 +212,14 @@ void screen_settings_form_layout(Screen *base, Doc *doc) {
 void screen_settings_form_header(Screen *base, HeaderInfo *info) {
     FormScreen *s = (FormScreen *)base;
     const char *label = json_str_nonempty(json_get(s->row, "label")), *repo = json_str_nonempty(json_get(s->row, "repo"));
-    if (s->id) {
+    if (s->id || s->read_only) {
         snprintf(info->title, sizeof info->title, "%s", label ? label : repo ? repo : "Project");
         snprintf(info->subtitle, sizeof info->subtitle, "%s", repo ? repo : "");
     } else {
         snprintf(info->title, sizeof info->title, "New project");
         snprintf(info->subtitle, sizeof info->subtitle, "A project is a repository a session can be started against.");
     }
-    if (!store_supports("settings_projects")) return;
+    if (s->read_only || !store_supports("settings_projects")) return;
     bool busy = s->req_save || s->req_delete;
     HeaderButton *b = &info->buttons[info->button_count++];
     snprintf(b->label, sizeof b->label, "%s", s->req_save ? "Saving\xE2\x80\xA6" : "Save");

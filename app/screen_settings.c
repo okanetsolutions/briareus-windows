@@ -73,6 +73,7 @@ static void settings_destroy(Screen *base) {
     request_cancel(&s->req); request_cancel(&s->req_order); request_cancel(&s->req_providers);
     request_cancel(&s->req_ssh); request_cancel(&s->req_forge);
     json_free(s->projects); free(s->error);
+    api_client_release(s->projects_client); free(s->projects_device); free(s->projects_permission);
     json_free(s->providers); free(s->providers_error);
     json_free(s->ssh); free(s->ssh_error); api_client_release(s->ssh_account); free(s->ssh_device);
     json_free(s->forge); free(s->forge_error);
@@ -120,7 +121,10 @@ static void settings_action(Screen *base, int action, intptr_t arg, POINT pt) {
     SettingsScreen *s = (SettingsScreen *)base;
     switch (action) {
     case ACT_BACK: settings_back(s); break;
-    case ACT_NEW_PROJECT: app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults"))); break;
+    case ACT_NEW_PROJECT:
+        if (!store_supports("settings_projects") || !store_supports("create_project")) break;
+        app_show_detail(project_settings_screen_new(NULL, screen_settings_projects_current(s) ? json_get(s->projects, "defaults") : NULL));
+        break;
     case ACT_OPEN_PROJECT: screen_settings_settings_open_row(s, (size_t)arg); break;
     case ACT_NEW_PROVIDER: app_show_detail(provider_settings_screen_new(NULL, json_get(s->providers, "defaults"))); break;
     case ACT_OPEN_PROVIDER: screen_settings_settings_open_provider(s, (size_t)arg); break;
@@ -174,7 +178,7 @@ static void settings_context(Screen *base, int action, intptr_t arg, POINT pt) {
 static void settings_visible(Screen *base, bool shown) {
     SettingsScreen *s = (SettingsScreen *)base;
     if (!shown) return;
-    if (!s->loaded && !s->req) screen_settings_projects_load(s);
+    if (!s->loaded || !screen_settings_projects_current(s)) screen_settings_projects_load(s);
     if (!s->providers_loaded && !s->req_providers) screen_settings_providers_load(s);
     if (!s->ssh_loaded || s->ssh_account != g_store.client || !str_eq(s->ssh_device, g_store.device.id)) screen_settings_ssh_load(s);
     if (!s->forge_loaded && !s->req_forge) screen_settings_forge_load(s);

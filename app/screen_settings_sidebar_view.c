@@ -6,7 +6,7 @@ static void layout_ssh(SettingsScreen *s, Doc *doc, int w, const char *selected)
 static void layout_forge(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_mail(SettingsScreen *s, Doc *doc, int w, const char *selected);
 static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *selected);
-static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected);
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected, bool can_add);
 
 static void layout_mcp(SettingsScreen *s, Doc *doc, int w, const char *selected) {
     doc_space(doc, px(18));
@@ -136,6 +136,7 @@ static void layout_mail(SettingsScreen *s, Doc *doc, int w, const char *selected
 
 void screen_settings_settings_layout(Screen *base, Doc *doc) {
     SettingsScreen *s = (SettingsScreen *)base;
+    if (!screen_settings_projects_current(s)) screen_settings_projects_load(s);
     int w = doc->width;
     const char *selected = pane_selected_id(base->pane);
     doc_space(doc, px(8));
@@ -152,9 +153,11 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     }
     if (mail_settings_offered()) { layout_mail(s, doc, w, selected); doc_space(doc, px(16)); }
     char *why = screen_settings_settings_unavailable();
-    screen_settings_section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
+    bool can_add = !why && store_supports("create_project");
+    screen_settings_section_title(doc, w, "Projects", NULL, can_add ? ACT_NEW_PROJECT : 0);
+    if (screen_settings_project_accounts_offered()) { free(why); why = NULL; }
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected); doc_space(doc, px(8)); return; }
-    layout_projects(s, doc, w, selected);
+    layout_projects(s, doc, w, selected, can_add);
     // The providers sessions start on, below the projects as on the dashboard; a server without the routes does not show
     // them.
     if (store_supports("settings_providers")) {
@@ -197,7 +200,7 @@ static void layout_providers(SettingsScreen *s, Doc *doc, int w, const char *sel
     doc_space(doc, px(8));
 }
 
-static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected) {
+static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *selected, bool can_add) {
     if (s->error) { doc_notice(doc, px(8), w - px(16), s->error); doc_space(doc, px(8)); }
     const Json *rows = screen_settings_settings_rows(s);
     // The order is the dashboard sidebar's and the composer's, so it is moved from here.
@@ -209,7 +212,7 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         d->repo = xstrdup(repo ? repo : "");
         d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
         d->enabled = !json_bool_is(json_get(row, "enabled"), false);
-        char *id = screen_settings_form_id(screen_settings_row_id(row));
+        char *id = screen_settings_project_row_form_id(row);
         d->selected = str_eq(selected, id);
         free(id);
         d->movable = movable;
@@ -223,7 +226,12 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         d->label = xstrdup("New project"); d->repo = xstrdup("not saved yet"); d->selected = true;
         doc_custom(doc, 0, w, px(6) + px(22) + px(18) + px(6), screen_settings_paint_project_row, d, screen_settings_project_row_free, 0, 0);
     }
-    if (s->loaded && !json_count(rows) && !s->error) doc_text(doc, px(8), w - px(16), "No projects yet. \xEF\xBC\x8B New adds a repository sessions can be started against.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    if (s->loaded && !json_count(rows) && !s->error) {
+        const char *empty = "No projects are available to this token.";
+        if (can_add) empty = "No projects yet. \xEF\xBC\x8B New adds a repository sessions can be started against.";
+        else if (store_supports("settings_projects")) empty = "No projects yet.";
+        doc_text(doc, px(8), w - px(16), empty, FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+    }
     if (!s->loaded) doc_loading(doc, 0, w, "Loading projects\xE2\x80\xA6");
     doc_space(doc, px(8));
 }
