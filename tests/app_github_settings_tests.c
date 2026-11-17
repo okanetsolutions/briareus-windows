@@ -95,6 +95,7 @@ static void errors_preserve_drafts_without_retry(void) {
 
 static void delete_confirmation_and_errors(void) {
     Form f; setup(&f, false);
+    pane_push(f.fixture.pane, &f.form->base);
     modal_driver_action(&f.form->base, ACT_GITHUB_DELETE, 0, IDCANCEL);
     CHECK(f.form->req_delete == NULL); CHECK_INT(f.fixture.writes, 0);
     edit(&f, GH_LABEL, "Retain on failed delete");
@@ -105,7 +106,9 @@ static void delete_confirmation_and_errors(void) {
     CHECK_OWNED_STR(screen_settings_edit_text(f.form->edits[GH_LABEL]), "Retain on failed delete");
     f.fixture.write_status = 200; f.fixture.write_response = "{\"ok\":true}";
     modal_driver_action(&f.form->base, ACT_GITHUB_DELETE, 0, IDOK); screen_fixture_pump(&f.fixture, 1);
-    CHECK_INT(f.fixture.writes, 2); CHECK(!f.form->dirty); cleanup(&f);
+    CHECK_INT(f.fixture.writes, 2);
+    CHECK(pane_root(f.fixture.pane) == NULL);
+    f.form = NULL; screen_fixture_clear(&f.fixture);
 }
 
 static void section_capability_and_permissions(void) {

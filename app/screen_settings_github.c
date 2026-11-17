@@ -84,8 +84,10 @@ static void github_delete_done(void *owner, Request *req) {
     if (!screen_settings_github_current(s) || req->client != s->client) return;
     if (!req->ok || !json_bool_is(json_get(req->result, "ok"), true)) { github_write_error(s, req); return; }
     s->dirty = false;
-    app_clear_detail();
+    Pane *pane = s->base.pane;
     screen_settings_github_changed_list();
+    if (pane == app_detail_pane()) app_clear_detail();
+    else if (pane_contains_screen(pane, &s->base)) pane_set_root(pane, NULL);
 }
 
 static void github_delete(GithubForm *s) {
