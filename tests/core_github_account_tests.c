@@ -55,18 +55,18 @@ static void test_project_github_summaries(void) {
 
 static void test_project_github_rate_windows(void) {
     Json *h = json_parsez("{\"rateLimit\":{\"core\":{\"remaining\":4999,\"limit\":5000,\"resetAt\":1700000000000},"
-        "\"graphql\":{\"remaining\":null,\"limit\":null,\"resetAt\":null},\"cooldownUntil\":{\"core\":1700000060000}}}");
-    char *rate = github_account_health_rate(h, "core", 1700000000);
+        "\"graphql\":{\"remaining\":null,\"limit\":null,\"resetAt\":null},\"cooldownUntil\":{\"core\":1700000060250}}}");
+    char *rate = github_account_health_rate(h, "core", 1700000060100.0);
     CHECK(strstr(rate, "REST") && strstr(rate, "4999 / 5000"));
     CHECK(strstr(rate, "2023-11-14 22:13:20 UTC") && strstr(rate, "2023-11-14 22:14:20 UTC"));
     free(rate);
-    rate = github_account_health_rate(h, "core", 1700000061);
+    rate = github_account_health_rate(h, "core", 1700000060750.0);
     CHECK(strstr(rate, "2023-11-14 22:13:20 UTC") && !strstr(rate, "2023-11-14 22:14:20 UTC"));
     CHECK(!strstr(rate, "retry after")); free(rate);
-    rate = github_account_health_rate(h, "graphql", 1700000061);
+    rate = github_account_health_rate(h, "graphql", 1700000060750.0);
     CHECK(strstr(rate, "GraphQL") && strstr(rate, "unknown / unknown") && !strstr(rate, "retry after")); free(rate);
     json_free(h);
-    rate = github_account_health_rate(NULL, "core", 1700000061);
+    rate = github_account_health_rate(NULL, "core", 1700000060750.0);
     CHECK(strstr(rate, "REST") && strstr(rate, "unknown / unknown") && !strstr(rate, "retry after")); free(rate);
 }
 

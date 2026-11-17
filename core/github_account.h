@@ -1,7 +1,6 @@
 #ifndef BRIAREUS_GITHUB_ACCOUNT_H
 #define BRIAREUS_GITHUB_ACCOUNT_H
 #include "json.h"
-#include <time.h>
 
 /// Owned display summaries of the account's reported scopes and assigned projects.
 char *github_account_scopes(const Json *account);
@@ -12,6 +11,6 @@ char *github_account_health_overall(const Json *health);
 char *github_account_health_token(const Json *health);
 char *github_account_health_scopes(const Json *health);
 char *github_account_health_repo(const Json *repo);
-/// `now` is epoch seconds, used to omit elapsed cooldowns.
-char *github_account_health_rate(const Json *health, const char *bucket, time_t now);
+/// `now_ms` is epoch milliseconds, used to omit elapsed cooldowns.
+char *github_account_health_rate(const Json *health, const char *bucket, double now_ms);
 #endif

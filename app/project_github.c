@@ -79,6 +79,12 @@ static void summary(Doc *doc, int x, int w, char *text) {
     doc_space(doc, px(6));
 }
 
+static double epoch_milliseconds(void) {
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER stamp; stamp.LowPart = ft.dwLowDateTime; stamp.HighPart = ft.dwHighDateTime;
+    return (double)(stamp.QuadPart / 10000ULL) - 11644473600000.0;
+}
+
 void project_github_layout(ProjectGithub *g, Doc *doc, int x, int w) {
     project_github_load(g, false);
     if (str_empty(g->repo) || !project_github_offered()) return;
@@ -105,9 +111,9 @@ void project_github_layout(ProjectGithub *g, Doc *doc, int x, int w) {
         size_t count = json_count(repos);
         if (!count) summary(doc, x, w, xstrdup("No repositories checked"));
         for (size_t i = 0; i < count; i++) summary(doc, x, w, github_account_health_repo(json_at(repos, i)));
-        time_t now = time(NULL);
-        summary(doc, x, w, github_account_health_rate(h, "core", now));
-        summary(doc, x, w, github_account_health_rate(h, "graphql", now));
+        double now_ms = epoch_milliseconds();
+        summary(doc, x, w, github_account_health_rate(h, "core", now_ms));
+        summary(doc, x, w, github_account_health_rate(h, "graphql", now_ms));
     }
     doc_space(doc, px(16));
 }

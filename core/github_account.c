@@ -80,12 +80,12 @@ static char *allowance(const Json *value) {
     return json_num(value, &n) && isfinite(n) && n >= 0 ? xstrfmt("%.0f", n) : xstrdup("unknown");
 }
 
-char *github_account_health_rate(const Json *health, const char *bucket, time_t now) {
+char *github_account_health_rate(const Json *health, const char *bucket, double now_ms) {
     const Json *limits = json_get(health, "rateLimit"), *rate = json_get(limits, bucket);
     char *remaining = allowance(json_get(rate, "remaining")), *limit = allowance(json_get(rate, "limit"));
     char *reset = reset_time(json_num_or(json_get(rate, "resetAt"), 0));
     double until = json_num_or(json_get(json_get(limits, "cooldownUntil"), bucket), 0);
-    char *cooldown = until > (double)now * 1000 ? reset_time(until) : NULL;
+    char *cooldown = until > now_ms ? reset_time(until) : NULL;
     char *text = xstrfmt("%s: %s / %s remaining; resets %s%s%s", str_eq(bucket, "core") ? "REST" : "GraphQL",
         remaining, limit, reset ? reset : "unknown", cooldown ? "; retry after " : "", cooldown ? cooldown : "");
     free(remaining); free(limit); free(reset); free(cooldown); return text;
