@@ -135,9 +135,9 @@ static void empty_failure_unsupported(void) {
     ScreenFixture f; PullScreen *s = setup(&f); Doc d; doc_init(&d);
     g_store.route_count = 0; screen_pulls_reviews_load(s, false); CHECK_INT(f.reads, 0);
     draw(s, &d, 900); CHECK(contains(&d, "not supported")); CHECK(!contains(&d, "0 findings"));
-    g_store.route_count = 1; f.read_status = 503; f.read_response = "{\"error\":\"Review database unreadable\"}";
+    g_store.route_count = 1; f.read_status = 503; f.read_response = "{\"error\":\"no GitHub token for o/r\"}";
     screen_pulls_reviews_load(s, false); screen_fixture_pump(&f, 1);
-    draw(s, &d, 900); CHECK(contains(&d, "database unreadable")); CHECK(!contains(&d, "0 findings")); CHECK(s->reviews.items == NULL);
+    draw(s, &d, 900); CHECK(contains(&d, "no GitHub token for o/r")); CHECK(!contains(&d, "0 findings")); CHECK(s->reviews.items == NULL);
     f.read_status = 200; f.read_response = "{}";
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); CHECK(s->reviews.error != NULL); CHECK(s->reviews.items == NULL);
     f.read_response = "{\"codeReviews\":[]}";

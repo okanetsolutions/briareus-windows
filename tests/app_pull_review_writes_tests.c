@@ -76,9 +76,12 @@ static void a_stopped_review_is_marked_handled_and_reopened(void) {
     CHECK_STR(json_str(json_get(f.body, "handlingStatus")), "pending"); CHECK(s->reviews.save_error && strstr(s->reviews.save_error, "Review changed"));
     CHECK_STR(code_review_handling(code_review_find(s->reviews.items, 20)), "handled");
     draw(s, &d); CHECK(contains(&d, "Review changed"));
+    f.write_status = 503; f.write_response = "{\"error\":\"no GitHub token for o/r\"}";
+    act(s, ACT_REVIEW_HANDLING, 20); screen_fixture_pump(&f, 1);
+    draw(s, &d); CHECK(contains(&d, "no GitHub token for o/r")); CHECK_INT(f.writes, 3);
     f.fail_write = true; act(s, ACT_REVIEW_HANDLING, 20); screen_fixture_pump(&f, 1);
     CHECK(s->reviews.save_error && strstr(s->reviews.save_error, "may still have been saved"));
-    CHECK_INT(f.writes, 3); CHECK_INT(f.reads, 1);
+    CHECK_INT(f.writes, 4); CHECK_INT(f.reads, 1);
     // A fresh read clears the stale error.
     screen_pulls_reviews_load(s, true); screen_fixture_pump(&f, 1); CHECK(s->reviews.save_error == NULL);
     doc_free(&d); cleanup(&f, s);

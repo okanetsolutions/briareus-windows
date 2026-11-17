@@ -60,7 +60,7 @@ void screen_pulls_issues_layout(PullsScreen *s, Doc *doc, int w, const BoardRow 
     if (refused) {
         int box = doc_box_begin(doc, 0, w, px(10), theme.raise, theme.line, px(12));
         doc_item(doc, box)->hover_fill = false;
-        doc_text(doc, px(12), w - px(24), "GitHub would not read this repository\xE2\x80\x99s issues with the server\xE2\x80\x99s token. A fine-grained token needs Issues: read. The pull requests are unaffected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
+        doc_text(doc, px(12), w - px(24), "GitHub would not read this repository\xE2\x80\x99s issues with the project\xE2\x80\x99s GitHub account (or GITHUB_TOKEN fallback). A fine-grained token needs Issues: read. The pull requests are unaffected.", FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(6));
         doc_notice(doc, px(12), w - px(24), refused);
         doc_box_end(doc, box, px(10));
