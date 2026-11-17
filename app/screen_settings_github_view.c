@@ -101,7 +101,7 @@ void screen_settings_github_layout(Screen *base, Doc *doc) {
     if (s->error) { doc_notice_box(doc, x, col, s->error); doc_space(doc, px(16)); }
     github_field(s, doc, x, col, GH_LABEL);
     github_field(s, doc, x, col, GH_TOKEN);
-    screen_settings_repos_layout(doc, x, col, s->repos, screen_settings_github_busy(s) ? 0 : ACT_GITHUB_REPO, "These projects use this GitHub account. Each project may be assigned to only one account.");
+    screen_settings_repos_layout(doc, x, col, s->repos, screen_settings_github_busy(s) ? 0 : ACT_GITHUB_REPO, "These projects use this GitHub account. Each project may be assigned to only one account.", SETTINGS_REPOS_IGNORE_CASE);
     if (s->id) {
         char *identity = xstrfmt("Verified login: %s\nGitHub id: %.0f", json_str_or(json_get(s->row, "login"), ""), json_num_or(json_get(s->row, "githubId"), 0));
         screen_settings_note(doc, x, col, identity); free(identity);
@@ -202,7 +202,7 @@ void screen_settings_github_controls(GithubForm *s) {
 
 void screen_settings_github_toggle_repo(GithubForm *s, size_t index) {
     if (screen_settings_github_busy(s) || !screen_settings_github_current(s)) return;
-    if (screen_settings_repos_toggle(&s->repos, index)) {
+    if (screen_settings_repos_toggle(&s->repos, index, SETTINGS_REPOS_IGNORE_CASE)) {
         screen_settings_github_changed(s);
         pane_relayout(s->base.pane);
     }

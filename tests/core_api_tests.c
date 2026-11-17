@@ -764,10 +764,16 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     Stub stub = { 0 };
     ApiClient *c = client(&stub);
     ApiError e; api_error_init(&e);
+    CHECK(!e.has_server_message);
     stub_json(&stub, 422, "{\"error\":\"Repository is required\",\"field\":\"repo\"}");
     CHECK(api_call(c, "create_project", NULL, 0, &e) == NULL);
     CHECK(e.kind == API_HTTP && e.status == 422); CHECK_STR(e.message, "Repository is required"); CHECK(e.retry_after < 0);
     CHECK_OWNED_STR(api_error_description(&e), "Repository is required (HTTP 422)");
+    CHECK(e.has_server_message);
+    ApiError copy; api_error_init(&copy); api_error_copy(&copy, &e);
+    CHECK(copy.has_server_message); CHECK_STR(copy.message, "Repository is required");
+    api_error_set(&copy, API_NETWORK, 0, "Timeout", -1); CHECK(!copy.has_server_message);
+    api_error_clear(&copy);
     struct { int status; const char *text; } fallback[] = {
         { 400, "bad request" }, { 401, "unauthorized" }, { 403, "forbidden" }, { 404, "not found" }, { 405, "method not allowed" },
         { 408, "request timeout" }, { 409, "conflict" }, { 413, "request too large" }, { 422, "unprocessable entity" },
@@ -777,13 +783,13 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     for (size_t i = 0; i < sizeof fallback / sizeof *fallback; i++) {
         // An HTML error page, a JSON body without a string `error`, and a JSON body that does not parse all fall back to the status.
         stub_json(&stub, fallback[i].status, "<html>Bad gateway</html>"); stub.content_type = "text/html";
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP); CHECK_INT(e.status, fallback[i].status); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(e.kind == API_HTTP); CHECK_INT(e.status, fallback[i].status); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":{\"code\":7},\"message\":\"nope\"}");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
         stub_json(&stub, fallback[i].status, "{\"error\":\"\"}");
-        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text);
+        CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK_STR(e.message, fallback[i].text); CHECK(!e.has_server_message);
     }
     // The server's `error` is read only from a JSON answer.
     stub_json(&stub, 400, "{\"error\":\"Hidden\"}"); stub.content_type = "text/plain";
@@ -794,7 +800,8 @@ static void test_error_answers_keep_the_servers_words_or_the_status(void) {
     stub_json(&stub, 401, "{\"error\":\"Token expired\"}");
     CHECK(api_call(c, "projects", NULL, 0, &e) == NULL); CHECK(api_error_unauthorized(&e)); CHECK_STR(e.message, "Token expired");
     CHECK_OWNED_STR(api_error_description(&e), "This token has expired or was revoked. Reconnect with a new token.");
-    api_error_clear(&e); api_client_release(c); stub_reset(&stub);
+    CHECK(e.has_server_message); api_error_clear(&e); CHECK(!e.has_server_message);
+    api_client_release(c); stub_reset(&stub);
 }
 static void test_error_answers_keep_the_servers_code(void) {
     Stub stub = { 0 };

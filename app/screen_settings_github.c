@@ -17,7 +17,7 @@ bool screen_settings_github_busy(const GithubForm *s) { return s->req_save || s-
 
 /// Whether the form holds a change not saved yet, for the dot after the tab's title.
 bool screen_settings_github_form_changed(GithubForm *s) {
-    if (!screen_settings_repos_same(s->repos, json_get(s->row, "repos"))) return true;
+    if (!screen_settings_repos_same(s->repos, json_get(s->row, "repos"), SETTINGS_REPOS_IGNORE_CASE)) return true;
     for (int f = 0; f < GH_COUNT; f++) {
         if (!s->edits[f]) continue;
         char *now = screen_settings_edit_text(s->edits[f]), *saved = screen_settings_github_field_text(s->row, f);
@@ -45,8 +45,9 @@ static void github_show_error(GithubForm *s, char *text) {
 static void github_write_error(GithubForm *s, Request *req) {
     char *text = NULL;
     if (req->ok) text = xstrdup("The server returned an unexpected response. It may still have been saved; refresh before trying again.");
-    // These account verification failures happen before create/update saves anything.
-    else if (req->error.kind == API_HTTP && (req->error.status == 502 || req->error.status == 503) && !str_eq(req->operation, "delete_github_account"))
+    // Only the server's token verification failure confirms that nothing was saved.
+    else if (req->error.kind == API_HTTP && (req->error.status == 502 || req->error.status == 503) &&
+             req->error.has_server_message && json_str_nonempty(json_get(req->args, "token")))
         request_error_into(&text, req);
     else request_write_error_into(&text, req);
     github_show_error(s, text);
