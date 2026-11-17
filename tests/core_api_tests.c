@@ -328,6 +328,7 @@ static const Expected ROUTE_TABLE[] = {
     { "settings_ssh_servers", "GET", "settings/ssh/servers" }, { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" }, { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
+    { "github_account", "GET", "github/account" }, { "github_account_health", "GET", "settings/github/health" },
     { "settings_github_accounts", "GET", "settings/github/accounts" }, { "create_github_account", "POST", "settings/github/accounts" },
     { "update_github_account", "PUT", "settings/github/accounts/{id}" }, { "delete_github_account", "DELETE", "settings/github/accounts/{id}" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
@@ -1278,6 +1279,48 @@ static void ssh_approval_routes(void) {
     json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_project_github_reads(void) {
+    Stub stub = {0}; stub_json(&stub, 200, "{}"); ApiClient *c = client(&stub);
+    const char *operations[] = {"github_account", "github_account_health"};
+    const char *paths[] = {BASE "github/account?repo=Owner%2Frepo%20%26%3F%23%25", BASE "settings/github/health?repo=Owner%2Frepo%20%26%3F%23%25"};
+    ApiError error; api_error_init(&error);
+    for (size_t i = 0; i < 2; i++) {
+        stub_json(&stub, 200, "{}");
+        check_url(c, &stub, operations[i], "{\"repo\":\"Owner/repo &?#%\"}", paths[i]);
+        CHECK_STR(stub.last_method, "GET"); CHECK(stub.last_body == NULL);
+        const int statuses[] = {400, 401, 403, 404, 503};
+        for (size_t j = 0; j < sizeof statuses / sizeof *statuses; j++) {
+            stub_json(&stub, statuses[j], "{\"error\":\"Registry unavailable\"}");
+            int before = stub.calls;
+            Json *result = call(c, operations[i], "{\"repo\":\"o/r\"}", &error);
+            CHECK(result == NULL); CHECK_INT(error.status, statuses[j]); CHECK_STR(error.message, "Registry unavailable");
+            CHECK_INT(stub.calls, before + 1); json_free(result); api_error_clear(&error);
+        }
+    }
+    api_client_release(c); stub_reset(&stub); api_error_clear(&error);
+}
+
+static void test_project_github_summaries(void) {
+    Json *account = json_parsez("{\"globalFallback\":true,\"login\":null}");
+    CHECK_OWNED_STR(github_account_identity(account), "Server default (GITHUB_TOKEN)");
+    json_set_bool(account, "globalFallback", false); json_set_str(account, "label", "Production"); json_set_str(account, "login", "bot");
+    CHECK_OWNED_STR(github_account_identity(account), "Production (@bot)");
+    json_set_str(account, "label", ""); CHECK_OWNED_STR(github_account_identity(account), "@bot"); json_free(account);
+    Json *h = json_parsez("{\"scopes\":{\"status\":\"unknown\",\"granted\":null,\"missing\":null}}");
+    CHECK_OWNED_STR(github_account_health_scopes(h), "unknown");
+    json_free(h); h = json_parsez("{\"scopes\":{\"status\":\"missing\",\"missing\":[\"repo\",\"admin:repo_hook\"]}}");
+    CHECK_OWNED_STR(github_account_health_scopes(h), "missing: repo, admin:repo_hook");
+    json_free(h); h = json_parsez("{\"scopes\":{\"status\":\"ok\"},\"rateLimit\":{\"core\":{\"remaining\":4999,\"limit\":5000,\"resetAt\":1700000000000},\"graphql\":{\"remaining\":null,\"limit\":null,\"resetAt\":null},\"cooldownUntil\":{\"core\":1700000060000}}}");
+    CHECK_OWNED_STR(github_account_health_scopes(h), "ok");
+    CHECK_OWNED_STR(github_account_health_rate(h, "core"), "REST: 4999 / 5000 remaining; resets 2023-11-14 22:13:20 UTC; retry after 2023-11-14 22:14:20 UTC");
+    CHECK_OWNED_STR(github_account_health_rate(h, "graphql"), "GraphQL: unknown / unknown remaining; resets unknown");
+    json_free(h); CHECK_OWNED_STR(github_account_health_rate(NULL, "core"), "REST: unknown / unknown remaining; resets unknown");
+    Json *repo = json_parsez("{\"repo\":\"o/denied\",\"status\":\"no_access\",\"accessible\":false,\"httpStatus\":403}");
+    CHECK_OWNED_STR(github_account_health_repo(repo), "o/denied: no_access (access denied; HTTP 403)");
+    json_set_str(repo, "status", "rate_limited"); json_object_set(repo, "accessible", json_null()); json_object_set(repo, "httpStatus", json_null());
+    CHECK_OWNED_STR(github_account_health_repo(repo), "o/denied: rate_limited (access unknown)"); json_free(repo);
+}
+
 static void test_github_accounts_contract(void) {
     Stub stub = {0}; stub_json(&stub, 200, "{\"accounts\":[]}");
     ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
@@ -1328,6 +1371,8 @@ static void test_github_account_metadata(void) {
 }
 
 void api_tests(void) {
+    test_run("Project GitHub reads encode repo and preserve refusals without retry", test_project_github_reads);
+    test_run("Project GitHub identity scopes access and rate diagnostics", test_project_github_summaries);
     test_run("GitHub account CRUD routes bodies and no write retries", test_github_accounts_contract);
     test_run("GitHub account nullable scopes and project summaries", test_github_account_metadata);
     test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);

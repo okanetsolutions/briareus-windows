@@ -85,6 +85,8 @@ void settings_mail_changed(const Json *list) {
 
 static void settings_done(void *owner, Request *req) {
     SettingsScreen *s = owner;
+    if (req->client != s->projects_client || req->client != g_store.client) return;
+    if (!str_eq(s->projects_device, g_store.device.id) || !str_eq(s->projects_permission, g_store.device.permission)) return;
     s->loaded = true;
     if (!req->ok) { request_error_into(&s->error, req); pane_relayout(s->base.pane); return; }
     set_string(&s->error, NULL);
@@ -93,12 +95,13 @@ static void settings_done(void *owner, Request *req) {
     json_object_set(s->projects, "list", json_clone(json_get(req->result, "projects")));
     json_object_set(s->projects, "defaults", json_clone(json_get(req->result, "defaults")));
     pane_relayout(s->base.pane);
+    if (str_eq(req->operation, "projects")) return;
     // The dashboard's settings page opens on its first project, or on a new one when there is none; so does this,
     // unless a settings form is already up.
     Screen *root = pane_root(app_detail_pane());
     if (root && screen_settings_is_form_id(root->id)) return;
     if (json_count(screen_settings_settings_rows(s))) screen_settings_settings_open_row(s, 0);
-    else app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
+    else if (store_supports("settings_projects")) app_show_detail(project_settings_screen_new(NULL, json_get(s->projects, "defaults")));
 }
 
 static void ssh_done(void *owner, Request *req) {
@@ -142,8 +145,18 @@ void screen_settings_forge_load(SettingsScreen *s) {
 }
 
 void screen_settings_projects_load(SettingsScreen *s) {
-    if (s->req || !store_supports("settings_projects")) { s->loaded = true; return; }
-    store_call("settings_projects", json_object(), 0, s, settings_done, 0, &s->req);
+    if (s->projects_client != g_store.client || !str_eq(s->projects_device, g_store.device.id)
+        || !str_eq(s->projects_permission, g_store.device.permission)) {
+        request_cancel(&s->req); api_client_release(s->projects_client);
+        s->projects_client = api_client_retain(g_store.client); set_string(&s->projects_device, g_store.device.id);
+        set_string(&s->projects_permission, g_store.device.permission);
+        json_free(s->projects); s->projects = json_object(); s->loaded = false; set_string(&s->error, NULL);
+    }
+    if (s->req) return;
+    const char *operation = store_supports("settings_projects") ? "settings_projects"
+        : screen_settings_project_accounts_offered() ? "projects" : NULL;
+    if (!operation) { s->loaded = true; return; }
+    store_call(operation, json_object(), 0, s, settings_done, 0, &s->req);
 }
 
 static void providers_done(void *owner, Request *req) {

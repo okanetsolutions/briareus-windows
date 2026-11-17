@@ -1,5 +1,6 @@
 #ifndef BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
 #define BRIAREUS_SCREEN_SETTINGS_INTERNAL_H
+#include "project_github.h"
 #include "mcp.h"
 #include "ssh_settings.h"
 #include "screens.h"
@@ -24,6 +25,7 @@ typedef struct {
     bool loaded;
     char *error;
     Request *req, *req_order;
+    ApiClient *projects_client; char *projects_device, *projects_permission;
     Json *providers;    // the server's Provider rows (`list`) and what a new one starts from (`defaults`)
     bool providers_loaded, open_first_provider;   // the second: open the first row once the list is read (after a delete)
     char *providers_error;
@@ -97,6 +99,8 @@ enum { ID_FIELD = 2000 };
 typedef struct {
     Screen base;
     Json *row;             // what the form was filled from: the saved row, the defaults, or a clone's values
+    ProjectGithub github;
+    bool read_only;        // project summaries from GET /projects have no admin settings or id
     int id;                // 0 until the project is saved
     HWND edits[F_COUNT];
     RECT rects[F_COUNT];   // each edit's place in content coordinates, from the last layout
@@ -198,6 +202,8 @@ double screen_settings_ssh_row_id(const Json *row);
 char *screen_settings_forge_form_id(double id);
 bool screen_settings_is_form_id(const char *id);
 char *screen_settings_settings_unavailable(void);
+bool screen_settings_project_accounts_offered(void);
+char *screen_settings_project_row_form_id(const Json *row);
 char *screen_settings_ssh_unavailable(void);
 void screen_settings_paint_back(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_settings_project_row_free(void *p);

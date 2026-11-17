@@ -153,6 +153,7 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     if (mail_settings_offered()) { layout_mail(s, doc, w, selected); doc_space(doc, px(16)); }
     char *why = screen_settings_settings_unavailable();
     screen_settings_section_title(doc, w, "Projects", NULL, why ? 0 : ACT_NEW_PROJECT);
+    if (screen_settings_project_accounts_offered()) { free(why); why = NULL; }
     if (why) { doc_text(doc, px(8), w - px(16), why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK); free(why); layout_ssh(s, doc, w, selected); if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected); doc_space(doc, px(8)); return; }
     layout_projects(s, doc, w, selected);
     // The providers sessions start on, below the projects as on the dashboard; a server without the routes does not show
@@ -209,7 +210,7 @@ static void layout_projects(SettingsScreen *s, Doc *doc, int w, const char *sele
         d->repo = xstrdup(repo ? repo : "");
         d->label = xstrdup(json_str_nonempty(json_get(row, "label")) ? json_str(json_get(row, "label")) : d->repo);
         d->enabled = !json_bool_is(json_get(row, "enabled"), false);
-        char *id = screen_settings_form_id(screen_settings_row_id(row));
+        char *id = screen_settings_project_row_form_id(row);
         d->selected = str_eq(selected, id);
         free(id);
         d->movable = movable;

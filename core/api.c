@@ -323,6 +323,8 @@ static const ApiRoute ROUTES[] = {
     {"delete_prompt", "DELETE", "prompts/{id}"},
     // Projects
     { "projects", "GET", "projects" },
+    { "github_account", "GET", "github/account" },
+    { "github_account_health", "GET", "settings/github/health" },
     { "events", "GET", "events" },
     { "branches", "GET", "branches" },
     { "runtimes", "GET", "runtimes" },

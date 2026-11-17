@@ -29,12 +29,13 @@ static Screen *new_form(int kind) {
     }
 }
 static void settings_leave_lifetime(void) {
+    static Route projects_route[] = {{"GET", "/settings/projects", "admin"}};
     static const ScreenVTable vt = {.action = check_leave};
     Screen navigation = {.vt = &vt};
     const int answers[] = {IDCANCEL, IDOK};
     for (int kind = 0; kind < 4; kind++) {
         for (size_t i = 0; i < sizeof answers / sizeof *answers; i++) {
-            ScreenFixture f; screen_fixture_init(&f, NULL, 0);
+            ScreenFixture f; screen_fixture_init(&f, projects_route, 1);
             Screen *s = new_form(kind); screen_fixture_pane(&f, s); pane_push(f.pane, s);
             leaving_pane = f.pane;
             leaving_edit = FindWindowExW(pane_hwnd(f.pane), NULL, L"EDIT", NULL);

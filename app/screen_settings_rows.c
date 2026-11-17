@@ -120,3 +120,13 @@ void screen_settings_layout_move_arrows(SettingsScreen *s, Doc *doc, int row, si
         it->tip = xstrdup(up ? "Move up" : "Move down");
     }
 }
+
+// Read tokens use the project summaries they are allowed to read, without requesting admin settings.
+bool screen_settings_project_accounts_offered(void) {
+    return project_github_offered() && store_supports("projects");
+}
+
+char *screen_settings_project_row_form_id(const Json *row) {
+    int id = screen_settings_row_id(row);
+    return id ? screen_settings_form_id(id) : xstrfmt("settings-project:%s", json_str_or(json_get(row, "repo"), "new"));
+}
