@@ -1,6 +1,10 @@
 // Repository credentials are resolved by the server; its diagnostic must survive each screen's read/write path.
 #include "screen_pulls_internal.h"
 #include "project_files_internal.h"
+// Both family headers name an action A_OPEN_GITHUB; only BoardTab state is used here.
+#define A_OPEN_GITHUB BOARD_OPEN_GITHUB
+#include "project_board_internal.h"
+#undef A_OPEN_GITHUB
 #include "screen_fixture.h"
 #include "suites.h"
 
@@ -22,6 +26,16 @@ static void cleanup(ScreenFixture *f) {
     cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(cache_dir);
     screen_fixture_clear(f);
 }
+// Drain cancelled completions as well as live requests before inspecting worker counters.
+static void settle(ScreenFixture *f) {
+    ULONGLONG end = GetTickCount64() + 400;
+    while (GetTickCount64() < end) {
+        MSG msg;
+        while (PeekMessageW(&msg, f->dispatcher, WM_APP_REQUEST_DONE, WM_APP_REQUEST_DONE, PM_REMOVE))
+            store_handle_message(msg.message, msg.wParam, msg.lParam);
+        Sleep(1);
+    }
+}
 static bool contains(const Doc *doc, const char *message) {
     for (size_t i = 0; i < doc->count; i++)
         if (doc->items[i].text && strstr(doc->items[i].text, message)) return true;
@@ -38,7 +52,8 @@ static void board_errors_wait_for_explicit_refresh(void) {
             doc_begin(&doc, NULL, 900); board_tab_layout(board, &doc, 900);
             CHECK(contains(&doc, errors[i]));
         }
-        CHECK_INT(f.reads, 1);
+        CHECK(board->req == NULL);
+        settle(&f); CHECK_INT(f.reads, 1);
         board_tab_refresh(board); screen_fixture_pump(&f, 1);
         doc_begin(&doc, NULL, 900); board_tab_layout(board, &doc, 900);
         CHECK(contains(&doc, errors[i])); CHECK_INT(f.reads, 2);
@@ -55,6 +70,7 @@ static void files_tree_and_file_errors_remain_visible(void) {
         doc_begin(&doc, NULL, 900); project_files_layout(files, &doc, 900);
         CHECK(contains(&doc, errors[i])); CHECK_INT(f.reads, 1);
         const char *failure = f.read_response;
+        // Omit sha deliberately: indexing would retain the cache past this fixture's cleanup.
         f.read_status = 200; f.read_response = "{\"ref\":\"main\",\"entries\":[]}";
         project_files_refresh(files); screen_fixture_pump(&f, 1); CHECK(files->has_tree);
         f.read_status = 503; f.read_response = failure;
@@ -81,7 +97,7 @@ static void issue_and_pull_details_and_pull_edits_show_server_errors(void) {
         Json *fields = json_object(); json_set_str(fields, "title", "New title");
         CHECK(store_supports("update_pull"));
         screen_pulls_pull_edit((PullScreen *)pull, fields); screen_fixture_pump(&f, 2);
-        CHECK_INT(f.writes, 1); CHECK(!((PullScreen *)pull)->editing);
+        settle(&f); CHECK_INT(f.writes, 1); CHECK(!((PullScreen *)pull)->editing);
         CHECK(((PullScreen *)pull)->edit_error && strstr(((PullScreen *)pull)->edit_error, errors[i]));
         set_string(&((PullScreen *)pull)->error, NULL);
         screen_fixture_draw(pull, &doc); CHECK(contains(&doc, errors[i]));

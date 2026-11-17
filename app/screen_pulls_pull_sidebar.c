@@ -59,7 +59,7 @@ void screen_pulls_side_project(Doc *doc, Col c, const Json *p, const char *from,
 
 /// What the Projects item says when there are none: why, when GitHub would not read them.
 void screen_pulls_side_projects_none(Doc *doc, Col c, const char *refused) {
-    if (refused) { char *t = xstrfmt("GitHub would not read its projects with the project's GitHub account token or the server's GITHUB_TOKEN fallback, which needs Projects: read. %s", refused); doc_text(doc, c.x, c.w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK); free(t); }
+    if (refused) { char *t = xstrfmt("GitHub would not read its projects with the project\xE2\x80\x99s GitHub account (or GITHUB_TOKEN fallback), which needs Projects: read. %s", refused); doc_text(doc, c.x, c.w, t, FONT_CAPTION, theme.secondary, DT_WORDBREAK); free(t); }
     else doc_text(doc, c.x, c.w, "None yet", FONT_CAPTION, theme.secondary, DT_SINGLELINE);
 }
 

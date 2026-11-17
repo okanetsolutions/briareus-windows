@@ -363,6 +363,21 @@ static size_t layout_count(Screen *s, const char *text) {
 static const char CUT_BOARD[] = "{\"pulls\":[],\"issuesTruncated\":true,\"issues\":[{\"number\":5,\"title\":\"Board five\",\"labels\":[\"bug\"]},"
     "{\"number\":4,\"title\":\"Board four\"}]}";
 static const char CUT_NOTE[] = "This repository has more open issues";
+static void test_issues_partial_errors_preserve_server_diagnostics(void) {
+    const char *messages[] = {
+        "no GitHub token for o/r",
+        "GitHub account registry is unavailable; initialize it before use"
+    };
+    for (size_t i = 0; i < sizeof messages / sizeof *messages; i++) {
+        reset();
+        Json *body = json_object(); json_set_str(body, "issuesError", messages[i]);
+        char *response = json_serialize(body, false); json_free(body); list_body = response;
+        Screen *s = board(); s->vt->refresh(s); drain(2);
+        ((PullsScreen *)s)->tab = TAB_ISSUES;
+        CHECK(layout_contains(s, messages[i]));
+        pane_set_root(pane, NULL); list_body = NULL; free(response);
+    }
+}
 static void test_issue_pages_load_past_a_cut_board(void) {
     Pane *original = pane;
     Project fixture = project();
@@ -872,6 +887,7 @@ void app_pulls_tests(void) {
     test_run("issue folding controls and board lifetime", test_issue_folding_controls_and_board_lifetime);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
+    test_run("Issues partial errors retain server diagnostics", test_issues_partial_errors_preserve_server_diagnostics);
     test_run("pulls issue pages load, filter, retry, close and reset past a cut board", test_issue_pages_load_past_a_cut_board);
     test_run("pulls issue pages need a cut board and the route", test_issue_pages_need_a_cut_board_and_the_route);
     test_run("pulls refresh cancels a pending issue page", test_refresh_cancels_a_pending_issue_page);
