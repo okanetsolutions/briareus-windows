@@ -363,6 +363,22 @@ static size_t layout_count(Screen *s, const char *text) {
 static const char CUT_BOARD[] = "{\"pulls\":[],\"issuesTruncated\":true,\"issues\":[{\"number\":5,\"title\":\"Board five\",\"labels\":[\"bug\"]},"
     "{\"number\":4,\"title\":\"Board four\"}]}";
 static const char CUT_NOTE[] = "This repository has more open issues";
+static void test_issues_partial_errors_preserve_server_diagnostics(void) {
+    const char *messages[] = {
+        "no GitHub token for o/r",
+        "GitHub account registry is unavailable; initialize it before use"
+    };
+    for (size_t i = 0; i < sizeof messages / sizeof *messages; i++) {
+        reset();
+        Json *body = json_object(); json_set_str(body, "issuesError", messages[i]);
+        char *response = json_serialize(body, false); json_free(body); list_body = response;
+        Screen *s = board();
+        s->vt->action(s, ACT_TAB, TAB_ISSUES, (POINT){0});
+        s->vt->refresh(s); drain(2);
+        CHECK(layout_contains(s, messages[i]));
+        pane_set_root(pane, NULL); list_body = NULL; free(response);
+    }
+}
 static void test_issue_pages_load_past_a_cut_board(void) {
     Pane *original = pane;
     Project fixture = project();
@@ -524,9 +540,10 @@ static void test_http_failures_keep_rows_and_permission_gates_stop_reads(void) {
     reset(); Screen *s = board(); s->vt->refresh(s); drain(2);
     const int statuses[] = { 403, 404, 409, 502, 503 };
     for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
-        expire(); list_status = statuses[i]; list_body = "{\"error\":\"Read refused\"}";
+        expire(); list_status = statuses[i];
+        list_body = statuses[i] == 503 ? "{\"error\":\"no GitHub token for o/r\"}" : "{\"error\":\"Read refused\"}";
         s->vt->refresh(s); drain(2); CHECK(layout_contains(s, "Keep this row"));
-        CHECK(layout_contains(s, "Read refused"));
+        CHECK(layout_contains(s, statuses[i] == 503 ? "no GitHub token for o/r" : "Read refused"));
     }
     LONG sent = list_calls; g_store.device.permission = "unknown";
     s->vt->refresh(s); CHECK_INT(list_calls, sent);
@@ -713,11 +730,12 @@ static void test_successful_list_completions_reset_shared_backoff(void) {
         Screen *s = screen_kind == 0 ? pulls_screen_new(&p) : screen_kind == 1 ?
             issue_detail_screen_new(&p, &issue) : pull_detail_screen_new(&p, 1, NULL, NULL);
         pane_set_root(pane, s); s->vt->refresh(s); drain(screen_kind ? 3 : 2);
-        list_status = 503; list_body = "{\"error\":\"Unavailable\"}";
+        list_status = 503; list_body = "{\"error\":\"GitHub account registry is unavailable; initialize it before use\"}";
         time_t before = time(NULL);
         s->vt->refresh(s); drain(screen_kind ? 3 : 2);
         time_t deadline = pulls_retry_deadline("o/r");
         CHECK(deadline >= before + 2 && deadline <= time(NULL) + 2);
+        if (screen_kind < 2) CHECK(layout_contains(s, "GitHub account registry is unavailable"));
         LONG sent = list_calls;
         s->vt->refresh(s); drain(screen_kind ? 2 : 1); CHECK_INT(list_calls, sent);
         api_error_clear(&e); pane_set_root(pane, NULL);
@@ -870,6 +888,7 @@ void app_pulls_tests(void) {
     test_run("issue folding controls and board lifetime", test_issue_folding_controls_and_board_lifetime);
     test_run("pulls cached freshness, cooldown and recovery transitions", test_cached_sync_and_error_recovery_transitions);
     test_run("pulls truncated issue detail and legacy transitions", test_truncated_issue_is_not_gone_and_reads_detail);
+    test_run("Issues partial errors retain server diagnostics", test_issues_partial_errors_preserve_server_diagnostics);
     test_run("pulls issue pages load, filter, retry, close and reset past a cut board", test_issue_pages_load_past_a_cut_board);
     test_run("pulls issue pages need a cut board and the route", test_issue_pages_need_a_cut_board_and_the_route);
     test_run("pulls refresh cancels a pending issue page", test_refresh_cancels_a_pending_issue_page);

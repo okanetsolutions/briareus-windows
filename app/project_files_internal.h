@@ -9,12 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-// A project's Files tab: its repository as PhpStorm's project view shows it, read through the server's GitHub token
-// (`repo_tree`, `repo_file`), so no checkout or token of the user's own is needed. The tree is on the left, folders
-// first, at the branch the header's picker names (the default one until another is picked). Files open as tabs on the
-// right, each read at the commit the tree was read at, so what opens matches the tree shown while the branch moves on;
-// their lines are numbered and coloured by language, and select and copy as text. A binary file, or one over 1 MB,
-// shows its size and a link to GitHub.
+// A project's Files tab: its repository as PhpStorm's project view shows it, read through the project's GitHub
+// account with GITHUB_TOKEN fallback (`repo_tree`, `repo_file`), so no checkout or personal token is needed.
+// The tree is on the left, folders first, at the branch the header's picker names (the default one until
+// another is picked). Files open as tabs on the right, each read at the commit the tree was read at, so what
+// opens matches the tree shown while the branch moves on; their lines are numbered and coloured by language,
+// and select and copy as text. A binary file, or one over 1 MB, shows its size and a link to GitHub.
 //
 // Over the tree, PhpStorm's four finders: Go to Class (Ctrl+N), Go to File (Ctrl+Shift+N), Go to Symbol
 // (Ctrl+Shift+Alt+N) and Find in Files (Ctrl+Shift+F). Files need only the tree; the other three search an index of

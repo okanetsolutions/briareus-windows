@@ -41,6 +41,7 @@ int main(void) {
     app_security_tests();
     app_status_approvals_tests();
     app_pulls_tests();
+    app_repository_errors_tests();
     app_projects_tests();
     app_ssh_servers_tests();
     app_ssh_settings_tests();

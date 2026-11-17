@@ -221,7 +221,7 @@ void board_tab_layout(BoardTab *p, Doc *doc, int w) {
     if (b->error) {
         doc_notice_box(doc, 0, w, b->error);
         doc_space(doc, px(6));
-        doc_text(doc, 0, w, "Reading a board needs Projects: read on the server's GitHub token (read:project on a classic token), and a project and view GitHub can find. The board is named in Settings \xE2\x86\x92 Projects.",
+        doc_text(doc, 0, w, "Reading a board needs Projects: read (read:project on a classic token) on the project's GitHub account or GITHUB_TOKEN fallback, and a project and view GitHub can find. The board is named in Settings \xE2\x86\x92 Projects.",
                  FONT_FOOTNOTE, theme.muted, DT_WORDBREAK);
         doc_space(doc, px(10));
     }
