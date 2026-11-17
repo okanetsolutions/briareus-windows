@@ -165,6 +165,7 @@ void screen_settings_settings_layout(Screen *base, Doc *doc) {
     // The SSH servers agents may run commands on, as on the dashboard, then the Forge accounts on a server that has them.
     layout_ssh(s, doc, w, selected);
     if (store_supports("settings_forge_accounts")) layout_forge(s, doc, w, selected);
+    screen_settings_github_section(s, doc, w, selected);
     if (mcp_settings_supported("settings_mcp_servers")) layout_mcp(s, doc, w, selected);
 }
 

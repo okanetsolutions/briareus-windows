@@ -179,7 +179,7 @@ void settings_providers_changed(bool open_first) {
 
 const Json *settings_project_rows(void) { return screen_settings_g_settings ? screen_settings_settings_rows(screen_settings_g_settings) : NULL; }
 
-void screen_settings_settings_load(SettingsScreen *s) { screen_settings_projects_load(s); screen_settings_ssh_load(s); screen_settings_forge_load(s); screen_settings_mcp_load(s); screen_settings_mail_load(s); }
+void screen_settings_settings_load(SettingsScreen *s) { screen_settings_projects_load(s); screen_settings_ssh_load(s); screen_settings_forge_load(s); screen_settings_github_load(s); screen_settings_mcp_load(s); screen_settings_mail_load(s); }
 
 void settings_projects_changed(int select_id) {
     (void)select_id;   // the form's own id is what the sidebar highlights

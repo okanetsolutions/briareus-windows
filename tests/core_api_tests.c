@@ -1,5 +1,6 @@
 // The client API: addresses, tokens, errors, the route table and every call built from it, answers and Retry-After.
 #include "api.h"
+#include "github_account.h"
 #include "json.h"
 #include "models.h"
 #include "str.h"
@@ -327,6 +328,8 @@ static const Expected ROUTE_TABLE[] = {
     { "settings_ssh_servers", "GET", "settings/ssh/servers" }, { "create_ssh_server", "POST", "settings/ssh/servers" },
     { "update_ssh_server", "PUT", "settings/ssh/servers/{id}" }, { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
+    { "settings_github_accounts", "GET", "settings/github/accounts" }, { "create_github_account", "POST", "settings/github/accounts" },
+    { "update_github_account", "PUT", "settings/github/accounts/{id}" }, { "delete_github_account", "DELETE", "settings/github/accounts/{id}" },
     { "settings_forge_accounts", "GET", "settings/forge/accounts" }, { "create_forge_account", "POST", "settings/forge/accounts" },
     { "update_forge_account", "PUT", "settings/forge/accounts/{id}" }, { "delete_forge_account", "DELETE", "settings/forge/accounts/{id}" },
     { "mail_messages", "GET", "mail/messages" },
@@ -1275,7 +1278,58 @@ static void ssh_approval_routes(void) {
     json_free(args); api_error_clear(&error); api_client_release(c); stub_reset(&stub);
 }
 
+static void test_github_accounts_contract(void) {
+    Stub stub = {0}; stub_json(&stub, 200, "{\"accounts\":[]}");
+    ApiClient *c = client(&stub); ApiError error; api_error_init(&error);
+    Json *answer = call(c, "settings_github_accounts", "{}", &error);
+    CHECK(json_is_array(json_get(answer, "accounts"))); json_free(answer);
+    CHECK_STR(stub.last_method, "GET"); CHECK_STR(stub.last_url, BASE "settings/github/accounts");
+    CHECK(stub.last_body == NULL);
+    stub_json(&stub, 201, "{\"account\":{\"id\":7,\"login\":\"bot\",\"githubId\":42,\"scopes\":null,\"hasToken\":true,\"repos\":[\"o/r\"]}}");
+    answer = call(c, "create_github_account", "{\"label\":\"Production\",\"token\":\"fixture-secret\",\"repos\":[\"o/r\"]}", &error);
+    CHECK_STR(stub.last_method, "POST"); CHECK_STR(stub.last_url, BASE "settings/github/accounts");
+    CHECK_STR(stub.last_body, "{\"label\":\"Production\",\"token\":\"fixture-secret\",\"repos\":[\"o/r\"]}");
+    CHECK_INT(json_int_or(json_get(json_get(answer, "account"), "githubId"), 0), 42); json_free(answer);
+    answer = call(c, "update_github_account", "{\"id\":7,\"label\":\"Renamed\",\"repos\":[]}", &error); json_free(answer);
+    CHECK_STR(stub.last_method, "PUT"); CHECK_STR(stub.last_url, BASE "settings/github/accounts/7");
+    CHECK_STR(stub.last_body, "{\"label\":\"Renamed\",\"repos\":[]}");
+    answer = call(c, "update_github_account", "{\"id\":7,\"token\":\"rotated-fixture\"}", &error); json_free(answer);
+    CHECK_STR(stub.last_body, "{\"token\":\"rotated-fixture\"}");
+    stub_json(&stub, 200, "{\"ok\":true}");
+    answer = call(c, "delete_github_account", "{\"id\":7}", &error); CHECK(json_bool_is(json_get(answer, "ok"), true)); json_free(answer);
+    CHECK_STR(stub.last_method, "DELETE"); CHECK_STR(stub.last_url, BASE "settings/github/accounts/7"); CHECK(stub.last_body == NULL);
+    const int statuses[] = {400, 404, 409, 502, 503};
+    const char *writes[] = {"create_github_account", "update_github_account", "delete_github_account"};
+    for (size_t i = 0; i < sizeof statuses / sizeof *statuses; i++) {
+        stub_json(&stub, statuses[i], "{\"error\":\"GitHub registry message\"}"); stub.retry_after = "30";
+        for (size_t k = 0; k < sizeof writes / sizeof *writes; k++) {
+            int before = stub.calls;
+            answer = call(c, writes[k], "{\"id\":7}", &error);
+            CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.status, statuses[i]);
+            CHECK_STR(error.message, "GitHub registry message");
+        }
+    }
+    stub.fail = true; stub.fail_message = "fixture timeout"; int before = stub.calls;
+    answer = call(c, "update_github_account", "{\"id\":7}", &error);
+    CHECK(answer == NULL); CHECK_INT(stub.calls, before + 1); CHECK_INT(error.kind, API_NETWORK);
+    api_error_clear(&error); api_client_release(c); stub_reset(&stub);
+}
+
+static void test_github_account_metadata(void) {
+    Json *account = json_parsez("{\"scopes\":null,\"repos\":[\"o/r\",\"o/second\"]}");
+    CHECK_OWNED_STR(github_account_scopes(account), "scopes unknown (fine-grained token)");
+    CHECK_OWNED_STR(github_account_projects(account), "o/r, o/second");
+    json_object_set(account, "scopes", json_parsez("[\"repo\",null,\"\",\"read:org\"]"));
+    CHECK_OWNED_STR(github_account_scopes(account), "repo, read:org");
+    json_object_set(account, "scopes", json_array()); json_object_set(account, "repos", json_array());
+    CHECK_OWNED_STR(github_account_scopes(account), "no classic scopes reported");
+    CHECK_OWNED_STR(github_account_projects(account), "No assigned projects");
+    json_free(account);
+}
+
 void api_tests(void) {
+    test_run("GitHub account CRUD routes bodies and no write retries", test_github_accounts_contract);
+    test_run("GitHub account nullable scopes and project summaries", test_github_account_metadata);
     test_run("SSH approval exact routes and no decision retry", ssh_approval_routes);
     test_run("browser stream route and cancellation before the network", test_browser_stream_route_and_cancellation);
     test_run("removed integrations are unregistered; serving, previews and shared browser remain", test_removed_integrations_are_unregistered);

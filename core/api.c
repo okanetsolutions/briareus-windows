@@ -435,6 +435,11 @@ static const ApiRoute ROUTES[] = {
     { "delete_ssh_server", "DELETE", "settings/ssh/servers/{id}" },
     // A server's database login, opened: the Settings form reads the username back from it.
     { "ssh_db_credentials", "GET", "settings/ssh/servers/{id}/db-credentials" },
+    // Admin registry for project GitHub identities; tokens are write-only.
+    { "settings_github_accounts", "GET", "settings/github/accounts" },
+    { "create_github_account", "POST", "settings/github/accounts" },
+    { "update_github_account", "PUT", "settings/github/accounts/{id}" },
+    { "delete_github_account", "DELETE", "settings/github/accounts/{id}" },
     // The Laravel Forge accounts: an organization, its token (write-only) and the projects it serves; admin as well.
     { "settings_forge_accounts", "GET", "settings/forge/accounts" },
     { "create_forge_account", "POST", "settings/forge/accounts" },
