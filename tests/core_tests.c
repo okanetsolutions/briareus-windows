@@ -885,6 +885,7 @@ int main(void) {
     str_tests();
     json_tests();
     markdown_tests();
+    remote_image_tests();
     diff_tests();
     models_tests();
     core_ci_tests();

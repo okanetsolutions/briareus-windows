@@ -60,6 +60,10 @@ struct Doc {
     DocRegion *regions; size_t region_count, region_cap;
     size_t regions_kept;            // regions the last layout had, whose scroll the next one keeps
     int drag_first, drag_last;      // the carried box and the items inside it, painted as an empty slot; none when equal
+    /// Lays out a picture a Markdown block links to (md_block_images), under the block at the cursor. NULL, as doc_begin
+    /// leaves it, shows none: a screen that fetches pictures sets it in its layout.
+    void (*picture)(Doc *doc, int x, int w, const MdImage *image, void *ctx);
+    void *picture_ctx;
 };
 
 void doc_init(Doc *doc);
@@ -86,7 +90,8 @@ typedef struct { size_t start, len; COLORREF color; } DocSpan;
 int doc_code_line(Doc *doc, const RECT *rc, const char *text, size_t len, const DocSpan *spans, size_t count, FontId f, int advance);
 /// Inline Markdown (bold, code, links) wrapped in `w`; advances. Links open on click.
 int doc_rich(Doc *doc, int x, int w, const char *inline_markdown, FontId base, COLORREF color);
-/// Block Markdown: paragraphs, headings, bullets, quotes, code with a copy button, rules; advances.
+/// Block Markdown: paragraphs, headings, bullets, quotes, code with a copy button, rules; advances. The pictures a block
+/// links to follow it when the document has a `picture` layout.
 void doc_markdown(Doc *doc, int x, int w, const char *source, FontId base);
 /// A rounded box opened at the cursor and closed once its content is laid out; `pad` is inside it.
 int doc_box_begin(Doc *doc, int x, int w, int pad, COLORREF fill, COLORREF border, int radius);

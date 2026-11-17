@@ -70,6 +70,11 @@ void draw_thick_line(Canvas *cv, int x1, int y1, int x2, int y2, COLORREF color,
 void draw_check_mark(Canvas *cv, const RECT *rc, COLORREF color);
 /// A 1px dotted outline of a rounded rectangle.
 void stroke_dotted_round_rect(Canvas *cv, const RECT *rc, int radius, COLORREF color);
+/// A decoded picture: 32-bit premultiplied BGRA rows, top-down. `key` names the pixels, so a canvas keeps what it sent
+/// to the GPU for the next frame; pixels that change need a new key (picture.h decodes and numbers them).
+typedef struct { unsigned char *pixels; int width, height; unsigned long long key; } Picture;
+/// Draws the whole picture scaled into `rc`, smoothed when that is smaller than the picture.
+void draw_picture(Canvas *cv, const Picture *picture, const RECT *rc);
 /// Draws UTF-8 text; DT_ flags as for DrawText (alignment, single line, word break, ellipses, no clip). Returns the height drawn.
 int draw_text(Canvas *cv, const char *text, RECT *rc, FontId f, COLORREF color, UINT flags);
 int draw_textw(Canvas *cv, const wchar_t *text, RECT *rc, FontId f, COLORREF color, UINT flags);

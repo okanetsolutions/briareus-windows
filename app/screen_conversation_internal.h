@@ -3,6 +3,7 @@
 #include "saved_prompts.h"
 #include "attach_list.h"
 #include "dialogs.h"
+#include "image_cache.h"
 #include "screens.h"
 #include "str.h"
 #include "session_working.h"
@@ -17,6 +18,7 @@
 enum {
     ACT_ANSWER = 1000, ACT_TOOL_TOGGLE, ACT_DROP_QUEUED, ACT_TRIAGE_DECISION, ACT_TRIAGE_COMPLETE, ACT_TRIAGE_NOTE,
     ACT_REFRESH_OUTCOME, ACT_DISMISS_ERROR, ACT_REOPEN, ACT_FINDING_LINK,
+    ACT_PICTURE_OPEN, ACT_PICTURE_ALLOW, ACT_PICTURE_RETRY,   // a picture under a reply; the arg is its address
     ACT_MENU_ITEM = 1100,   // plus a MENU_ id: the header's buttons
 };
 
@@ -53,6 +55,7 @@ typedef struct {
     // footer hit rects
     RECT mic_rc, send_rc, discard_rc, attach_rc, prompts_rc;
     bool at_bottom;
+    int return_scroll;   // where the view was when a picture was opened from above the end; -1 otherwise
 } ConversationScreen;
 
 // MARK: - Footer (composer)
@@ -89,6 +92,12 @@ bool screen_conversation_prep_closed(const Event *e);
 void screen_conversation_paint_queued_box(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_conversation_paint_working(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
 void screen_conversation_layout_event(ConversationScreen *s, Doc *doc, int x, int w, const Event *e);
+/// A reply's picture, as the document's `picture` layout: its preview, which opens it, or what it waits for.
+void screen_conversation_layout_picture(Doc *doc, int x, int w, const MdImage *image, void *ctx);
+/// The image cache's watcher: lays the conversation out again.
+void screen_conversation_pictures_changed(void *ctx);
+/// True when the action was a picture's.
+bool screen_conversation_picture_action(ConversationScreen *s, int action, intptr_t arg);
 void screen_conversation_layout_triage(ConversationScreen *s, Doc *doc, int x, int w, const Json *triage);
 void screen_conversation_complete_triage(ConversationScreen *s, size_t fixes);
 void screen_conversation_conversation_layout(Screen *base, Doc *doc);

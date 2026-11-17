@@ -14,7 +14,14 @@ extern "C" {
 #include "str.h"
 }
 
+/// A part of a picture as the target holds it: pictures larger than a GPU texture are kept in tiles.
+typedef struct { unsigned long long key; int x, y; ID2D1Bitmap *bitmap; size_t bytes; unsigned stamp; bool drawn; } PictureTile;
+enum { PICTURE_TILES = 32, PICTURE_TILE_SIDE = 4096 };
+static const size_t PICTURE_BUDGET = 384u * 1024 * 1024;
+
 struct Canvas {
+    PictureTile tiles[PICTURE_TILES];   // what draw_picture uploaded, least recently drawn first to go
+    unsigned stamp;                     // counts draw_picture calls
     HWND hwnd;                          // a pane's window, or NULL for the borrowed GDI canvas
     ID2D1RenderTarget *rt;
     ID2D1DCRenderTarget *window_rt;     // owned; bound to the window's DC for each frame
@@ -187,7 +194,19 @@ extern "C" void canvas_set_font(FontId id, const wchar_t *face, float size, int 
 
 // MARK: - Targets
 
+static void drop_pictures(Canvas *cv) {
+    for (int i = 0; i < PICTURE_TILES; i++) { release(cv->tiles[i].bitmap); cv->tiles[i].key = 0; cv->tiles[i].bytes = 0; }
+}
+/// After a frame: a tile the frame did not draw is let go, so a picture scrolled away or closed holds no texture.
+static void sweep_pictures(Canvas *cv) {
+    for (int i = 0; i < PICTURE_TILES; i++) {
+        PictureTile *t = &cv->tiles[i];
+        if (t->bitmap && !t->drawn) { release(t->bitmap); t->bytes = 0; }
+        t->drawn = false;
+    }
+}
 static void drop_target(Canvas *cv) {
+    drop_pictures(cv);
     release(cv->brush);
     cv->rt = NULL;
     release(cv->window_rt);
@@ -241,6 +260,7 @@ extern "C" bool canvas_begin(Canvas *cv) {
 extern "C" void canvas_end(Canvas *cv) {
     if (!cv || !cv->rt) return;
     while (cv->clips > 0) canvas_unclip(cv);
+    sweep_pictures(cv);
     HRESULT hr = cv->rt->EndDraw();
     ReleaseDC(cv->hwnd, cv->window_dc); cv->window_dc = NULL;
     if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {
@@ -269,7 +289,8 @@ extern "C" Canvas *canvas_begin_dc(HDC hdc, const RECT *rc) {
 extern "C" void canvas_end_dc(Canvas *cv) {
     if (!cv || !dc_rt) return;
     while (cv->clips > 0) canvas_unclip(cv);
-    if (dc_rt->EndDraw() == (HRESULT)D2DERR_RECREATE_TARGET) { release(dc_canvas.brush); release(dc_rt); dc_canvas.rt = NULL; }
+    sweep_pictures(cv);
+    if (dc_rt->EndDraw() == (HRESULT)D2DERR_RECREATE_TARGET) { drop_pictures(&dc_canvas); release(dc_canvas.brush); release(dc_rt); dc_canvas.rt = NULL; }
 }
 
 static D2D1_RECT_F rectf(const RECT *rc) { return D2D1::RectF((float)rc->left, (float)rc->top, (float)rc->right, (float)rc->bottom); }
@@ -414,6 +435,62 @@ extern "C" void stroke_dotted_round_rect(Canvas *cv, const RECT *rc, int radius,
     if (!ready(cv)) return;
     D2D1_RECT_F r = D2D1::RectF(rc->left + 0.5f, rc->top + 0.5f, rc->right - 0.5f, rc->bottom - 0.5f);
     cv->rt->DrawRoundedRectangle(D2D1::RoundedRect(r, (float)radius, (float)radius), paint(cv, color), 1.0f, stroke_style(true));
+}
+
+// MARK: - Pictures
+
+/// The slot for a tile: the one that holds it, else a free one, else the least recently drawn; over the budget, older
+/// tiles go as well. A slot that held another tile comes back empty.
+static PictureTile *picture_slot(Canvas *cv, unsigned long long key, int x, int y, size_t bytes) {
+    PictureTile *found = NULL, *oldest = &cv->tiles[0];
+    size_t held = 0;
+    for (int i = 0; i < PICTURE_TILES; i++) {
+        PictureTile *t = &cv->tiles[i];
+        if (t->bitmap && t->key == key && t->x == x && t->y == y) return t;
+        if (!t->bitmap) { if (!found) found = t; continue; }
+        held += t->bytes;
+        if (!oldest->bitmap || cv->stamp - t->stamp > cv->stamp - oldest->stamp) oldest = t;
+    }
+    for (int i = 0; i < PICTURE_TILES && held + bytes > PICTURE_BUDGET; i++) {
+        PictureTile *t = &cv->tiles[i];
+        if (!t->bitmap || t->stamp == cv->stamp) continue;
+        held -= t->bytes;
+        release(t->bitmap); t->bytes = 0;
+        if (!found) found = t;
+    }
+    if (!found) { found = oldest; release(found->bitmap); found->bytes = 0; }
+    return found;
+}
+
+static bool has_pixels(const Picture *p) { return p && p->pixels && p->width > 0 && p->height > 0; }
+
+extern "C" void draw_picture(Canvas *cv, const Picture *p, const RECT *rc) {
+    if (!ready(cv) || !has_pixels(p) || rc->right <= rc->left || rc->bottom <= rc->top) return;
+    cv->stamp++;
+    int side = (int)cv->rt->GetMaximumBitmapSize();
+    if (side <= 0 || side > PICTURE_TILE_SIDE) side = PICTURE_TILE_SIDE;
+    float sx = (float)(rc->right - rc->left) / p->width, sy = (float)(rc->bottom - rc->top) / p->height;
+    ID2D1DeviceContext *dc = NULL;
+    if (FAILED(cv->rt->QueryInterface(__uuidof(ID2D1DeviceContext), (void **)&dc))) dc = NULL;
+    D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+    for (int y = 0; y < p->height; y += side) {
+        for (int x = 0; x < p->width; x += side) {
+            int w = p->width - x < side ? p->width - x : side, h = p->height - y < side ? p->height - y : side;
+            size_t bytes = (size_t)w * h * 4;
+            PictureTile *t = picture_slot(cv, p->key, x, y, bytes);
+            if (!t->bitmap) {
+                const unsigned char *first = p->pixels + ((size_t)y * p->width + x) * 4;
+                if (FAILED(cv->rt->CreateBitmap(D2D1::SizeU((UINT32)w, (UINT32)h), first, (UINT32)p->width * 4, &props, &t->bitmap))) { t->bitmap = NULL; continue; }
+                t->key = p->key; t->x = x; t->y = y; t->bytes = bytes;
+            }
+            t->stamp = cv->stamp; t->drawn = true;
+            // Tiles meet on whole source pixels, so their scaled edges are computed from the same numbers.
+            D2D1_RECT_F to = D2D1::RectF(rc->left + x * sx, rc->top + y * sy, rc->left + (x + w) * sx, rc->top + (y + h) * sy);
+            if (dc && (sx < 0.99f || sy < 0.99f)) dc->DrawBitmap(t->bitmap, &to, 1.0f, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, NULL, NULL);
+            else cv->rt->DrawBitmap(t->bitmap, &to, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, NULL);
+        }
+    }
+    release(dc);
 }
 
 // MARK: - Text

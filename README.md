@@ -11,6 +11,7 @@ A native Win32 client for [Briareus](https://github.com/nadinyamaui/briareus), t
 - Lists the projects and conversations the device token permits, with search and status updates.
 - Shows incremental transcripts with the time of each message, agent questions, tool activity (collapsed into clusters, expandable) and queued messages. Workspace setup steps are left out.
 - Renders agent replies as Markdown: headings, paragraphs, bullet and numbered lists, task lists, quotes, code blocks with a copy button, tables, rules, bold, italic, strikethrough, inline code and links.
+- Shows the pictures a reply links to under the paragraph that names them: a published session file or any other link to a PNG, JPEG, GIF, BMP or WebP file, and Markdown images. A click opens the picture on its own page, fitted to the window, where + and − zoom, 1 shows its actual size, 0 fits it again, Save (Ctrl+S) writes the file and Open in browser hands the link to the browser. Pictures on the paired server load by themselves; one on any other host, such as the storage a server publishes its files to, shows its name and waits for a click, which allows that host from then on, until the connection is forgotten. F5 tries the pictures that failed again, and Back returns to where the conversation was.
 - Finds text in a conversation with Ctrl+F, even from the composer or in a detached window: case-insensitive matches are highlighted with a count, Enter/F3 advances, Shift+Enter/Shift+F3 goes back, and Escape closes the find bar; searches include rendered Markdown and code in expanded tool output.
 - Selects text as a browser does: drag across messages, double-click a word, Ctrl+A for everything; Ctrl+C or the right-click menu copies it. The menu also copies the paragraph under the pointer.
 - Starts conversations on a chosen branch, provider, model and effort, or on the project default.
@@ -75,7 +76,7 @@ The core (JSON, models, API client, cache, diff, Markdown and board logic) has n
 | Path | Contents |
 | --- | --- |
 | `core/` | The portable core: JSON, models, the `/api/v1` client over WinHTTP (one table of the calls the app makes and their routes), saved-response cache, board, diff and Markdown parsing, Credential Manager and registry access. No UI. |
-| `app/` | The Win32 app: theme and drawing helpers, the item-based layout toolkit (`doc.c`), the screen stack container (`pane.c`), the connection store with UI-thread requests (`store.c`), the screens, the dialogs, voice notes and attachments (`attach.c`: the clipboard's image as PNG through Windows Imaging Component, dropped or pasted files read from disk). |
+| `app/` | The Win32 app: theme and drawing helpers, the item-based layout toolkit (`doc.c`), the screen stack container (`pane.c`), the connection store with UI-thread requests (`store.c`), the screens, the dialogs, the pictures of a conversation (`image_cache.c`, decoded by `picture.c` through Windows Imaging Component and opened by `screen_image.c`), voice notes and attachments (`attach.c`: the clipboard's image as PNG through Windows Imaging Component, dropped or pasted files read from disk). |
 | `tests/` | Core tests. |
 | `res/` | Icon, manifest, dialogs and version resources. |
 
@@ -95,6 +96,7 @@ A revoked or expired token returns the app to pairing. Forgetting the connection
 - No shared secret is built into the app. Each device holds its own token in Credential Manager, scoped by canonical server origin and persisted for this machine only. Only the server origin is saved in the registry (`HKCU\Software\Okanet\Briareus`).
 - Saved responses live under `%LOCALAPPDATA%\Okanet\Briareus\Responses`, encrypted with EFS where the volume allows it. They are erased when the connection is forgotten, revoked, expired or replaced by another device token, and entries untouched for 30 days are dropped.
 - Voice notes are sent to your server for transcription and nowhere else.
+- A picture linked from a reply is fetched over HTTPS with no token, no cookies and no redirects, kept in memory only, and decoded only when it starts as a PNG, JPEG, GIF, BMP or WebP file of at most 32 MB. Only the paired server and the hosts you allowed are asked without a click: an address an agent wrote can carry what it read to whoever serves it. The allowed hosts are kept with the saved responses and erased with them.
 - Update checks read the latest release from `api.github.com` with no identifying data, and downloads are followed only to GitHub's own hosts over HTTPS.
 - No analytics or telemetry.
 
