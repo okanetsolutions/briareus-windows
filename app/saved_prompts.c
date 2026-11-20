@@ -6,6 +6,9 @@ static bool account(ApiClient *client, const Json *device) {
     if (client != g_store.client || !g_store.has_device) return false;
     Json *current = device_json(&g_store.device); bool same = json_equal(current, device); json_free(current); return same;
 }
+bool prompt_picker_bound_to(const PromptPicker *p, const char *repo) {
+    return p && !p->retired && str_eq(p->repo, repo) && account(p->client, p->device);
+}
 bool prompt_picker_owner_current(PromptPicker *p) {
     if (!p || p->retired || !p->shown || !account(p->client, p->device)) return false;
     return p->current(p->ctx, p->repo, p->identity);

@@ -64,6 +64,7 @@ static void branches_done(void *owner, Request *req) {
 void screen_new_session_load_choices(NewSessionScreen *s) {
     const Project *p = screen_new_session_project(s);
     attach_list_scope(s->files, p ? p->repo : NULL);
+    screen_new_session_sync_prompts(s);
     request_cancel(&s->req_runtimes); request_cancel(&s->req_branches);
     if (s->has_catalog) { runtime_catalog_free(&s->catalog); s->has_catalog = false; }
     if (s->has_runtime) { runtime_choice_free(&s->runtime); s->has_runtime = false; }
