@@ -21,5 +21,10 @@ void ssh_approvals_refresh(SshApprovals *s);
 void ssh_approvals_timer(SshApprovals *s, UINT id);
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w);
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token);
+/// Whether this device may list SSH approvals on this server: a Manage token and the `ssh_requests` route.
+bool ssh_approvals_offered(void);
+/// True once this device's queue holds a successful read, with `*waiting` how many wait; false (and 0) before that,
+/// after a failed read, or when not offered.
+bool ssh_approvals_counted(size_t *waiting);
 size_t ssh_approvals_badge(void);
 #endif

@@ -9,20 +9,29 @@ static void findings_refresh(Screen *base);
 static void findings_activated(Screen *base, bool active);
 static void findings_destroy(Screen *base);
 
+/// Why the screen can show nothing for this device, or NULL when SSH approvals are offered.
+static const char *unavailable_reason(void) {
+    if (!store_can_manage()) return "SSH approvals need a Manage token; this device's token cannot list them.";
+    if (!store_supports("ssh_requests")) return "This server does not offer SSH approvals.";
+    return NULL;
+}
+
 static void findings_layout(Screen *base, Doc *doc) {
     FindingsScreen *s = (FindingsScreen *)base;
     doc_space(doc, px(14));
-    int top = doc->y;
     ssh_approvals_layout(s->ssh, doc, 0, doc->width);
-    if (doc->y == top) doc_text(doc, 0, doc->width, "Nothing is waiting. SSH approvals appear here for a device with a manage token.", FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
+    const char *why = unavailable_reason();
+    if (why) doc_text(doc, 0, doc->width, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     doc_space(doc, px(12));
 }
 
 static void findings_header(Screen *base, HeaderInfo *info) {
     (void)base;
     snprintf(info->title, sizeof info->title, "\xE2\x9A\x91 Findings");
-    size_t n = ssh_approvals_badge();
-    if (n) snprintf(info->subtitle, sizeof info->subtitle, "%zu SSH approval%s waiting", n, n == 1 ? "" : "s");
+    // Blank until a read lands: before it, or after a failed one, the count is not known.
+    size_t n;
+    if (!ssh_approvals_counted(&n)) info->subtitle[0] = 0;
+    else if (n) snprintf(info->subtitle, sizeof info->subtitle, "%zu SSH approval%s waiting", n, n == 1 ? "" : "s");
     else snprintf(info->subtitle, sizeof info->subtitle, "nothing is waiting");
 }
 

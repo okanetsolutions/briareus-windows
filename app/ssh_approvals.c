@@ -7,7 +7,7 @@
 
 static SshApprovals *views;
 static bool current(SshApprovals *s) {
-    if (s->client != g_store.client || !store_can_manage() || !store_supports("ssh_requests")) return false;
+    if (s->client != g_store.client || !ssh_approvals_offered()) return false;
     Json *d = device_json(&g_store.device); bool same = json_equal(d, s->device); json_free(d); return same;
 }
 static SshApprovalQueue *queue(SshApprovals *s) { return ssh_approval_queue(&g_store.ssh_approvals, s->scope); }
@@ -99,12 +99,16 @@ void ssh_approvals_free(SshApprovals *s) {
     if (*slot) *slot = s->next;
     json_free(s->device); json_free(s->bindings); free(s->scope); api_client_release(s->client); free(s);
 }
-size_t ssh_approvals_badge(void) {
-    if (!store_can_manage() || !store_supports("ssh_requests")) return 0;
+bool ssh_approvals_offered(void) { return store_can_manage() && store_supports("ssh_requests"); }
+bool ssh_approvals_counted(size_t *waiting) {
+    *waiting = 0;
+    if (!ssh_approvals_offered()) return false;
     Json *d = device_json(&g_store.device); char *scope = json_serialize(d, true); json_free(d);
     SshApprovalQueue *q = ssh_approval_queue(&g_store.ssh_approvals, scope); free(scope);
-    return ssh_approval_waiting(q, (double)time(NULL));
+    *waiting = ssh_approval_waiting(q, (double)time(NULL));
+    return q->fresh;
 }
+size_t ssh_approvals_badge(void) { size_t n; ssh_approvals_counted(&n); return n; }
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token) {
     if (action == SSH_REFRESH) { ssh_approvals_refresh(s); notify(); return; }
     if (!s || !s->shown || !current(s)) return;

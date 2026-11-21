@@ -184,23 +184,44 @@ static void findings_screen_reads_only_ssh_requests(void) {
     // The conversations' held review rounds are retired (core #228): Findings reads no project or session list.
     Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}, {"GET", "/sessions", "read"}};
     g_store.routes = routes; g_store.route_count = 4;
+    // The subtitle stays blank until a read lands, and again after one fails: the count is not known then.
+    HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
     screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
     CHECK_STR(f.steps[0].url, "https://example.com/api/v1/ssh/requests");
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK(info.subtitle[0] != 0);
     base->vt->timer(base, SSH_POLL); complete(&f, 1);
     CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
     f.steps[2].status = 429; f.steps[2].retry = "3600";
     base->vt->refresh(base); complete(&f, 2);
     CHECK_STR(f.steps[2].url, "https://example.com/api/v1/ssh/requests");
     base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 3);
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
     base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
     base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 3);
     base->vt->destroy(base); clear(&f);
+}
+static void findings_screen_unavailable_reads_nothing(void) {
+    // A token that cannot list SSH approvals, or a server without them, gets a reason, no request and no count.
+    for (int i = 0; i < 2; i++) {
+        Fixture f; init(&f);
+        if (i == 0) g_store.device.permission = "read"; else g_store.route_count = 0;
+        Screen *base = findings_screen_new();
+        screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); base->vt->refresh(base);
+        CHECK_INT(f.calls, 0);
+        Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+        CHECK(doc.count > 0);
+        for (size_t k = 0; k < doc.count; k++) CHECK(doc.items[k].action != SSH_REFRESH);
+        doc_free(&doc);
+        HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
+        base->vt->destroy(base); clear(&f);
+    }
 }
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
     test_run("SSH metadata rebind retains read and write cooldowns", metadata_rebind_preserves_cooldowns);
     test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
     test_run("Findings screen reads only SSH requests", findings_screen_reads_only_ssh_requests);
+    test_run("Findings screen without SSH approvals says why and reads nothing", findings_screen_unavailable_reads_nothing);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);
