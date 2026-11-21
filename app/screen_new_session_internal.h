@@ -2,6 +2,7 @@
 #define BRIAREUS_SCREEN_NEW_SESSION_INTERNAL_H
 #include "attach_list.h"
 #include "credentials.h"
+#include "saved_prompts.h"
 #include "screens.h"
 #include "str.h"
 #include "voice.h"
@@ -37,9 +38,11 @@ typedef struct {
     HWND composer; int composer_lines; RECT composer_rc; bool focused;
     VoiceNote *voice;
     AttachList *files;
+    PromptPicker *prompts;
+    bool window_shown;
     // footer hit rects, from the last paint
     RECT chip_rc[CHIP_COUNT]; bool chip_on[CHIP_COUNT];
-    RECT mic_rc, send_rc, box_rc, attach_rc;
+    RECT mic_rc, send_rc, box_rc, attach_rc, prompts_rc;
     int chips_h;
 } NewSessionScreen;
 
@@ -52,6 +55,7 @@ bool screen_new_session_can_start(NewSessionScreen *s);
 bool screen_new_session_effective_choice(NewSessionScreen *s, RuntimeChoice *out);
 void screen_new_session_adopt(NewSessionScreen *s, RuntimeCatalog c);
 void screen_new_session_load_choices(NewSessionScreen *s);
+void screen_new_session_sync_prompts(NewSessionScreen *s);
 void screen_new_session_start(NewSessionScreen *s);
 LRESULT CALLBACK screen_new_session_composer_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR ref);
 void screen_new_session_voice_changed(void *ctx);

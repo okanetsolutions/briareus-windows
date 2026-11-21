@@ -1,4 +1,5 @@
 #include "screen_new_session_internal.h"
+#include "saved_prompt.h"
 
 // MARK: - Layout
 
@@ -136,11 +137,58 @@ static void projects_done(void *owner, Request *req) {
 static void new_session_visible(Screen *base, bool shown) {
     NewSessionScreen *s = (NewSessionScreen *)base;
     if (shown) {
+        if (!s->composer) {
+            HWND parent = pane_hwnd(base->pane);
+            s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
+            SendMessageW(s->composer, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
+            SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Describe what to build\x2026");
+            SetWindowSubclass(s->composer, screen_new_session_composer_proc, ID_COMPOSER, (DWORD_PTR)s);
+            theme_apply_control(s->composer);
+            DragAcceptFiles(s->composer, TRUE);
+        }
         ShowWindow(s->composer, SW_SHOW);
         if (!s->count && !s->req_projects) store_call("projects", json_object(), 0, s, projects_done, 0, &s->req_projects);
         if (s->count && !s->has_catalog && !s->req_runtimes) screen_new_session_load_choices(s);
     }
     else { ShowWindow(s->composer, SW_HIDE); KillTimer(pane_hwnd(base->pane), TIMER_VOICE); if (s->voice) voice_drop(s->voice); }
+}
+
+static const char *prompt_repo(NewSessionScreen *s) {
+    const Project *p = screen_new_session_project(s);
+    return p ? p->repo : NULL;
+}
+
+static bool prompts_current(void *ctx, const char *repo, const char *identity) {
+    (void)identity;
+    NewSessionScreen *s = ctx;
+    return !s->busy && IsWindow(s->composer) && str_eq(prompt_repo(s), repo);
+}
+
+static char *prompts_draft(void *ctx) { return screen_new_session_composer_text(ctx); }
+
+static void prompts_insert(void *ctx, const char *body) {
+    NewSessionScreen *s = ctx;
+    char *draft = screen_new_session_composer_text(s);
+    char *joined = saved_prompt_insert(draft, body);
+    screen_new_session_set_composer_text(s, joined);
+    free(joined); free(draft);
+    SetFocus(s->composer);
+}
+
+void screen_new_session_sync_prompts(NewSessionScreen *s) {
+    if (!s->window_shown || !store_connected()) return;
+    const char *repo = prompt_repo(s);
+    if (prompt_picker_bound_to(s->prompts, repo)) return;
+    prompt_picker_free(s->prompts);
+    s->prompts = prompt_picker_new(&s->base, repo, s->base.id, prompts_current, prompts_draft, prompts_insert, s);
+    prompt_picker_visible(s->prompts, true);
+}
+
+static void new_session_window_visible(Screen *base, bool shown) {
+    NewSessionScreen *s = (NewSessionScreen *)base;
+    s->window_shown = shown;
+    prompt_picker_visible(s->prompts, shown);
+    screen_new_session_sync_prompts(s);
 }
 
 static void new_session_activated(Screen *base, bool active) {
@@ -153,6 +201,7 @@ static void new_session_destroy(Screen *base) {
     request_cancel(&s->req_runtimes); request_cancel(&s->req_branches); request_cancel(&s->req_start); request_cancel(&s->req_projects);
     if (base->pane) KillTimer(pane_hwnd(base->pane), TIMER_VOICE);
     if (s->voice) voice_free(s->voice);
+    prompt_picker_free(s->prompts);
     attach_list_free(s->files);
     if (s->composer) DestroyWindow(s->composer);
     projects_free(s->projects, s->count);
@@ -187,7 +236,7 @@ static const ScreenVTable new_session_vt = {
     .destroy = new_session_destroy, .layout = new_session_layout, .header = new_session_header,
     .footer_height = screen_new_session_new_session_footer_height, .footer_layout = screen_new_session_new_session_footer_layout, .footer_paint = screen_new_session_new_session_footer_paint,
     .footer_click = screen_new_session_new_session_footer_click, .visible = new_session_visible, .command = screen_new_session_new_session_command, .timer = new_session_timer,
-    .activated = new_session_activated, .adopt = new_session_adopt,
+    .activated = new_session_activated, .adopt = new_session_adopt, .window_visible = new_session_window_visible,
 };
 
 Screen *new_session_screen_new(const Project *project_, const Project *projects, size_t count) {
@@ -208,13 +257,6 @@ Screen *new_session_screen_new(const Project *project_, const Project *projects,
     }
     s->review_loop = settings_read_review_loop();
     s->composer_lines = 1;
-    HWND parent = pane_hwnd(app_detail_pane());
-    s->composer = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN, 0, 0, 10, 10, parent, (HMENU)(INT_PTR)ID_COMPOSER, GetModuleHandleW(NULL), NULL);
-    SendMessageW(s->composer, WM_SETFONT, (WPARAM)font(FONT_BODY), TRUE);
-    SendMessageW(s->composer, EM_SETCUEBANNER, TRUE, (LPARAM)L"Describe what to build\x2026");
-    SetWindowSubclass(s->composer, screen_new_session_composer_proc, ID_COMPOSER, (DWORD_PTR)s);
-    theme_apply_control(s->composer);
-    DragAcceptFiles(s->composer, TRUE);
     s->files = attach_list_new(&s->base, "start_session");
     const Project *picked = screen_new_session_project(s);
     attach_list_scope(s->files, picked ? picked->repo : NULL);

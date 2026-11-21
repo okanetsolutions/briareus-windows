@@ -13,6 +13,8 @@ PromptPicker *prompt_picker_dialog_new(HWND window, const char *repo, const char
     PromptOwnerCurrent current, PromptDraft draft, PromptInsert insert, void *ctx);
 void prompt_picker_free(PromptPicker *p);
 void prompt_picker_visible(PromptPicker *p, bool shown);
+// Whether a picker is still bound to this project and connection, even while hidden.
+bool prompt_picker_bound_to(const PromptPicker *p, const char *repo);
 // Owner and account validity, independent of prompt capability.
 bool prompt_picker_owner_current(PromptPicker *p);
 bool prompt_picker_offered(PromptPicker *p);

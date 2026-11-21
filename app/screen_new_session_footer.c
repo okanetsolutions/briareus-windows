@@ -19,7 +19,8 @@ char *screen_new_session_composer_text(NewSessionScreen *s) {
 }
 
 void screen_new_session_set_composer_text(NewSessionScreen *s, const char *text) {
-    char *crlf = str_replace(text ? text : "", "\n", "\r\n");
+    char *lf = str_replace(text ? text : "", "\r\n", "\n");
+    char *crlf = str_replace(lf, "\n", "\r\n"); free(lf);
     wchar_t *w = utf8_to_wide(crlf);
     SetWindowTextW(s->composer, w);
     SendMessageW(s->composer, EM_SETSEL, (WPARAM)wcslen(w), (LPARAM)wcslen(w));
@@ -159,6 +160,7 @@ static RECT footer_column(const RECT *rc) {
 
 void screen_new_session_new_session_footer_layout(Screen *base, const RECT *rc) {
     NewSessionScreen *s = (NewSessionScreen *)base;
+    screen_new_session_sync_prompts(s);
     Canvas *cv = NULL;   // measuring only
     RECT col = footer_column(rc);
     int chips = chips_layout(s, cv, col.right - col.left, NULL);
@@ -205,12 +207,20 @@ void screen_new_session_new_session_footer_paint(Screen *base, Canvas *cv, const
     attach_list_paint(s->files, cv, box.left + px(12), box.top + px(10) + 1, width - px(24));
     int row_y = box.top + px(10) + 1 + files + ch + px(6), bh = px(30), bw = px(32);
     memset(&s->mic_rc, 0, sizeof s->mic_rc); memset(&s->attach_rc, 0, sizeof s->attach_rc);
+    SetRectEmpty(&s->prompts_rc);
     int x = box.left + px(12);
     // `#btn-attach`: the 📎 left of the microphone, for files the clipboard or a drop cannot bring.
     if (attach_list_supported(s->files)) {
         RECT attach = { x, row_y, x + bw, row_y + bh };
         s->attach_rc = attach;
         attach_button_paint(cv, &attach, !s->busy && attach_list_count(s->files) < ATTACHMENTS_MAX);
+        x += bw + px(6);
+    }
+    if (prompt_picker_offered(s->prompts)) {
+        RECT button = { x, row_y, x + bw, row_y + bh };
+        s->prompts_rc = button;
+        fill_round_rect(cv, &button, px(8), theme.raise, theme.line);
+        draw_text(cv, "\xF0\x9F\x93\x9A", &button, FONT_EMOJI_LARGE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         x += bw + px(6);
     }
     VoiceState vs = s->voice ? voice_state(s->voice) : VOICE_IDLE;
@@ -236,6 +246,12 @@ void screen_new_session_new_session_footer_click(Screen *base, POINT pt) {
     NewSessionScreen *s = (NewSessionScreen *)base;
     for (int c = 0; c < CHIP_COUNT; c++) if (!IsRectEmpty(&s->chip_rc[c]) && PtInRect(&s->chip_rc[c], pt)) { screen_new_session_pick_chip(s, c); return; }
     if (PtInRect(&s->send_rc, pt)) { screen_new_session_start(s); return; }
+    if (PtInRect(&s->prompts_rc, pt)) {
+        POINT menu = {s->prompts_rc.left, s->prompts_rc.bottom};
+        ClientToScreen(pane_hwnd(base->pane), &menu);
+        prompt_picker_open(s->prompts, menu);
+        return;
+    }
     if (!s->busy && attach_list_click(s->files, pt)) return;
     if (PtInRect(&s->attach_rc, pt)) { if (!s->busy) attach_list_pick(s->files); return; }
     if (PtInRect(&s->mic_rc, pt) && s->voice) {
