@@ -218,10 +218,13 @@ static void test_findings_badge_follows_the_sidebar_poll(void) {
     f.read_response = SSH_REQUESTS; LONG reads = f.reads;
     s->vt->refresh(s); screen_fixture_pump(&f, 2);
     CHECK_INT(f.reads, reads + 2); CHECK_INT(screen_projects_g_waiting, 1);
-    // Covered by another sidebar screen, the root keeps the read: the strip on top still shows the badge.
-    s->vt->visible(s, false); f.read_response = "{\"requests\":[]}";
-    s->vt->refresh(s); screen_fixture_pump(&f, 2);
-    CHECK_INT(f.reads, reads + 4); CHECK_INT(screen_projects_g_waiting, 0);
+    // A project's sessions cover the root; its strip still counts, since the root keeps the read and the sessions
+    // screen asks for it: not on appearing just after one, and at once on F5.
+    Screen *sessions = new_sessions(); pane_push(f.pane, sessions); CHECK(pane_top(f.pane) == sessions);
+    CHECK_INT(f.reads, reads + 2);
+    f.read_response = "{\"requests\":[]}";
+    sessions->vt->refresh(sessions); screen_fixture_pump(&f, 2);
+    CHECK(f.reads > reads + 2); CHECK_INT(screen_projects_g_waiting, 0);
     f.read_response = NULL; finish(&f);
 }
 static void test_footer_controls(void) {

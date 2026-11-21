@@ -188,17 +188,15 @@ static void projects_read_ssh(ProjectsScreen *s, bool now) {
     if (!now && s->ssh_read_at && tick - s->ssh_read_at < 30000) return;
     if (s->ssh && s->ssh->client != g_store.client) { ssh_approvals_free(s->ssh); s->ssh = NULL; }
     if (!s->ssh) { s->ssh = ssh_approvals_new(&s->base); s->ssh->changed = ssh_changed; ssh_approvals_watch(s->ssh, true); }
-    s->ssh_read_at = tick;
-    ssh_approvals_refresh(s->ssh);
+    if (ssh_approvals_refresh(s->ssh)) s->ssh_read_at = tick;   // a skipped attempt does not hold the next one back
 }
 
-static ProjectsScreen *sidebar_root(void) {
-    Pane *sidebar = app_sidebar_pane();
+static ProjectsScreen *sidebar_root(Pane *sidebar) {
     Screen *root = sidebar ? pane_root(sidebar) : NULL;
     return root && root->vt->layout == projects_layout ? (ProjectsScreen *)root : NULL;
 }
 
-void screen_projects_read_ssh(bool now) { ProjectsScreen *s = sidebar_root(); if (s) projects_read_ssh(s, now); }
+void screen_projects_read_ssh(Pane *sidebar, bool now) { ProjectsScreen *s = sidebar_root(sidebar); if (s) projects_read_ssh(s, now); }
 
 static void projects_timer(Screen *base, UINT id) {
     ProjectsScreen *s = (ProjectsScreen *)base;
@@ -234,7 +232,7 @@ Screen *projects_screen_new(void) {
 }
 
 const Project *projects_list(size_t *count) {
-    ProjectsScreen *s = sidebar_root();
+    ProjectsScreen *s = sidebar_root(app_sidebar_pane());
     if (!s) { *count = 0; return NULL; }
     *count = s->count;
     return s->projects;

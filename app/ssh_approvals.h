@@ -22,7 +22,8 @@ void ssh_approvals_visible(SshApprovals *s, bool shown);
 void ssh_approvals_watch(SshApprovals *s, bool shown);
 /// The first read is under way: nothing read yet, and no failure to show.
 bool ssh_approvals_loading(SshApprovals *s);
-void ssh_approvals_refresh(SshApprovals *s);
+/// Reads the queue again; true when a read was sent (none while one is out, in a cooldown, or hidden).
+bool ssh_approvals_refresh(SshApprovals *s);
 void ssh_approvals_timer(SshApprovals *s, UINT id);
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w);
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token);

@@ -16,22 +16,31 @@ static void retain_decisions(SshApprovalQueue *q) {
         ssh_approval_retain(q, old);
     }
 }
-// Rebinding discards displayed metadata, but submitted decisions survive until disconnect.
+static bool scope_bound(const SshApprovals *self, const char *scope) {
+    for (const SshApprovals *v = views; v; v = v->next) if (v != self && str_eq(v->scope, scope)) return true;
+    return false;
+}
+// Rebinding discards displayed metadata, but submitted decisions survive until disconnect. The first view to reach a
+// scope resets its queue; a later one with a stale device only adopts it, keeping another view's rows and reads.
 static void rebind(SshApprovals *s) {
     request_cancel(&s->read); request_cancel(&s->write);
     json_free(s->bindings); s->bindings = NULL;
     json_free(s->device); s->device = device_json(&g_store.device);
     free(s->scope); s->scope = json_serialize(s->device, true);
+    if (scope_bound(s, s->scope)) return;
     SshApprovalQueue *q = queue(s);
     json_free(q->rows); q->rows = json_object(); q->fresh = false; q->generation++;
     retain_decisions(q);
 }
 static void notify(void) {
+    bool counted = false;
     for (SshApprovals *s = views; s; s = s->next) {
-        if (s->changed) s->changed(s->owner);
+        if (s->changed) { s->changed(s->owner); counted = true; }
         if (!s->owner->pane) continue;
         pane_relayout(s->owner->pane); pane_header_changed(s->owner->pane);
     }
+    // Before the sidebar has a view of its own, its ⚑ count is taken here.
+    if (!counted) projects_recount_findings();
 }
 // Finalizers own only scope and input metadata; they never borrow the screen or queue.
 typedef struct { Json *device, *sent; char *scope; unsigned long long generation; } Completion;
@@ -67,13 +76,14 @@ static void attach(SshApprovals *s, Request *req, const Json *sent) {
     c->sent = sent ? json_clone(sent) : NULL; c->generation = queue(s)->generation;
     req->completion_ctx = c; req->completed = completed;
 }
-void ssh_approvals_refresh(SshApprovals *s) {
-    if (!s || !s->shown || !g_store.active || s->client != g_store.client) return;
-    if (!store_can_manage() || !store_supports("ssh_requests")) return;
+bool ssh_approvals_refresh(SshApprovals *s) {
+    if (!s || !s->shown || !g_store.active || s->client != g_store.client) return false;
+    if (!store_can_manage() || !store_supports("ssh_requests")) return false;
     if (!current(s)) rebind(s);
-    if (s->read) return;
-    if (queue(s)->retry_until > (double)time(NULL)) return;
+    if (s->read) return false;
+    if (queue(s)->retry_until > (double)time(NULL)) return false;
     Request *req = store_call("ssh_requests", json_object(), 0, NULL, NULL, 0, &s->read); attach(s, req, NULL);
+    return true;
 }
 void ssh_approvals_timer(SshApprovals *s, UINT id) {
     if (!s || !poller_fired(&s->poller, id)) return;

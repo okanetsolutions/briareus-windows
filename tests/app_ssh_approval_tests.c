@@ -178,6 +178,21 @@ static void metadata_rebind_preserves_cooldowns(void) {
         ssh_approvals_free(s); clear(&f);
     }
 }
+static void stale_view_adopts_a_bound_scope(void) {
+    Fixture f; init(&f); SshApprovals *a = ssh_approvals_new(&f.owner), *b = ssh_approvals_new(&f.owner);
+    ssh_approvals_visible(a, true); complete(&f, 0); ssh_approvals_visible(b, true); complete(&f, 1);
+    g_store.device.label = "Verified device";
+    ssh_approvals_refresh(a); complete(&f, 2); CHECK(queue(a)->fresh); intptr_t token = draw(a); CHECK(token != 0);
+    // b still holds the old device: catching up adopts the scope a already read, without wiping its rows.
+    ssh_approvals_refresh(b); entered(&f, 3);
+    CHECK(queue(b) == queue(a)); CHECK(queue(a)->fresh); CHECK_INT(json_count(queue(a)->rows), 1);
+    // So a decision aimed on a's list still goes.
+    f.steps[4].answer = "{\"request\":{\"id\":\"fake-request\",\"status\":\"running\"}}";
+    ssh_approvals_action(a, SSH_APPROVE, token); entered(&f, 4); CHECK(a->write != NULL);
+    CHECK_STR(f.steps[4].url, "https://example.com/api/v1/ssh/requests/fake-request/decision");
+    complete(&f, 3); complete(&f, 4);
+    ssh_approvals_free(a); ssh_approvals_free(b); clear(&f);
+}
 static bool shows(Screen *base, int action) {
     Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
     bool found = false;
@@ -234,6 +249,7 @@ void app_ssh_approval_tests(void) {
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);
+    test_run("SSH approval view with a stale device adopts a scope another view read", stale_view_adopts_a_bound_scope);
     test_run("SSH approval cooldown and stale scope completions", refresh_cooldown_refusal_and_scope);
     test_run("SSH approval expiry, refused and stale clicks", expiry_refused_and_stale_actions);
 }
