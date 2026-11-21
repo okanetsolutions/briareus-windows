@@ -3,13 +3,8 @@
 static int composer_height(ConversationScreen *s, Canvas *cv);
 static char *chip_text(ConversationScreen *s, int chip);
 static bool chip_shown(ConversationScreen *s, int chip);
-static bool chip_live(int chip);
-static const char *loop_cost(ConversationScreen *s);
-static int loop_cost_height(ConversationScreen *s, Canvas *cv, int width);
 static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out);
 static RECT footer_column(const RECT *rc);
-
-static RECT g_chip_rc[CHIP_COUNT];
 
 static int composer_height(ConversationScreen *s, Canvas *cv) {
     int line_h = px(24);
@@ -27,37 +22,13 @@ static char *chip_text(ConversationScreen *s, int chip) {
     case CHIP_PROVIDER: return xstrdup(session_provider(ss) ? session_provider(ss) : "");
     case CHIP_MODEL: return xstrdup(session_model(ss) ? session_model(ss) : "");
     case CHIP_EFFORT: { const char *e = json_str_nonempty(json_get(ss->raw, "effort")); return xstrdup(e ? e : ""); }
-    case CHIP_LOOP: return xstrdup(session_review_loop_on(ss) ? "\xF0\x9F\x94\x81 Review loop: on" : "\xF0\x9F\x94\x81 Review loop");
     }
     return xstrdup("");
 }
 
 static bool chip_shown(ConversationScreen *s, int chip) {
-    const Session *ss = screen_conversation_session(s);
-    if (chip == CHIP_LOOP) return store_supports("review_loop") && session_can_review_loop(ss);
     char *text = chip_text(s, chip); bool shown = *text != 0; free(text);
     return shown;
-}
-
-static bool chip_live(int chip) { return chip == CHIP_LOOP; }
-
-/// What the loop chip costs, since it asks nothing first: under the composer whatever else its note says.
-static const char *loop_cost(ConversationScreen *s) {
-    if (!chip_shown(s, CHIP_LOOP)) return NULL;
-    return session_review_loop_on(screen_conversation_session(s)) ? "Review loop: a paid review round per push; turning it off won't stop a running round"
-                                              : "Turning on the review loop may start a paid review round now, then one per push";
-}
-
-/// The cost wraps rather than ellipsizes, so a narrow pane still shows all of it.
-/// Measured once per text, width and scale: the footer's height is asked for on every keystroke.
-static int loop_cost_height(ConversationScreen *s, Canvas *cv, int width) {
-    const char *cost = loop_cost(s);
-    if (!cost) return 0;
-    if (cost != s->cost_text || width != s->cost_width || px(16) != s->cost_unit) {
-        s->cost_text = cost; s->cost_width = width; s->cost_unit = px(16);
-        s->cost_h = measure_text(cv, cost, width, FONT_FOOTNOTE, DT_CENTER | DT_WORDBREAK);
-    }
-    return s->cost_h;
 }
 
 static int chips_layout(ConversationScreen *s, Canvas *cv, int width, RECT *out) {
@@ -90,8 +61,7 @@ int screen_conversation_conversation_footer_height(Screen *base, int width) {
     int chips = chips_layout(s, cv, inner, NULL);
     int files = screen_conversation_can_compose(s) ? attach_list_height(s->files, cv, inner - px(24)) : 0;
     int box = screen_conversation_can_compose(s) ? px(10) + files + composer_height(s, cv) + px(6) + px(30) + px(8) + 2 : px(30) + px(20) + 2;
-    int cost = screen_conversation_can_compose(s) ? loop_cost_height(s, cv, inner) : 0;
-    int h = px(8) + chips + px(8) + box + px(6) + px(16) + cost + px(14);
+    int h = px(8) + chips + px(8) + box + px(6) + px(16) + px(14);
     return h;
 }
 
@@ -123,17 +93,12 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
     int y0 = col.top + px(8);
     bool can = !s->busy && !s->uncertain;
     for (int c = 0; c < CHIP_COUNT; c++) {
-        SetRectEmpty(&g_chip_rc[c]);
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
-        bool live = chip_live(c) && can && !(c == CHIP_LOOP && s->reloading);
-        if (live) g_chip_rc[c] = r;
-        bool on = (c == CHIP_LOOP && session_review_loop_on(ss));
-        // A held chip looks held whatever the loop's state: an accent one would seem to take the click it ignores.
-        fill_round_rect(cv, &r, px(6), theme.raise, on && live ? theme.accent : theme.line);
+        fill_round_rect(cv, &r, px(6), theme.raise, theme.line);
         char *label = chip_text(s, c);
         RECT t = { r.left + px(6), r.top, r.right - px(6) + 2, r.bottom };
-        draw_text(cv, label, &t, FONT_CAPTION, live ? (on ? theme.accent : theme.ink) : theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(cv, label, &t, FONT_CAPTION, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         free(label);
     }
     int top = y0 + chips + px(8);
@@ -205,20 +170,16 @@ void screen_conversation_conversation_footer_paint(Screen *base, Canvas *cv, con
             if (rec) { char *clock = format_clock(voice_elapsed(s->voice)); RECT cr = { x, row_y, x + px(60), row_y + bh }; draw_text(cv, clock, &cr, FONT_CAPTION, theme.danger, DT_LEFT | DT_VCENTER | DT_SINGLELINE); free(clock); }
         }
     }
-    // `#composer-note`: what a message sent now does, then on its own row what the loop chip costs, so it stays put.
+    // `#composer-note`: what a message sent now does.
     RECT note = { col.left, box.bottom + px(6), col.right, box.bottom + px(6) + px(16) };
     const char *text = active ? (session_live_input(ss) ? "Sent into the running turn" : "Queued for the next turn")
                       : uploading ? "Uploading\xE2\x80\xA6" : attach_list_count(s->files) && trimmed_empty ? "Add a few words to send the files"
                       : "";
     if (*text) draw_text(cv, text, &note, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    // The footer's height already holds the cost, so it is drawn to the bottom margin without measuring it again.
-    const char *cost = loop_cost(s);
-    if (cost) { RECT cr = { note.left, note.bottom, note.right, rc->bottom - px(14) }; draw_text(cv, cost, &cr, FONT_FOOTNOTE, theme.muted, DT_CENTER | DT_WORDBREAK); }
 }
 
 void screen_conversation_conversation_footer_click(Screen *base, POINT pt) {
     ConversationScreen *s = (ConversationScreen *)base;
-    if (!IsRectEmpty(&g_chip_rc[CHIP_LOOP]) && PtInRect(&g_chip_rc[CHIP_LOOP], pt)) { screen_conversation_menu_choice(s, session_review_loop_on(screen_conversation_session(s)) ? MENU_LOOP_OFF : MENU_LOOP_ON); return; }
     if (!screen_conversation_can_compose(s)) { if (PtInRect(&s->send_rc, pt) && !s->busy && !s->uncertain) screen_conversation_confirm_and_mutate(s, "reopen"); return; }
     if (PtInRect(&s->prompts_rc, pt) && prompt_picker_offered(s->prompts)) {
         POINT menu = {s->prompts_rc.left, s->prompts_rc.bottom}; ClientToScreen(pane_hwnd(base->pane), &menu);

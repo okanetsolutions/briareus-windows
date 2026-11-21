@@ -12,13 +12,13 @@
 #include <string.h>
 
 // The dashboard's opening view: "Welcome back", and the composer that starts a session, with its row of chips for the
-// project, branch, provider, model, effort and the loops.
+// project, branch, provider, model and effort.
 
 enum { ID_COMPOSER = 401 };
 
 enum { TIMER_VOICE = 3 };
 
-enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_LOOP, CHIP_COUNT };
+enum { CHIP_WORKSPACE, CHIP_PROJECT, CHIP_BRANCH, CHIP_PROVIDER, CHIP_MODEL, CHIP_EFFORT, CHIP_COUNT };
 
 typedef enum { WORKSPACE_WORKTREE = 1, WORKSPACE_LOCAL, WORKSPACE_ORCHESTRATOR } WorkspaceMode;
 
@@ -31,7 +31,6 @@ typedef struct {
     bool hand_picked;   // the pick came from the chips rather than from the last pick or the first available provider
     char **branches; size_t branch_count; char *default_branch; char *branch;   // NULL: a new branch off the default
     WorkspaceMode workspace;
-    bool review_loop;
     Request *req_runtimes, *req_branches, *req_start, *req_projects;
     bool busy, uncertain;
     char *error;

@@ -354,8 +354,6 @@ static const ApiRoute ROUTES[] = {
     // each answers the requirement and the outcome computed after it (review_approvals.c).
     { "approve_pull", "POST", "pulls/{pr}/approvals" },
     { "withdraw_pull_approval", "POST", "pulls/{pr}/approvals/{approvalId}/withdraw" },
-    { "findings", "GET", "pulls/{pr}/findings" },
-    { "finding_decision", "POST", "pulls/{pr}/findings/decision" },
     { "merge_pull", "POST", "pulls/{pr}/merge" },
     { "update_pull", "PATCH", "pulls/{pr}" },             // its `title`, `body`, `labels` and `assignees`; a list replaces the old one
     { "update_pull_branch", "POST", "pulls/{pr}/update-branch" }, // merges its base into it on GitHub, at the `headSha` and `baseRef` read
@@ -390,13 +388,8 @@ static const ApiRoute ROUTES[] = {
     { "serve", "POST", "sessions/{sessionId}/serve" },
     { "compact", "POST", "sessions/{sessionId}/compact" },
     { "clear", "POST", "sessions/{sessionId}/clear" },
-    { "review_loop", "POST", "sessions/{sessionId}/review-loop" },
     { "qa_loop", "POST", "sessions/{sessionId}/qa-loop" },
     { "link_pr", "POST", "sessions/{sessionId}/link-pr" },
-    { "complete_findings", "POST", "sessions/{sessionId}/findings/triage" },
-    { "save_findings", "POST", "sessions/{sessionId}/findings/save" },
-    { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
-    { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
     // The session's shared browser: its state, switched on and off, acted in, and watched (api_stream).
     { "browser", "GET", "sessions/{sessionId}/browser" },
     { "browser_on", "POST", "sessions/{sessionId}/browser" },

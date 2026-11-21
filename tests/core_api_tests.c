@@ -288,12 +288,12 @@ static const Expected ROUTE_TABLE[] = {
     { "usage_all", "GET", "usage/all" }, { "actions", "GET", "actions" }, { "action", "POST", "actions" },
     { "pulls", "GET", "pulls" }, { "pull", "GET", "pulls/{pr}" }, { "pull_description", "GET", "pulls/{pr}/description" },
     { "pull_files", "GET", "pulls/{pr}/files" }, { "pull_comments", "GET", "pulls/{pr}/comments" }, { "pull_reviews", "GET", "pulls/{pr}/reviews" },
-    { "pull_review_comments", "GET", "pulls/{pr}/review-comments" }, { "findings", "GET", "pulls/{pr}/findings" },
+    { "pull_review_comments", "GET", "pulls/{pr}/review-comments" },
     { "code_reviews", "GET", "pulls/{pr}/code-reviews" }, { "code_review_rounds", "GET", "pulls/{pr}/code-review-rounds" },
     { "update_code_review", "PATCH", "pulls/{pr}/code-reviews/{reviewId}" },
     { "update_code_review_finding", "PATCH", "pulls/{pr}/code-reviews/{reviewId}/findings/{findingId}" },
     { "approve_pull", "POST", "pulls/{pr}/approvals" }, { "withdraw_pull_approval", "POST", "pulls/{pr}/approvals/{approvalId}/withdraw" },
-    { "finding_decision", "POST", "pulls/{pr}/findings/decision" }, { "merge_pull", "POST", "pulls/{pr}/merge" },
+    { "merge_pull", "POST", "pulls/{pr}/merge" },
     { "update_pull", "PATCH", "pulls/{pr}" }, { "update_pull_branch", "POST", "pulls/{pr}/update-branch" },
     { "serve_pull", "POST", "pulls/{prNumber}/serve" }, { "serve_branch", "POST", "branches/serve" },
     { "issue", "GET", "issues/{issue}" }, { "issue_timeline", "GET", "issues/{issue}/timeline" }, { "close_issue", "POST", "issues/{issue}/close" },
@@ -307,10 +307,7 @@ static const Expected ROUTE_TABLE[] = {
     { "message", "POST", "sessions/{sessionId}/messages" }, { "drop_message", "DELETE", "sessions/{sessionId}/queue/{index}" },
     { "cancel", "POST", "sessions/{sessionId}/cancel" }, { "close", "POST", "sessions/{sessionId}/close" }, { "reopen", "POST", "sessions/{sessionId}/reopen" },
     { "serve", "POST", "sessions/{sessionId}/serve" }, { "compact", "POST", "sessions/{sessionId}/compact" }, { "clear", "POST", "sessions/{sessionId}/clear" },
-    { "review_loop", "POST", "sessions/{sessionId}/review-loop" }, { "qa_loop", "POST", "sessions/{sessionId}/qa-loop" },
-    { "link_pr", "POST", "sessions/{sessionId}/link-pr" }, { "complete_findings", "POST", "sessions/{sessionId}/findings/triage" },
-    { "save_findings", "POST", "sessions/{sessionId}/findings/save" }, { "reply_finding", "POST", "sessions/{sessionId}/findings/reply" },
-    { "delete_finding", "POST", "sessions/{sessionId}/findings/delete" },
+    { "qa_loop", "POST", "sessions/{sessionId}/qa-loop" }, { "link_pr", "POST", "sessions/{sessionId}/link-pr" },
     { "browser", "GET", "sessions/{sessionId}/browser" }, { "browser_on", "POST", "sessions/{sessionId}/browser" },
     { "browser_off", "DELETE", "sessions/{sessionId}/browser" }, { "browser_input", "POST", "sessions/{sessionId}/browser/input" },
     { "browser_stream", "GET", "sessions/{sessionId}/browser/stream" },
@@ -374,6 +371,9 @@ static void test_route_lookup_is_exact(void) {
     const char *missing[] = { NULL, "", "Projects", "projects ", " projects", "project", "operations", "operations/projects", "revoke", "token",
                               "api_revoke", "devices", "settings_devices", "../projects", "sessions/abc", "SESSION" };
     for (size_t i = 0; i < sizeof missing / sizeof *missing; i++) CHECK(api_route(missing[i]) == NULL);
+    // The server retired its review loop and held findings (core #228); the stored code reviews replace them.
+    const char *retired[] = { "findings", "finding_decision", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding" };
+    for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) CHECK(api_route(retired[i]) == NULL);
 }
 
 static void fill_path(Str *url, const char *path, const char *encoded) {
@@ -579,8 +579,6 @@ static void test_json_bodies_of_writes(void) {
     CHECK_STR(stub.last_url, BASE "pulls/12/serve"); CHECK_STR(stub.last_body, "{\"repo\":\"o/r\"}");
     r = call(c, "message", "{\"sessionId\":\"abc\",\"text\":\"Hi\",\"attachments\":[\"1a2b\"]}", &e); json_free(r);
     CHECK_STR(stub.last_body, "{\"text\":\"Hi\",\"attachments\":[\"1a2b\"]}");
-    r = call(c, "finding_decision", "{\"pr\":4,\"key\":\"k\",\"decision\":\"accept\"}", &e); json_free(r);
-    CHECK_STR(stub.last_url, BASE "pulls/4/findings/decision"); CHECK_STR(stub.last_body, "{\"key\":\"k\",\"decision\":\"accept\"}");
     // Unicode text goes through as it is.
     r = call(c, "message", "{\"sessionId\":\"abc\",\"text\":\"\xC2\xA1Hola \xF0\x9F\x91\x8B\"}", &e); json_free(r);
     Json *sent = json_parsez(stub.last_body); CHECK_STR(json_str(json_get(sent, "text")), "\xC2\xA1Hola \xF0\x9F\x91\x8B"); json_free(sent);

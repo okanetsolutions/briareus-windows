@@ -1,4 +1,5 @@
 #include "screen_projects_internal.h"
+#include "ssh_approvals.h"
 
 typedef struct { char text[40]; int badge; bool active, wide; StripMark mark; } StripData;
 
@@ -76,7 +77,9 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
     doc_space(doc, px(10));
     int y = doc->y, h = px(STRIP_H), iw = px(ICON_W), gap = px(STRIP_GAP);
     bool mail = mail_inbox_offered() || mail_settings_offered();
-    int icons = STRIP_ICONS + (mail ? 1 : 0);
+    // ⚑ Findings holds only SSH approvals: without them it could show nothing.
+    bool findings = ssh_approvals_offered();
+    int icons = STRIP_ICONS + (mail ? 1 : 0) + (findings ? 1 : 0);
     int icons_w = iw * icons + gap * (icons - 1);
     RECT nr = { 0, y, w - icons_w - gap, y + h };
     strip_button(doc, &nr, "\xEF\xBC\x8B New session", true, 0, false, ACT_NEW);
@@ -95,7 +98,7 @@ void screen_projects_sidebar_top(Doc *doc, int w, const char *selected) {
     x += iw + gap;
     RECT dr = { x, y, x + iw, y + h }; strip_button(doc, &dr, "\xF0\x9F\x93\x8A", false, 0, str_eq(selected, "dashboard"), ACT_DASHBOARD);
     x += iw + gap;
-    RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS);
+    if (findings) { RECT fr = { x, y, x + iw, y + h }; strip_button(doc, &fr, "\xE2\x9A\x91", false, (int)screen_projects_g_waiting, str_eq(selected, "findings"), ACT_FINDINGS); }
     doc->y = y + h;
     doc_space(doc, px(14));
     doc_pin(doc, (int)doc->count, doc->y);
@@ -255,7 +258,7 @@ bool screen_projects_sidebar_common_action(Pane *pane, int action) {
     case ACT_STATUS: app_show_detail(status_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
-    case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
+    case ACT_FINDINGS: if (ssh_approvals_offered()) app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;
     case ACT_SIGN_OUT: sign_out(); return true;

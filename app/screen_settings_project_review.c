@@ -99,7 +99,7 @@ void screen_settings_review_layout(FormScreen *s, Doc *doc, int x, int col) {
     screen_settings_field(s, doc, x, col, F_PUBLISH);
     screen_settings_check(s, doc, x, col, F_AUTO_LOOP);
     if (screen_settings_field_offered(s, F_AUTO_LOOP) && s->bools[F_AUTO_LOOP])
-        screen_settings_note(doc, x, col, "Every finding of a session's review-loop round, low severity and parked ones too, goes to \xE2\x9A\x99 Implement feedback on its own, and the fix is pushed and reviewed again until a round comes back clean and code-approved. The loop's round limit and repeated-findings check still stop one that cannot converge. Sessions still need their review loop switched on; a standalone \xE2\x8C\x95 Code review keeps its manual findings.");
+        screen_settings_note(doc, x, col, "Every finding of a session's review-loop round, low severity and parked ones too, goes to \xE2\x9A\x99 Implement feedback on its own, and the fix is pushed and reviewed again until a round comes back clean and code-approved. The loop's round limit and repeated-findings check still stop one that cannot converge. A standalone \xE2\x8C\x95 Code review keeps its manual findings.");
     // Each step runs as a turn of its own, on the code review's runtime unless it names one; a step switched off has none.
     screen_settings_check(s, doc, x, col, F_TEST_SHEET);
     if (s->bools[F_TEST_SHEET]) screen_settings_runtime_row(s, doc, x + px(23), col - px(23), R_TEST_SHEET);

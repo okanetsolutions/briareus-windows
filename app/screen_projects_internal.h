@@ -19,7 +19,7 @@
 
 enum { ACT_NEW = 900, ACT_FINDINGS, ACT_SELECT, ACT_SIGN_OUT, ACT_DASHBOARD, ACT_SETTINGS, ACT_WHATSAPP, ACT_MAIL, ACT_STATUS, ACT_SSH };
 
-enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 4 };
+enum { STRIP_H = 32, ICON_W = 26, STRIP_GAP = 3, STRIP_ICONS = 3 };   // WhatsApp, Status and 📊 always; Mail and ⚑ when offered
 
 extern size_t screen_projects_g_waiting;
 extern size_t screen_projects_g_status;

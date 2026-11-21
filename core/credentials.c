@@ -103,13 +103,6 @@ bool settings_read_auto_update(void) {
     return on;
 }
 void settings_write_auto_update(bool on) { settings_write(L"autoUpdate", on ? "on" : "off"); }
-bool settings_read_review_loop(void) {
-    char *value = settings_read(L"reviewLoop");
-    bool on = !str_eq(value, "off");
-    free(value);
-    return on;
-}
-void settings_write_review_loop(bool on) { settings_write(L"reviewLoop", on ? "on" : "off"); }
 
 int settings_read_sleep(void) {
     char *value = settings_read(L"sleepAfterMinutes");

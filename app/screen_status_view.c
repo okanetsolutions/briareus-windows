@@ -39,9 +39,7 @@ static void waiting(StatusScreen *s, Doc *doc, size_t index, int x, int w) {
     const char *text = question ? question->question ? question->question : question->text : json_str(json_get(c->session.raw, "lastText"));
     if (text) doc_text(doc, pad, iw, text, FONT_HEADLINE, theme.ink, DT_WORDBREAK);
     doc_space(doc, px(12));
-    if (session_state(&c->session) == SESSION_FINDINGS) {
-        doc_button(doc, pad, 0, "Decide findings →", BUTTON_BORDERED, STATUS_OPEN, status_action_add(s, index, -1), true);
-    } else if (store_supports("message") && question) {
+    if (store_supports("message") && question) {
         bool can = status_can_answer(s, c);
         for (size_t i = 0; i < json_count(question->options); i++) {
             const char *label = json_str_nonempty(json_get(json_at(question->options, i), "label"));

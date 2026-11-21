@@ -6,10 +6,10 @@ Windows parity for Swift [#108](https://github.com/okanetsolutions/briareus-swif
 (b3203687aa6198db3b2a387090a22195769093c5).
 
 The sidebar's ◉ Status opens a detachable overview of top-level conversations.
-Need you includes unanswered questions and held findings; Working and Ready exclude
-failed/closed sessions. Questions take precedence over held findings. Waiting rows
-are oldest first; working rows sort by title. Findings keeps its separate badge.
-Held findings open their conversation for decisions.
+Need you lists unanswered questions; Working and Ready exclude failed/closed sessions.
+Waiting rows are oldest first; working rows sort by title. Findings keeps its separate
+badge. The held review findings Status once listed were retired by the server
+(core #228).
 
 The existing Windows client uses Poller and aggregate `sessions` reads, rather than
 Swift's SessionFeed SSE updates. Status uses that same store/poller lifecycle and
@@ -39,7 +39,7 @@ between the confirmation read and write remains a transport limitation.
 Core and linked app tests cover state precedence/counts/order, pending asks,
 question identity replacement, stale actions before repaint, catalog/token gates,
 message bodies, duplicate suppression, refusal/uncertain/cancellation paths,
-count refresh, project/server isolation, held navigation and teardown. Windows CI
+count refresh, project/server isolation, card navigation and teardown. Windows CI
 executes these tests; a local MinGW cross-build alone is compilation evidence.
 No new Win32 APIs or dependencies were introduced; existing edit/control and region
 APIs are reused, including the APIs already consumed by the Switch shim.

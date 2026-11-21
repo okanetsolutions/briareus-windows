@@ -193,7 +193,6 @@ void screen_new_session_pick_chip(NewSessionScreen *s, int chip) {
         pane_footer_changed(s->base.pane);
         break;
     }
-    case CHIP_LOOP: s->review_loop = !s->review_loop; settings_write_review_loop(s->review_loop); pane_footer_changed(s->base.pane); break;
     }
     if (has) runtime_choice_free(&eff);
 }

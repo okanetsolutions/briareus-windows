@@ -73,9 +73,9 @@ bool browser_is_open(const char *session_id);
 /// which shows its progress and errors and reads the session again afterwards.
 void conversation_session_op(const char *session_id, const char *operation, Json *extra);
 Screen *issue_detail_screen_new(const Project *project, const IssueSummary *issue);
-/// The review rounds waiting for a decision across every project, as the dashboard's Findings screen.
+/// The SSH commands waiting for this device's decision.
 Screen *findings_screen_new(void);
-/// Global waiting questions, held findings and working/ready counts.
+/// Global waiting questions and working/ready counts.
 Screen *status_screen_new(void);
 /// Read-only observed CI/CD metrics and paged runs across accessible projects.
 Screen *ci_screen_new(void);
@@ -322,9 +322,7 @@ void settings_providers_changed(bool open_first);
 const Json *settings_project_rows(void);
 /// Updates the registered Settings sidebar after a form adopts its saved identity.
 void settings_select_id(const char *id);
-/// How many rounds the saved conversations of these projects hold, for the sidebar's count.
-size_t findings_waiting(const Project *projects, size_t count);
-/// The Findings screen read the conversations again: the sidebar counts once more.
+/// The SSH approvals or the saved conversations changed: the sidebar's Findings and Status counts are taken again.
 void projects_recount_findings(void);
 
 /// Shows a screen as the detail pane's root, unless one with the same id already is.
@@ -412,14 +410,6 @@ time_t pulls_sync_time(const Json *result, bool saved, time_t now);
 void set_string(char **slot, const char *value);
 /// Current wall-clock time in Unix epoch milliseconds.
 double epoch_milliseconds(void);
-/// A finding's severity as its pill label (CRIT, HIGH, MED or LOW), with the pill's color in `*color`.
-const char *finding_severity_label(const char *severity, COLORREF *color);
-/// The decisions a finding can be given, as the API spells them and as the segmented control titles them.
-#define FINDING_DECISION_COUNT 3
-extern const char *const finding_decision_ids[FINDING_DECISION_COUNT];
-extern const char *const finding_decision_titles[FINDING_DECISION_COUNT];
-/// The decision's index in `finding_decision_ids`, or -1.
-int finding_decision_index(const char *decision);
 /// "Status · model", as the rows word it.
 char *session_subtitle(const Session *session);
 /// A session row: status dot, title and subtitle, clickable. `trailing` keeps that much room at the right for an item laid

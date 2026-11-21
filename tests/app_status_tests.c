@@ -113,7 +113,8 @@ static intptr_t card_action_arg(StatusScreen *s, Doc *doc, int action, size_t in
 }
 static void test_option_and_text_wire(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
-    CHECK_INT(s->overview.waiting_count, 2); CHECK_INT(s->overview.working_count, 1); CHECK_INT(stub.reads, 1);
+    // A session still carrying a review round the server retired (`reviewTriage`) is not waiting on anyone.
+    CHECK_INT(s->overview.waiting_count, 1); CHECK_INT(s->overview.working_count, 1); CHECK_INT(stub.reads, 1);
     CHECK_STR(stub.read_url, "https://example.com/api/v1/sessions/wait?since=0");
     Doc doc; doc_init(&doc); draw(s, &doc);
     intptr_t option = item_arg(&doc, STATUS_OPTION, "Second fixture");
@@ -173,8 +174,7 @@ static void test_permissions_and_changed_ask(void) {
 }
 static void test_refresh_and_cached_questions(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
-    CHECK_INT(status_waiting(s->projects, s->project_count), 2);
-    CHECK_INT(findings_waiting(s->projects, s->project_count), 1);
+    CHECK_INT(status_waiting(s->projects, s->project_count), 1);
     size_t index = card(s, "wait");
     Doc doc; doc_init(&doc); draw(s, &doc);
     intptr_t old_option = item_arg(&doc, STATUS_OPTION, "First fixture");
@@ -188,7 +188,7 @@ static void test_refresh_and_cached_questions(void) {
     stub.sessions = "[{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"running\"}]";
     s->base.vt->refresh(&s->base); pump(2);
     CHECK_INT(s->overview.waiting_count, 0); CHECK_INT(s->overview.working_count, 1); CHECK_INT(s->overview.ready, 0);
-    CHECK_INT(status_waiting(s->projects, s->project_count), 0); CHECK_INT(findings_waiting(s->projects, s->project_count), 0);
+    CHECK_INT(status_waiting(s->projects, s->project_count), 0);
     CHECK(!s->cards[index]->confirmed);
     stub.sessions = "[{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\"}]";
     s->base.vt->refresh(&s->base); pump(2);
@@ -302,19 +302,6 @@ static void test_live_snapshot_without_cache_write(void) {
     CHECK_INT(s->overview.waiting_count, 0); CHECK_INT(s->overview.working_count, 1);
     SetEvent(stub.resume); pump(1);
     CloseHandle(lock); cleanup(&stub);
-}
-static void test_findings_replace_question_preview(void) {
-    Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
-    stub.sessions = "[{\"id\":\"wait\",\"repo\":\"one/repo\",\"status\":\"idle\","
-        "\"reviewTriage\":{\"findings\":[]},\"lastText\":\"Current findings fixture\"}]";
-    status_load(s); pump(2);
-    Doc doc; doc_init(&doc); draw(s, &doc);
-    bool current = false, obsolete = false;
-    for (size_t i = 0; i < doc.count; i++) {
-        if (str_eq(doc.items[i].text, "Current findings fixture")) current = true;
-        if (str_eq(doc.items[i].text, "Which fixture?")) obsolete = true;
-    }
-    CHECK(current); CHECK(!obsolete); doc_free(&doc); cleanup(&stub);
 }
 static void test_detail_retry_after(void) {
     Stub stub = {0}; stub.read_status = 429; stub.retry_after = "120";
@@ -564,7 +551,7 @@ static void test_uncertainty_survives_reopen(void) {
         s = (StatusScreen *)status_screen_new(); pane_set_root(pane, &s->base); pump(3);
         size_t index = card(s, "wait"); StatusCard *c = s->cards[index];
         CHECK(c->confirmed); CHECK(status_uncertain(s, c)); CHECK(!status_can_answer(s, c));
-        CHECK(!status_uncertain(s, s->cards[card(s, "held")]));
+        CHECK(!status_uncertain(s, s->cards[card(s, "work")]));
         status_send(s, index, "Duplicate"); CHECK(s->check_read == NULL); CHECK_INT(stub.writes, 1);
         if (cancelled) {
             SetEvent(stub.resume); pump(1); // discarded completion must not silently clear the interlock
@@ -580,14 +567,14 @@ static void test_uncertainty_survives_reopen(void) {
         doc_free(&doc); cleanup(&stub);
     }
 }
-static void test_held_navigation_and_teardown(void) {
+static void test_card_navigation_and_teardown(void) {
     Stub stub = {0}; StatusScreen *s = setup(&stub, "manage", 4); pump(3);
     Screen *moved = pane_take_root(pane);
     Pane *window = detached_open(moved, NULL, false); CHECK(window != NULL); pump(3);
     Doc doc; doc_init(&doc); draw(s, &doc);
-    intptr_t open = card_action_arg(s, &doc, STATUS_OPEN, card(s, "held"));
+    intptr_t open = card_action_arg(s, &doc, STATUS_OPEN, card(s, "wait"));
     s->base.vt->action(&s->base, STATUS_OPEN, open, (POINT){0});
-    Screen *top = pane_top(window); CHECK(top != &s->base); CHECK_STR(top->id, "conversation:held");
+    Screen *top = pane_top(window); CHECK(top != &s->base); CHECK_STR(top->id, "conversation:wait");
     // The conversation's normal read is cancelled when its owning pane is destroyed.
     doc_free(&doc); DestroyWindow(GetAncestor(pane_hwnd(window), GA_ROOT)); cleanup(&stub);
 
@@ -719,7 +706,6 @@ void app_status_tests(void) {
     test_run("Status polling preserves slow reads, scan progress and send preflights", test_poll_preserves_reads_and_scan);
     test_run("Status polling cancels reads for changed identities", test_poll_invalidates_changed_reads);
     test_run("Status live snapshots survive failed cache writes and remain scoped", test_live_snapshot_without_cache_write);
-    test_run("Status findings replace an answered question preview", test_findings_replace_question_preview);
     test_run("Status detail Retry-After pauses scans and preflights across polls and reopening", test_detail_retry_after);
     test_run("Status message Retry-After blocks replies across refresh and reopening until expiry", test_message_retry_after);
     test_run("Status delayed detail preserves newer shared cached events", test_delayed_detail_preserves_shared_events);
@@ -728,6 +714,6 @@ void app_status_tests(void) {
     test_run("Status reply edit handles DPI changes, submit, focus escape, tab and refresh", test_reply_keyboard);
     test_run("Status keyboard rejects replacement asks until rendered", test_keyboard_rejects_unpainted_ask);
     test_run("Status unknown send interlocks survive root replacement and refresh", test_uncertainty_survives_reopen);
-    test_run("Status held findings open their conversation and teardown cancels reads", test_held_navigation_and_teardown);
+    test_run("Status cards open their conversation and teardown cancels reads", test_card_navigation_and_teardown);
     pane_destroy(pane); DestroyWindow(dispatcher); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(directory); memset(&g_store, 0, sizeof g_store);
 }

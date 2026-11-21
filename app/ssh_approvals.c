@@ -7,7 +7,7 @@
 
 static SshApprovals *views;
 static bool current(SshApprovals *s) {
-    if (s->client != g_store.client || !store_can_manage() || !store_supports("ssh_requests")) return false;
+    if (s->client != g_store.client || !ssh_approvals_offered()) return false;
     Json *d = device_json(&g_store.device); bool same = json_equal(d, s->device); json_free(d); return same;
 }
 static SshApprovalQueue *queue(SshApprovals *s) { return ssh_approval_queue(&g_store.ssh_approvals, s->scope); }
@@ -70,7 +70,8 @@ static void attach(SshApprovals *s, Request *req, const Json *sent) {
 void ssh_approvals_refresh(SshApprovals *s) {
     if (!s || !s->shown || !g_store.active || s->client != g_store.client) return;
     if (!store_can_manage() || !store_supports("ssh_requests")) return;
-    if (!current(s)) rebind(s);
+    // A rebind changes what the view shows even when no read can go yet (a cooldown carried over): draw it again.
+    if (!current(s)) { rebind(s); if (s->owner->pane) pane_relayout(s->owner->pane); }
     if (s->read) return;
     if (queue(s)->retry_until > (double)time(NULL)) return;
     Request *req = store_call("ssh_requests", json_object(), 0, NULL, NULL, 0, &s->read); attach(s, req, NULL);
@@ -99,12 +100,17 @@ void ssh_approvals_free(SshApprovals *s) {
     if (*slot) *slot = s->next;
     json_free(s->device); json_free(s->bindings); free(s->scope); api_client_release(s->client); free(s);
 }
-size_t ssh_approvals_badge(void) {
-    if (!store_can_manage() || !store_supports("ssh_requests")) return 0;
+bool ssh_approvals_offered(void) { return store_can_manage() && store_supports("ssh_requests"); }
+bool ssh_approvals_counted(size_t *waiting) {
+    *waiting = 0;
+    if (!ssh_approvals_offered()) return false;
     Json *d = device_json(&g_store.device); char *scope = json_serialize(d, true); json_free(d);
     SshApprovalQueue *q = ssh_approval_queue(&g_store.ssh_approvals, scope); free(scope);
-    return ssh_approval_waiting(q, (double)time(NULL));
+    if (!q->fresh) return false;
+    *waiting = ssh_approval_waiting(q, (double)time(NULL));
+    return true;
 }
+size_t ssh_approvals_badge(void) { size_t n; return ssh_approvals_counted(&n) ? n : 0; }
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token) {
     if (action == SSH_REFRESH) { ssh_approvals_refresh(s); notify(); return; }
     if (!s || !s->shown || !current(s)) return;
@@ -119,12 +125,17 @@ void ssh_approvals_action(SshApprovals *s, int action, intptr_t token) {
     Request *req = store_call("ssh_decision", body, 0, NULL, NULL, 0, &s->write); attach(s, req, displayed);
     notify();
 }
+/// The first read of this scope is under way: nothing read yet, and no failure to show.
+static bool loading(const SshApprovals *s, const SshApprovalQueue *q) { return s->read && !q->fresh && !q->error && !json_count(q->rows); }
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w) {
     if (!s) return;
+    // A view whose device changed catches up first, so the frame shows the new scope's read under way.
     if (!current(s)) ssh_approvals_refresh(s);
     json_free(s->bindings); s->bindings = json_object();
-    if (!current(s)) return;
+    // Still behind (the app is in the background, say): the read waits, and the frame says so rather than going blank.
+    if (!current(s)) { if (ssh_approvals_offered()) doc_loading(doc, x, w, "Loading SSH approvals\xE2\x80\xA6"); return; }
     SshApprovalQueue *q = queue(s); s->rendered_generation = q->generation;
+    if (loading(s, q)) { doc_loading(doc, x, w, "Loading SSH approvals\xE2\x80\xA6"); return; }
     doc_text(doc, x, w, "Waiting on you: SSH approvals", FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK);
     ButtonSpec refresh = {0, "Refresh SSH approvals", BUTTON_PLAIN, SSH_REFRESH, 0, !s->read};
     doc_button_row(doc, x, w, &refresh, 1);

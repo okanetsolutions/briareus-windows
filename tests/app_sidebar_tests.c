@@ -4,7 +4,7 @@
 #include "suites.h"
 #include <windowsx.h>
 
-static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/settings/ssh/servers", "admin" } };
+static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/settings/ssh/servers", "admin" }, { "GET", "/ssh/requests", "manage" } };
 static wchar_t cache_directory[MAX_PATH];
 
 static void draw(Pane *pane) {
@@ -46,6 +46,7 @@ static void start(ScreenFixture *f) {
 }
 static void finish(ScreenFixture *f) {
     DiskCache *cache = g_store.cache;
+    ssh_approval_free(&g_store.ssh_approvals);
     screen_fixture_clear(f);
     cache_remove_all(cache); cache_free(cache); RemoveDirectoryW(cache_directory);
 }
@@ -192,6 +193,22 @@ static void test_session_sidebar(void) {
     pane_relayout(f.pane); draw(f.pane); check_strip(f.pane); CHECK_INT(pane_scroll_y(f.pane), 0);
     finish(&f); theme_set_dpi(96);
 }
+static void test_findings_strip_needs_ssh_approvals(void) {
+    ScreenFixture f; start(&f); load_projects(&f);
+    resize(f.pane, 320, 300); check_strip(f.pane);
+    // ⚑ Findings holds only SSH approvals: a server without them, or a token that cannot list them, has no button.
+    for (int i = 0; i < 2; i++) {
+        if (i == 0) g_store.route_count = 2; else { g_store.route_count = 3; g_store.device.permission = "read"; }
+        pane_relayout(f.pane); draw(f.pane);
+        Doc *doc = pane_doc(f.pane);
+        for (size_t k = 0; k < doc->count; k++) CHECK(doc->items[k].action != ACT_FINDINGS);
+        CHECK_INT(doc->items[action_item(doc, ACT_DASHBOARD, 0)].rc.right, pane_content_width(f.pane));
+        // A stale click is taken and does nothing: opening Findings would need the detail pane this fixture lacks.
+        CHECK(screen_projects_sidebar_common_action(f.pane, ACT_FINDINGS));
+        CHECK_INT(screen_projects_g_waiting, 0);
+    }
+    finish(&f);
+}
 static void test_footer_controls(void) {
     ScreenFixture f; start(&f); Screen *s = load_projects(&f);
     int dpi = theme_dpi();
@@ -239,6 +256,7 @@ void app_sidebar_tests(void) {
     screen_fixture_prepare();
     test_run("project sidebar pins actions above scrolling rows and survives navigation and resize (Swift #113)", test_project_sidebar);
     test_run("Sidebar native footer buttons fit at narrow DPI, traverse focus and route Settings", test_footer_controls);
+    test_run("sidebar shows Findings only where SSH approvals are offered", test_findings_strip_needs_ssh_approvals);
     test_run("sidebar recount preserves live projects when cache writes fail", test_recount_preserves_live_projects);
     test_run("session sidebar pins actions through wheel, keyboard, drag, DPI and selection changes (Swift #113)", test_session_sidebar);
 }

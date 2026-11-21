@@ -1,11 +1,6 @@
 #include "screen_panel_internal.h"
 
-typedef struct { char *label; COLORREF color; } SevData;
-
 static void section_label(Doc *doc, int w, const char *text, int fold_action, bool open);
-static void sev_free(void *p);
-static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
-static int doc_severity(Doc *doc, int x, int y, const char *severity);
 
 // MARK: - Layout
 
@@ -17,26 +12,6 @@ static void section_label(Doc *doc, int w, const char *text, int fold_action, bo
     if (fold_action) { doc_item(doc, i)->action = fold_action; doc_item(doc, i)->hand = true; }
     free(label);
     doc_space(doc, px(4));
-}
-
-static void sev_free(void *p) { SevData *d = p; free(d->label); free(d); }
-
-static void paint_sev(Doc *doc, Item *it, Canvas *cv, const RECT *rc) {
-    SevData *d = it->data;
-    fill_round_rect(cv, rc, px(4), theme.sidebar, d->color == theme.muted ? theme.line : d->color);
-    RECT t = *rc;
-    draw_text(cv, d->label, &t, FONT_TINY_SEMIBOLD, d->color, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
-
-/// `rounded-[4px] border px-1 text-[10px] font-semibold`; returns its width.
-static int doc_severity(Doc *doc, int x, int y, const char *severity) {
-    SevData *d = xcalloc(1, sizeof *d);
-    d->label = xstrdup(finding_severity_label(severity, &d->color));
-    int w = px(4) * 2 + text_width(doc->cv, d->label, FONT_TINY_SEMIBOLD) + 2, h = px(16);
-    RECT rc = { x, y, x + w, y + h };
-    int i = doc_add(doc, &rc, paint_sev);
-    doc_item(doc, i)->data = d; doc_item(doc, i)->free_data = sev_free;
-    return w;
 }
 
 void screen_panel_pr_layout(PanelScreen *s, Doc *doc, int w) {
@@ -121,35 +96,4 @@ void screen_panel_pr_layout(PanelScreen *s, Doc *doc, int w) {
         doc_space(doc, px(2));
     }
     if (!json_count(reviews)) doc_text(doc, 0, w, "\xE2\x97\x8B none yet", FONT_CAPTION, theme.muted, DT_SINGLELINE);
-    // Findings (N · all fixed)
-    if (store_supports("findings")) {
-        size_t fn = json_count(s->findings), fixed = 0;
-        for (size_t i = 0; i < fn; i++) if (json_bool_is(json_get(json_at(s->findings, i), "fixed"), true)) fixed++;
-        char *label = fn ? (fixed == fn ? xstrfmt("Findings (%zu \xC2\xB7 all fixed)", fn) : fixed ? xstrfmt("Findings (%zu \xC2\xB7 %zu fixed)", fn, fixed) : xstrfmt("Findings (%zu)", fn)) : xstrdup("Findings");
-        section_label(doc, w, label, ACT_FINDINGS, s->findings_open);
-        free(label);
-        if (s->findings_open) {
-            if (!fn) doc_text(doc, 0, w, "No findings reported", FONT_CAPTION, theme.muted, DT_SINGLELINE);
-            for (size_t i = 0; i < fn; i++) {
-                const Json *f = json_at(s->findings, i);
-                if (i) doc_space(doc, px(8));
-                y = doc->y;
-                int sw = doc_severity(doc, 0, y + px(2), json_str(json_get(f, "severity")));
-                bool is_fixed = json_bool_is(json_get(f, "fixed"), true);
-                const char *decision = json_str(json_get(f, "decision"));
-                const char *right = is_fixed ? "\xE2\x9C\x93 fixed" : "";
-                int rw = *right ? text_width(doc->cv, right, FONT_CAPTION2) + px(6) : 0;
-                const char *ft = json_str(json_get(f, "title"));
-                RECT tr = { sw + px(6), y, w - rw, y + px(20) };
-                int fi = doc_text_at(doc, &tr, ft ? ft : "Finding", FONT_CAPTION, theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-                if (safe_web_url(json_str(json_get(f, "url")))) { doc_item(doc, fi)->action = ACT_FINDING_URL; doc_item(doc, fi)->arg = (intptr_t)i; doc_item(doc, fi)->hand = true; }
-                if (rw) { RECT rr = { w - rw, y, w, y + px(20) }; doc_text_at(doc, &rr, right, FONT_CAPTION2, theme.ok, DT_RIGHT | DT_VCENTER | DT_SINGLELINE); }
-                doc->y = y + px(20) + px(4);
-                if (store_supports("finding_decision") && json_str(json_get(f, "key")) && store_can_manage()) {
-                    int selected = finding_decision_index(decision);
-                    doc_segments(doc, 0, w, finding_decision_titles, FINDING_DECISION_COUNT, selected, ACT_DECIDE, (intptr_t)(i * 4), s->deciding == NULL);
-                }
-            }
-        }
-    }
 }

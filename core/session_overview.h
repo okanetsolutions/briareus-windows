@@ -3,7 +3,7 @@
 #define BRIAREUS_SESSION_OVERVIEW_H
 #include "models.h"
 
-typedef enum { SESSION_WAITING, SESSION_FINDINGS, SESSION_WORKING, SESSION_READY, SESSION_FAILED, SESSION_CLOSED } SessionState;
+typedef enum { SESSION_WAITING, SESSION_WORKING, SESSION_READY, SESSION_FAILED, SESSION_CLOSED } SessionState;
 SessionState session_state(const Session *session);
 bool session_needs_you(const Session *session);
 const char *session_state_label(SessionState state);

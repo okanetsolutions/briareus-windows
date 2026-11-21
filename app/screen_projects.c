@@ -33,7 +33,7 @@ static void projects_visible(Screen *base, bool shown);
 static void projects_refresh(Screen *base);
 static void projects_activated(Screen *base, bool active);
 
-// WhatsApp, dashboard, findings; Mail joins them when the server offers it
+// The strip: WhatsApp, Status and 📊 always; Mail and ⚑ Findings join them when the server offers them
 
 size_t screen_projects_g_waiting;
 size_t screen_projects_g_status;
@@ -55,7 +55,7 @@ static void projects_count(ProjectsScreen *s) {
         }
         json_free(list);
     }
-    screen_projects_g_waiting = findings_waiting(s->projects, s->count) + ssh_approvals_badge();
+    screen_projects_g_waiting = ssh_approvals_badge();
     screen_projects_g_status = status_waiting(s->projects, s->count);
 }
 

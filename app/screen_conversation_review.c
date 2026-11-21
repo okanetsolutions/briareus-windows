@@ -9,7 +9,7 @@ bool screen_conversation_review_removed(ConversationScreen *s, const Request *re
     Session ended; session_copy(&ended, last); json_set_str(ended.raw, "status", "closed");
     if (s->has_snapshot) session_free(&s->snapshot);
     s->snapshot = ended; s->has_snapshot = s->removed = s->loaded = true;
-    s->pending_full = s->pending_refresh = s->reloading = false;
+    s->pending_full = s->pending_refresh = false;
     set_string(&s->error, NULL); poller_stop(&s->poller);
     KillTimer(pane_hwnd(s->base.pane), TIMER_WORKING);
     pane_relayout(s->base.pane); pane_header_changed(s->base.pane);

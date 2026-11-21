@@ -178,33 +178,100 @@ static void metadata_rebind_preserves_cooldowns(void) {
         ssh_approvals_free(s); clear(&f);
     }
 }
-static void findings_cooldown_does_not_delay_ssh(void) {
+static bool shows(Screen *base, int action) {
+    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+    bool found = false;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == action) found = true;
+    doc_free(&doc); return found;
+}
+static void findings_screen_reads_only_ssh_requests(void) {
     Fixture f; init(&f);
-    wchar_t dir[MAX_PATH]; GetTempPathW(MAX_PATH, dir); wcscat(dir, L"briareus-ssh-poll-tests");
-    g_store.cache = cache_new(dir); cache_remove_all(g_store.cache);
     Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
-    Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}};
-    g_store.routes = routes; g_store.route_count = 3;
-    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
-    f.steps[1].status = 429; f.steps[1].retry = "3600";
-    base->vt->timer(base, TIMER_POLL); complete(&f, 1);
-    CHECK_STR(f.steps[1].url, "https://example.com/api/v1/projects");
-    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.base_ms, 7000);
-    base->vt->timer(base, SSH_POLL); complete(&f, 2);
+    // The conversations' held review rounds are retired (core #228): Findings reads no project or session list.
+    Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}, {"GET", "/sessions", "read"}};
+    g_store.routes = routes; g_store.route_count = 4;
+    // The subtitle stays blank until a read lands, and again after one fails: the count is not known then.
+    // So does the ⚑ badge: it counts only a fresh read.
+    HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, ""); CHECK_INT(ssh_approvals_badge(), 0);
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); entered(&f, 0);
+    // The first read under way shows as loading, not as a queue waiting for a refresh.
+    CHECK(!shows(base, SSH_REFRESH));
+    SetEvent(f.steps[0].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
+    CHECK_STR(f.steps[0].url, "https://example.com/api/v1/ssh/requests");
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK(info.subtitle[0] != 0); CHECK_INT(ssh_approvals_badge(), 1);
+    base->vt->timer(base, SSH_POLL); complete(&f, 1);
+    CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
+    f.steps[2].status = 429; f.steps[2].retry = "3600";
+    base->vt->refresh(base); complete(&f, 2);
     CHECK_STR(f.steps[2].url, "https://example.com/api/v1/ssh/requests");
-    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.retry_after, -1);
-    f.steps[3].status = 429; f.steps[3].retry = "3600";
-    base->vt->timer(base, SSH_POLL); complete(&f, 3);
-    base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 4);
+    base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 3);
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK_STR(info.subtitle, ""); CHECK_INT(ssh_approvals_badge(), 0);
     base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
-    base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 4);
-    base->vt->destroy(base); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir); clear(&f);
+    base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 3);
+    base->vt->destroy(base); clear(&f);
+}
+static void findings_screen_catches_up_after_device_change(void) {
+    Fixture f; init(&f); Screen *base = findings_screen_new();
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0); CHECK(shows(base, SSH_REFRESH));
+    // The device's details change while Findings is open: the next frame reads the new scope and shows it loading.
+    g_store.device.label = "Verified device";
+    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+    CHECK(screen_fixture_find(&doc, "Loading SSH approvals\xE2\x80\xA6") >= 0);
+    for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != SSH_REFRESH);
+    doc_free(&doc);
+    entered(&f, 1); CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
+    SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
+    base->vt->destroy(base); clear(&f);
+}
+static Doc *paint(Fixture *f) { RedrawWindow(pane_hwnd(f->screen.pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW); return pane_doc(f->screen.pane); }
+static bool has_action(const Doc *doc, int action) {
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].action == action) return true;
+    return false;
+}
+static void findings_screen_waits_for_an_inactive_app(void) {
+    for (int cooldown = 0; cooldown < 2; cooldown++) {
+        Fixture f; init(&f); Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
+        screen_fixture_pane(&f.screen, base); pane_push(f.screen.pane, base); complete(&f, 0);
+        if (cooldown) queue(s->ssh)->retry_until = (double)time(NULL) + 3600;
+        // The device changes while the app is in the background: nothing is read until it returns, and the frame says so.
+        g_store.active = false; g_store.device.label = "Verified device";
+        Doc *doc = paint(&f);
+        CHECK(screen_fixture_find(doc, "Loading SSH approvals\xE2\x80\xA6") >= 0); CHECK(!has_action(doc, SSH_REFRESH)); CHECK_INT(f.calls, 1);
+        // Back in front, the view catches up and is drawn again: its new read under way, or Refresh in a cooldown it kept.
+        g_store.active = true; base->vt->activated(base, true);
+        if (cooldown) {
+            doc = paint(&f); CHECK(has_action(doc, SSH_REFRESH));
+            CHECK(screen_fixture_find(doc, "Loading SSH approvals\xE2\x80\xA6") < 0); CHECK_INT(f.calls, 1);
+        } else {
+            entered(&f, 1); SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(has_action(paint(&f), SSH_REFRESH));
+        }
+        clear(&f);   // the pane owns the screen
+    }
+}
+static void findings_screen_unavailable_reads_nothing(void) {
+    // A token that cannot list SSH approvals, or a server without them, gets a reason, no request and no count.
+    for (int i = 0; i < 2; i++) {
+        Fixture f; init(&f);
+        if (i == 0) g_store.device.permission = "read"; else g_store.route_count = 0;
+        Screen *base = findings_screen_new();
+        screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); base->vt->refresh(base);
+        CHECK_INT(f.calls, 0);
+        Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+        CHECK(doc.count > 0);
+        for (size_t k = 0; k < doc.count; k++) CHECK(doc.items[k].action != SSH_REFRESH);
+        doc_free(&doc);
+        HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
+        base->vt->destroy(base); clear(&f);
+    }
 }
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
     test_run("SSH metadata rebind retains read and write cooldowns", metadata_rebind_preserves_cooldowns);
     test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
-    test_run("Findings cooldown leaves SSH polling independent", findings_cooldown_does_not_delay_ssh);
+    test_run("Findings screen reads only SSH requests", findings_screen_reads_only_ssh_requests);
+    test_run("Findings screen without SSH approvals says why and reads nothing", findings_screen_unavailable_reads_nothing);
+    test_run("Findings screen shows the first read of a changed device loading", findings_screen_catches_up_after_device_change);
+    test_run("Findings screen shows loading while a changed device waits for the app to return", findings_screen_waits_for_an_inactive_app);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);
