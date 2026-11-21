@@ -6,7 +6,9 @@
 #include "fixtures/ssh_approval.h"
 #include <windowsx.h>
 
+// The last route offers SSH approvals; the fixture starts without it, so only the tests about ⚑ read them.
 static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/settings/ssh/servers", "admin" }, { "GET", "/ssh/requests", "manage" } };
+enum { ROUTES_WITHOUT_SSH = 2, ROUTES_WITH_SSH = 3 };
 static wchar_t cache_directory[MAX_PATH];
 
 static void draw(Pane *pane) {
@@ -38,7 +40,7 @@ static void wheel(Pane *pane, int delta) {
     draw(pane);
 }
 static void start(ScreenFixture *f) {
-    screen_fixture_init(f, routes, sizeof routes / sizeof *routes);
+    screen_fixture_init(f, routes, ROUTES_WITHOUT_SSH);
     GetTempPathW(MAX_PATH, cache_directory); wcscat(cache_directory, L"briareus-sidebar-tests");
     g_store.cache = cache_new(cache_directory); cache_remove_all(g_store.cache);
     f->parent = CreateWindowExW(0, L"STATIC", L"Sidebar scroll fixture", WS_POPUP,
@@ -81,14 +83,15 @@ static void check_strip(Pane *pane) {
     CHECK(doc->pin_last > 0); CHECK_INT(doc->pin_bottom, px(56));
     CHECK_INT(doc->full_width, pane_content_width(pane));
     int actions[] = { ACT_NEW, ACT_WHATSAPP, ACT_STATUS, ACT_DASHBOARD, ACT_FINDINGS };
-    for (size_t i = 0; i < sizeof actions / sizeof *actions; i++) {
+    size_t shown = ssh_approvals_offered() ? 5 : 4;
+    for (size_t i = 0; i < shown; i++) {
         int index = action_item(doc, actions[i], 0); Item *it = &doc->items[index];
         CHECK(index < doc->pin_last);
         CHECK_INT(it->rc.top - pane_scroll_y(pane), px(10));
         CHECK_INT(it->rc.bottom - pane_scroll_y(pane), px(42));
         CHECK_INT(doc_hit(doc, (it->rc.left + it->rc.right) / 2, pane_scroll_y(pane) + px(20)), index);
     }
-    CHECK_INT(doc->items[action_item(doc, ACT_FINDINGS, 0)].rc.right, pane_content_width(pane));
+    CHECK_INT(doc->items[action_item(doc, actions[shown - 1], 0)].rc.right, pane_content_width(pane));
     CHECK_INT(pane_scroll_x(pane), 0);
 }
 static void check_scroll_inputs(Pane *pane, int row_action) {
@@ -197,10 +200,10 @@ static void test_session_sidebar(void) {
 }
 static void test_findings_strip_needs_ssh_approvals(void) {
     ScreenFixture f; start(&f); load_projects(&f);
-    resize(f.pane, 320, 300); check_strip(f.pane);
+    g_store.route_count = ROUTES_WITH_SSH; resize(f.pane, 320, 300); pane_relayout(f.pane); draw(f.pane); check_strip(f.pane);
     // ⚑ Findings holds only SSH approvals: a server without them, or a token that cannot list them, has no button.
     for (int i = 0; i < 2; i++) {
-        if (i == 0) g_store.route_count = 2; else { g_store.route_count = 3; g_store.device.permission = "read"; }
+        if (i == 0) g_store.route_count = ROUTES_WITHOUT_SSH; else { g_store.route_count = ROUTES_WITH_SSH; g_store.device.permission = "read"; }
         pane_relayout(f.pane); draw(f.pane);
         Doc *doc = pane_doc(f.pane);
         for (size_t k = 0; k < doc->count; k++) CHECK(doc->items[k].action != ACT_FINDINGS);
@@ -210,12 +213,15 @@ static void test_findings_strip_needs_ssh_approvals(void) {
 }
 static void test_findings_badge_follows_the_sidebar_poll(void) {
     ScreenFixture f; start(&f); Screen *s = load_projects(&f);
-    CHECK_INT(ssh_approvals_badge(), 0);
-    // The sidebar's own poll reads the SSH queue as well, so ⚑ counts what waits without Findings open.
+    g_store.route_count = ROUTES_WITH_SSH; CHECK_INT(ssh_approvals_badge(), 0);
+    // The sidebar reads the SSH queue as well (F5 here, its poll otherwise), and the read's own completion recounts ⚑.
     f.read_response = SSH_REQUESTS; LONG reads = f.reads;
-    s->vt->visible(s, true); s->vt->timer(s, TIMER_POLL); screen_fixture_pump(&f, 2);
-    CHECK_INT(f.reads, reads + 2); CHECK_INT(ssh_approvals_badge(), 1);
-    s->vt->visible(s, true); CHECK_INT(screen_projects_g_waiting, 1);
+    s->vt->refresh(s); screen_fixture_pump(&f, 2);
+    CHECK_INT(f.reads, reads + 2); CHECK_INT(screen_projects_g_waiting, 1);
+    // Covered by another sidebar screen, the root keeps the read: the strip on top still shows the badge.
+    s->vt->visible(s, false); f.read_response = "{\"requests\":[]}";
+    s->vt->refresh(s); screen_fixture_pump(&f, 2);
+    CHECK_INT(f.reads, reads + 4); CHECK_INT(screen_projects_g_waiting, 0);
     f.read_response = NULL; finish(&f);
 }
 static void test_footer_controls(void) {

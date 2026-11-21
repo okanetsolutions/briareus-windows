@@ -11,7 +11,8 @@ typedef struct {
     Request *req, *req_sessions;
     Poller poller;
     FooterRects footer;
-    SshApprovals *ssh;   // read on the sidebar's poll for the ⚑ badge; made once SSH approvals are offered
+    SshApprovals *ssh;   // the ⚑ badge's reads, for as long as the sidebar lives; made once SSH approvals are offered
+    ULONGLONG ssh_read_at;
 } ProjectsScreen;
 
 static void projects_count(ProjectsScreen *s);
@@ -177,29 +178,41 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 
-/// The ⚑ badge counts SSH approvals, so the sidebar's poll reads them as well, at its own pace: the count is live
-/// without Findings open. Each completion recounts the sidebar.
-static void projects_poll_ssh(ProjectsScreen *s) {
+static void ssh_changed(Screen *owner) { screen_projects_g_waiting = ssh_approvals_badge(); if (owner->pane) pane_relayout(owner->pane); }
+
+/// The ⚑ badge counts SSH approvals. The sidebar's root owns their read, so it lasts as long as the strip whichever
+/// sidebar screen shows it; that screen's poll asks, at most every 30 seconds unless `now`. Each change recounts.
+static void projects_read_ssh(ProjectsScreen *s, bool now) {
     if (!ssh_approvals_offered()) return;
+    ULONGLONG tick = GetTickCount64();
+    if (!now && s->ssh_read_at && tick - s->ssh_read_at < 30000) return;
     if (s->ssh && s->ssh->client != g_store.client) { ssh_approvals_free(s->ssh); s->ssh = NULL; }
-    if (!s->ssh) { s->ssh = ssh_approvals_new(&s->base); ssh_approvals_watch(s->ssh, true); }
+    if (!s->ssh) { s->ssh = ssh_approvals_new(&s->base); s->ssh->changed = ssh_changed; ssh_approvals_watch(s->ssh, true); }
+    s->ssh_read_at = tick;
     ssh_approvals_refresh(s->ssh);
 }
 
+static ProjectsScreen *sidebar_root(void) {
+    Pane *sidebar = app_sidebar_pane();
+    Screen *root = sidebar ? pane_root(sidebar) : NULL;
+    return root && root->vt->layout == projects_layout ? (ProjectsScreen *)root : NULL;
+}
+
+void screen_projects_read_ssh(bool now) { ProjectsScreen *s = sidebar_root(); if (s) projects_read_ssh(s, now); }
+
 static void projects_timer(Screen *base, UINT id) {
     ProjectsScreen *s = (ProjectsScreen *)base;
-    if (poller_fired(&s->poller, id)) { projects_load(s); projects_poll_ssh(s); }
+    if (poller_fired(&s->poller, id)) { projects_load(s); projects_read_ssh(s, true); }
 }
 
 static void projects_visible(Screen *base, bool shown) {
     if (!shown) screen_projects_footer_hide(&((ProjectsScreen *)base)->footer);
     ProjectsScreen *s = (ProjectsScreen *)base;
-    ssh_approvals_watch(s->ssh, shown);
-    if (shown) { projects_count(s); poller_start(&s->poller, base->pane, TIMER_POLL, 30000); }
+    if (shown) { projects_count(s); projects_read_ssh(s, false); poller_start(&s->poller, base->pane, TIMER_POLL, 30000); }
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_sessions); }
 }
 
-static void projects_refresh(Screen *base) { ProjectsScreen *s = (ProjectsScreen *)base; request_cancel(&s->req); request_cancel(&s->req_sessions); projects_load(s); }
+static void projects_refresh(Screen *base) { ProjectsScreen *s = (ProjectsScreen *)base; request_cancel(&s->req); request_cancel(&s->req_sessions); projects_load(s); projects_read_ssh(s, true); }
 
 static void projects_activated(Screen *base, bool active) { if (active) projects_visible(base, true); }
 
@@ -221,10 +234,8 @@ Screen *projects_screen_new(void) {
 }
 
 const Project *projects_list(size_t *count) {
-    Pane *sidebar = app_sidebar_pane();
-    Screen *root = sidebar ? pane_root(sidebar) : NULL;
-    if (!root || root->vt->layout != projects_layout) { *count = 0; return NULL; }
-    ProjectsScreen *s = (ProjectsScreen *)root;
+    ProjectsScreen *s = sidebar_root();
+    if (!s) { *count = 0; return NULL; }
     *count = s->count;
     return s->projects;
 }

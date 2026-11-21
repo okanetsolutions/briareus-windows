@@ -28,10 +28,10 @@ static void rebind(SshApprovals *s) {
 }
 static void notify(void) {
     for (SshApprovals *s = views; s; s = s->next) {
+        if (s->changed) s->changed(s->owner);
         if (!s->owner->pane) continue;
         pane_relayout(s->owner->pane); pane_header_changed(s->owner->pane);
     }
-    projects_recount_findings();
 }
 // Finalizers own only scope and input metadata; they never borrow the screen or queue.
 typedef struct { Json *device, *sent; char *scope; unsigned long long generation; } Completion;
@@ -115,10 +115,11 @@ bool ssh_approvals_counted(size_t *waiting) {
     if (!ssh_approvals_offered()) return false;
     Json *d = device_json(&g_store.device); char *scope = json_serialize(d, true); json_free(d);
     SshApprovalQueue *q = ssh_approval_queue(&g_store.ssh_approvals, scope); free(scope);
+    if (!q->fresh) return false;
     *waiting = ssh_approval_waiting(q, (double)time(NULL));
-    return q->fresh;
+    return true;
 }
-size_t ssh_approvals_badge(void) { size_t n; ssh_approvals_counted(&n); return n; }
+size_t ssh_approvals_badge(void) { size_t n; return ssh_approvals_counted(&n) ? n : 0; }
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token) {
     if (action == SSH_REFRESH) { ssh_approvals_refresh(s); notify(); return; }
     if (!s || !s->shown || !current(s)) return;

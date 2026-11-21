@@ -11,6 +11,7 @@ typedef struct SshApprovals {
     Poller poller;
     intptr_t serial;
     unsigned long long rendered_generation;
+    void (*changed)(Screen *owner);   // optional: called whenever the shared queue changes, for counts kept elsewhere
     struct SshApprovals *next;
 } SshApprovals;
 enum { SSH_APPROVE = 1900, SSH_DENY, SSH_REFRESH, SSH_POLL };
