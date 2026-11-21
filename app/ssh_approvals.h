@@ -17,8 +17,6 @@ enum { SSH_APPROVE = 1900, SSH_DENY, SSH_REFRESH, SSH_POLL };
 SshApprovals *ssh_approvals_new(Screen *owner);
 void ssh_approvals_free(SshApprovals *s);
 void ssh_approvals_visible(SshApprovals *s, bool shown);
-/// The first read is under way: nothing read yet, and no failure to show.
-bool ssh_approvals_loading(SshApprovals *s);
 void ssh_approvals_refresh(SshApprovals *s);
 void ssh_approvals_timer(SshApprovals *s, UINT id);
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w);

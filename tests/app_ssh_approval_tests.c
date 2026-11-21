@@ -210,6 +210,15 @@ static void findings_screen_reads_only_ssh_requests(void) {
     base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 3);
     base->vt->destroy(base); clear(&f);
 }
+static void findings_screen_catches_up_after_device_change(void) {
+    Fixture f; init(&f); Screen *base = findings_screen_new();
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0); CHECK(shows(base, SSH_REFRESH));
+    // The device's details change while Findings is open: the next frame reads the new scope and shows it loading.
+    g_store.device.label = "Verified device";
+    CHECK(!shows(base, SSH_REFRESH)); entered(&f, 1); CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
+    SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
+    base->vt->destroy(base); clear(&f);
+}
 static void findings_screen_unavailable_reads_nothing(void) {
     // A token that cannot list SSH approvals, or a server without them, gets a reason, no request and no count.
     for (int i = 0; i < 2; i++) {
@@ -232,6 +241,7 @@ void app_ssh_approval_tests(void) {
     test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
     test_run("Findings screen reads only SSH requests", findings_screen_reads_only_ssh_requests);
     test_run("Findings screen without SSH approvals says why and reads nothing", findings_screen_unavailable_reads_nothing);
+    test_run("Findings screen shows the first read of a changed device loading", findings_screen_catches_up_after_device_change);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);

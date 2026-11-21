@@ -19,8 +19,7 @@ static const char *unavailable_reason(void) {
 static void findings_layout(Screen *base, Doc *doc) {
     FindingsScreen *s = (FindingsScreen *)base;
     doc_space(doc, px(14));
-    if (ssh_approvals_loading(s->ssh)) doc_loading(doc, 0, doc->width, "Loading SSH approvals\xE2\x80\xA6");
-    else ssh_approvals_layout(s->ssh, doc, 0, doc->width);
+    ssh_approvals_layout(s->ssh, doc, 0, doc->width);
     const char *why = unavailable_reason();
     if (why) doc_text(doc, 0, doc->width, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     doc_space(doc, px(12));
