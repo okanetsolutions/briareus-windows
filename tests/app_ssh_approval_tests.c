@@ -215,7 +215,11 @@ static void findings_screen_catches_up_after_device_change(void) {
     screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0); CHECK(shows(base, SSH_REFRESH));
     // The device's details change while Findings is open: the next frame reads the new scope and shows it loading.
     g_store.device.label = "Verified device";
-    CHECK(!shows(base, SSH_REFRESH)); entered(&f, 1); CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
+    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+    CHECK(screen_fixture_find(&doc, "Loading SSH approvals\xE2\x80\xA6") >= 0);
+    for (size_t i = 0; i < doc.count; i++) CHECK(doc.items[i].action != SSH_REFRESH);
+    doc_free(&doc);
+    entered(&f, 1); CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
     SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
     base->vt->destroy(base); clear(&f);
 }
