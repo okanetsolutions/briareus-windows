@@ -4,6 +4,14 @@
 static void header_button(HeaderInfo *info, wchar_t glyph, const char *label, int action, bool enabled, bool destructive);
 static char *status_line(const Session *ss);
 
+bool screen_conversation_is_expanded(ConversationScreen *s, int seq) { for (size_t i = 0; i < s->expanded_count; i++) if (s->expanded[i] == seq) return true; return false; }
+
+void screen_conversation_toggle_expanded(ConversationScreen *s, int seq) {
+    for (size_t i = 0; i < s->expanded_count; i++) if (s->expanded[i] == seq) { s->expanded[i] = s->expanded[--s->expanded_count]; return; }
+    s->expanded = xrealloc(s->expanded, (s->expanded_count + 1) * sizeof *s->expanded);
+    s->expanded[s->expanded_count++] = seq;
+}
+
 void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
     ConversationScreen *s = (ConversationScreen *)base;
     int x = screen_conversation_column_x(doc->width), w = screen_conversation_column_w(doc->width);
@@ -110,8 +118,6 @@ void screen_conversation_conversation_layout(Screen *base, Doc *doc) {
         }
         doc->y += lh;
     }
-    const Json *triage = session_held_triage(screen_conversation_session(s));
-    if (triage && store_supports("complete_findings")) { doc_space(doc, px(14)); screen_conversation_layout_triage(s, doc, x, w, triage); }
     char *working = session_working_text(screen_conversation_session(s), &s->transcript, working_verb(s->tick));
     if (working) {
         doc_space(doc, px(12));
@@ -134,16 +140,13 @@ static void header_button(HeaderInfo *info, wchar_t glyph, const char *label, in
     snprintf(b->label, sizeof b->label, "%s", label);
 }
 
-/// `#chat-sub`: provider · model · effort · state · 🔁 loop round · branch · tokens · cost · session id · the pull request.
+/// `#chat-sub`: provider · model · effort · state · branch · tokens · cost · session id · the pull request.
 static char *status_line(const Session *ss) {
     Str sub; str_init(&sub);
     const char *parts[3] = { session_provider(ss), session_model(ss), json_str_nonempty(json_get(ss->raw, "effort")) };
     for (int i = 0; i < 3; i++) if (parts[i]) str_appendf(&sub, "%s%s", sub.len ? " \xC2\xB7 " : "", parts[i]);
     const char *state = str_eq(session_status(ss), "idle") && json_bool_is(json_get(ss->raw, "awaitingAnswer"), true) ? "waiting" : session_status(ss);
     str_appendf(&sub, "%s%s", sub.len ? " \xC2\xB7 " : "", state);
-    const Json *loop = json_get(ss->raw, "reviewLoop");
-    double round;
-    if (json_is_object(loop)) { if (json_num(json_get(loop, "rounds"), &round)) str_appendf(&sub, " \xC2\xB7 \xF0\x9F\x94\x81 loop round %d", (int)round); else str_appendz(&sub, " \xC2\xB7 \xF0\x9F\x94\x81 loop"); }
     const char *branch = json_str_nonempty(json_get(ss->raw, "branch"));
     if (branch) str_appendf(&sub, " \xC2\xB7 %s", branch);
     bool browser_up = false;
@@ -212,8 +215,6 @@ void screen_conversation_menu_choice(ConversationScreen *s, int chosen) {
     case MENU_RESOURCES: if (store_supports("session_stats")) app_push_from(&s->base, resources_screen_new(ss)); break;
     case MENU_MAIL_WAKE: if (store_supports("session_mail_wake")) app_push_from(&s->base, mail_wake_screen_new(ss)); break;
     case MENU_WEBHOOK: app_push_from(&s->base, webhook_screen_new(ss)); break;
-    case MENU_LOOP_OFF:
-    case MENU_LOOP_ON: { Json *extra = json_object(); json_set_bool(extra, "on", chosen == MENU_LOOP_ON); screen_conversation_mutate(s, "review_loop", extra); break; }
     case MENU_RENAME: {
         s->renaming = true; s->dialog_open = true;
         char *title = dialog_rename(app_dialog_owner(), session_display_title(ss));
@@ -245,28 +246,7 @@ void screen_conversation_conversation_action(Screen *base, int action, intptr_t 
     }
     case ACT_TOOL_TOGGLE: screen_conversation_toggle_expanded(s, (int)arg); pane_relayout(base->pane); break;
     case ACT_DROP_QUEUED: { Json *extra = json_object(); json_set_num(extra, "index", (double)arg); screen_conversation_mutate(s, "drop_message", extra); break; }
-    case ACT_TRIAGE_DECISION: {
-        const Json *triage = session_held_triage(screen_conversation_session(s));
-        size_t index = (size_t)(arg / 4); int decision = (int)(arg % 4);
-        const char *key = json_str(json_get(json_at(json_get(triage, "findings"), index), "key"));
-        if (key && decision >= 0 && decision < FINDING_DECISION_COUNT) { screen_conversation_set_decision(s, key, finding_decision_ids[decision]); pane_relayout(base->pane); }
-        break;
-    }
-    case ACT_TRIAGE_NOTE: {
-        s->dialog_open = true;
-        char *note = dialog_rename(app_dialog_owner(), s->triage_note ? s->triage_note : "");
-        s->dialog_open = false;
-        if (note) { set_string(&s->triage_note, note); free(note); pane_relayout(base->pane); }
-        break;
-    }
-    case ACT_TRIAGE_COMPLETE: screen_conversation_complete_triage(s, (size_t)arg); break;
-    case ACT_FINDING_LINK: {
-        const Json *triage = session_held_triage(screen_conversation_session(s));
-        const char *url = json_str(json_get(json_at(json_get(triage, "findings"), (size_t)arg), "url"));
-        open_web_url(url);
-        break;
-    }
-    case ACT_REFRESH_OUTCOME: s->uncertain = false; s->reloading = true; set_string(&s->write_error, NULL); screen_conversation_refresh(s, false); pane_relayout(base->pane); break;
+    case ACT_REFRESH_OUTCOME: s->uncertain = false; set_string(&s->write_error, NULL); screen_conversation_refresh(s, false); pane_relayout(base->pane); break;
     case ACT_DISMISS_ERROR: set_string(&s->write_error, NULL); pane_relayout(base->pane); break;
     case ACT_REOPEN: screen_conversation_confirm_and_mutate(s, "reopen"); break;
     default: screen_conversation_picture_action(s, action, arg); break;

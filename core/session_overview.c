@@ -5,16 +5,14 @@
 
 SessionState session_state(const Session *s) {
     if (str_eq(session_status(s), "idle")) {
-        if (json_bool_is(json_get(s->raw, "awaitingAnswer"), true)) return SESSION_WAITING;
-        if (session_held_round(s)) return SESSION_FINDINGS;
-        return SESSION_READY;
+        return json_bool_is(json_get(s->raw, "awaitingAnswer"), true) ? SESSION_WAITING : SESSION_READY;
     }
     if (session_is_active(s)) return SESSION_WORKING;
     return str_eq(session_status(s), "failed") ? SESSION_FAILED : SESSION_CLOSED;
 }
-bool session_needs_you(const Session *s) { SessionState state = session_state(s); return state == SESSION_WAITING || state == SESSION_FINDINGS; }
+bool session_needs_you(const Session *s) { return session_state(s) == SESSION_WAITING; }
 const char *session_state_label(SessionState state) {
-    static const char *const labels[] = { "Needs your answer", "Findings to decide", "Working", "Ready", "Failed", "Closed" };
+    static const char *const labels[] = { "Needs your answer", "Working", "Ready", "Failed", "Closed" };
     return labels[state];
 }
 static time_t waiting_since(const Session *s) {

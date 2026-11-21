@@ -119,23 +119,6 @@ time_t pulls_sync_time(const Json *result, bool saved, time_t now) {
 
 void set_string(char **slot, const char *value) { free(*slot); *slot = xstrdup(value); }
 
-const char *finding_severity_label(const char *severity, COLORREF *color) {
-    char *f = str_fold(severity);
-    const char *label;
-    if (str_eq(f, "critical")) { label = "CRIT"; *color = theme.danger; }
-    else if (str_eq(f, "high")) { label = "HIGH"; *color = theme.danger; }
-    else if (str_eq(f, "low")) { label = "LOW"; *color = theme.muted; }
-    else { label = "MED"; *color = theme.warn; }
-    free(f);
-    return label;
-}
-const char *const finding_decision_ids[FINDING_DECISION_COUNT] = { "fix", "optional", "dismissed" };
-const char *const finding_decision_titles[FINDING_DECISION_COUNT] = { "Fix", "Optional", "Dismiss" };
-int finding_decision_index(const char *decision) {
-    for (int k = 0; k < FINDING_DECISION_COUNT; k++) if (str_eq(decision, finding_decision_ids[k])) return k;
-    return -1;
-}
-
 // MARK: - Rows
 
 char *session_subtitle(const Session *session) {

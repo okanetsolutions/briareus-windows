@@ -384,33 +384,6 @@ static void test_session_live_input_and_queue(void) {
     const char *off[] = { "{\"id\":\"a\",\"status\":\"running\"}", "{\"id\":\"a\",\"status\":\"running\",\"liveInput\":false}", "{\"id\":\"a\",\"status\":\"running\",\"liveInput\":1}", "{\"id\":\"a\",\"status\":\"running\",\"liveInput\":\"true\"}" };
     for (size_t i = 0; i < 4; i++) { s = session_of(off[i]); CHECK(!session_live_input(&s)); CHECK(json_is_null(session_queued(&s))); session_free(&s); }
 }
-static void test_session_review_loop_flags(void) {
-    Session s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"reviewLoop\":{\"on\":true}}");
-    CHECK(session_review_loop_on(&s)); CHECK(session_can_review_loop(&s)); session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\"}"); CHECK(!session_review_loop_on(&s)); CHECK(session_can_review_loop(&s)); session_free(&s);
-    // Every flag that marks a session as not started from scratch on a task rules the loop out; an unset value does not.
-    const char *flags[] = { "\"reviewBranch\":\"f\"", "\"qaBranch\":\"q\"", "\"autoClose\":true", "\"loopParentId\":\"p\"", "\"local\":true", "\"orchestrator\":1" };
-    const char *unset[] = { "\"reviewBranch\":\"\"", "\"qaBranch\":null", "\"autoClose\":false", "\"loopParentId\":null", "\"local\":false", "\"orchestrator\":0" };
-    for (size_t i = 0; i < 6; i++) {
-        char *t = xstrfmt("{\"id\":\"a\",\"status\":\"idle\",%s}", flags[i]); s = session_of(t); free(t);
-        CHECK(!session_can_review_loop(&s)); session_free(&s);
-        t = xstrfmt("{\"id\":\"a\",\"status\":\"idle\",%s}", unset[i]); s = session_of(t); free(t);
-        CHECK(session_can_review_loop(&s)); session_free(&s);
-    }
-    s = session_of("{\"id\":\"a\",\"status\":\"closed\"}"); CHECK(!session_can_review_loop(&s)); session_free(&s);
-}
-static void test_held_triage_needs_findings_and_prefers_the_standalone_review(void) {
-    Session s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"reviewTriage\":{\"findings\":[{\"key\":\"own\"}]},\"reviewLoop\":{\"triage\":{\"findings\":[{\"key\":\"loop\"}]}}}");
-    CHECK_STR(json_str(json_get(json_at(json_get(session_held_triage(&s), "findings"), 0), "key")), "own");
-    // The Findings screen's round prefers the loop's.
-    CHECK_STR(json_str(json_get(json_at(json_get(session_held_round(&s), "findings"), 0), "key")), "loop");
-    session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"reviewTriage\":{\"findings\":[]},\"reviewLoop\":{\"triage\":{\"findings\":[{\"key\":\"loop\"}]}}}");
-    CHECK_STR(json_str(json_get(json_at(json_get(session_held_triage(&s), "findings"), 0), "key")), "loop");
-    session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"reviewTriage\":{},\"reviewLoop\":{\"triage\":{\"findings\":[]}}}");
-    CHECK(session_held_triage(&s) == NULL); CHECK(session_held_round(&s) != NULL); session_free(&s);
-}
 static void test_session_pull_number_ignores_what_is_not_a_pull_request(void) {
     const char *cases[] = { "{\"id\":\"s\",\"status\":\"idle\",\"prStatus\":{\"number\":-3}}",
                             "{\"id\":\"s\",\"status\":\"idle\",\"startedOnPr\":\"4\"}",
@@ -426,87 +399,6 @@ static void test_session_on_issue_reads_the_title_an_issue_start_gives(void) {
     bool expected[] = { true, false, false, false, false };
     for (int i = 0; i < 5; i++) { Session s = session_of(cases[i]); CHECK(session_on_issue(&s, 12) == expected[i]); session_free(&s); }
     Session s = session_of(cases[0]); CHECK(!session_on_issue(&s, 0)); session_free(&s);
-}
-
-// MARK: - Findings
-
-static void test_held_rounds_of_an_empty_list(void) {
-    size_t n = 99; HeldRound *r = sessions_held_rounds(NULL, 0, &n);
-    CHECK(r != NULL); CHECK_INT(n, 0); free(r);
-    Session s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"reviewTriage\":\"held\",\"reviewLoop\":{\"triage\":[]}}");
-    CHECK(session_held_round(&s) == NULL);
-    r = sessions_held_rounds(&s, 1, &n); CHECK_INT(n, 0); free(r); session_free(&s);
-}
-static void test_held_rounds_with_equal_holds_keep_the_list_order(void) {
-    Json *j = json_parsez("[{\"id\":\"a\",\"status\":\"idle\",\"reviewTriage\":{\"heldAt\":\"2026-09-29T10:00:00Z\"}},"
-                          "{\"id\":\"b\",\"status\":\"idle\"},"
-                          "{\"id\":\"c\",\"status\":\"idle\",\"reviewTriage\":{\"heldAt\":\"2026-09-29T09:00:00Z\"}},"
-                          "{\"id\":\"d\",\"status\":\"idle\",\"reviewTriage\":{\"heldAt\":\"2026-09-29T10:00:00Z\"}},"
-                          "{\"id\":\"e\",\"status\":\"idle\",\"reviewTriage\":{\"heldAt\":\"2026-09-29T09:00:00Z\"}}]");
-    Session *s; size_t n; CHECK(sessions_parse(j, &s, &n));
-    size_t count; HeldRound *r = sessions_held_rounds(s, n, &count);
-    CHECK_INT(count, 4);
-    CHECK_INT(r[0].index, 2); CHECK_INT(r[1].index, 4); CHECK_INT(r[2].index, 0); CHECK_INT(r[3].index, 3);
-    CHECK(r[0].held == session_held_round(&s[2]));
-    free(r); sessions_free(s, n); json_free(j);
-}
-static void test_held_round_url_reuses_the_conversations_own_link_only_for_its_pull_request(void) {
-    Json *held7 = json_parsez("{\"prNumber\":7}"), *held9 = json_parsez("{\"prNumber\":9}"), *none = json_parsez("{}");
-    Session s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"number\":7,\"url\":\"https://ghe.example/o/r/pull/7\"}}");
-    CHECK_OWNED_STR(held_round_pr_url(&s, held7), "https://ghe.example/o/r/pull/7");
-    CHECK_OWNED_STR(held_round_pr_url(&s, held9), "https://github.com/o/r/pull/9");
-    session_free(&s);
-    // An empty link or one without a number is built from the round's number.
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"number\":7,\"url\":\"\"}}");
-    CHECK_OWNED_STR(held_round_pr_url(&s, held7), "https://github.com/o/r/pull/7"); session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"url\":\"https://ghe.example/x\"}}");
-    CHECK_OWNED_STR(held_round_pr_url(&s, held7), "https://github.com/o/r/pull/7"); session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\"}");
-    CHECK_OWNED_STR(held_round_pr_url(&s, held9), "https://github.com//pull/9"); session_free(&s);
-    // A round without a number has the conversation's own link, or none.
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\",\"prStatus\":{\"number\":7,\"url\":\"https://ghe.example/o/r/pull/7\"}}");
-    CHECK_OWNED_STR(held_round_pr_url(&s, none), "https://ghe.example/o/r/pull/7"); session_free(&s);
-    s = session_of("{\"id\":\"a\",\"status\":\"idle\",\"repo\":\"o/r\"}");
-    CHECK(held_round_pr_url(&s, none) == NULL); session_free(&s);
-    CHECK_INT(held_round_pr_number(held7), 7); CHECK_INT(held_round_pr_number(none), 0); CHECK_INT(held_round_pr_number(NULL), 0);
-    Json *odd = json_parsez("{\"prNumber\":0}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
-    odd = json_parsez("{\"prNumber\":\"7\"}"); CHECK_INT(held_round_pr_number(odd), 0); json_free(odd);
-    json_free(held7); json_free(held9); json_free(none);
-}
-static void test_held_round_is_mine_unless_a_standalone_review_says_otherwise(void) {
-    const char *mine[] = { "{}", "{\"mine\":false}", "{\"standalone\":false,\"mine\":false}", "{\"standalone\":null}", "{\"standalone\":true,\"mine\":true}" };
-    const char *theirs[] = { "{\"standalone\":true}", "{\"standalone\":true,\"mine\":false}", "{\"standalone\":true,\"mine\":\"yes\"}", "{\"standalone\":1,\"mine\":1}" };
-    for (size_t i = 0; i < 5; i++) { Json *j = json_parsez(mine[i]); CHECK(held_round_is_mine(j)); json_free(j); }
-    for (size_t i = 0; i < 4; i++) { Json *j = json_parsez(theirs[i]); CHECK(!held_round_is_mine(j)); json_free(j); }
-}
-static void test_triage_outcome_text_covers_every_outcome(void) {
-    struct { const char *outcome, *text; bool danger; } cases[] = {
-        { "{\"completed\":true,\"prNumber\":12}", "Review completed; what it found stays on PR #12 for its author.", false },
-        { "{\"completed\":true}", "Review completed; what it found stays on the pull request for its author.", false },
-        { "{\"completed\":true,\"prNumber\":\"12\"}", "Review completed; what it found stays on the pull request for its author.", false },
-        { "{\"converged\":true,\"approved\":true}", "Verdicts recorded; nothing was left to fix, so code-approved was added and the loop converged.", false },
-        { "{\"approved\":true,\"fixing\":true}", "Verdicts recorded; nothing was left to fix, so code-approved was added.", false },
-        { "{\"fixing\":\"session-id\"}", "Verdicts recorded; a fix session is running.", false },
-        { "{\"reviewing\":true,\"deferred\":true}", "Verdicts recorded; nothing was left to fix, but the branch had moved, so the new commits are being reviewed.", false },
-        { "{\"deferred\":true}", "Verdicts recorded; nothing was left to fix, but the branch had moved. The new commits are reviewed once the session settles idle.", false },
-        { "{\"completed\":false,\"converged\":null,\"fixing\":\"\",\"deferred\":0}", "Verdicts recorded, but no fix session started. The session\xE2\x80\x99s log says why.", true },
-        { "{}", "Verdicts recorded, but no fix session started. The session\xE2\x80\x99s log says why.", true },
-    };
-    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        Json *j = json_parsez(cases[i].outcome); bool danger = !cases[i].danger;
-        CHECK_OWNED_STR(triage_outcome_text(j, &danger), cases[i].text); CHECK(danger == cases[i].danger);
-        json_free(j);
-    }
-    bool danger = false;
-    CHECK_OWNED_STR(triage_outcome_text(NULL, &danger), "Verdicts recorded, but no fix session started. The session\xE2\x80\x99s log says why."); CHECK(danger);
-}
-static void test_findings_subtitle_counts_reviews_and_pull_requests(void) {
-    CHECK_OWNED_STR(findings_subtitle(0, 0), "nothing is waiting");
-    CHECK_OWNED_STR(findings_subtitle(0, 3), "nothing is waiting");
-    CHECK_OWNED_STR(findings_subtitle(1, 1), "1 review waiting for a decision");
-    CHECK_OWNED_STR(findings_subtitle(2, 2), "2 reviews waiting for a decision");
-    CHECK_OWNED_STR(findings_subtitle(2, 1), "2 reviews on 1 pull request waiting for a decision");
-    CHECK_OWNED_STR(findings_subtitle(5, 3), "5 reviews on 3 pull requests waiting for a decision");
 }
 
 // MARK: - Events and transcript
@@ -967,16 +859,8 @@ void models_tests(void) {
     test_run("session accessors fall back when fields are missing", test_session_accessors_fall_back_when_fields_are_missing);
     test_run("session is active by status", test_session_is_active_by_status);
     test_run("session live input and queue", test_session_live_input_and_queue);
-    test_run("session review loop flags", test_session_review_loop_flags);
-    test_run("held triage needs findings and prefers the standalone review", test_held_triage_needs_findings_and_prefers_the_standalone_review);
     test_run("session pull number ignores what is not a pull request", test_session_pull_number_ignores_what_is_not_a_pull_request);
     test_run("session on issue reads the title an issue start gives", test_session_on_issue_reads_the_title_an_issue_start_gives);
-    test_run("held rounds of an empty list", test_held_rounds_of_an_empty_list);
-    test_run("held rounds with equal holds keep the list order", test_held_rounds_with_equal_holds_keep_the_list_order);
-    test_run("held round URL reuses the conversation's own link only for its pull request", test_held_round_url_reuses_the_conversations_own_link_only_for_its_pull_request);
-    test_run("held round is mine unless a standalone review says otherwise", test_held_round_is_mine_unless_a_standalone_review_says_otherwise);
-    test_run("triage outcome text covers every outcome", test_triage_outcome_text_covers_every_outcome);
-    test_run("findings subtitle counts reviews and pull requests", test_findings_subtitle_counts_reviews_and_pull_requests);
     test_run("event reads every field", test_event_reads_every_field);
     test_run("event needs a kind and a sequence", test_event_needs_a_kind_and_a_sequence);
     test_run("event detail prefers text over summary", test_event_detail_prefers_text_over_summary);

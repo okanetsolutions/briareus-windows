@@ -2,8 +2,7 @@
 
 static char *chip_label(NewSessionScreen *s, int chip);
 static bool chip_shown(NewSessionScreen *s, int chip);
-static bool chip_picker(int chip);
-static int chip_width(Canvas *cv, const char *label, bool picker);
+static int chip_width(Canvas *cv, const char *label);
 static int chips_layout(NewSessionScreen *s, Canvas *cv, int width, RECT *out);
 static int composer_height(NewSessionScreen *s, Canvas *cv);
 static RECT footer_column(const RECT *rc);
@@ -91,7 +90,6 @@ static char *chip_label(NewSessionScreen *s, int chip) {
         break;
     }
     case CHIP_EFFORT: out = xstrdup(has && eff.effort ? eff.effort : "effort"); break;
-    case CHIP_LOOP: out = xstrdup(s->review_loop ? "\xF0\x9F\x94\x81 Review loop: on" : "\xF0\x9F\x94\x81 Review loop"); break;
     }
     if (has) runtime_choice_free(&eff);
     return out;
@@ -102,16 +100,13 @@ static bool chip_shown(NewSessionScreen *s, int chip) {
     case CHIP_PROVIDER: case CHIP_MODEL: return s->has_catalog && s->catalog.provider_count > 0;
     case CHIP_EFFORT: { RuntimeChoice eff; if (!screen_new_session_effective_choice(s, &eff)) return false; size_t n = 0; runtime_catalog_efforts(&s->catalog, &eff, &n); runtime_choice_free(&eff); return n > 0; }
     case CHIP_BRANCH: return s->workspace != WORKSPACE_ORCHESTRATOR && store_supports("branches");
-    case CHIP_LOOP: return s->workspace == WORKSPACE_WORKTREE && store_supports("review_loop");
     default: return true;
     }
 }
 
-static bool chip_picker(int chip) { return chip != CHIP_LOOP; }
-
-static int chip_width(Canvas *cv, const char *label, bool picker) {
+static int chip_width(Canvas *cv, const char *label) {
     int w = px(6) * 2 + text_width(cv, label, FONT_CAPTION) + px(4);   // a glyph from a fallback font measures a touch narrow
-    if (picker) w += px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
+    w += px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
     if (w > px(150)) w = px(150);
     return w;
 }
@@ -123,7 +118,7 @@ static int chips_layout(NewSessionScreen *s, Canvas *cv, int width, RECT *out) {
         if (out) SetRectEmpty(&out[c]);
         if (!chip_shown(s, c)) continue;
         char *label = chip_label(s, c);
-        int w = chip_width(cv, label, chip_picker(c));
+        int w = chip_width(cv, label);
         free(label);
         if (x > 0 && x + w > width) { x = 0; y += h + gap; }
         if (out) { RECT r = { x, y, x + w, y + h }; out[c] = r; }
@@ -186,15 +181,13 @@ void screen_new_session_new_session_footer_paint(Screen *base, Canvas *cv, const
         if (IsRectEmpty(&rects[c])) continue;
         RECT r = { col.left + rects[c].left, y0 + rects[c].top, col.left + rects[c].right, y0 + rects[c].bottom };
         s->chip_rc[c] = r;
-        bool on = (c == CHIP_LOOP && s->review_loop);
         bool dim = s->busy;
-        fill_round_rect(cv, &r, px(6), theme.raise, on ? theme.accent : theme.line);
+        fill_round_rect(cv, &r, px(6), theme.raise, theme.line);
         char *label = chip_label(s, c);
-        bool picker = chip_picker(c);
-        int cw = picker ? px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD) : 0;
+        int cw = px(4) + text_width(cv, "\xE2\x96\xBE", FONT_TINY_SEMIBOLD);
         RECT t = { r.left + px(6), r.top, r.right - px(6) - cw, r.bottom };
-        draw_text(cv, label, &t, FONT_CAPTION, on ? theme.accent : dim ? theme.muted : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        if (picker) { RECT a = { r.right - px(6) - cw + px(4), r.top, r.right - px(6), r.bottom }; draw_text(cv, "\xE2\x96\xBE", &a, FONT_TINY_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE); }
+        draw_text(cv, label, &t, FONT_CAPTION, dim ? theme.muted : theme.ink, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        RECT a = { r.right - px(6) - cw + px(4), r.top, r.right - px(6), r.bottom }; draw_text(cv, "\xE2\x96\xBE", &a, FONT_TINY_SEMIBOLD, theme.muted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         free(label);
     }
     // The box: `rounded-2xl border border-line bg-raise px-3 pt-2.5 pb-2 focus-within:border-line-strong`.

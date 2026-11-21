@@ -19,16 +19,17 @@ static void states_and_order(void) {
         "{\"id\":\"starting\",\"status\":\"starting\",\"title\":\"Zulu\"},"
         "{\"id\":\"other\",\"status\":\"interrupted\"}]");
     Session *items; size_t count; CHECK(sessions_parse(raw, &items, &count)); json_free(raw);
-    CHECK_INT(session_state(&items[0]), SESSION_WAITING); CHECK_INT(session_state(&items[1]), SESSION_FINDINGS);
+    CHECK_INT(session_state(&items[0]), SESSION_WAITING); CHECK_INT(session_state(&items[1]), SESSION_READY);
     CHECK_INT(session_state(&items[2]), SESSION_WORKING); CHECK_INT(session_state(&items[4]), SESSION_READY);
     CHECK_INT(session_state(&items[5]), SESSION_FAILED); CHECK_INT(session_state(&items[6]), SESSION_CLOSED);
     CHECK_INT(session_state(&items[12]), SESSION_CLOSED);
     SessionOverview o = session_overview(items, count);
-    CHECK_INT(o.waiting_count, 2); CHECK_INT(o.working_count, 4); CHECK_INT(o.ready, 1);
-    CHECK_STR(session_id(&items[o.waiting[0]]), "held"); CHECK_STR(session_id(&items[o.waiting[1]]), "wait");
+    // A review round the server once held on the session (`reviewLoop`, `reviewTriage`) no longer asks for anything.
+    CHECK_INT(o.waiting_count, 1); CHECK_INT(o.working_count, 4); CHECK_INT(o.ready, 2);
+    CHECK_STR(session_id(&items[o.waiting[0]]), "wait");
     CHECK_STR(session_id(&items[o.working[0]]), "alpha"); CHECK_STR(session_id(&items[o.working[1]]), "beta");
     CHECK_STR(session_id(&items[o.working[2]]), "queued"); CHECK_STR(session_id(&items[o.working[3]]), "starting");
-    CHECK_STR(session_state_label(SESSION_FINDINGS), "Findings to decide");
+    CHECK_STR(session_state_label(SESSION_WAITING), "Needs your answer"); CHECK_STR(session_state_label(SESSION_CLOSED), "Closed");
     session_overview_free(&o); sessions_free(items, count);
     o = session_overview(NULL, 0); CHECK_INT(o.waiting_count, 0); CHECK_INT(o.working_count, 0); CHECK_INT(o.ready, 0); session_overview_free(&o);
 }

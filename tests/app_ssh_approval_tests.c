@@ -178,33 +178,29 @@ static void metadata_rebind_preserves_cooldowns(void) {
         ssh_approvals_free(s); clear(&f);
     }
 }
-static void findings_cooldown_does_not_delay_ssh(void) {
+static void findings_screen_reads_only_ssh_requests(void) {
     Fixture f; init(&f);
-    wchar_t dir[MAX_PATH]; GetTempPathW(MAX_PATH, dir); wcscat(dir, L"briareus-ssh-poll-tests");
-    g_store.cache = cache_new(dir); cache_remove_all(g_store.cache);
     Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
-    Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}};
-    g_store.routes = routes; g_store.route_count = 3;
+    // The conversations' held review rounds are retired (core #228): Findings reads no project or session list.
+    Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}, {"GET", "/sessions", "read"}};
+    g_store.routes = routes; g_store.route_count = 4;
     screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
-    f.steps[1].status = 429; f.steps[1].retry = "3600";
-    base->vt->timer(base, TIMER_POLL); complete(&f, 1);
-    CHECK_STR(f.steps[1].url, "https://example.com/api/v1/projects");
-    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.base_ms, 7000);
-    base->vt->timer(base, SSH_POLL); complete(&f, 2);
+    CHECK_STR(f.steps[0].url, "https://example.com/api/v1/ssh/requests");
+    base->vt->timer(base, SSH_POLL); complete(&f, 1);
+    CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
+    f.steps[2].status = 429; f.steps[2].retry = "3600";
+    base->vt->refresh(base); complete(&f, 2);
     CHECK_STR(f.steps[2].url, "https://example.com/api/v1/ssh/requests");
-    CHECK_INT(s->poller.retry_after, 3600); CHECK_INT(s->ssh->poller.retry_after, -1);
-    f.steps[3].status = 429; f.steps[3].retry = "3600";
-    base->vt->timer(base, SSH_POLL); complete(&f, 3);
-    base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 4);
+    base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 3);
     base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
-    base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 4);
-    base->vt->destroy(base); cache_remove_all(g_store.cache); cache_free(g_store.cache); RemoveDirectoryW(dir); clear(&f);
+    base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 3);
+    base->vt->destroy(base); clear(&f);
 }
 void app_ssh_approval_tests(void) {
     screen_fixture_prepare();
     test_run("SSH metadata rebind retains read and write cooldowns", metadata_rebind_preserves_cooldowns);
     test_run("SSH restored metadata rebinds without unlocking decisions", restored_metadata_rebinds_and_keeps_interlocks);
-    test_run("Findings cooldown leaves SSH polling independent", findings_cooldown_does_not_delay_ssh);
+    test_run("Findings screen reads only SSH requests", findings_screen_reads_only_ssh_requests);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);

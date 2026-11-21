@@ -55,7 +55,7 @@ static void projects_count(ProjectsScreen *s) {
         }
         json_free(list);
     }
-    screen_projects_g_waiting = findings_waiting(s->projects, s->count) + ssh_approvals_badge();
+    screen_projects_g_waiting = ssh_approvals_badge();
     screen_projects_g_status = status_waiting(s->projects, s->count);
 }
 

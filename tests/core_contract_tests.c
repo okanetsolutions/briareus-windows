@@ -162,7 +162,7 @@ static void test_provider_choices_survive_catalog_round_trip(void) {
     runtime_choice_free(&choice); runtime_catalog_free(&back); json_free(saved); runtime_catalog_free(&c); json_free(j);
 }
 
-static void test_not_fixed_prose_and_links_do_not_add_held_findings(void) {
+static void test_not_fixed_prose_keeps_its_heading_and_safe_links(void) {
     Json *j = json_parsez(REVIEW); const char *body = json_str(json_get(j, "body"));
     size_t n = 0; MdBlock *blocks = md_parse(body, &n); bool heading = false; size_t links = 0;
     for (size_t i = 0; i < n; i++) {
@@ -176,13 +176,7 @@ static void test_not_fixed_prose_and_links_do_not_add_held_findings(void) {
         md_spans_free(spans, sn);
     }
     CHECK(heading); CHECK_INT(links, 2); md_free(blocks, n);
-    Session s; CHECK(session_parse(json_get(j, "session"), &s));
-    const Json *findings = json_get(session_held_triage(&s), "findings");
-    CHECK_INT(json_count(findings), 1); CHECK_STR(json_str(json_get(json_at(findings, 0), "key")), "optional");
-    CHECK(json_bool_is(json_get(json_get(json_at(findings, 0), "assessment"), "worthFixing"), false));
-    CHECK_INT(json_count(json_get(j, "findings")), 1);
-    CHECK(json_equal(s.raw, json_get(j, "session")));
-    session_free(&s); json_free(j);
+    json_free(j);
 }
 
 void contract_tests(void) {
@@ -191,5 +185,5 @@ void contract_tests(void) {
     test_run("Claude server turn costs and future events round trip", test_claude_turn_costs_and_future_events_round_trip);
     test_run("Codex absorbed estimates survive cache and refresh", test_codex_server_rollup_preserves_absorbed_estimates_and_refresh);
     test_run("provider choices survive refreshed catalogs", test_provider_choices_survive_catalog_round_trip);
-    test_run("Not fixed prose and links keep only confirmed held findings", test_not_fixed_prose_and_links_do_not_add_held_findings);
+    test_run("Not fixed prose keeps its heading and safe links", test_not_fixed_prose_keeps_its_heading_and_safe_links);
 }

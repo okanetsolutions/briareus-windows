@@ -25,7 +25,6 @@ static void refresh_done(void *owner, Request *req) {
     ConversationScreen *s = owner;
     s->loading = false;
     bool full = req->arg != 0;
-    bool read = false;
     if (!req->ok) {
         if (screen_conversation_review_removed(s, req)) return;
         request_error_into(&s->error, req);
@@ -36,7 +35,7 @@ static void refresh_done(void *owner, Request *req) {
         Session next;
         if (session_parse(json_get(req->result, "session"), &next)) {
             if (s->has_snapshot) session_free(&s->snapshot);
-            s->snapshot = next; s->has_snapshot = true; read = true;
+            s->snapshot = next; s->has_snapshot = true;
         }
         if (full) { transcript_free(&s->transcript); transcript_init(&s->transcript); }
         transcript_append(&s->transcript, events);
@@ -54,8 +53,6 @@ static void refresh_done(void *owner, Request *req) {
     pane_header_changed(s->base.pane);
     // A read asked for while this one was out goes now; after a failed one it waits for the poller's retry and its backoff.
     if (req->ok && (s->pending_full || s->pending_refresh)) { bool f = s->pending_full; s->pending_full = s->pending_refresh = false; screen_conversation_refresh(s, f); }
-    // The session a mutation changed is current only once a read of it lands.
-    else if (read) s->reloading = false;
 }
 
 void screen_conversation_refresh(ConversationScreen *s, bool full) {
@@ -99,7 +96,7 @@ static void mutate_done(void *owner, Request *req) {
         // A refusal (draining, closed elsewhere) changed nothing, so the screen stays usable; it is read again, since a
         // refusal often means what it shows is out of date.
         if (request_outcome_unknown(req)) s->uncertain = true;
-        else { s->reloading = true; screen_conversation_refresh(s, false); }
+        else screen_conversation_refresh(s, false);
         pane_relayout(s->base.pane); pane_header_changed(s->base.pane);
         return;
     }
@@ -118,10 +115,7 @@ static void mutate_done(void *owner, Request *req) {
         if (pane_depth(pane) > 1) pane_pop(pane); else if (detached_pane(pane)) detached_close(pane); else app_clear_detail();
         return;   // this screen is gone
     }
-    if (str_eq(name, "complete_findings")) { str_array_free(s->decisions, s->decision_count); s->decisions = NULL; s->decision_count = 0; set_string(&s->triage_note, NULL); }
     pane_header_changed(s->base.pane);
-    // Until the session is read again the loop chip would act on the old one, and a second click resend the same `on`.
-    s->reloading = true;
     // A Clear or a compaction hides lines already on screen, so the transcript is read again whole.
     screen_conversation_refresh(s, str_eq(name, "clear") || str_eq(name, "compact"));
 }
@@ -250,8 +244,7 @@ static void conversation_destroy(Screen *base) {
     if (s->composer) DestroyWindow(s->composer);
     session_free(&s->initial); if (s->has_snapshot) session_free(&s->snapshot);
     transcript_free(&s->transcript);
-    free(s->error); free(s->write_error); free(s->pending_mutation); free(s->expanded); free(s->triage_note);
-    str_array_free(s->decisions, s->decision_count);
+    free(s->error); free(s->write_error); free(s->pending_mutation); free(s->expanded);
     screen_release(base);
 }
 

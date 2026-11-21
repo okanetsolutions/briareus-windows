@@ -233,22 +233,6 @@ bool session_is_active(const Session *s) {
 }
 bool session_live_input(const Session *s) { return json_bool_is(json_get(s->raw, "liveInput"), true); }
 const Json *session_queued(const Session *s) { return json_get(s->raw, "queued"); }
-bool session_review_loop_on(const Session *s) {
-    return !json_is_null(json_get(s->raw, "reviewLoop"));
-}
-bool session_can_review_loop(const Session *s) {
-    if (str_eq(session_status(s), "closed")) return false;
-    static const char *const flags[] = { "reviewBranch", "qaBranch", "autoClose", "loopParentId", "local", "orchestrator" };
-    for (size_t i = 0; i < sizeof flags / sizeof *flags; i++) if (json_is_set(json_get(s->raw, flags[i]))) return false;
-    return true;
-}
-const Json *session_held_triage(const Session *s) {
-    const Json *candidates[] = { json_get(s->raw, "reviewTriage"), json_get(json_get(s->raw, "reviewLoop"), "triage") };
-    for (size_t i = 0; i < 2; i++) {
-        if (!json_is_null(candidates[i]) && json_count(json_get(candidates[i], "findings")) > 0) return candidates[i];
-    }
-    return NULL;
-}
 int session_pull_number(const Session *s) {
     double n;
     if (!json_num(json_get(json_get(s->raw, "prStatus"), "number"), &n) && !json_num(json_get(s->raw, "startedOnPr"), &n)) return 0;
@@ -273,66 +257,6 @@ Json *sessions_json(const Session *sessions, size_t count) {
     return a;
 }
 DEFINE_LIST_FREE(Session, sessions_free, session_free)
-
-// MARK: - Findings
-
-const Json *session_held_round(const Session *s) {
-    const Json *loop = json_get(json_get(s->raw, "reviewLoop"), "triage");
-    if (json_is_object(loop)) return loop;
-    const Json *standalone = json_get(s->raw, "reviewTriage");
-    return json_is_object(standalone) ? standalone : NULL;
-}
-static const char *held_at(const Json *held) { const char *at = json_str(json_get(held, "heldAt")); return at ? at : ""; }
-HeldRound *sessions_held_rounds(const Session *sessions, size_t count, size_t *out_count) {
-    HeldRound *rounds = xcalloc(count, sizeof *rounds);
-    size_t n = 0;
-    for (size_t i = 0; i < count; i++) {
-        const Json *held = session_held_round(&sessions[i]);
-        if (!held) continue;
-        // Oldest hold first; equal holds keep the list's order.
-        size_t at = n;
-        while (at > 0 && strcmp(held_at(rounds[at - 1].held), held_at(held)) > 0) { rounds[at] = rounds[at - 1]; at--; }
-        rounds[at].index = i; rounds[at].held = held;
-        n++;
-    }
-    *out_count = n;
-    return rounds;
-}
-int held_round_pr_number(const Json *held) { double n; return json_num(json_get(held, "prNumber"), &n) && n >= 1 ? (int)n : 0; }
-char *held_round_pr_url(const Session *s, const Json *held) {
-    const Json *pr = json_get(s->raw, "prStatus");
-    const char *url = json_str_nonempty(json_get(pr, "url"));
-    double number;
-    int held_number = held_round_pr_number(held);
-    if (url && (!held_number || (json_num(json_get(pr, "number"), &number) && (int)number == held_number))) return xstrdup(url);
-    if (!held_number) return NULL;
-    const char *repo = session_repo(s);
-    return xstrfmt("https://github.com/%s/pull/%d", repo ? repo : "", held_number);
-}
-bool held_round_is_mine(const Json *held) {
-    if (!json_is_set(json_get(held, "standalone"))) return true;
-    return json_bool_is(json_get(held, "mine"), true);
-}
-char *triage_outcome_text(const Json *outcome, bool *danger) {
-    *danger = false;
-    if (json_is_set(json_get(outcome, "completed"))) {
-        int pr = json_int_or(json_get(outcome, "prNumber"), 0);
-        return pr ? xstrfmt("Review completed; what it found stays on PR #%d for its author.", pr)
-                  : xstrdup("Review completed; what it found stays on the pull request for its author.");
-    }
-    if (json_is_set(json_get(outcome, "converged"))) return xstrdup("Verdicts recorded; nothing was left to fix, so code-approved was added and the loop converged.");
-    if (json_is_set(json_get(outcome, "approved"))) return xstrdup("Verdicts recorded; nothing was left to fix, so code-approved was added.");
-    if (json_is_set(json_get(outcome, "fixing"))) return xstrdup("Verdicts recorded; a fix session is running.");
-    if (json_is_set(json_get(outcome, "reviewing"))) return xstrdup("Verdicts recorded; nothing was left to fix, but the branch had moved, so the new commits are being reviewed.");
-    if (json_is_set(json_get(outcome, "deferred"))) return xstrdup("Verdicts recorded; nothing was left to fix, but the branch had moved. The new commits are reviewed once the session settles idle.");
-    *danger = true;
-    return xstrdup("Verdicts recorded, but no fix session started. The session\xE2\x80\x99s log says why.");
-}
-char *findings_subtitle(size_t rounds, size_t pull_requests) {
-    if (!rounds) return xstrdup("nothing is waiting");
-    if (pull_requests == rounds) return xstrfmt("%zu review%s waiting for a decision", rounds, rounds == 1 ? "" : "s");
-    return xstrfmt("%zu reviews on %zu pull request%s waiting for a decision", rounds, pull_requests, pull_requests == 1 ? "" : "s");
-}
 
 // MARK: - Transcript
 

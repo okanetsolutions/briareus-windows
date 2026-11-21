@@ -40,7 +40,7 @@ static void test_pinned_catalog_gates_existing_calls(void) {
     Route *routes = NULL; size_t n = 0; CHECK(routes_parse(j, &routes, &n)); json_free(j);
     const struct { const char *call; int least; } calls[] = {
         { "pulls", 0 }, { "sessions", 0 }, { "session", 0 }, { "runtimes", 0 },
-        { "repo_tree", 0 }, { "repo_file", 0 }, { "pull_description", 0 }, { "findings", 0 },
+        { "repo_tree", 0 }, { "repo_file", 0 }, { "pull_description", 0 },
         { "settings_mcp_servers", 2 }, { "create_mcp_server", 2 }, { "update_mcp_server", 2 },
         { "delete_mcp_server", 2 }, { "connect_mcp_server", 2 }, { "finish_mcp_sign_in", 2 },
         { "settings_mail_accounts", 2 }, { "connect_mail_account", 2 }, { "finish_mail_account", 2 },

@@ -5,7 +5,6 @@
 
 typedef struct { char *before, *name, *after; } WelcomeData;
 
-static void loop_done(void *owner, Request *req);
 static void start_done(void *owner, Request *req);
 static void welcome_free(void *p);
 static void paint_welcome_line(Doc *doc, Item *it, Canvas *cv, const RECT *rc);
@@ -25,8 +24,6 @@ char *screen_new_session_no_branch_label(NewSessionScreen *s) { return s->worksp
 
 // MARK: - Starting
 
-static void loop_done(void *owner, Request *req) { (void)owner; (void)req; }
-
 static void start_done(void *owner, Request *req) {
     NewSessionScreen *s = owner;
     s->busy = false;
@@ -34,11 +31,6 @@ static void start_done(void *owner, Request *req) {
     if (req->ok && session_parse(json_get(req->result, "session"), &started)) {
         screen_new_session_set_composer_text(s, "");
         attach_list_sent(s->files, json_get(req->args, "attachments"));
-        // Only worktree sessions have a review-loop chip; local sessions and orchestrators never have their own loop.
-        if (s->workspace == WORKSPACE_WORKTREE && !s->review_loop && store_supports("review_loop") && session_can_review_loop(&started)) {
-            Json *a = json_object(); json_set_str(a, "sessionId", session_id(&started)); json_set_bool(a, "on", false);
-            store_call("review_loop", a, 0, NULL, loop_done, 0, NULL);
-        }
         app_show_detail(conversation_screen_new(&started));
         session_free(&started);
         return;
@@ -255,7 +247,6 @@ Screen *new_session_screen_new(const Project *project_, const Project *projects,
         if (saved && projects_parse(saved, &items, &n)) { free(s->projects); s->projects = items; s->count = n; }
         json_free(saved);
     }
-    s->review_loop = settings_read_review_loop();
     s->composer_lines = 1;
     s->files = attach_list_new(&s->base, "start_session");
     const Project *picked = screen_new_session_project(s);

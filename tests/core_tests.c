@@ -220,9 +220,9 @@ static void test_calls_take_their_route_and_arguments_from_the_table(void) {
     CHECK(stub.calls == calls);
     // Every call the board and the screens make is in the table.
     const char *names[] = { "projects", "sessions", "session", "runtimes", "branches", "actions", "action", "pulls", "pull", "pull_description", "pull_files", "pull_comments",
-                            "pull_reviews", "pull_review_comments", "findings",
-                            "finding_decision", "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
-                            "reopen", "review_loop", "complete_findings", "save_findings", "reply_finding", "delete_finding", "upload", "transcribe",
+                            "pull_reviews", "pull_review_comments",
+                            "merge_pull", "serve_pull", "start_session", "review", "message", "rename", "delete", "drop_message", "cancel", "close",
+                            "reopen", "upload", "transcribe",
                             "settings_projects", "create_project", "update_project", "delete_project", "order_projects",
                             "settings_providers", "create_provider", "update_provider", "delete_provider", "test_provider", "provider_status",
                             "provider_login", "provider_login_start", "provider_login_finish",
@@ -415,46 +415,6 @@ static void test_transcript_deduplicates_sorts_and_advances_unknown_events(void)
     Transcript fresh; transcript_init(&fresh); CHECK(fresh.cursor == 0);
     transcript_free(&t); json_free(events);
 }
-static void test_session_reads_review_loop_and_held_triage(void) {
-    Json *list = json_parsez("[{\"id\":\"a\",\"status\":\"idle\",\"reviewLoop\":{\"triage\":{\"round\":2,\"findings\":[{\"key\":\"k1\"}]}}},"
-                             "{\"id\":\"b\",\"status\":\"idle\",\"reviewBranch\":\"feature\",\"reviewTriage\":{\"mine\":false,\"findings\":[{\"key\":\"k2\"}]},\"reviewLoop\":null},"
-                             "{\"id\":\"c\",\"status\":\"closed\",\"local\":false}]");
-    Session *s; size_t n; CHECK(sessions_parse(list, &s, &n)); CHECK(n == 3);
-    CHECK(session_review_loop_on(&s[0]) && !session_review_loop_on(&s[1]) && !session_review_loop_on(&s[2]));
-    CHECK(session_can_review_loop(&s[0]) && !session_can_review_loop(&s[1]) && !session_can_review_loop(&s[2]));
-    CHECK_STR(json_str(json_get(json_at(json_get(session_held_triage(&s[0]), "findings"), 0), "key")), "k1");
-    CHECK_STR(json_str(json_get(json_at(json_get(session_held_triage(&s[1]), "findings"), 0), "key")), "k2");
-    CHECK(session_held_triage(&s[2]) == NULL);
-    sessions_free(s, n); json_free(list);
-}
-static void test_findings_queue_lists_held_rounds_oldest_first_by_pull_request(void) {
-    Json *list = json_parsez("[{\"id\":\"a\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewLoop\":{\"triage\":{\"round\":2,\"prNumber\":7,\"heldAt\":\"2026-09-29T10:00:00Z\",\"findings\":[{\"key\":\"k1\"}]}},\"prStatus\":{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\"}},"
-                             "{\"id\":\"b\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":{\"standalone\":true,\"mine\":false,\"prNumber\":9,\"heldAt\":\"2026-09-29T09:00:00Z\",\"findings\":[]},\"prStatus\":{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\"}},"
-                             "{\"id\":\"c\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":null,\"reviewLoop\":{\"on\":true,\"triage\":null}},"
-                             "{\"id\":\"d\",\"repo\":\"o/r\",\"status\":\"idle\",\"reviewTriage\":{\"standalone\":true,\"mine\":true,\"prNumber\":7,\"findings\":[{\"key\":\"k3\"}]}}]");
-    Session *s; size_t n; CHECK(sessions_parse(list, &s, &n)); CHECK(n == 4);
-    // A review whose every finding was deleted still waits to be completed; the old helper leaves it out.
-    CHECK(session_held_round(&s[1]) != NULL && session_held_triage(&s[1]) == NULL);
-    CHECK(session_held_round(&s[2]) == NULL);
-    size_t count; HeldRound *rounds = sessions_held_rounds(s, n, &count);
-    CHECK(count == 3);
-    CHECK(rounds[0].index == 3 && rounds[1].index == 1 && rounds[2].index == 0);   // no hold time sorts first, then the oldest
-    CHECK(held_round_is_mine(rounds[2].held) && !held_round_is_mine(rounds[1].held) && held_round_is_mine(rounds[0].held));
-    CHECK(held_round_pr_number(rounds[1].held) == 9);
-    char *own = held_round_pr_url(&s[0], rounds[2].held), *moved = held_round_pr_url(&s[1], rounds[1].held);
-    CHECK_STR(own, "https://github.com/o/r/pull/7"); CHECK_STR(moved, "https://github.com/o/r/pull/9");
-    free(own); free(moved); free(rounds);
-    bool danger;
-    Json *fixing = json_parsez("{\"fixing\":true}"), *nothing = json_parsez("{\"dismissed\":false}"), *done = json_parsez("{\"completed\":true,\"prNumber\":9}");
-    char *t1 = triage_outcome_text(fixing, &danger); CHECK_STR(t1, "Verdicts recorded; a fix session is running."); CHECK(!danger);
-    char *t2 = triage_outcome_text(nothing, &danger); CHECK(str_has_prefix(t2, "Verdicts recorded, but no fix session started")); CHECK(danger);
-    char *t3 = triage_outcome_text(done, &danger); CHECK_STR(t3, "Review completed; what it found stays on PR #9 for its author."); CHECK(!danger);
-    free(t1); free(t2); free(t3); json_free(fixing); json_free(nothing); json_free(done);
-    char *s0 = findings_subtitle(0, 0), *s1 = findings_subtitle(1, 1), *s2 = findings_subtitle(3, 2);
-    CHECK_STR(s0, "nothing is waiting"); CHECK_STR(s1, "1 review waiting for a decision"); CHECK_STR(s2, "3 reviews on 2 pull requests waiting for a decision");
-    free(s0); free(s1); free(s2);
-    sessions_free(s, n); json_free(list);
-}
 static void test_setup_events_are_shown_and_status_hidden(void) {
     Json *events = json_parsez("[{\"seq\":1,\"kind\":\"setup\",\"text\":\"SQLSTATE[HY000] Connection refused\"},{\"seq\":2,\"kind\":\"status\",\"status\":\"failed\"},{\"seq\":3,\"kind\":\"text\",\"text\":\"Done\"}]");
     Transcript t; transcript_init(&t); transcript_append(&t, events);
@@ -619,16 +579,15 @@ static void test_cache_restores_transcript_so_only_new_events_are_requested(void
 static void test_cache_keeps_values_per_key_inside_its_directory(void) {
     wchar_t *dir = temp_directory();
     DiskCache *cache = cache_new(dir);
-    Json *sessions = json_parsez("[{\"id\":\"a\",\"status\":\"running\",\"title\":\"One\",\"reviewLoop\":{\"triage\":{\"findings\":[{\"key\":\"k\"}]}},\"prStatus\":{\"number\":4},\"local\":false,\"queued\":[{\"text\":\"next\"}]}]");
+    Json *sessions = json_parsez("[{\"id\":\"a\",\"status\":\"running\",\"title\":\"One\",\"prStatus\":{\"number\":4},\"local\":false,\"queued\":[{\"text\":\"next\"}]}]");
     CHECK(cache_store(cache, sessions, "sessions:o/r"));
     Json *projects = json_parsez("[{\"repo\":\"o/r\",\"label\":\"Repo\"}]");
     CHECK(cache_store(cache, projects, "../../projects"));
     bool suspicious; CHECK(count_files(dir, &suspicious) == 2); CHECK(!suspicious);
     Json *found = cache_value(cache, "sessions:o/r"); CHECK(found != NULL);
     Session *s; size_t n; CHECK(sessions_parse(found, &s, &n) && n == 1);
-    CHECK_STR(json_str(json_get(s[0].raw, "title")), "One"); CHECK(session_review_loop_on(&s[0]) && session_can_review_loop(&s[0]));
+    CHECK_STR(json_str(json_get(s[0].raw, "title")), "One");
     CHECK(session_pull_number(&s[0]) == 4); CHECK_STR(json_str(json_get(json_at(session_queued(&s[0]), 0), "text")), "next");
-    CHECK(json_count(json_get(session_held_triage(&s[0]), "findings")) == 1);
     sessions_free(s, n); json_free(found);
     CHECK(cache_value(cache, "sessions:o/other") == NULL);
     // Unchanged content costs no write.
@@ -860,8 +819,6 @@ int main(void) {
         { "oversized write never leaves the client", test_oversized_write_never_leaves_client },
         { "Retry-After HTTP date", test_retry_after_http_date },
         { "transcript deduplicates, sorts and advances unknown events", test_transcript_deduplicates_sorts_and_advances_unknown_events },
-        { "session reads review loop and held triage", test_session_reads_review_loop_and_held_triage },
-        { "findings queue lists held rounds oldest first by pull request", test_findings_queue_lists_held_rounds_oldest_first_by_pull_request },
         { "setup events are shown, status events hidden", test_setup_events_are_shown_and_status_hidden },
         { "optional fields and unknown statuses do not break decoding", test_optional_fields_and_unknown_statuses_do_not_break_decoding },
         { "session finds its pull request", test_session_finds_its_pull_request },

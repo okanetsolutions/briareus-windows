@@ -82,51 +82,6 @@ static void test_text_selection_hit_bounds_and_clipping(void) {
 
 // MARK: - Labels
 
-static void test_severity_labels_and_colours(void) {
-    ensure_theme();
-    COLORREF c = 0;
-    CHECK_STR(finding_severity_label("critical", &c), "CRIT"); CHECK_INT(c, theme.danger);
-    CHECK_STR(finding_severity_label("CRITICAL", &c), "CRIT"); CHECK_INT(c, theme.danger);
-    CHECK_STR(finding_severity_label("High", &c), "HIGH"); CHECK_INT(c, theme.danger);
-    CHECK_STR(finding_severity_label("low", &c), "LOW"); CHECK_INT(c, theme.muted);
-    CHECK_STR(finding_severity_label("medium", &c), "MED"); CHECK_INT(c, theme.warn);
-}
-
-static void test_unknown_severity_reads_as_medium(void) {
-    ensure_theme();
-    COLORREF c = 0;
-    CHECK_STR(finding_severity_label("", &c), "MED"); CHECK_INT(c, theme.warn);
-    CHECK_STR(finding_severity_label(NULL, &c), "MED"); CHECK_INT(c, theme.warn);
-    CHECK_STR(finding_severity_label("blocker", &c), "MED"); CHECK_INT(c, theme.warn);
-}
-
-static void test_severity_colours_are_the_ones_the_screens_used_before_sharing(void) {
-    // #46 moved three copies here; the findings screen's copy named secondary and warning, the aliases of muted and warn.
-    ensure_theme();
-    COLORREF c = 0;
-    finding_severity_label("low", &c); CHECK_INT(c, theme.secondary);
-    finding_severity_label("medium", &c); CHECK_INT(c, theme.warning);
-}
-
-static void test_decisions_are_indexed_by_their_api_spelling(void) {
-    CHECK_INT(FINDING_DECISION_COUNT, 3);
-    CHECK_INT(finding_decision_index("fix"), 0);
-    CHECK_INT(finding_decision_index("optional"), 1);
-    CHECK_INT(finding_decision_index("dismissed"), 2);
-    CHECK_STR(finding_decision_titles[0], "Fix");
-    CHECK_STR(finding_decision_titles[1], "Optional");
-    CHECK_STR(finding_decision_titles[2], "Dismiss");
-    for (int k = 0; k < FINDING_DECISION_COUNT; k++) CHECK_INT(finding_decision_index(finding_decision_ids[k]), k);
-}
-
-static void test_unknown_decisions_have_no_index(void) {
-    CHECK_INT(finding_decision_index("Fix"), -1);
-    CHECK_INT(finding_decision_index("dismiss"), -1);
-    CHECK_INT(finding_decision_index("undecided"), -1);
-    CHECK_INT(finding_decision_index(""), -1);
-    CHECK_INT(finding_decision_index(NULL), -1);
-}
-
 static void test_session_subtitle_is_status_and_model(void) {
     Session s = session_from("{\"id\":\"s1\",\"status\":\"waiting\",\"model\":\"opus\"}");
     CHECK_OWNED_STR(session_subtitle(&s), "Waiting \xC2\xB7 opus");
@@ -428,11 +383,6 @@ void app_common_tests(void) {
     test_run("settings form shortcut characters preserve editing and multiline Enter", test_form_shortcut_characters);
     test_run("terminal argument validation preserves ASCII, UTF-8 and permitted punctuation", test_terminal_argument_characters);
     test_run("selectable text hit testing respects bounds and region clipping", test_text_selection_hit_bounds_and_clipping);
-    test_run("severity labels and colours", test_severity_labels_and_colours);
-    test_run("unknown severity reads as medium", test_unknown_severity_reads_as_medium);
-    test_run("severity colours are the ones the screens used before sharing", test_severity_colours_are_the_ones_the_screens_used_before_sharing);
-    test_run("decisions are indexed by their api spelling", test_decisions_are_indexed_by_their_api_spelling);
-    test_run("unknown decisions have no index", test_unknown_decisions_have_no_index);
     test_run("session subtitle is status and model", test_session_subtitle_is_status_and_model);
     test_run("set string replaces and clears", test_set_string_replaces_and_clears);
     test_run("people lists logins up to a limit", test_people_lists_logins_up_to_a_limit);
