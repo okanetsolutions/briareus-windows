@@ -223,6 +223,17 @@ static void findings_screen_catches_up_after_device_change(void) {
     SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
     base->vt->destroy(base); clear(&f);
 }
+static void findings_screen_waits_for_an_inactive_app(void) {
+    Fixture f; init(&f); Screen *base = findings_screen_new();
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
+    // The device changes while the app is in the background: nothing is read until it returns, and the frame says so.
+    g_store.active = false; g_store.device.label = "Verified device";
+    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+    CHECK(screen_fixture_find(&doc, "Loading SSH approvals\xE2\x80\xA6") >= 0); doc_free(&doc); CHECK_INT(f.calls, 1);
+    g_store.active = true; CHECK(!shows(base, SSH_REFRESH)); entered(&f, 1);
+    SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
+    base->vt->destroy(base); clear(&f);
+}
 static void findings_screen_unavailable_reads_nothing(void) {
     // A token that cannot list SSH approvals, or a server without them, gets a reason, no request and no count.
     for (int i = 0; i < 2; i++) {
@@ -246,6 +257,7 @@ void app_ssh_approval_tests(void) {
     test_run("Findings screen reads only SSH requests", findings_screen_reads_only_ssh_requests);
     test_run("Findings screen without SSH approvals says why and reads nothing", findings_screen_unavailable_reads_nothing);
     test_run("Findings screen shows the first read of a changed device loading", findings_screen_catches_up_after_device_change);
+    test_run("Findings screen shows loading while a changed device waits for the app to return", findings_screen_waits_for_an_inactive_app);
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);

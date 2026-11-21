@@ -131,7 +131,8 @@ void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w) {
     // A view whose device changed catches up first, so the frame shows the new scope's read under way.
     if (!current(s)) ssh_approvals_refresh(s);
     json_free(s->bindings); s->bindings = json_object();
-    if (!current(s)) return;
+    // Still behind (the app is in the background, say): the read waits, and the frame says so rather than going blank.
+    if (!current(s)) { if (ssh_approvals_offered()) doc_loading(doc, x, w, "Loading SSH approvals\xE2\x80\xA6"); return; }
     SshApprovalQueue *q = queue(s); s->rendered_generation = q->generation;
     if (loading(s, q)) { doc_loading(doc, x, w, "Loading SSH approvals\xE2\x80\xA6"); return; }
     doc_text(doc, x, w, "Waiting on you: SSH approvals", FONT_BODY_SEMIBOLD, theme.ink, DT_WORDBREAK);
