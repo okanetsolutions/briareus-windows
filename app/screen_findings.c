@@ -11,15 +11,16 @@ static void findings_destroy(Screen *base);
 
 /// Why the screen can show nothing for this device, or NULL when SSH approvals are offered.
 static const char *unavailable_reason(void) {
-    if (!store_can_manage()) return "SSH approvals need a Manage token; this device's token cannot list them.";
-    if (!store_supports("ssh_requests")) return "This server does not offer SSH approvals.";
+    if (!store_lists("ssh_requests")) return "This server does not offer SSH approvals.";
+    if (!ssh_approvals_offered()) return "SSH approvals need a Manage token; this device's token cannot list them.";
     return NULL;
 }
 
 static void findings_layout(Screen *base, Doc *doc) {
     FindingsScreen *s = (FindingsScreen *)base;
     doc_space(doc, px(14));
-    ssh_approvals_layout(s->ssh, doc, 0, doc->width);
+    if (ssh_approvals_loading(s->ssh)) doc_loading(doc, 0, doc->width, "Loading SSH approvals\xE2\x80\xA6");
+    else ssh_approvals_layout(s->ssh, doc, 0, doc->width);
     const char *why = unavailable_reason();
     if (why) doc_text(doc, 0, doc->width, why, FONT_FOOTNOTE, theme.muted, DT_LEFT | DT_WORDBREAK);
     doc_space(doc, px(12));

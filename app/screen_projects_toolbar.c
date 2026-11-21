@@ -258,7 +258,7 @@ bool screen_projects_sidebar_common_action(Pane *pane, int action) {
     case ACT_STATUS: app_show_detail(status_screen_new()); return true;
     case ACT_DASHBOARD: app_show_detail(dashboard_screen_new()); return true;
     case ACT_WHATSAPP: app_show_detail(web_app_screen_new(WEB_APP_WHATSAPP)); return true;
-    case ACT_FINDINGS: app_show_detail(findings_screen_new()); return true;
+    case ACT_FINDINGS: if (ssh_approvals_offered()) app_show_detail(findings_screen_new()); return true;
     // Settings take the sidebar's place, as the dashboard's settings page has a sidebar of its own.
     case ACT_SETTINGS: pane_push(pane, settings_screen_new()); return true;
     case ACT_SIGN_OUT: sign_out(); return true;

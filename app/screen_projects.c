@@ -11,6 +11,7 @@ typedef struct {
     Request *req, *req_sessions;
     Poller poller;
     FooterRects footer;
+    SshApprovals *ssh;   // read on the sidebar's poll for the ⚑ badge; made once SSH approvals are offered
 } ProjectsScreen;
 
 static void projects_count(ProjectsScreen *s);
@@ -33,7 +34,7 @@ static void projects_visible(Screen *base, bool shown);
 static void projects_refresh(Screen *base);
 static void projects_activated(Screen *base, bool active);
 
-// WhatsApp, dashboard, findings; Mail joins them when the server offers it
+// The strip: WhatsApp, Status and 📊 always; Mail and ⚑ Findings join them when the server offers them
 
 size_t screen_projects_g_waiting;
 size_t screen_projects_g_status;
@@ -126,6 +127,7 @@ void projects_recount_findings(void) { screen_projects_recount(app_sidebar_pane(
 static void projects_destroy(Screen *base) {
     ProjectsScreen *s = (ProjectsScreen *)base;
     request_cancel(&s->req); request_cancel(&s->req_sessions); poller_stop(&s->poller);
+    ssh_approvals_free(s->ssh);
     screen_projects_footer_free(&s->footer);
     projects_free(s->projects, s->count); free(s->counts); free(s->busy); free(s->error);
     screen_release(base);
@@ -175,14 +177,24 @@ static void projects_action(Screen *base, int action, intptr_t arg, POINT pt) {
     if (action == ACT_OPEN_PROJECT && (size_t)arg < s->count) pane_push(base->pane, sessions_screen_new(&s->projects[arg]));
 }
 
+/// The ⚑ badge counts SSH approvals, so the sidebar's poll reads them as well, at its own pace: the count is live
+/// without Findings open. Each completion recounts the sidebar.
+static void projects_poll_ssh(ProjectsScreen *s) {
+    if (!ssh_approvals_offered()) return;
+    if (s->ssh && s->ssh->client != g_store.client) { ssh_approvals_free(s->ssh); s->ssh = NULL; }
+    if (!s->ssh) { s->ssh = ssh_approvals_new(&s->base); ssh_approvals_watch(s->ssh, true); }
+    ssh_approvals_refresh(s->ssh);
+}
+
 static void projects_timer(Screen *base, UINT id) {
     ProjectsScreen *s = (ProjectsScreen *)base;
-    if (poller_fired(&s->poller, id)) projects_load(s);
+    if (poller_fired(&s->poller, id)) { projects_load(s); projects_poll_ssh(s); }
 }
 
 static void projects_visible(Screen *base, bool shown) {
     if (!shown) screen_projects_footer_hide(&((ProjectsScreen *)base)->footer);
     ProjectsScreen *s = (ProjectsScreen *)base;
+    ssh_approvals_watch(s->ssh, shown);
     if (shown) { projects_count(s); poller_start(&s->poller, base->pane, TIMER_POLL, 30000); }
     else { poller_stop(&s->poller); request_cancel(&s->req); request_cancel(&s->req_sessions); }
 }

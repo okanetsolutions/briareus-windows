@@ -178,6 +178,12 @@ static void metadata_rebind_preserves_cooldowns(void) {
         ssh_approvals_free(s); clear(&f);
     }
 }
+static bool shows(Screen *base, int action) {
+    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
+    bool found = false;
+    for (size_t i = 0; i < doc.count; i++) if (doc.items[i].action == action) found = true;
+    doc_free(&doc); return found;
+}
 static void findings_screen_reads_only_ssh_requests(void) {
     Fixture f; init(&f);
     Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
@@ -186,7 +192,10 @@ static void findings_screen_reads_only_ssh_requests(void) {
     g_store.routes = routes; g_store.route_count = 4;
     // The subtitle stays blank until a read lands, and again after one fails: the count is not known then.
     HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
-    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
+    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); entered(&f, 0);
+    // The first read under way shows as loading, not as a queue waiting for a refresh.
+    CHECK(!shows(base, SSH_REFRESH));
+    SetEvent(f.steps[0].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
     CHECK_STR(f.steps[0].url, "https://example.com/api/v1/ssh/requests");
     memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK(info.subtitle[0] != 0);
     base->vt->timer(base, SSH_POLL); complete(&f, 1);

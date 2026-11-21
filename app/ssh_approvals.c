@@ -80,11 +80,21 @@ void ssh_approvals_timer(SshApprovals *s, UINT id) {
     ssh_approvals_refresh(s);
     poller_finished(&s->poller, false, -1);
 }
-void ssh_approvals_visible(SshApprovals *s, bool shown) {
+void ssh_approvals_watch(SshApprovals *s, bool shown) {
     if (!s) return;
     s->shown = shown;
+    if (!shown) { request_cancel(&s->read); json_free(s->bindings); s->bindings = NULL; }
+}
+void ssh_approvals_visible(SshApprovals *s, bool shown) {
+    if (!s) return;
+    ssh_approvals_watch(s, shown);
     if (shown) { if (s->owner->pane) poller_start(&s->poller, s->owner->pane, SSH_POLL, 7000); ssh_approvals_refresh(s); }
-    else { poller_stop(&s->poller); request_cancel(&s->read); json_free(s->bindings); s->bindings = NULL; }
+    else poller_stop(&s->poller);
+}
+bool ssh_approvals_loading(SshApprovals *s) {
+    if (!s || !s->read || !current(s)) return false;
+    SshApprovalQueue *q = queue(s);
+    return !q->fresh && !q->error && !json_count(q->rows);
 }
 SshApprovals *ssh_approvals_new(Screen *owner) {
     SshApprovals *s = xcalloc(1, sizeof *s); s->owner = owner;

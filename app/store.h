@@ -49,6 +49,8 @@ bool store_can_manage(void);
 bool store_can_transcribe(void);
 /// Whether the server has the route a call is made on and this token may call it.
 bool store_supports(const char *call);
+/// Whether the server's catalog has `call` at all, whatever this token may do with it.
+bool store_lists(const char *call);
 /// Files can go with a message: the server takes uploads and messages, and this token may write.
 bool store_supports_attachments(void);
 /// The same for the call the files go with: `message`, or `start_session` for a session's first prompt.

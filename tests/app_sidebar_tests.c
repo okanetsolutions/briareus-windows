@@ -1,7 +1,9 @@
 // Swift #113 parity: exercise the real sidebar layouts and pane input/scrollbar handling.
 #include "screen_fixture.h"
 #include "screen_projects_internal.h"
+#include "ssh_approvals.h"
 #include "suites.h"
+#include "fixtures/ssh_approval.h"
 #include <windowsx.h>
 
 static Route routes[] = { { "GET", "/projects", "read" }, { "GET", "/settings/ssh/servers", "admin" }, { "GET", "/ssh/requests", "manage" } };
@@ -206,6 +208,16 @@ static void test_findings_strip_needs_ssh_approvals(void) {
     }
     finish(&f);
 }
+static void test_findings_badge_follows_the_sidebar_poll(void) {
+    ScreenFixture f; start(&f); Screen *s = load_projects(&f);
+    CHECK_INT(ssh_approvals_badge(), 0);
+    // The sidebar's own poll reads the SSH queue as well, so ⚑ counts what waits without Findings open.
+    f.read_response = SSH_REQUESTS; LONG reads = f.reads;
+    s->vt->visible(s, true); s->vt->timer(s, TIMER_POLL); screen_fixture_pump(&f, 2);
+    CHECK_INT(f.reads, reads + 2); CHECK_INT(ssh_approvals_badge(), 1);
+    s->vt->visible(s, true); CHECK_INT(screen_projects_g_waiting, 1);
+    f.read_response = NULL; finish(&f);
+}
 static void test_footer_controls(void) {
     ScreenFixture f; start(&f); Screen *s = load_projects(&f);
     int dpi = theme_dpi();
@@ -254,6 +266,7 @@ void app_sidebar_tests(void) {
     test_run("project sidebar pins actions above scrolling rows and survives navigation and resize (Swift #113)", test_project_sidebar);
     test_run("Sidebar native footer buttons fit at narrow DPI, traverse focus and route Settings", test_footer_controls);
     test_run("sidebar shows Findings only where SSH approvals are offered", test_findings_strip_needs_ssh_approvals);
+    test_run("sidebar poll keeps the Findings badge live", test_findings_badge_follows_the_sidebar_poll);
     test_run("sidebar recount preserves live projects when cache writes fail", test_recount_preserves_live_projects);
     test_run("session sidebar pins actions through wheel, keyboard, drag, DPI and selection changes (Swift #113)", test_session_sidebar);
 }

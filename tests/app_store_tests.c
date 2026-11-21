@@ -32,6 +32,16 @@ static void store_fake(const char *permission, Route *routes, size_t count) {
 }
 static void store_reset(void) { memset(&g_store, 0, sizeof g_store); }
 
+// Whether the server has a route is a separate question from whether this token may call it.
+static void test_lists_ignores_the_tokens_permission(void) {
+    store_fake("read", ROUTES, sizeof ROUTES / sizeof *ROUTES);
+    CHECK(!store_supports("usage_all")); CHECK(store_lists("usage_all"));
+    CHECK(store_supports("sessions")); CHECK(store_lists("sessions"));
+    CHECK(!store_lists("ssh_requests")); CHECK(!store_lists("no_such_call"));
+    g_store.has_device = false; CHECK(!store_lists("sessions"));
+    store_reset();
+}
+
 // Catalog permissions must gate the actual store calls, including older deployments.
 static void test_pinned_catalog_gates_existing_calls(void) {
     Str fixture; str_init(&fixture);
@@ -441,6 +451,7 @@ static void test_stream_creation_requires_connection_and_capability(void) {
 void app_store_tests(void) {
     test_run("streams check capability and retain their client through cancellation", test_stream_creation_requires_connection_and_capability);
     test_run("pinned catalog gates actual calls and absent routes", test_pinned_catalog_gates_existing_calls);
+    test_run("listed routes ignore the token's permission", test_lists_ignores_the_tokens_permission);
     test_run("MCP settings require admin catalog routes and the same account", test_mcp_admin_catalog_and_account_gates);
     test_run("cancelled MCP callbacks are discarded", test_cancelled_mcp_finish_is_never_delivered);
     test_run("poll delay is the base without failures", test_poll_delay_is_the_base_without_failures);
