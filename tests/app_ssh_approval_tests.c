@@ -223,16 +223,30 @@ static void findings_screen_catches_up_after_device_change(void) {
     SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
     base->vt->destroy(base); clear(&f);
 }
+static Doc *paint(Fixture *f) { RedrawWindow(pane_hwnd(f->screen.pane), NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW); return pane_doc(f->screen.pane); }
+static bool has_action(const Doc *doc, int action) {
+    for (size_t i = 0; i < doc->count; i++) if (doc->items[i].action == action) return true;
+    return false;
+}
 static void findings_screen_waits_for_an_inactive_app(void) {
-    Fixture f; init(&f); Screen *base = findings_screen_new();
-    screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); complete(&f, 0);
-    // The device changes while the app is in the background: nothing is read until it returns, and the frame says so.
-    g_store.active = false; g_store.device.label = "Verified device";
-    Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
-    CHECK(screen_fixture_find(&doc, "Loading SSH approvals\xE2\x80\xA6") >= 0); doc_free(&doc); CHECK_INT(f.calls, 1);
-    g_store.active = true; CHECK(!shows(base, SSH_REFRESH)); entered(&f, 1);
-    SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
-    base->vt->destroy(base); clear(&f);
+    for (int cooldown = 0; cooldown < 2; cooldown++) {
+        Fixture f; init(&f); Screen *base = findings_screen_new(); FindingsScreen *s = (FindingsScreen *)base;
+        screen_fixture_pane(&f.screen, base); pane_push(f.screen.pane, base); complete(&f, 0);
+        if (cooldown) queue(s->ssh)->retry_until = (double)time(NULL) + 3600;
+        // The device changes while the app is in the background: nothing is read until it returns, and the frame says so.
+        g_store.active = false; g_store.device.label = "Verified device";
+        Doc *doc = paint(&f);
+        CHECK(screen_fixture_find(doc, "Loading SSH approvals\xE2\x80\xA6") >= 0); CHECK(!has_action(doc, SSH_REFRESH)); CHECK_INT(f.calls, 1);
+        // Back in front, the view catches up and is drawn again: its new read under way, or Refresh in a cooldown it kept.
+        g_store.active = true; base->vt->activated(base, true);
+        if (cooldown) {
+            doc = paint(&f); CHECK(has_action(doc, SSH_REFRESH));
+            CHECK(screen_fixture_find(doc, "Loading SSH approvals\xE2\x80\xA6") < 0); CHECK_INT(f.calls, 1);
+        } else {
+            entered(&f, 1); SetEvent(f.steps[1].release); screen_fixture_pump(&f.screen, 1); CHECK(has_action(paint(&f), SSH_REFRESH));
+        }
+        clear(&f);   // the pane owns the screen
+    }
 }
 static void findings_screen_unavailable_reads_nothing(void) {
     // A token that cannot list SSH approvals, or a server without them, gets a reason, no request and no count.

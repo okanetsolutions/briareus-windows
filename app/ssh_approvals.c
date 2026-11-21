@@ -70,7 +70,8 @@ static void attach(SshApprovals *s, Request *req, const Json *sent) {
 void ssh_approvals_refresh(SshApprovals *s) {
     if (!s || !s->shown || !g_store.active || s->client != g_store.client) return;
     if (!store_can_manage() || !store_supports("ssh_requests")) return;
-    if (!current(s)) rebind(s);
+    // A rebind changes what the view shows even when no read can go yet (a cooldown carried over): draw it again.
+    if (!current(s)) { rebind(s); if (s->owner->pane) pane_relayout(s->owner->pane); }
     if (s->read) return;
     if (queue(s)->retry_until > (double)time(NULL)) return;
     Request *req = store_call("ssh_requests", json_object(), 0, NULL, NULL, 0, &s->read); attach(s, req, NULL);
