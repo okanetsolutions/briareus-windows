@@ -252,16 +252,16 @@ static void sessions_action(Screen *base, int action, intptr_t arg, POINT pt) {
 
 static void sessions_timer(Screen *base, UINT id) {
     SessionsScreen *s = (SessionsScreen *)base;
-    if (poller_fired(&s->poller, id)) { sessions_load(s); screen_projects_read_ssh(base->pane, false); }
+    if (poller_fired(&s->poller, id)) sessions_load(s);
 }
 
 static void sessions_visible(Screen *base, bool shown) {
     if (!shown) screen_projects_footer_hide(&((SessionsScreen *)base)->footer);
     SessionsScreen *s = (SessionsScreen *)base;
-    if (shown) { screen_projects_read_ssh(base->pane, false); poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } else { poller_stop(&s->poller); request_cancel(&s->req); }
+    if (shown) poller_start(&s->poller, base->pane, TIMER_POLL, 7000); else { poller_stop(&s->poller); request_cancel(&s->req); }
 }
 
-static void sessions_refresh(Screen *base) { SessionsScreen *s = (SessionsScreen *)base; request_cancel(&s->req); sessions_load(s); screen_projects_read_ssh(base->pane, true); }
+static void sessions_refresh(Screen *base) { SessionsScreen *s = (SessionsScreen *)base; request_cancel(&s->req); sessions_load(s); }
 
 static void sessions_activated(Screen *base, bool active) { if (active) { SessionsScreen *s = (SessionsScreen *)base; poller_start(&s->poller, base->pane, TIMER_POLL, 7000); } }
 

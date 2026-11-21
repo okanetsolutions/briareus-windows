@@ -178,21 +178,6 @@ static void metadata_rebind_preserves_cooldowns(void) {
         ssh_approvals_free(s); clear(&f);
     }
 }
-static void stale_view_adopts_a_bound_scope(void) {
-    Fixture f; init(&f); SshApprovals *a = ssh_approvals_new(&f.owner), *b = ssh_approvals_new(&f.owner);
-    ssh_approvals_visible(a, true); complete(&f, 0); ssh_approvals_visible(b, true); complete(&f, 1);
-    g_store.device.label = "Verified device";
-    ssh_approvals_refresh(a); complete(&f, 2); CHECK(queue(a)->fresh); intptr_t token = draw(a); CHECK(token != 0);
-    // b still holds the old device: catching up adopts the scope a already read, without wiping its rows.
-    ssh_approvals_refresh(b); entered(&f, 3);
-    CHECK(queue(b) == queue(a)); CHECK(queue(a)->fresh); CHECK_INT(json_count(queue(a)->rows), 1);
-    // So a decision aimed on a's list still goes.
-    f.steps[4].answer = "{\"request\":{\"id\":\"fake-request\",\"status\":\"running\"}}";
-    ssh_approvals_action(a, SSH_APPROVE, token); entered(&f, 4); CHECK(a->write != NULL);
-    CHECK_STR(f.steps[4].url, "https://example.com/api/v1/ssh/requests/fake-request/decision");
-    complete(&f, 3); complete(&f, 4);
-    ssh_approvals_free(a); ssh_approvals_free(b); clear(&f);
-}
 static bool shows(Screen *base, int action) {
     Doc doc; doc_init(&doc); screen_fixture_draw(base, &doc);
     bool found = false;
@@ -206,20 +191,21 @@ static void findings_screen_reads_only_ssh_requests(void) {
     Route routes[] = {{"GET", "/ssh/requests", "manage"}, {"POST", "/ssh/requests/{id}/decision", "manage"}, {"GET", "/projects", "read"}, {"GET", "/sessions", "read"}};
     g_store.routes = routes; g_store.route_count = 4;
     // The subtitle stays blank until a read lands, and again after one fails: the count is not known then.
-    HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
+    // So does the ⚑ badge: it counts only a fresh read.
+    HeaderInfo info = {0}; base->vt->header(base, &info); CHECK_STR(info.subtitle, ""); CHECK_INT(ssh_approvals_badge(), 0);
     screen_fixture_pane(&f.screen, base); base->vt->visible(base, true); entered(&f, 0);
     // The first read under way shows as loading, not as a queue waiting for a refresh.
     CHECK(!shows(base, SSH_REFRESH));
     SetEvent(f.steps[0].release); screen_fixture_pump(&f.screen, 1); CHECK(shows(base, SSH_REFRESH));
     CHECK_STR(f.steps[0].url, "https://example.com/api/v1/ssh/requests");
-    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK(info.subtitle[0] != 0);
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK(info.subtitle[0] != 0); CHECK_INT(ssh_approvals_badge(), 1);
     base->vt->timer(base, SSH_POLL); complete(&f, 1);
     CHECK_STR(f.steps[1].url, "https://example.com/api/v1/ssh/requests");
     f.steps[2].status = 429; f.steps[2].retry = "3600";
     base->vt->refresh(base); complete(&f, 2);
     CHECK_STR(f.steps[2].url, "https://example.com/api/v1/ssh/requests");
     base->vt->timer(base, SSH_POLL); CHECK(s->ssh->read == NULL); CHECK_INT(f.calls, 3);
-    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK_STR(info.subtitle, "");
+    memset(&info, 0, sizeof info); base->vt->header(base, &info); CHECK_STR(info.subtitle, ""); CHECK_INT(ssh_approvals_badge(), 0);
     base->vt->visible(base, false); CHECK(!s->ssh->poller.running);
     base->vt->timer(base, SSH_POLL); CHECK_INT(f.calls, 3);
     base->vt->destroy(base); clear(&f);
@@ -249,7 +235,6 @@ void app_ssh_approval_tests(void) {
     test_run("SSH refusal redacts metadata but retains decision interlocks", refused_metadata_preserves_interlocks);
     test_run("SSH approval catalog/token gating and exact wire", gating_and_exact_wire);
     test_run("SSH approval multiple views and uncertain teardown", multiple_views_uncertain_and_teardown);
-    test_run("SSH approval view with a stale device adopts a scope another view read", stale_view_adopts_a_bound_scope);
     test_run("SSH approval cooldown and stale scope completions", refresh_cooldown_refusal_and_scope);
     test_run("SSH approval expiry, refused and stale clicks", expiry_refused_and_stale_actions);
 }

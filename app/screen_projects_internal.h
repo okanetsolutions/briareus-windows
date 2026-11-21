@@ -93,9 +93,6 @@ void screen_projects_doc_dashboard_session_row(Doc *doc, int w, const Session *s
 void screen_projects_forget_cached_session(const char *repo, const char *id);
 void projects_recount_findings(void);
 void screen_projects_recount(Pane *sidebar);
-/// Reads the SSH approvals behind the ⚑ badge for the strip of `sidebar`, whose root owns the read: at most every
-/// 30 seconds, unless `now`. Nothing when its root is not the projects list.
-void screen_projects_read_ssh(Pane *sidebar, bool now);
 Screen *projects_screen_new(void);
 const Project *projects_list(size_t *count);
 void sessions_forget(const char *repo, const char *id);

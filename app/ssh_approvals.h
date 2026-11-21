@@ -11,19 +11,15 @@ typedef struct SshApprovals {
     Poller poller;
     intptr_t serial;
     unsigned long long rendered_generation;
-    void (*changed)(Screen *owner);   // optional: called whenever the shared queue changes, for counts kept elsewhere
     struct SshApprovals *next;
 } SshApprovals;
 enum { SSH_APPROVE = 1900, SSH_DENY, SSH_REFRESH, SSH_POLL };
 SshApprovals *ssh_approvals_new(Screen *owner);
 void ssh_approvals_free(SshApprovals *s);
 void ssh_approvals_visible(SshApprovals *s, bool shown);
-/// Lets `s` read without a poller of its own: its owner calls ssh_approvals_refresh on its own schedule.
-void ssh_approvals_watch(SshApprovals *s, bool shown);
 /// The first read is under way: nothing read yet, and no failure to show.
 bool ssh_approvals_loading(SshApprovals *s);
-/// Reads the queue again; true when a read was sent (none while one is out, in a cooldown, or hidden).
-bool ssh_approvals_refresh(SshApprovals *s);
+void ssh_approvals_refresh(SshApprovals *s);
 void ssh_approvals_timer(SshApprovals *s, UINT id);
 void ssh_approvals_layout(SshApprovals *s, Doc *doc, int x, int w);
 void ssh_approvals_action(SshApprovals *s, int action, intptr_t token);
